@@ -1,0 +1,34 @@
+{
+  "full_description": "use both arms to attach four markers to the magnetic cylinder in the center so they are evenly spaced ninety degrees apart around it",
+  "schema": "",
+  "preference": "num of words should not exceed 15",
+  "seen": [
+    "Attach the four markers evenly around the magnetic cylinder.",
+    "Stick all four markers to the cylinder ninety degrees apart.",
+    "Use both arms to mount the markers around the cylinder.",
+    "Arrange the four markers evenly spaced on the magnet cylinder.",
+    "Place each marker against the cylinder so they are evenly spaced.",
+    "Attach the markers to the cylinder at four equal angles.",
+    "Press the four markers onto the magnetic cylinder evenly.",
+    "Mount the markers around the cylinder ninety degrees apart.",
+    "Assemble the four markers onto the cylinder with even spacing.",
+    "Left and right arms attach markers evenly around the cylinder.",
+    "Fix the four markers to the cylinder, spaced ninety degrees.",
+    "Distribute the four markers evenly around the magnet cylinder.",
+    "Attach two markers per arm evenly onto the cylinder.",
+    "Stick the markers around the cylinder so spacing is even.",
+    "Use both hands to evenly attach markers to the cylinder.",
+    "Press all four markers onto the cylinder at equal angles.",
+    "Mount each marker against the magnetic cylinder evenly spaced.",
+    "Attach the markers around the central cylinder ninety degrees apart.",
+    "Place the four markers evenly around the magnetic cylinder.",
+    "Assemble markers evenly spaced around the magnet cylinder using both arms."
+  ],
+  "unseen": [
+    "Evenly attach four markers around the magnetic cylinder.",
+    "Mount the markers ninety degrees apart on the cylinder.",
+    "Use both arms to space the markers evenly on the cylinder.",
+    "Attach all four markers to the cylinder at equal angles.",
+    "Distribute the markers evenly around the central magnet cylinder."
+  ]
+}

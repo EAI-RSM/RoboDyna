@@ -1,0 +1,24 @@
+{
+  "full_description": "pick up the tall block from the table and set it onto the moving conveyor belt so it rides to the end without tipping over",
+  "schema": "{A} notifies the tall block, {B} notifies the conveyor belt, {a} notifies the arm that handles the block",
+  "preference": "num of words should not exceed 13. Degree of detail avg is 6",
+  "seen": [
+    "Place {A} onto {B} so it rides to the end upright",
+    "Use {a} to set {A} on {B} without tipping it",
+    "Put {A} on the moving {B} and keep it standing",
+    "Set {A} onto {B}, matching the belt speed on release",
+    "Load {A} onto {B} so it travels to the end upright",
+    "With {a}, place {A} on {B} and let it ride along",
+    "Stand {A} on {B} and let the belt carry it",
+    "Move {A} onto {B} without toppling the tall block",
+    "Drop {A} onto {B} at belt speed so it stays upright",
+    "Use {a} to load {A} onto {B} and ride to the end",
+    "Place the tall block on the belt so it rides upright",
+    "Set {A} on {B} so it reaches the end without falling"
+  ],
+  "unseen": [
+    "Transfer {A} onto {B} so it stays standing to the end",
+    "Carefully place {A} on the moving {B} upright",
+    "Put the tall block on the conveyor and keep it from tipping"
+  ]
+}

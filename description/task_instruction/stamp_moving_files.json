@@ -1,0 +1,34 @@
+{
+  "full_description": "press the button so the stamp head marks each <file box> passing on the belt",
+  "schema": "{A} notifies the file boxes on the belt, {a} notifies the arm that presses the stamp button",
+  "preference": "num of words should not exceed 14",
+  "seen": [
+    "Press the button with {a} to stamp each {A}",
+    "Use {a} to press the stamp button as {A} pass",
+    "Time {a} on the button so the stamp marks every {A}",
+    "Make {a} press the button to mark the {A} on the belt",
+    "Fire the stamp with {a} on each passing {A}",
+    "Press the stamp button using {a} for every {A}",
+    "Have {a} tap the button to stamp the moving {A}",
+    "Trigger the stamp head with {a} as each {A} arrives",
+    "Press the button with {a} to mark each {A} on the conveyor",
+    "Use {a} to stamp every {A} moving down the belt",
+    "Command {a} to press the button and stamp the {A}",
+    "Direct {a} to fire the stamp on each {A}",
+    "Press the button so the stamp hits every {A}",
+    "Let {a} press the button to mark all the {A}",
+    "Stamp each {A} by pressing the button with {a}",
+    "Press down the button with {a} for every passing {A}",
+    "Mark the {A} on the belt by pressing the button with {a}",
+    "Use {a} to press the button and stamp the {A} in time",
+    "Press the stamp button with {a} as the {A} reach the head",
+    "Have {a} press the button to mark each {A} accurately"
+  ],
+  "unseen": [
+    "With {a}, press the button to stamp every {A} on the belt",
+    "Press the button using {a} so the stamp marks each {A}",
+    "Use {a} to trigger the stamp for all the {A} passing by",
+    "Tap the button with {a} to mark each moving {A}",
+    "Press the button with {a} and stamp every {A} in turn"
+  ]
+}

@@ -1,0 +1,149 @@
+render_freq: 0
+episode_num: 8                 # debug: small batch
+use_seed: false
+save_freq: 15
+embodiment: [ur5-wsg, ur5-wsg, 0.6]
+language_num: 100
+use_dynamic: false            # static path by default; tasks with a moving element flip this themselves
+dynamic_level: 1              # dynamic complexity level(1,2,3)
+dynamic_coefficient: 0.1      # dynamic coefficient
+domain_randomization:
+  random_background: false
+  cluttered_table: false
+  clean_background_rate: 1
+  random_head_camera_dis: 0
+  random_table_height: 0
+  random_light: false
+  crazy_random_light_rate: 0
+camera:
+  head_camera_type: D435
+  wrist_camera_type: D435
+  collect_head_camera: true
+  collect_wrist_camera: true
+data_type:
+  rgb: true
+  third_view: false
+  depth: false
+  pointcloud: false
+  observer: false
+  endpose: true
+  qpos: true
+  mesh_segmentation: false
+  actor_segmentation: false
+pcd_down_sample_num: 1024
+pcd_crop: true
+save_path: ./data
+clear_cache_freq: 5
+collect_data: true
+eval_video_log: true
+check_render_success: false   # debug: don't filter render-pass successes
+# ---- LeRobot v2.1 export (inline, written alongside the HDF5/mp4 into one combined suite dataset) ----
+export_lerobot: true
+lerobot_root: ./data_lerobot/domino_suite
+lerobot_chunks_size: 1000
+lerobot_task_state_dim: 32
+save_failed_cases: true       # debug: save every attempt (with its success flag) so a not-yet-fixed task's job always TERMINATES instead of looping seeds forever
+# ---------------------------------------------------------------------------
+# DEBUG mirror of demo_dynamic.yml: same per-task params, smaller batch + save-failed
+# so jobs terminate while tuning. Invoke as `collect_data.sh <task> debug_dynamic 0`.
+# Keep this task_args block in sync with demo_dynamic.yml.
+# ---------------------------------------------------------------------------
+task_args:
+  toast_bread:
+    toast_steps: 300
+    target_doneness: 0.45
+    plate_scale_mult: 0.65
+    steamer_scale_mult: 0.10
+  cook_meat:
+    cook_steps: 1000
+    target_doneness: 0.5
+  assemble_markers_cylinder:
+    cyl_radius: 0.035
+    cyl_half_len: 0.075
+    attach_dist: 0.06
+    attach_z: 0.04
+    dwell_steps: 40
+  catch_marbles_trapdoors:
+    belt_base_speed: 0.0016
+    press_hold_steps: 24
+    marble_dwell_steps: 900
+    drop_window: 0.045
+  catch_rat:
+    num_appearances: 3
+    pop_steps: 90
+    grasp_tol: 0.05
+  collect_falling_bowl:
+    num_objects: 4
+    emit_interval: 40
+    fall_steps: 55
+    rim_radius: 0.055
+    pour_every: 3
+  cup_curtain_slot:
+    curtain_freq: 0.8
+    curtain_amp: 0.05
+    belt_speed: 0.04
+    belt_range: 0.06
+    placement_tol: 0.07
+    gap_tol: 0.06
+    reach_tol: 0.07
+  dual_hole_punch:
+    n_pages: 3
+    punch_tol: 0.035
+  pick_cup_behind_fan:
+    fan_omega_deg: 2.0
+    gap_frac: 0.40
+    theta_spill: 35.0
+    fan_far_y: 0.12
+  pick_ripe_apple:
+    ripen_steps: 2500   # slow ripening: apple stays ~red through the grasp
+    red_window_min: 0.48   # per-episode red target band (like cook_meat doneness)
+    red_window_max: 0.52
+    red_tolerance: 0.12
+  place_block_belt:
+    belt_speed: 0.06
+    theta_max_deg: 30.0
+    belt_ride_steps: 600
+  rotating_shape_sorter:
+    spin_speed: 0.9
+    r_tol: 0.06
+    align_window: 0.18
+    max_track_steps: 900
+  sort_apples_belt:
+    n_apples: 10
+    belt_speed: 0.012
+    belt_speed_scale: 1.0
+    advance_every: 4
+    gate_default_left: true
+  stab_moving_target:
+    r_outer: 0.075
+    n_rings: 4
+    sway_amp: 0.10
+    sway_period: 900
+    target_speed: 1.0
+  ring_on_moving_peg:
+    r_ring: 0.028
+    catch_r: 0.07
+    period: 3000
+    amp_x: 0.010
+    amp_y: 0.025
+    amp_z: 0.018
+  stamp_moving_files:
+    n_files: 4
+    stamp_tol: 0.035
+  two_type_sorting_catch:
+    num_objects: 4
+    fall_steps: 90
+    lateral_bias: 0.16
+    center_rate: 0.25
+    catch_tol: 0.07
+  catch_ramp_ball:
+    ramp_angle: 0.24
+    ball_radius: 0.018
+    rim_radius: 0.04
+    x_span: 0.15
+    roll_time_min: 5.0      # s; kinematic roll(t1)+fall lasts ~10-20s
+    roll_time_max: 20.0
+    fall_time: 0.5          # s; short accelerating drop off the edge
+    idle_time_min: 2.0      # s; robot stays still before grasping
+    idle_time_max: 4.0
+    settle_steps: 70

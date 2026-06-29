@@ -1,0 +1,24 @@
+{
+  "full_description": "wait for the apple on the table to ripen red, then pick it up and drop it into the basket",
+  "schema": "{A} notifies the apple, {B} notifies the basket",
+  "preference": "num of words should not exceed 14. Degree of detail avg is 6",
+  "seen": [
+    "Wait until {A} turns red, then put it in {B}",
+    "Pick the ripe {A} off the table and place it in {B}",
+    "When {A} is red, grab it and drop it in {B}",
+    "Let {A} ripen, then move it into {B}",
+    "Grab the red {A} and set it inside {B}",
+    "Once {A} is ripe, pick it up and put it in {B}",
+    "Take the ripe {A} and deposit it in {B}",
+    "Pick {A} at its red stage and place it in {B}",
+    "Collect the red {A} into {B}",
+    "Wait for {A} to redden, then drop it in {B}",
+    "Pick up the ripe {A} and put it into {B}",
+    "When {A} ripens, move it into {B}"
+  ],
+  "unseen": [
+    "Wait for {A} to ripen red, then place it in {B}",
+    "Pick the ripe {A} and drop it into {B}",
+    "Grab {A} at peak ripeness and put it in {B}"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "full_description": "pick up the raw meat from the table, cook it on the pan until done, then put it back on the table",
+  "schema": "{A} notifies the meat, {B} notifies the pan, {a} notifies the arm that handles the meat",
+  "preference": "num of words should not exceed 13. Degree of detail avg is 6",
+  "seen": [
+    "Pick up {A}, cook it on {B}, then set it back down",
+    "Use {a} to fry {A} on {B} and return it to the table",
+    "Take {A}, cook on {B}, then put it back on the table",
+    "Grill {A} on {B} then place it back on the table",
+    "Move {A} to {B}, cook it, then back onto the table",
+    "Cook {A} on {B} and set it on the table using {a}",
+    "Fry {A} on {B} then put it back down",
+    "With {a}, cook {A} on {B} and return it to the table",
+    "Sear {A} on {B} and place it back on the table",
+    "Brown {A} on {B}, then set it back on the table",
+    "Cook {A} on {B}, then put the meat back on the table",
+    "Use {a} to cook {A} on {B} and set it back down"
+  ],
+  "unseen": [
+    "Heat {A} on {B} until cooked, then return it to the table",
+    "Transfer {A} to {B}, cook, then back onto the table",
+    "Cook the meat on the pan and put it back"
+  ]
+}

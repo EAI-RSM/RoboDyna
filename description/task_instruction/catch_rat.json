@@ -1,0 +1,24 @@
+{
+  "full_description": "watch the hole board and, when the rat pops up, use the arm on that side to close the gripper around it before it retracts",
+  "schema": "{A} notifies the rat body, {B} notifies the hole board, {a} notifies the arm that catches the rat",
+  "preference": "num of words should not exceed 14. Degree of detail avg is 6",
+  "seen": [
+    "Catch {A} with the {a} arm when it pops out of {B}",
+    "When {A} appears from {B}, grab it with the {a} arm",
+    "Use the {a} arm to snatch {A} as it rises from {B}",
+    "Whack-a-mole: catch {A} from {B} using the {a} arm",
+    "Close the {a} gripper on {A} while it is up out of {B}",
+    "Grab {A} the moment it pops up from {B} with the {a} arm",
+    "Catch the rat {A} emerging from {B} before it drops back",
+    "Wait for {A} to rise from {B}, then seize it with the {a} arm",
+    "Pin {A} with the {a} arm while it is raised above {B}",
+    "Trap {A} as it surfaces from {B} using the {a} arm",
+    "React and grab {A} on its appearance from {B}",
+    "Catch the popping {A} from {B} with the correct-side arm"
+  ],
+  "unseen": [
+    "Snatch {A} the instant it rises out of {B}",
+    "Use the {a} arm to catch {A} popping from {B}",
+    "Grab {A} while it is up out of {B} with the {a} arm"
+  ]
+}

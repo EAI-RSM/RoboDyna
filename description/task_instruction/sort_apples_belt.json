@@ -1,0 +1,24 @@
+{
+  "full_description": "watch apples arrive on the conveyor belt and press the button to route each apple into the basket matching its color",
+  "schema": "{A} notifies the apple, {B} notifies the basket, {a} notifies the arm that presses the button",
+  "preference": "num of words should not exceed 15. Degree of detail avg is 6",
+  "seen": [
+    "Press the button to sort each {A} into the matching {B}",
+    "Use {a} to route every {A} into its color-matched {B}",
+    "Send each {A} down the belt into the correct {B}",
+    "Toggle the button so each {A} drops in the right {B}",
+    "Sort the apples by color into the matching {B} using {a}",
+    "With {a}, press the button to divert each {A} to its {B}",
+    "Route red and green {A} into their matching {B}",
+    "Press the button so every {A} reaches the right-colored {B}",
+    "Direct each incoming {A} into the {B} of its color",
+    "Use {a} to flip the diverter and sort the {A} by color",
+    "Match each {A} to its colored {B} with the button",
+    "Sort all apples on the belt into the correct {B}"
+  ],
+  "unseen": [
+    "Press the button to put each {A} in the basket of its color",
+    "Divert every {A} into the matching {B} using {a}",
+    "Sort the conveyor apples into the right baskets by color"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "full_description": "run two parallel belts at once, each arm pressing its own button to hole-punch the pages on its belt at the right moment until both belts are cleared",
+  "schema": "{a} notifies the arm that services the left belt, {b} notifies the arm that services the right belt",
+  "preference": "num of words should not exceed 15. Degree of detail avg is 6",
+  "seen": [
+    "Punch every page on both belts, {a} on the left and {b} on the right",
+    "Use {a} and {b} together to hole-punch the pages on both belts",
+    "Time each press so pages on the left and right belts are punched",
+    "Service both belts at once: {a} presses left, {b} presses right",
+    "Hole-punch all pages on the two belts simultaneously",
+    "Press both buttons to punch each page as it reaches its punch head",
+    "Drive {a} and {b} together to clear both belts of unpunched pages",
+    "Punch the left belt with {a} and the right belt with {b} at the same time",
+    "Operate both punch buttons so every page gets a clean hole",
+    "Clear both belts by timing the {a} and {b} presses to each page",
+    "Simultaneously hole-punch the pages riding both belts",
+    "With {a} and {b}, punch all pages on the left and right belts"
+  ],
+  "unseen": [
+    "Punch each page on both moving belts at the correct moment",
+    "Run both belts and hole-punch every page using {a} and {b}",
+    "Time the two presses to punch all pages on both belts"
+  ]
+}
