@@ -33,7 +33,7 @@ data_type:
 pcd_down_sample_num: 1024
 pcd_crop: true
 save_path: ./data
-clear_cache_freq: 5
+clear_cache_freq: 1
 collect_data: true
 eval_video_log: true
 check_render_success: true  # whether to check render success

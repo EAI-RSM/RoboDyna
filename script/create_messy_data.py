@@ -20,6 +20,7 @@ from PIL import Image
 
 import re
 import time
+import os
 from typing import List, Literal
 
 from sapien import Pose
@@ -28,6 +29,14 @@ from sapien import Pose
 CAMERA_POSE = Pose([0, 0.134123, 0.96], [0.684988, 0.174248, 0.173926, -0.685696])
 # main graph
 # CAMERA_POSE = Pose([0.0293144, -1.12261, 1.52599], [0.665553, 0.233024, 0.231257, -0.670268])
+
+
+def resolve_ray_tracing_denoiser(default: str = "none") -> str:
+    override = os.getenv("MS_RAY_TRACING_DENOISER") or os.getenv("SAPIEN_RT_DENOISER")
+    denoiser = (override or default or "none").strip().lower()
+    if denoiser not in {"none", "oidn", "optix"}:
+        denoiser = "none"
+    return denoiser
 
 class Helper:
     POINTS = [
@@ -54,7 +63,7 @@ class Helper:
         sapien.render.set_camera_shader_dir("rt")
         sapien.render.set_ray_tracing_samples_per_pixel(32)
         sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+        sapien.render.set_ray_tracing_denoiser(resolve_ray_tracing_denoiser())
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()

@@ -30,9 +30,10 @@ class catch_rat(Base_Task):
     GRASP_TOL_DEFAULT = 0.05          # horizontal tolerance (m) used to normalize the catch offset
 
     RAT_HALF = [0.020, 0.026, 0.030]  # rat body half-extents (small graspable box)
-    BOARD_HALF = [0.30, 0.13, 0.018]  # hole board half-extents (wide span, thin)
+    BOARD_HALF = [0.30, 0.13, 0.048]  # hole board half-extents (wide span, thin)
     POP_HEIGHT = 0.055                # how far above the board top the rat rises when popped
     HIDE_DEPTH = 0.075                # how far below the board top the rat hides when retracted
+    RAT_MOVE_SPEED = 0.06             # meters per second for the rat's start-up motion
 
     def setup_demo(self, **kwags):
         # capture task-scoped params BEFORE init (kwags isn't stored on self otherwise)
@@ -54,41 +55,67 @@ class catch_rat(Base_Task):
         self.pop_steps = int(self._cfg.get("pop_steps", self.POP_STEPS_DEFAULT))
         self.pre_pop_steps = int(self._cfg.get("pre_pop_steps", self.PRE_POP_STEPS_DEFAULT))
         self.grasp_tol = float(self._cfg.get("grasp_tol", self.GRASP_TOL_DEFAULT))
+        self.hole_size = float(self._cfg.get("hole_size", 0.05))
+        self.hole_bar_thickness = float(self._cfg.get("hole_bar_thickness", 0.02))
+        self.hole_count = int(self._cfg.get("hole_count", 9))
 
         self.table_top = 0.74 + self.table_z_bias
 
         # --- hole board: fixed, static, spanning the mid zone across both arms' reach ---
         board_cy = float(np.random.uniform(-0.05, 0.0))
         self.board_center = np.array([0.0, board_cy, self.table_top + self.BOARD_HALF[2]])
-        self.board = create_box(
+        self.board = create_hollow_box_with_holes(
             self.scene,
             sapien.Pose(p=self.board_center.tolist()),
             half_size=self.BOARD_HALF,
             color=[0.45, 0.32, 0.18],
             is_static=True,
             name="hole_board",
+            hole_count=self.hole_count,
+            hole_size=self.hole_size,
+            wall_thickness=0.02,
+            top_thickness=0.02,
+            bar_thickness=self.hole_bar_thickness,
         )
         self.board_top_z = self.board_center[2] + self.BOARD_HALF[2]
 
-        # --- hole grid: 2 rows (near/far) x 3 cols (left / center / right). Every hole is
-        #     inside the combined two-arm reach; col x-signs decide the owning arm. The center
-        #     column is biased to a clear side so it never lands ambiguously on the centerline.
-        col_x = [-0.20, float(np.random.choice([-0.07, 0.07])), 0.20]
-        row_dy = [-0.05, 0.05]
-        self.holes = []   # list of (x, y) in world coords
-        for cx in col_x:
-            for dy in row_dy:
-                self.holes.append((self.board_center[0] + cx, self.board_center[1] + dy))
-        self.holes = [np.array(h) for h in self.holes]
+        # --- hole grid: calculate positions for N holes based on the chosen square size.
+        hole_rows = int(np.ceil(np.sqrt(self.hole_count)))
+        hole_cols = int(np.ceil(self.hole_count / hole_rows))
+        x_half = self.BOARD_HALF[0]
+        y_half = self.BOARD_HALF[1]
+        gap_x = (2 * x_half - hole_cols * self.hole_size) / (hole_cols + 1)
+        gap_y = (2 * y_half - hole_rows * self.hole_size) / (hole_rows + 1)
+        if gap_x < self.hole_bar_thickness or gap_y < self.hole_bar_thickness:
+            raise ValueError("Requested hole_size is too large for the board top")
+        x_centers = np.linspace(
+            -x_half + gap_x + self.hole_size / 2,
+            x_half - gap_x - self.hole_size / 2,
+            hole_cols,
+        )
+        y_centers = np.linspace(
+            -y_half + gap_y + self.hole_size / 2,
+            y_half - gap_y - self.hole_size / 2,
+            hole_rows,
+        )
+        positions = [(self.board_center[0] + cx, self.board_center[1] + dy)
+                     for cx in x_centers for dy in y_centers]
+        self.holes = [np.array(pos) for pos in positions[:self.hole_count]]
         self.num_holes = len(self.holes)
 
-        # --- the rat: a small graspable box body, kinematic, starts hidden in hole 0 ---
-        self._active_hole = 0
+        # --- the rat: a small graspable box body, kinematic, starts hidden under a random hole ---
+        self._active_hole = int(np.random.randint(0, self.num_holes))
         self._rat_raised = False
+        rat_size = float(self.hole_size) - 0.004
+        if rat_size <= 0:
+            raise ValueError("hole_size must be larger than 4 mm to fit the rat")
+        rat_half_xy = rat_size / 2.0
+        rat_half = [rat_half_xy, rat_half_xy, self.RAT_HALF[2]]
+        self.rat_half = rat_half
         self.rat = create_box(
             self.scene,
-            sapien.Pose(p=self._rat_pose_p(0, raised=False).tolist()),
-            half_size=self.RAT_HALF,
+            sapien.Pose(p=self._rat_pose_p(self._active_hole, raised=False).tolist()),
+            half_size=rat_half,
             color=[0.40, 0.40, 0.42],
             is_static=False,
             name="rat_body",
@@ -101,7 +128,29 @@ class catch_rat(Base_Task):
         if self._rat_rigid is not None:
             self._rat_rigid.set_kinematic(True)
             self._rat_rigid.set_kinematic_target(
-                sapien.Pose(p=self._rat_pose_p(0, raised=False).tolist()))
+                sapien.Pose(p=self._rat_pose_p(self._active_hole, raised=False).tolist()))
+
+            hidden_pose = self._rat_pose_p(self._active_hole, raised=False)
+            raised_pose = hidden_pose.copy()
+            # place the rat entirely above the board top so it does not overlap.
+            # center z = board top + rat half-height + small gap
+            raised_pose[2] = self.board_top_z + self.rat_half[2] + 1e-4
+            rise_distance = raised_pose[2] - hidden_pose[2]
+            duration_steps = max(1, int(round(abs(rise_distance) / (self.RAT_MOVE_SPEED * self.scene.get_timestep()))))
+            rise_velocity = np.array([0.0, 0.0, rise_distance / (duration_steps * self.scene.get_timestep())])
+
+            self.start_kinematic_velocity(
+                self.rat,
+                linear_velocity=rise_velocity,
+                angular_velocity=np.zeros(3),
+                duration_steps=duration_steps,
+                revert_to_dynamic=False,
+                constrain_z=False,
+                explicit_z=None,
+            )
+            self._rat_auto_motion = "rising"
+            self._rat_rise_steps = duration_steps
+            self._rat_rise_velocity = rise_velocity
 
         # keep clutter off the board
         self.prohibited_area.append([
@@ -128,7 +177,8 @@ class catch_rat(Base_Task):
     def _rat_pose_p(self, hole_idx, raised):
         h = self.holes[hole_idx]
         if raised:
-            z = self.board_top_z + self.POP_HEIGHT
+            # center the rat so its bottom is just above the board top (no overlap)
+            z = self.board_top_z + self.rat_half[2] + 1e-4
         else:
             z = self.board_top_z - self.HIDE_DEPTH
         return np.array([h[0], h[1], z])
@@ -146,11 +196,32 @@ class catch_rat(Base_Task):
         self._global_step = getattr(self, "_global_step", 0) + 1
         if getattr(self, "_rat_rigid", None) is None or not getattr(self, "holes", None):
             return
+        if getattr(self, "_rat_auto_motion", False):
+            active_rat_tasks = [task for task in self.active_kinematic_tasks if task.get("component") == self._rat_rigid]
+            if active_rat_tasks:
+                return
+            if self._rat_auto_motion == "rising":
+                fall_velocity = -self._rat_rise_velocity
+                self.start_kinematic_velocity(
+                    self.rat,
+                    linear_velocity=fall_velocity,
+                    angular_velocity=np.zeros(3),
+                    duration_steps=self._rat_rise_steps,
+                    revert_to_dynamic=False,
+                    constrain_z=False,
+                    explicit_z=None,
+                )
+                self._rat_auto_motion = "falling"
+                return
+            self._rat_auto_motion = False
         # while the rat is being driven kinematically (not yet caught), keep pinning it to its
-        # commanded slot so contact with the gripper doesn't shove it off.
-        if self._rat_rigid.get_kinematic():
-            self._rat_rigid.set_kinematic_target(
-                sapien.Pose(p=self._rat_pose_p(self._active_hole, self._rat_raised).tolist()))
+        # commanded slot so contact with the gripper doesn't shove it off. Do NOT override
+        # the kinematic target while the automated rise/fall task is running (it would
+        # teleport the rat to the final pose immediately).
+        if not getattr(self, "_rat_auto_motion", False):
+            if self._rat_rigid.get_kinematic():
+                self._rat_rigid.set_kinematic_target(
+                    sapien.Pose(p=self._rat_pose_p(self._active_hole, self._rat_raised).tolist()))
 
     # ------------------------------------------------------------- dwell
     def _dwell(self, steps):

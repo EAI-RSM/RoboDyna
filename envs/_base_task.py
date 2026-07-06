@@ -33,6 +33,14 @@ current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
 
+def resolve_ray_tracing_denoiser(default: str = "none") -> str:
+    override = os.getenv("MS_RAY_TRACING_DENOISER") or os.getenv("SAPIEN_RT_DENOISER")
+    denoiser = (override or default or "none").strip().lower()
+    if denoiser not in {"none", "oidn", "optix"}:
+        denoiser = "none"
+    return denoiser
+
+
 class Base_Task(gym.Env):
 
     def __init__(self):
@@ -70,6 +78,9 @@ class Base_Task(gym.Env):
         self.save_data = kwags.get("save_data", False)
         self.dual_arm = kwags.get("dual_arm", True)
         self.eval_mode = kwags.get("eval_mode", False)
+        self.force_clear_cache_on_close = os.getenv(
+            "ROBOREAL_FORCE_CLEAR_CACHE_ON_CLOSE", "1"
+        ).strip().lower() not in {"0", "false", "no"}
 
         self.need_topp = True  # TODO
 
@@ -237,7 +248,7 @@ class Base_Task(gym.Env):
         sapien.render.set_camera_shader_dir("rt")
         sapien.render.set_ray_tracing_samples_per_pixel(32)
         sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+        sapien.render.set_ray_tracing_denoiser(resolve_ray_tracing_denoiser())
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()
@@ -979,7 +990,7 @@ class Base_Task(gym.Env):
             except:
                 pass
         
-        if clear_cache:
+        if clear_cache or getattr(self, "force_clear_cache_on_close", True):
             # for actor in self.scene.get_all_actors():
             #     self.scene.remove_actor(actor)
             sapien_clear_cache()

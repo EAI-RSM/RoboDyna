@@ -197,6 +197,185 @@ def create_box(
     return Actor(entity, data)
 
 
+def create_hollow_box_with_holes(
+    scene,
+    pose: sapien.Pose,
+    half_size,
+    color=None,
+    is_static=True,
+    name="",
+    hole_rows=None,
+    hole_cols=None,
+    hole_count=None,
+    hole_size=None,
+    wall_thickness=0.02,
+    top_thickness=0.02,
+    bar_thickness=0.02,
+) -> Actor:
+    scene, pose = preprocess(scene, pose)
+    x_half, y_half, z_half = half_size
+    builder = scene.create_actor_builder()
+    builder.set_physx_body_type("static" if is_static else "dynamic")
+
+    if hole_rows is None and hole_cols is None:
+        if hole_count is None:
+            hole_rows = 5
+            hole_cols = 3
+        else:
+            hole_cols = int(np.ceil(np.sqrt(hole_count)))
+            hole_rows = int(np.ceil(hole_count / hole_cols))
+    elif hole_rows is None:
+        if hole_count is not None:
+            hole_rows = int(np.ceil(hole_count / hole_cols))
+        else:
+            raise ValueError("hole_rows is missing")
+    elif hole_cols is None:
+        if hole_count is not None:
+            hole_cols = int(np.ceil(hole_count / hole_rows))
+        else:
+            raise ValueError("hole_cols is missing")
+    elif hole_count is not None and hole_rows * hole_cols != hole_count:
+        raise ValueError("hole_count must equal hole_rows * hole_cols")
+
+    if hole_rows < 1 or hole_cols < 1:
+        raise ValueError("hole_rows and hole_cols must be >= 1")
+
+    total_x = 2 * x_half
+    total_y = 2 * y_half
+    if hole_size is None:
+        hole_space_x = total_x - (hole_cols + 1) * bar_thickness
+        hole_space_y = total_y - (hole_rows + 1) * bar_thickness
+        if hole_space_x <= 0 or hole_space_y <= 0:
+            raise ValueError("Board is too small for the requested hole layout")
+        hole_size = min(hole_space_x / hole_cols, hole_space_y / hole_rows)
+    else:
+        if hole_size <= 0:
+            raise ValueError("hole_size must be > 0")
+        if bar_thickness <= 0:
+            raise ValueError("bar_thickness must be > 0")
+        if hole_size * hole_cols + bar_thickness * (hole_cols + 1) > total_x:
+            raise ValueError("Requested hole_size is too large for the board width")
+        if hole_size * hole_rows + bar_thickness * (hole_rows + 1) > total_y:
+            raise ValueError("Requested hole_size is too large for the board depth")
+
+    # side walls around the perimeter (open bottom)
+    side_height = 2 * z_half - top_thickness
+    side_z = -z_half + side_height / 2
+    builder.add_box_collision(
+        pose=sapien.Pose([-x_half + wall_thickness / 2, 0, side_z]),
+        half_size=[wall_thickness / 2, y_half, side_height / 2],
+        material=scene.default_physical_material,
+    )
+    builder.add_box_collision(
+        pose=sapien.Pose([x_half - wall_thickness / 2, 0, side_z]),
+        half_size=[wall_thickness / 2, y_half, side_height / 2],
+        material=scene.default_physical_material,
+    )
+    builder.add_box_collision(
+        pose=sapien.Pose([0, -y_half + wall_thickness / 2, side_z]),
+        half_size=[x_half - 2 * wall_thickness, wall_thickness / 2, side_height / 2],
+        material=scene.default_physical_material,
+    )
+    builder.add_box_collision(
+        pose=sapien.Pose([0, y_half - wall_thickness / 2, side_z]),
+        half_size=[x_half - 2 * wall_thickness, wall_thickness / 2, side_height / 2],
+        material=scene.default_physical_material,
+    )
+
+    if hole_size is None:
+        hole_size_x = (2 * x_half - (hole_cols + 1) * bar_thickness) / hole_cols
+        hole_size_y = (2 * y_half - (hole_rows + 1) * bar_thickness) / hole_rows
+        hole_size = min(hole_size_x, hole_size_y)
+        if hole_size <= 0:
+            raise ValueError("Board is too small for the requested hole layout")
+
+    gap_x = (2 * x_half - hole_cols * hole_size) / (hole_cols + 1)
+    gap_y = (2 * y_half - hole_rows * hole_size) / (hole_rows + 1)
+    if gap_x < bar_thickness or gap_y < bar_thickness:
+        raise ValueError("Requested hole_size is too large for the board top")
+
+    # fill the top surface around the holes with a lattice of filled strips
+    # horizontal strips: between hole rows and at the top/bottom margins
+    y = -y_half + gap_y / 2
+    for _ in range(hole_rows + 1):
+        builder.add_box_collision(
+            pose=sapien.Pose([0, y, z_half - top_thickness / 2]),
+            half_size=[x_half, gap_y / 2, top_thickness / 2],
+            material=scene.default_physical_material,
+        )
+        y += hole_size + gap_y
+
+    # vertical strip fillers for each hole band
+    y = -y_half + gap_y + hole_size / 2
+    for _ in range(hole_rows):
+        x = -x_half + gap_x / 2
+        for _ in range(hole_cols + 1):
+            builder.add_box_collision(
+                pose=sapien.Pose([x, y, z_half - top_thickness / 2]),
+                half_size=[gap_x / 2, hole_size / 2, top_thickness / 2],
+                material=scene.default_physical_material,
+            )
+            x += hole_size + gap_x
+        y += hole_size + gap_y
+
+    board_color = color if color is not None else [1.0, 1.0, 1.0]
+    builder.add_box_visual(
+        pose=sapien.Pose([-x_half + wall_thickness / 2, 0, side_z]),
+        half_size=[wall_thickness / 2, y_half, side_height / 2],
+        material=board_color,
+    )
+    builder.add_box_visual(
+        pose=sapien.Pose([x_half - wall_thickness / 2, 0, side_z]),
+        half_size=[wall_thickness / 2, y_half, side_height / 2],
+        material=board_color,
+    )
+    builder.add_box_visual(
+        pose=sapien.Pose([0, -y_half + wall_thickness / 2, side_z]),
+        half_size=[x_half - 2 * wall_thickness, wall_thickness / 2, side_height / 2],
+        material=board_color,
+    )
+    builder.add_box_visual(
+        pose=sapien.Pose([0, y_half - wall_thickness / 2, side_z]),
+        half_size=[x_half - 2 * wall_thickness, wall_thickness / 2, side_height / 2],
+        material=board_color,
+    )
+
+    # Visual top plate filler: match the collision lattice around the holes.
+    y = -y_half + gap_y / 2
+    for _ in range(hole_rows + 1):
+        builder.add_box_visual(
+            pose=sapien.Pose([0, y, z_half - top_thickness / 2]),
+            half_size=[x_half, gap_y / 2, top_thickness / 2],
+            material=board_color,
+        )
+        y += hole_size + gap_y
+
+    y = -y_half + gap_y + hole_size / 2
+    for _ in range(hole_rows):
+        x = -x_half + gap_x / 2
+        for _ in range(hole_cols + 1):
+            builder.add_box_visual(
+                pose=sapien.Pose([x, y, z_half - top_thickness / 2]),
+                half_size=[gap_x / 2, hole_size / 2, top_thickness / 2],
+                material=board_color,
+            )
+            x += hole_size + gap_x
+        y += hole_size + gap_y
+
+    builder.set_initial_pose(pose)
+    entity = builder.build(name=name)
+    model_data = {
+        "center": [0, 0, 0],
+        "extents": half_size,
+        "scale": half_size,
+        "target_pose": [np.eye(4).tolist()],
+        "contact_points_pose": [],
+        "transform_matrix": np.eye(4).tolist(),
+        "functional_matrix": [],
+    }
+    return Actor(entity, model_data)
+
+
 # create spere
 def create_sphere(
     scene,

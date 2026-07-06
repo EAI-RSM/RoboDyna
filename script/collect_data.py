@@ -3,7 +3,7 @@ import sys
 sys.path.append("./")
 
 import sapien.core as sapien
-from sapien.render import clear_cache
+# from sapien.render import clear_cache
 from collections import OrderedDict
 import pdb
 from copy import deepcopy

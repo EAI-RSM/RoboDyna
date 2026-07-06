@@ -1,5 +1,5 @@
 render_freq: 0
-episode_num: 50
+episode_num: 1
 use_seed: false
 save_freq: 15
 embodiment: [ur5-wsg, ur5-wsg, 0.6]
@@ -33,7 +33,7 @@ data_type:
 pcd_down_sample_num: 1024
 pcd_crop: true
 save_path: ./data
-clear_cache_freq: 5
+clear_cache_freq: 1
 collect_data: true
 eval_video_log: true
 check_render_success: false  # only filter on plan-pass success; flip to true for a double-verified production set

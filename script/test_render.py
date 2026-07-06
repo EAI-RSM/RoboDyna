@@ -41,6 +41,14 @@ import transforms3d as t3d
 from collections import OrderedDict
 
 
+def resolve_ray_tracing_denoiser(default: str = "none") -> str:
+    override = os.getenv("MS_RAY_TRACING_DENOISER") or os.getenv("SAPIEN_RT_DENOISER")
+    denoiser = (override or default or "none").strip().lower()
+    if denoiser not in {"none", "oidn", "optix"}:
+        denoiser = "none"
+    return denoiser
+
+
 class Sapien_TEST(gym.Env):
 
     def __init__(self):
@@ -49,7 +57,8 @@ class Sapien_TEST(gym.Env):
         try:
             self.setup_scene()
             print("\033[32m" + "Render Well" + "\033[0m")
-        except:
+        except Exception as exc:
+            print(exc)
             print("\033[31m" + "Render Error" + "\033[0m")
             exit()
 
@@ -70,7 +79,7 @@ class Sapien_TEST(gym.Env):
         sapien.render.set_camera_shader_dir("rt")
         sapien.render.set_ray_tracing_samples_per_pixel(32)
         sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+        sapien.render.set_ray_tracing_denoiser(resolve_ray_tracing_denoiser())
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()
