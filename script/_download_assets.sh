@@ -1,16 +1,19 @@
+#!/usr/bin/env bash
+set -e
+
 cd assets
 python _download.py
 
 # background_texture
-unzip background_texture.zip
+unzip -o background_texture.zip
 rm -rf background_texture.zip
 
 # embodiments
-unzip embodiments.zip
+unzip -o embodiments.zip
 rm -rf embodiments.zip
 
 # objects
-unzip objects.zip
+unzip -o objects.zip
 rm -rf objects.zip
 
 cd ..
