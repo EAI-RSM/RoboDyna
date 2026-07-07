@@ -2,31 +2,25 @@
 
 Author: Rui Heng Yang
 
-A dynamic **dual-arm** robotic-manipulation benchmark, forked and extended from
-[DOMINO](https://github.com/h-embodvis/DOMINO) (RoboTwin 2.0 + SAPIEN + curobo). All tasks run on the
-dual-UR5 (`ur5-wsg`) embodiment, standardize on **SAPIEN 3.0.3**, and export to HDF5 + LeRobot v2.1.
+A dynamic **dual-arm** robotic-manipulation benchmark. All tasks run on the dual-UR5 (`ur5-wsg`)
+embodiment, standardize on **SAPIEN 3.0.3**, and export to HDF5 + LeRobot v2.1.
 
 ## ⚙️ Simulator: SAPIEN 3.0.3 (required)
 
 We standardize on **SAPIEN 3.0.3** for *both* data collection and evaluation. **Do not mix SAPIEN
 versions** across data-gen and eval — different render shaders and PhysX defaults cause a
-vision-policy distribution shift. (Upstream pins `3.0.0b1`, which predates aarch64 and has no arm64
-wheel; 3.0.3 is the only release with wheels for both x86_64 and aarch64.)
+vision-policy distribution shift.
+
+**Install:**
+```bash
+bash script/_install.sh
+bash script/_download_assets.sh
+```
 
 **x86_64** (e.g. RTX 5080):
 ```bash
 pip install sapien==3.0.3
 ```
-
-**aarch64** (NVIDIA GB10 / Jetson) — use the official aarch64 wheel from the haosulab release:
-```bash
-pip install https://github.com/haosulab/SAPIEN/releases/download/3.0.3/sapien-3.0.3-cp310-cp310-linux_aarch64.whl
-```
-Two aarch64-only fixes are needed (automated in `build_domino_aarch64.sh`):
-- **librt ABI fix** (glibc 2.39): symlink the vendored `…/sapien.libs/librt-*.so` →
-  `/lib/aarch64-linux-gnu/librt.so.1`.
-- **import order**: `import open3d` **before** `import sapien`, or the renderer segfaults — a
-  `sitecustomize.py` that preloads open3d handles this transparently.
 
 **Run data collection** (env vars are required):
 ```bash

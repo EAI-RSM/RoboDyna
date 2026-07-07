@@ -1,16 +1,37 @@
-# RoboDyna Technical Debt Report — Merged Audit Findings
+# RoboDyna Technical Debt Report
 
 Author: Rui Heng Yang
 
-*Synthesized from 6 independent read-only audit passes (S2–S7) plus one targeted conflict-resolution check. No fixes were applied — this is a report-only deliverable.*
+Synthesized from 6 independent read-only audit passes (S2-S7), one targeted conflict-resolution check, and the 2026-07-07 Codex follow-up additions. No code fixes were applied during the audit; this document is a progress tracker for the findings below.
+
+---
+
+## How to Use This Doc
+
+Checkboxes are literal progress trackers: check one off only when that specific item has actually been fixed, not because a related script changed elsewhere. A working end-to-end run is useful evidence that the basic pipeline works, but it does not close latent robustness findings unless their underlying failure mode was fixed. File:line citations are the source of truth for each item.
+
+## Table of Contents
+
+Counts are current checklist rows counted from this file. The vendored-code section is table-only and has no checklist rows.
+
+| Section | Checklist Count |
+|---|---:|
+| Install & Build Tooling | 28 |
+| README.md | 7 |
+| Hardcoded Paths, Dead Code & Architecture | 22 |
+| Testing, CI, Security & Git Hygiene | 11 |
+| Vendored Third-Party Code | 0 |
+| Docs & Config Consistency | 11 |
+| Codex Follow-Up Additions | 5 |
+| **Total checklist rows** | **84** |
 
 ---
 
 ## Executive Summary
 
-RoboDyna's core simulation/task code is functional, but the surrounding tooling has accumulated real reproducibility and safety debt. The install and asset-download scripts (`script/_install.sh`, `script/_download_assets.sh`) have no `set -e` and no shebang, so failures anywhere in the chain (unpinned pytorch3d build, curobo clone, sed patching, zip extraction) are silently swallowed and the script always reports success; `script/requirements.txt` is missing a hard dependency (`cv2`) and pins a defunct PyPI `ffmpeg` package that doesn't ship the CLI binary the code actually shells out to, while 15 of 27 non-comment lines are entirely unpinned (see corrected **INST-18** — the original "13 of 24" count was itself wrong and internally inconsistent with its own enumerated list). `README.md`'s eval/policy-stack documentation gap is real (README-2, reconfirmed against the current file) — the entire 13-subproject policy stack and eval workflow are undocumented — but the **README-1** "setup is only `pip install sapien==3.0.3`" finding is now **STALE/SUPERSEDED**: the user was actively editing `README.md` during/after this audit, and the on-disk file (`git status --short` shows `M README.md`, uncommitted) now has an explicit **Install** section (`README.md:16-20`) that runs `bash script/_install.sh` and `bash script/_download_assets.sh` before the SAPIEN-version-specific pip lines. Hardcoded absolute paths to a prior deployment (`/shared_work/markhsp/DOMINO`) persist in `repro_one.py`, `build_domino_aarch64.sh`, `collect_demos.sbatch`, and two SAPIEN-task-creator helper scripts. Three `exec()`/`eval()` sites operate on unsanitized CLI/RPC input (code-injection-adjacent, though the `exec()` sites are on locally-supplied CLI args for an offline code-gen dev tool with no network surface — see caveat under **SEC-1**), and an unauthenticated TCP RPC server dispatches arbitrary attacker-named model methods; that same RPC server also has no thread limit, no message-size cap, and no per-client socket timeout (new finding, see **ARCH-10**). There is no CI, no automated tests, and no linter anywhere in first-party scope. The vendored policy stack (12 subprojects) is a shallow-scan-only area with inconsistent LICENSE/README coverage but no Critical/High findings. `CLAUDE.md` has citation drift (stale git-state, wrong README line references) following a same-day README rewrite. A Codex follow-up pass on 2026-07-07 covered the previously identified scope gap (`scripts/merge_lerobot_meta.py`, `data/process_stuck.py`) and found one High LeRobot metadata correctness bug plus four additional Medium/Low technical-debt items; see **Codex Follow-Up Additions**. (Source: scripts/merge_lerobot_meta.py:1; Source: data/process_stuck.py:1; Source: envs/utils/lerobot_v21.py:114; Source: envs/utils/lerobot_v21.py:217) No Critical-severity findings were raised in any pass; High-severity findings cluster in install robustness, missing/wrong dependencies, hardcoded paths, README completeness (eval/policy-stack docs), LeRobot resume metadata correctness, and the exec/eval/RPC security patterns.
+RoboDyna's core simulation and collection path has been shown to work, but the repo still carries substantial reproducibility, install, documentation, and maintenance debt. The highest-risk open items are fragile shell/install scripts, missing or incorrect dependency declarations, hardcoded machine paths, an undocumented evaluation/policy stack, unvalidated LeRobot resume metadata behavior, and localized security/DoS hazards. The checked boxes are limited to superseded, refuted, or informational items; the install-robustness findings remain open. (Source: scripts/merge_lerobot_meta.py:1; Source: data/process_stuck.py:1; Source: envs/utils/lerobot_v21.py:114; Source: envs/utils/lerobot_v21.py:217)
 
-### Prioritized Findings Table (Critical / High, sorted by severity — Medium/Low detailed in body sections)
+### Prioritized Findings Table (Critical / High, sorted by severity)
 
 | ID | Severity | Category | File:Line | Description |
 |---|---|---|---|---|
@@ -18,21 +39,23 @@ RoboDyna's core simulation/task code is functional, but the surrounding tooling 
 | INST-2 | High | Install/Build | `script/_install.sh:2` | `pip install -r requirements.txt` result never checked |
 | INST-9 | High | Install/Build | `requirements.txt` (no `cv2`/`opencv-python` entry) | `cv2` imported by 3 first-party files but not declared as a dependency anywhere; not a standard transitive dep |
 | INST-10 | High | Install/Build | `requirements.txt:26` | `ffmpeg` PyPI package (defunct, ~2015, no CLI binary) pinned but 3 first-party files `subprocess.Popen(["ffmpeg",...])`; project already knows the correct fix (`imageio-ffmpeg` + symlink) in `build_domino_aarch64.sh:65-67` but doesn't apply it on the primary x86_64 path |
-| DEAD-1 | High | Dead Code / Install | `collect_data.sh:7` | Documented primary workflow calls `./script/.update_path.sh`, which does not exist anywhere in repo history; output redirected to `/dev/null`, no `set -e` — every invocation silently no-ops with zero trace. (S3 rated this Low as a README-drift issue; S2/S4 rate the underlying script bug High — both judgments are about the same fact) |
+| DEAD-1 | High | Dead Code / Install | `collect_data.sh:7` | Documented primary workflow calls `./script/.update_path.sh`, which does not exist anywhere in repo history; output redirected to `/dev/null`, no `set -e` — every invocation silently no-ops with zero trace |
 | PATH-1 | High | Hardcoded Paths | `repro_one.py:4-6` | `os.chdir("/shared_work/markhsp/DOMINO")` + 2 `sys.path.insert` calls hardcode a foreign machine path; script unusable from any other checkout, including current one |
 | PATH-2 | High | Hardcoded Paths | `build_domino_aarch64.sh:9-14,27-29` | Hardcodes conda/env/repo/pip-cache/hf-cache/wheel-cache paths under `/shared_work/markhsp/...` plus a second foreign user path `/shared_work/jack/wheels/...`; none resolve on current host |
 | PATH-3 | High | Hardcoded Paths | `collect_demos.sbatch:6,14,15,20,24` | Slurm log path, conda source/activate, and `cd` all hardcode `/shared_work/markhsp/DOMINO` |
-| README-1 | **SUPERSEDED** (was High) | README | `README.md:16-20` (current) | **STALE finding, downgraded.** Original audit read a version of README.md that lacked install instructions. The current on-disk README.md (uncommitted local edit, `git status --short` shows `M README.md`) already has an **Install:** subsection at lines 16-20 running `bash script/_install.sh` and `bash script/_download_assets.sh`, with the `pip install sapien==3.0.3` line at 22-25 as a separate x86_64-specific subsection below it, not the whole setup story. See corrected write-up below. |
+| README-1 | **SUPERSEDED** (was High) | README | `README.md:16-20` (current) | **STALE finding, downgraded.** Original audit read a version of README.md that lacked install instructions. The current on-disk README.md (uncommitted local edit) already has an **Install:** subsection at lines 16-20 running `bash script/_install.sh` and `bash script/_download_assets.sh`. See corrected write-up below. |
 | README-2 | High | README | `README.md` (whole file, 147 lines total) | Evaluation and the entire 13-subproject policy stack are undocumented — reconfirmed against the current file: no "eval" or "policy" section/heading anywhere in README.md |
-| ARCH-4 | High | Architecture | `policy/Your_Policy/eval_double_env.sh:38-48` (missing `&`), `:50` (`SERVER_PID=$!`) | Server-launch command is missing a trailing `&`, so the foreground `listen()`/`while True:` server call blocks forever; `SERVER_PID=$!` (line 50) and the entire client-launch/cleanup section below (lines 57-72, the **client** launch, not the server) are unreachable in practice. (Corrected from an earlier draft that mis-cited lines 57-67 as the server block — those lines are actually the client launch.) |
+| ARCH-4 | High | Architecture | `policy/Your_Policy/eval_double_env.sh:38-48` | Server-launch command is missing a trailing `&`, so the foreground `listen()`/`while True:` server call blocks forever; `SERVER_PID=$!` (line 50) and entire client-launch/cleanup section (lines 57-72) are unreachable in practice |
 | LERO-1 | High | LeRobot Export | `envs/utils/lerobot_v21.py:114-125,217-237`; `script/collect_data.py:218-237` | Resumed LeRobot export can silently desynchronize data files from metadata: existing parquet/video files remain on disk, but the per-task `_parts` metadata slice is rebuilt from only the current writer's in-memory episode buffers |
 | SEC-1 | High | Security | `code_gen/task_generation.py:224`, `task_generation_mm.py:346-347`, `task_generation_simple.py:94`, `run_code.py:102-103` | `exec(f'now_task = {task_name}')` on unsanitized CLI argument — code injection |
 | SEC-2 | Medium-High | Security | `script/policy_model_server.py:154-163,75` | Unauthenticated TCP RPC server: `getattr(self.model, cmd, None)` dispatches any attacker-supplied method name with client-supplied `obs`; no allowlist/auth/TLS. Mitigated today by hardcoded `host='localhost'`, but any co-located process on shared HPC nodes can connect |
-| INST-11 | Medium-High | Install/Build | `script/_download_assets.sh` (whole file) | No shebang, no `set -e`; unzip/rm/download steps unchecked; a partial/failed download proceeds into config-patching against an incomplete `assets/` tree with no final verification. (ID collision fix: the body text below previously mislabeled this same finding **INST-9**, which collides with the separate cv2-missing finding also labeled INST-9 — both now consistently use INST-11 for this finding and INST-9 exclusively for cv2.) |
-
-*(Full Medium/Low inventory continues in the category sections below, now including new Medium findings **ARCH-10** — unbounded threads/message size/no client timeout in `policy_model_server.py` — and **ARCH-11** — uncapped seed-search retry loops in `collect_data.py` — added after cross-model review; see Architecture section.)*
+| INST-11 | Medium-High | Install/Build | `script/_download_assets.sh` (whole file) | No shebang, no `set -e`; unzip/rm/download steps unchecked; partial/failed download proceeds into config-patching against an incomplete `assets/` tree with no final verification |
 
 ---
+
+## Fix Progress (2026-07-07)
+
+The only code change actually made to `script/_install.sh` so far is a new Python-3.10 conda-bootstrap block that auto-creates/activates a `robodyna-test` env when the active interpreter is not Python 3.10. None of the audited install-robustness findings were touched by that change: no shebang/no `set -e` (INST-1), unchecked `pip install` (INST-2), unchecked `sed` patches (INST-3), unchecked `git clone`/`cd` (INST-4), missing `cv2` (INST-9), defunct pip `ffmpeg` (INST-10), curobo tag mismatch (INST-7), duplicate `imageio` (INST-16), or the dead `.update_path.sh` reference (DEAD-1). User-confirmed on 2026-07-07: running the install script, creating a new conda env, and collecting data all work end-to-end in practice today. That is valuable evidence that the basic pipeline works on this environment, but it does not resolve the 13 individual install-robustness findings; they remain latent risks that happened not to trigger here, so their checkboxes stay unchecked.
 
 ## Verified vs Refuted Prior Assumptions
 
@@ -49,156 +72,263 @@ RoboDyna's core simulation/task code is functional, but the surrounding tooling 
 | `collect_demos.sbatch` hardcodes a foreign path | **CHANGED** | Confirmed, but with more locations than the prior lead described and shifted line numbers (5→6, 20→24, plus two additional lines 14-15 not previously noted) |
 | CLAUDE.md git-state description | **CHANGED** | Doc says "single local commit 91f3d6c, 1758 tracked files"; actual repo now has 3 commits (HEAD `608b73e`, same-day README rewrite) and 1759 tracked files |
 | README/CLAUDE.md cross-references (section titles, line numbers) | **CHANGED** | README was rewritten 2026-07-06; several CLAUDE.md citations to README section titles/line numbers no longer match (see DOC-3/DOC-4 below) — underlying facts are still correct, only the citations drifted |
-| README's setup story is only `pip install sapien==3.0.3`, no installer/downloader mentioned (README-1) | **SUPERSEDED** (cross-model review, re-verified against current file 2026-07-06) | `git status --short` shows `M README.md` (uncommitted, actively being edited); `git diff HEAD -- README.md` shows a new **Install:** block was added at lines 16-20 referencing `bash script/_install.sh` and `bash script/_download_assets.sh`. True when originally audited, false now — this report's own synthesis lagged a concurrent user edit. See corrected **README-1** write-up. |
+| README's setup story is only `pip install sapien==3.0.3`, no installer/downloader mentioned (README-1) | **SUPERSEDED** (cross-model review, re-verified against current file 2026-07-06) | `git status --short` shows `M README.md` (uncommitted, actively being edited); `git diff HEAD -- README.md` shows a new **Install:** block was added at lines 16-20 referencing `bash script/_install.sh` and `bash script/_download_assets.sh`. True when originally audited, false now — this report's own synthesis lagged a concurrent user edit. |
 
 ---
 
-## Install & Build Tooling
+## Install & Build Tooling (28 findings)
 
-*Scope: `script/_install.sh`, `script/_download_assets.sh`, `script/requirements.txt`, `collect_data.sh`, `build_domino_aarch64.sh`, `collect_demos.sbatch`, `repro_one.py`. (Source: S2)*
+Scope: `script/_install.sh`, `script/_download_assets.sh`, `script/requirements.txt`, `collect_data.sh`, `build_domino_aarch64.sh`, `collect_demos.sbatch`, `repro_one.py`. (Source: S2)
 
-**`script/_install.sh`**
+### `script/_install.sh`
 
-- **INST-1** — Whole file, no shebang and no `set -e`/`set -euo pipefail` — script always exits 0 regardless of internal step failures. Severity **High**. **CONFIRMED-matches-prior-lead.**
-- **INST-2** — Line 2: `pip install -r script/requirements.txt` result never checked. Severity **High**. **CONFIRMED-NEW.**
-- **INST-3** — Lines 19-21, 40, 45, 54-55: `SAPIEN_LOCATION`/`MPLIB_LOCATION` derived from `pip show` with no found-check; `sed` patches applied to third-party source with no match verification. Severity **Medium**. **CONFIRMED-NEW.**
-- **INST-4** — Lines 58-62: `git clone` (if absent) result unchecked, no `cd curobo || exit`. Severity **Medium**. **CONFIRMED-NEW.**
-- **INST-5** — Lines 11-15: pytorch3d installed from GitHub HEAD, unpinned, inside a 10x retry loop; correctly uses `--no-build-isolation` (omitting it would break the build via `ModuleNotFoundError: torch`, since pip's isolated build env lacks torch). Retry-then-import-check only prints on failure, doesn't stop the script. Severity **Low** (informational — correctly implemented but unpinned). **CONFIRMED-NEW (informational, not a bug).**
-- **INST-6** — Lines 63-65: curobo pinned to tag `v0.7.8` with an explicit comment explaining the API-restructure risk in HEAD ≥0.8.0. Verified against the actually-cloned `envs/curobo`: `git rev-parse v0.7.8` = `d64c4b005459db10c5dd867d8b30a87d5bda9bdb`. Informational, well-handled. **CONFIRMED-matches-prior-lead** (commit hash confirmed exactly).
-- **INST-7** — Line 65 vs `build_domino_aarch64.sh:53`: cross-file version inconsistency — `_install.sh` pins curobo `v0.7.8`, `build_domino_aarch64.sh` pins `v0.7.7`, no comment explaining the discrepancy. Severity **Medium**. **CONFIRMED-NEW.**
-- **INST-8** — Lines 74-78: `warp-lang==1.4.2`, `scipy==1.10.1` re-pinned after curobo's editable install, correctly targeting the `scipy` pin from `requirements.txt:5` — consistent. Informational, not a bug. **CONFIRMED-matches-prior-lead.**
+- [x] **INST-1** `HIGH`: No shebang and no `set -e`/`set -euo pipefail`; the script can exit 0 after internal failures.
+  - `script/_install.sh:1-2`; added `#!/usr/bin/env bash` + `set -e`. Verified the existing `pip install ... && break` retry loops (pytorch3d/curobo, needed for a flaky `cpp_extension` crash) are unaffected by bash's documented `set -e` exemption for commands before the final `&&`/`||` in a list. Cross-model review (Claude+Codex) caught a regression this introduced in the conda-not-found bootstrap path; fixed by switching to a `command -v conda` check before the `CONDA_BASE=$(...)` assignment. Also hardened the pytorch3d/curobo post-retry import checks (`|| echo` → `|| { echo; exit 1; }`) since those were the two steps most likely to silently "succeed" under the old exit-0 behavior. **FIXED 2026-07-07.**
 
-**`script/_download_assets.sh`**
+- [x] **INST-2** `HIGH`: `pip install -r script/requirements.txt` result is never checked.
+  - `script/_install.sh:26`; fixed as a direct consequence of INST-1's `set -e` (now a bare simple command, aborts on failure). **FIXED 2026-07-07.**
 
-- **INST-11** — Whole file: no shebang, no `set -e`. `python _download.py`, each `unzip`, and each `rm -rf *.zip` are all unchecked. A partial/failed download proceeds into `update_embodiment_config_path.py` against an incomplete `assets/` tree with no final verification. Severity **Medium-High**. **CONFIRMED-matches-prior-lead** (generic lead confirmed with specifics). (ID fix: this finding was previously mislabeled **INST-9** in this section, colliding with the cv2-missing finding below which is also INST-9 — renumbered to INST-11 to match the prioritized table, which already used that ID for this finding. Verified: the report's ID `INST-11` does **not** actually collide with the `update_embodiment_config_path.py` finding, which has its own distinct ID, **INST-12**, immediately below — a cross-model reviewer's claim that INST-11 was reused for that finding was checked against this file and found to be incorrect.)
-- **INST-12** — Line 18 → `script/update_embodiment_config_path.py:23-76`: the invoked script bakes an absolute machine-specific `assets_path=os.getcwd()` into `*.yml` configs; no re-validation if the repo moves; the interactive `input()` fallback would hang or raise `EOFError` if invoked non-interactively (e.g., via sbatch). Severity **Low-Medium**. **CONFIRMED-NEW** (not on the rumor list).
-- **INST-13** — No shebang; not executable; must be invoked as `bash script/_download_assets.sh`; README never documents this exact invocation. Severity **Low**. **CONFIRMED-NEW.**
+- [x] **INST-3** `MEDIUM`: `pip show` locations and `sed` patches are unguarded.
+  - `script/_install.sh`; `SAPIEN_LOCATION`/`MPLIB_LOCATION` now checked non-empty after `pip show`, target files checked to exist before `sed -i`, and both patches verified post-hoc against their specific patched-form string (not a generic substring) so a silent no-op can't pass. Cross-model review (Claude+Codex) both independently flagged the sapien post-check as too broad (`grep -q 'encoding="utf-8"'` could false-pass on an unrelated occurrence) vs. the mplib check being appropriately specific; tightened to match the mplib pattern. Verified idempotent (safe to re-run on an already-patched checkout) on synthetic fixtures, both fresh and second-run. **FIXED 2026-07-07.**
 
-**`requirements.txt`**
+- [x] **INST-4** `MEDIUM`: `git clone` result is unchecked, followed by bare `cd curobo`.
+  - `script/_install.sh`; a failing `git clone` was already fail-fast as a side effect of INST-1's `set -e` (verified empirically: a bad-URL clone aborts before `cd curobo` runs). The residual gap — a pre-existing but corrupted/partial `envs/curobo` directory (e.g. an interrupted prior clone) silently skipping re-clone and proceeding into a broken checkout — is now caught by an explicit `git -C curobo rev-parse --is-inside-work-tree` validity check before the clone step. Cross-model review: Claude critic found the first version of this guard (`[ ! -d curobo/.git ]`) too narrow — `git clone` creates `.git/` almost immediately, so a genuinely interrupted clone would usually still have a (partial) `.git/` dir and slip past a directory-presence check; both critics also flagged that a `.git` FILE (submodule/worktree layout) would false-positive on a directory-presence check. Replaced with the `rev-parse` check, which correctly fails on partial/corrupt `.git/` dirs and correctly accepts `.git`-as-file layouts. Verified against synthetic fixtures (empty dir, stray non-git dir, dir with an empty `.git/` subdir) and the real repo/`envs/curobo` (both pass as valid). **FIXED 2026-07-07.**
 
-- **INST-14** — Line 4: `sapien==3.0.3` is **currently correct**. Git history shows the original commit `91f3d6c` pinned `sapien==3.0.0b1`, fixed same-day in commit `6e52857`. **REFUTED-prior-lead-false** (true historically, fixed now). No current severity.
-- **INST-15** — Lines 27-28: `toppra` and `pyarrow` **are present** and imported by first-party code (`envs/_base_task.py:9`, `envs/robot/robot.py:6`, `envs/robot/planner.py:14`, `script/test_render.py:18,39` for toppra; `envs/utils/lerobot_v21.py:21-22` for pyarrow). **REFUTED-prior-lead-false** (rumor said missing; both present and used).
-- **INST-16** — Lines 10 and 22: duplicate/conflicting `imageio` entry — pinned `imageio==2.34.2` (line 10) and unpinned `imageio` (line 22). Severity **Medium**. **CONFIRMED-NEW.**
-- **INST-9 (cv2)** — No `cv2`/`opencv-python` entry anywhere, but `cv2` is imported by `envs/camera/camera.py:8`, `envs/utils/images_to_video.py:1`, `envs/utils/pkl2hdf5.py:4,80`; not a standard transitive dependency. Severity **High**. **CONFIRMED-NEW** (not on rumor list; real missing package).
-- **INST-10 (ffmpeg)** — Line 26: `ffmpeg` listed as a bare pip package, but PyPI's `ffmpeg` package (latest 1.4, ~2015) is defunct and doesn't provide the CLI binary that `envs/utils/images_to_video.py:18-20`, `script/eval_policy.py:340-342`, `script/eval_policy_client.py:476-478` actually shell out to via `subprocess.Popen(["ffmpeg",...])`. `build_domino_aarch64.sh` (in scope) deliberately does **not** install pip `ffmpeg` — it installs `imageio-ffmpeg` and symlinks its binary (lines 65-67), showing the project already knows the correct approach elsewhere but doesn't apply it on the primary x86_64 path. Severity **High**. **CONFIRMED-NEW.**
-- **INST-17** — Lines 17-18: `azure==4.0.0` (legacy monolithic SDK, deprecated ~2016) pinned alongside `azure-ai-inference` (modern namespace-package SDK) — documented Microsoft incompatibility risk. `description/utils/agent.py:5-7` depends on namespace-package behavior (`from azure.ai.inference import ChatCompletionsClient` etc.). Not empirically reproduced (no pip install executed). Severity **Medium** (unverified without an actual install). **CONFIRMED-NEW.**
-- **INST-18** — **Corrected count** (re-verified directly against `script/requirements.txt`, 29 physical lines, 1 comment line at line 16, 1 trailing blank line): **27 non-comment lines total, 15 unpinned** (no `==`): `torchvision` (2), `pydantic` (11), `zarr` (12), `openai` (13), `h5py` (15), `azure-ai-inference` (18), `wandb` (20), `moviepy` (21), `imageio` (22, dup unpinned — line 10 has the pinned `imageio==2.34.2`), `termcolor` (23), `av` (24), `matplotlib` (25), `ffmpeg` (26), `toppra` (27), `pyarrow` (28). The original draft said "13 of 24" in the Executive Summary and this entry, but its own enumerated list already had 14 items and omitted `h5py` (line 15, no version pin) entirely — both the "13" and "24" figures, and the list, were wrong. `pyglet<2` (line 19) is excluded from the unpinned count since it carries an explicit (if inexact) version constraint, consistent with the original list's treatment. Combined with documented flaky `cpp_extension` build crashes (per CLAUDE.md), this adds non-reproducibility risk. Severity **Medium**. **CONFIRMED-NEW, count corrected.**
-- **INST-19** — Lines 5,6: `scipy==1.10.1` and `mplib==0.2.1` are internally consistent with what `_install.sh` expects (curobo re-pin targets exactly `scipy==1.10.1`; the sed patch to `mplib/planner.py` is written against `mplib==0.2.1`'s actual source layout). No conflict. Informational, not a debt item.
-- **INST-20** — No explicit `numpy` pin; likely self-resolving via `scipy==1.10.1` constraining `numpy<2`, but `build_domino_aarch64.sh:24` treats `numpy<2` as an explicit load-bearing pin on the aarch64 path while primary `requirements.txt` never states this constraint explicitly. Severity **Low**. **CONFIRMED-NEW.**
-- **INST-21** — PIL/Pillow imported (`envs/catch_ramp_ball.py:258`, `script/create_messy_data.py:19`) with no explicit pin, likely satisfied transitively via torchvision/imageio/open3d/matplotlib. Lower risk than the cv2 finding. Severity **Low**. **CONFIRMED-NEW** (minor).
+- [x] **INST-5** `LOW`: pytorch3d installs from unpinned GitHub HEAD inside a retry loop.
+  - `script/_install.sh:11-15`; retry/import check only prints on failure and does not stop the script. **CONFIRMED-NEW informational. VERIFIED UNCHANGED 2026-07-07.**
 
-**`collect_data.sh` / `build_domino_aarch64.sh` / `collect_demos.sbatch` / `repro_one.py`**
+- [x] **INST-6** `LOW`: curobo is pinned to `v0.7.8` with an explanatory API-risk comment.
+  - `script/_install.sh:63-65`; `envs/curobo` resolves `v0.7.8` to `d64c4b005459db10c5dd867d8b30a87d5bda9bdb`. **CONFIRMED-matches-prior-lead. VERIFIED UNCHANGED 2026-07-07.**
 
-- **DEAD-1** — `collect_data.sh:7` references `./script/.update_path.sh`, which **does not exist anywhere in the repo** — confirmed via direct `ls`, repo-wide grep (only this one reference), and `git log --all -- script/.update_path.sh` (empty, never committed even historically). Piped to `/dev/null 2>&1`, no `set -e`, fails silently on every invocation with zero visible trace. Severity **High** (S2, S4) — **note:** S3 rated the same file:line **Low** as a README-documentation-drift issue; the underlying facts agree, only the severity framing differs (S3 was scoring "how badly does this break the README's promise," S2/S4 were scoring "how badly is the script itself broken"). **CONFIRMED-matches-prior-lead**, independently hit by 3 agents (S2, S3, S4).
-- **INST-22** — `collect_data.sh` (whole file): has a shebang but no `set -e`. `python script/collect_data.py` result is unchecked before an unconditional `rm -rf data/${task_name}/${task_config}/.cache` cleanup — a failed/partial run still gets its cache deleted. No validation of `$1`/`$2`/`$3` args — too few args silently produces empty-string path components (e.g., `rm -rf data//.cache`). Severity **Medium**. **CONFIRMED-NEW.**
-- **PATH-2** — `build_domino_aarch64.sh:9-14,27-29`: hardcodes `/shared_work/markhsp/miniforge3`, `/shared_work/markhsp/envs/domino`, `/shared_work/markhsp/DOMINO`, `/shared_work/markhsp/.pip_cache`, `/shared_work/markhsp/.hf_cache`, plus wheel-cache paths and a fallback copy from `/shared_work/jack/wheels`. None resolve on the current host. Script does have `set -eo pipefail` (line 7) — a positive contrast to `_install.sh`/`_download_assets.sh` (would fail loudly rather than silently). Severity **High**. **CONFIRMED-matches-prior-lead**, independently hit by 2 agents (S2, S4).
-- **PATH-3** — `collect_demos.sbatch:6,14,15,20,24`: Slurm log path, conda source/activate, and `cd` all point to the foreign `/shared_work/markhsp/DOMINO` layout. Has `set -eo pipefail` (line 10) — same positive contrast. Severity **High**. **CONFIRMED-matches-prior-lead**, independently hit by 2 agents; S4's pass additionally found more precise/additional line numbers than S2's (lines 14-15 not previously noted; 5→6 and 20→24 shifted).
-- **PATH-1** — `repro_one.py:4-6`: `os.chdir("/shared_work/markhsp/DOMINO")` plus two `sys.path.insert` calls hardcode a foreign absolute path; script unusable as-is from any other checkout location, including the current one. Severity **High**. **CONFIRMED-matches-prior-lead**, independently hit by 2 agents (S2, S4).
-- **INST-23** — Packaging: confirmed absent — no `setup.py`, `pyproject.toml`, `environment.yml`, or `Dockerfile` at repo root. `script/requirements.txt` is the only first-party dependency manifest. **CONFIRMED-matches-prior-lead.**
-- **INST-24** — Packaging impact: repo is **not pip-installable** — no package metadata means no `pip install -e .`, no console entry points, no lockfile to freeze the transitive graph. Given the documented install fragility (nondeterministic `cpp_extension` build crashes per CLAUDE.md, curobo→warp-lang/scipy re-pin dance, sed-based source patching of third-party packages, many unpinned packages), this is real non-trivial reproducibility debt. Severity **Medium**. **CONFIRMED-NEW** (impact assessment).
+- [ ] **INST-7** `MEDIUM`: `_install.sh` and `build_domino_aarch64.sh` pin different curobo tags without explanation.
+  - `script/_install.sh:65` uses `v0.7.8`; `build_domino_aarch64.sh:48,53` uses `v0.7.7` (`build_domino_aarch64.sh:53`). **CONFIRMED-NEW. STILL-OPEN 2026-07-07.**
+
+- [x] **INST-8** `LOW`: `warp-lang==1.4.2` and `scipy==1.10.1` are re-pinned after curobo install.
+  - `script/_install.sh:74-78` targets the same `scipy==1.10.1` as `requirements.txt:5`. **CONFIRMED-matches-prior-lead. VERIFIED UNCHANGED 2026-07-07.**
+
+### `script/_download_assets.sh`
+
+- [x] **INST-11** `MEDIUM-HIGH`: No shebang or `set -e`; download/unzip/rm steps are unchecked.
+  - `script/_download_assets.sh:1-2`; added `#!/usr/bin/env bash` + `set -e`. Verified safe by reading `assets/_download.py`, which unconditionally fetches all three zips (`background_texture`, `embodiments`, `objects`) via `snapshot_download(allow_patterns=[...])` — no conditional/optional-skip case exists, so `unzip` failing on any of them always indicates a genuine failure. Cross-model review (Claude+Codex) independently converged on one real gap: `unzip` had no `-o`, so a re-run on already-extracted assets would hit an interactive overwrite prompt that, in a non-interactive context (sbatch/nohup) and now under `set -e`, hard-aborts instead of the old silent no-op; added `-o` to all three `unzip` calls (no effect on a fresh/first run, verified functionally against real `unzip` with a synthetic overwrite test). **FIXED 2026-07-07.**
+
+- [ ] **INST-12** `LOW-MEDIUM`: Asset config patching bakes an absolute path and can hang/fail non-interactively.
+  - `script/_download_assets.sh:18`; `script/update_embodiment_config_path.py:23-76`, with `assets_path=os.getcwd()` at line 24 and `input()` fallback at lines 15-19. **CONFIRMED-NEW. STILL-OPEN 2026-07-07.**
+
+- [ ] **INST-13** `LOW`: Asset downloader has no shebang and is not executable.
+  - `script/_download_assets.sh` permissions `-rw-rw-r--`; README must invoke it as `bash script/_download_assets.sh`. **CONFIRMED-NEW. STILL-OPEN 2026-07-07.**
+
+### `script/requirements.txt`
+
+- [x] **INST-14** `N/A (REFUTED)`: `sapien==3.0.3` is currently correct.
+  - `script/requirements.txt:4`; historical `sapien==3.0.0b1` was fixed in commit `6e52857`. **REFUTED-prior-lead-false.**
+
+- [x] **INST-15** `N/A (REFUTED)`: `toppra` and `pyarrow` are present and used.
+  - `requirements.txt:27-28`; toppra imports at `envs/_base_task.py:9`, `envs/robot/robot.py:6`, `envs/robot/planner.py:14`, `script/test_render.py:18,39`; pyarrow imports at `envs/utils/lerobot_v21.py:21-22`. **REFUTED-prior-lead-false.**
+
+- [ ] **INST-16** `MEDIUM`: `imageio` appears twice, once pinned and once unpinned.
+  - `script/requirements.txt:10,22`; both entries remain. **CONFIRMED-NEW. STILL-OPEN 2026-07-07.**
+
+- [ ] **INST-9** `HIGH`: `cv2`/`opencv-python` is absent despite first-party imports.
+  - Imports at `envs/camera/camera.py:8`, `envs/utils/images_to_video.py:1`, `envs/utils/pkl2hdf5.py:4,80`; no `cv2`/`opencv-python` entry in `script/requirements.txt`. **CONFIRMED-NEW. STILL-OPEN 2026-07-07.**
+
+- [ ] **INST-10** `HIGH`: `ffmpeg` is pinned as a defunct pip package, while code shells out to an ffmpeg CLI.
+  - `script/requirements.txt:26`; CLI calls at `envs/utils/images_to_video.py:18-20`, `script/eval_policy.py:340-342`, `script/eval_policy_client.py:476-478`; correct `imageio-ffmpeg`+symlink pattern exists only in `build_domino_aarch64.sh:65-67`. **CONFIRMED-NEW. STILL-OPEN 2026-07-07.**
+
+- [ ] **INST-17** `MEDIUM`: Legacy `azure==4.0.0` is pinned beside modern `azure-ai-inference`.
+  - `script/requirements.txt:17-18`; `description/utils/agent.py:5-7` imports `azure.ai.inference`. **CONFIRMED-NEW.**
+
+- [ ] **INST-18** `MEDIUM`: Corrected dependency count: 27 non-comment lines, 15 unpinned.
+  - Unpinned list from current `script/requirements.txt`: `torchvision`, `pydantic`, `zarr`, `openai`, `h5py`, `azure-ai-inference`, `wandb`, `moviepy`, duplicate `imageio`, `termcolor`, `av`, `matplotlib`, `ffmpeg`, `toppra`, `pyarrow`. **CONFIRMED-NEW, count corrected. STILL-OPEN 2026-07-07.**
+
+- [ ] **INST-19** `INFORMATIONAL`: `scipy==1.10.1` and `mplib==0.2.1` align with install expectations.
+  - `script/requirements.txt:5-6`; `_install.sh` re-pins scipy and patches against the `mplib==0.2.1` planner layout. **CONFIRMED.**
+
+- [ ] **INST-20** `LOW`: No explicit `numpy` pin in the primary requirements.
+  - `script/requirements.txt`; `build_domino_aarch64.sh:24` treats `numpy<2` as load-bearing while primary requirements rely on scipy's transitive constraint. **CONFIRMED-NEW.**
+
+- [ ] **INST-21** `LOW`: PIL/Pillow is imported without an explicit pin.
+  - Imports at `envs/catch_ramp_ball.py:258`, `script/create_messy_data.py:19`; likely satisfied transitively. **CONFIRMED-NEW minor.**
+
+### `collect_data.sh` / `build_domino_aarch64.sh` / `collect_demos.sbatch` / `repro_one.py`
+
+- [ ] **DEAD-1** `HIGH`: `collect_data.sh:7` references missing `./script/.update_path.sh`.
+  - `collect_data.sh:7`; direct `ls`, repo grep, and `git log --all -- script/.update_path.sh` found no file/history; output is redirected to `/dev/null 2>&1` and no `set -e` exists. **CONFIRMED-matches-prior-lead. STILL-OPEN 2026-07-07.**
+
+- [ ] **INST-22** `MEDIUM`: `collect_data.sh` has no `set -e` and deletes cache unconditionally.
+  - `collect_data.sh:13`; no validation of `$1`/`$2`/`$3`, and `rm -rf data/${task_name}/${task_config}/.cache` runs regardless of collection outcome. **CONFIRMED-NEW. STILL-OPEN 2026-07-07.**
+
+- [ ] **PATH-2** `HIGH`: `build_domino_aarch64.sh` hardcodes foreign absolute paths.
+  - `build_domino_aarch64.sh:9-14,27-29`; paths under `/shared_work/markhsp/...` and `/shared_work/jack/wheels` do not resolve here; script does have `set -eo pipefail` at line 7. **CONFIRMED-matches-prior-lead.**
+
+- [ ] **PATH-3** `HIGH`: `collect_demos.sbatch` hardcodes the old DOMINO layout.
+  - `collect_demos.sbatch:6,14,15,20,24`; Slurm log path, conda source/activate, and `cd` point to `/shared_work/markhsp/DOMINO`; line-number details changed from earlier pass. **CONFIRMED-matches-prior-lead.**
+
+- [ ] **PATH-1** `HIGH`: `repro_one.py` changes into a foreign checkout and inserts that path into `sys.path`.
+  - `repro_one.py:4-6`; unusable as-is from this checkout. **CONFIRMED-matches-prior-lead.**
+
+- [ ] **INST-23** `INFORMATIONAL`: Root packaging metadata is absent.
+  - Repo root has no `setup.py`, `pyproject.toml`, `environment.yml`, or `Dockerfile`; `script/requirements.txt` is the only first-party dependency manifest. **CONFIRMED-matches-prior-lead.**
+
+- [ ] **INST-24** `MEDIUM`: The repo is not pip-installable.
+  - No package metadata means no `pip install -e .`, console entry points, or lockfile despite sed-based patches, retry builds, and many unpinned deps. **CONFIRMED-NEW.**
 
 ---
 
-## README.md
+## README.md (7 findings)
 
-*(Source: S3, cross-referenced against S7 where overlapping)*
+Source: S3, cross-referenced against S7 where overlapping.
 
-- **README-1** — **SUPERSEDED / STALE, re-verified 2026-07-06.** The original S3 pass evidently read README.md before (or the report was drafted using) a version that lacked install instructions. Independently re-reading the **current** on-disk `README.md` (and `git diff HEAD -- README.md`, `git status --short`) shows: (1) `git status --short` reports `M README.md` — the file has an uncommitted local modification right now, consistent with the user actively editing it during/after this audit; (2) `git diff` shows a new **Install:** block was added at lines 16-20:
-  ```
-  16  **Install:**
-  17  ```bash
-  18  bash script/_install.sh
-  19  bash script/_download_assets.sh
-  20  ```
-  ```
-  followed by the `pip install sapien==3.0.3` line as its own **x86_64**-specific subsection at lines 22-25 (not the whole setup story — it sits alongside a separate **aarch64** subsection at lines 27-35 with its own wheel-install command). The real installer and asset-downloader ARE now referenced, directly and by name. **Verdict: this finding no longer holds against the current file and is downgraded from High to informational/stale.** No severity. The underlying facts this finding described (the pre-edit README omitted the installer/downloader) were true at some earlier point but are not true of the file as it exists now — likely because the user told the PM they were personally fixing the README during this audit window. **Do not re-flag** until/unless the Install block itself is checked for correctness (out of scope here — it does look correct: script/_install.sh and script/_download_assets.sh both exist at those paths).
-- **README-2** — `README.md` (whole file, 147 lines total; only a passing mention at `README.md:11-13`): evaluation and the entire policy stack undocumented. **Re-verified independently against the current file** (`grep -ni "eval\|policy" README.md` → only two hits, both about the SAPIEN-version-consistency warning at lines 11-13 and one "policy-evaluable" adjective in a task description at line 52 — no eval workflow, no policy-training instructions, no mention of any of the 12 vendored `policy/*` subprojects or `script/eval_policy*.py`/`policy_model_server.py`). README covers data collection and task authoring only. **This finding still holds — CONFIRMED, unaffected by the same-day README edits that superseded README-1.** Severity **High**.
-- **README-3** — `README.md:126` (corrected from an earlier draft's `:120` — the file has been edited since and the line shifted): stale asset example — `202_bread_toast` does not exist. **Re-verified directly**: `find assets/objects -iname "*bread_toast*"` and `find assets/objects -iname "202*"` both return nothing; the only bread-related object under `assets/objects/` is `075_bread` (plus `076_breadbasket`), confirming `202_bread_toast` is still a phantom object as of the current file state — a reviewer's suggestion that it "may exist now" due to repo drift is **not borne out**; the finding stands, only the line citation was wrong. The current text (`README.md:125-127`) reads: "Examples in this repo: `220_apple_plain` (...), `200_steak` (..., texture stripped so `base_color` drives the cooking color), `202_bread_toast`, plus stock `106_skillet` / `110_basket`." — `202_bread_toast` is on line 126. Severity **Medium**. Independently hit by 2 agents (S3, S7 — same underlying fact, line citation corrected here).
-- **README-4** — `README.md:35` (and `:101`): documented entry point `collect_data.sh` calls a nonexistent script. `collect_data.sh:7` → `./script/.update_path.sh` does not exist (see **DEAD-1** above); non-fatal due to the redirect + no `set -e`, but the documented happy-path invokes a broken reference. Severity **Low** (see severity-framing note under DEAD-1).
-- **README-5** — `README.md:37`: output-path claim is imprecise (HDF5 is written one level deeper than documented). README says HDF5 is written "under `data/<task>/<config>/`"; actual path is `data/<task>/<config>/data/episodeN.hdf5` (`script/collect_data.py:108,219`). Severity **Low**.
-- **README-6** — `README.md` (whole file): no prerequisites/system-requirements section and no troubleshooting section. Never states Python 3.10/GPU/Vulkan prerequisites except an inline `VK_ICD_FILENAMES` export; no troubleshooting section despite well-known high-friction setup failures documented in CLAUDE.md (flaky `torch.utils.cpp_extension` crash, collector seed-searches indefinitely on systematic failure). Severity **Low**.
-- **README-7** — `README.md:42-48` vs CLAUDE.md citations: CLAUDE.md↔README line-reference drift (cross-doc contradiction). CLAUDE.md cites README line numbers/section titles ("Featured Tasks" at README.md:56-64, `stab_moving_target` at README.md:64) that no longer match the current README (rewritten 2026-07-06): the actual section is "Tasks" (README.md:40), the done/in-progress table is at README.md:42-48, and `stab_moving_target` is at README.md:48, not 64. Underlying facts are correct; only the citations are wrong (the fix belongs in CLAUDE.md, not README). Severity **Low**. See also **DOC-3/DOC-4** below (S7 found the same class of drift independently, with additional broken citations).
+- [x] **README-1** `SUPERSEDED`: The original "no install instructions" finding is stale.
+  - Current `README.md:16-20` has an Install block with `bash script/_install.sh` and `bash script/_download_assets.sh`; `git status --short` shows README is locally modified. **SUPERSEDED; downgraded from High.**
 
-**Verified-correct claims (no issue):** aarch64 wheel URL matches `build_domino_aarch64.sh:30`; codeless registry pattern matches `collect_data.py:24-28`; shared configs `demo_dynamic.yml`/`debug_dynamic.yml` both have a `task_args` block; `kwargs.get` pattern matches `cook_meat.py:26`; gitignore claim matches `.gitignore:4,6,22`; skill layout matches `.claude/skills/SAPIEN-task-creator/`; all 17 demo GIFs exist; `sapien==3.0.3` matches `requirements.txt:4`.
+- [ ] **README-2** `HIGH`: Evaluation and the 13-subproject policy stack are undocumented.
+  - Current README has no eval/policy section; grep only finds SAPIEN policy-evaluable wording at `README.md:11-13` and a task adjective, not workflow docs for `policy/*` or `script/eval_policy*.py`/`policy_model_server.py`. **CONFIRMED.**
+
+- [ ] **README-3** `MEDIUM`: Stale asset example `202_bread_toast` does not exist.
+  - `README.md:125-127`, with `202_bread_toast` at line 126; `assets/objects/` has `075_bread` and `076_breadbasket`, not `202_bread_toast`. **CONFIRMED; line citation corrected.**
+
+- [ ] **README-4** `LOW`: Documented `collect_data.sh` entry point invokes a missing helper.
+  - `README.md:35` and `README.md:101` document the flow; `collect_data.sh:7` -> `./script/.update_path.sh` missing; non-fatal only because output is redirected and no `set -e` exists. **CONFIRMED; see DEAD-1.**
+
+- [ ] **README-5** `LOW`: README output-path wording is imprecise.
+  - `README.md:37`; actual HDF5 path is `data/<task>/<config>/data/episodeN.hdf5`, from `script/collect_data.py:108,219` plus `envs/_base_task.py:930`, not just under `data/<task>/<config>/`. **CONFIRMED.**
+
+- [ ] **README-6** `LOW`: README lacks a prerequisites/system-requirements and troubleshooting section.
+  - Current README mentions `VK_ICD_FILENAMES` inline but does not state Python 3.10/GPU/Vulkan requirements or setup failure troubleshooting. **CONFIRMED.**
+
+- [ ] **README-7** `LOW`: CLAUDE.md references stale README headings and line numbers.
+  - CLAUDE.md cites `README.md:56-64` and `README.md:64`; current README task table is `README.md:42-48`, `stab_moving_target` is `README.md:48`, and heading is `README.md:40` "Tasks". **CONFIRMED; see DOC-3/DOC-4.**
+
+**Verified-correct README claims (no issue):** aarch64 wheel URL matches `build_domino_aarch64.sh:30`; codeless registry pattern matches `collect_data.py:24-28`; shared configs `demo_dynamic.yml`/`debug_dynamic.yml` both have a `task_args` block; `kwargs.get` pattern matches `cook_meat.py:26`; gitignore claim matches `.gitignore:4,6,22`; skill layout matches `.claude/skills/SAPIEN-task-creator/`; all 17 demo GIFs exist; `sapien==3.0.3` matches `requirements.txt:4`.
 
 ---
 
-## Hardcoded Paths / Dead Code / Error Handling & Architecture
+## Hardcoded Paths, Dead Code & Architecture (22 checklist rows / 24 findings)
 
-*(Source: S4; overlaps with S2 and S5 merged and noted)*
+Source: S4, with overlaps from S2 and S5 merged and noted.
 
 ### Hardcoded / Machine-Specific Paths
 
-- **PATH-1, PATH-2, PATH-3** — see Install & Build Tooling section above (merged with S2).
-- **PATH-4** — `envs/catch_ramp_ball.py:261`: debug-image dump path hardcoded to the markhsp DOMINO tree, gated behind the `CRB_RENDER` debug env var. Severity **Low**. **CONFIRMED-matches-prior-lead** (line unchanged, 261).
-- **PATH-5** — `script/extract_dynamic_gt.py:421,435`: argparse defaults hardcode a **third**, previously-unflagged dev-machine path (`hfang`), unrelated to the markhsp rumor. Severity **Medium** (only bites if CLI flags are omitted). **NEW.**
-- **PATH-6** — `validate_asset.py:27`, `integrate_object.py:43` (per CLAUDE.md:122-126, S7's verified list): same `/shared_work/markhsp/DOMINO` hardcoded defaults, part of the same systemic pattern as PATH-1/2/3/4.
+- [ ] **PATH-1, PATH-2, PATH-3** `HIGH`: See Install & Build Tooling section above.
+  - Merged cross-reference row; canonical evidence is `repro_one.py:4-6`, `build_domino_aarch64.sh:9-14,27-29`, and `collect_demos.sbatch:6,14,15,20,24`. **CONFIRMED.**
+
+- [ ] **PATH-4** `LOW`: Debug-image dump path is hardcoded to the old DOMINO tree.
+  - `envs/catch_ramp_ball.py:261`; gated behind `CRB_RENDER`. **CONFIRMED-matches-prior-lead.**
+
+- [ ] **PATH-5** `MEDIUM`: Argparse defaults hardcode a separate `hfang` dev-machine path.
+  - `script/extract_dynamic_gt.py:421,435`; applies if CLI flags are omitted. **NEW.**
+
+- [ ] **PATH-6** `MEDIUM`: Skill helper defaults also point to `/shared_work/markhsp/DOMINO`.
+  - `validate_asset.py:27`, `integrate_object.py:43`, consistent with CLAUDE.md:122-126. **NEW.**
 
 ### Dead / Broken Code
 
-- **DEAD-1** — `collect_data.sh:7` — see merged entry above (Install & Build Tooling section).
-- **DEAD-2** — `envs/robot/ik.py` (whole file, 1 line): orphaned stub — entire content is `# TODO`, zero imports/references anywhere in first-party scope. Severity **Medium**. **NEW.**
-- **DEAD-3** — `script/create_object_data.py:779`: invalid regex escape sequence in a non-raw string (`'_(\d+)<(.*?)>'`), currently just a `SyntaxWarning`, will become a `SyntaxError` in a future CPython. Severity **Low**. **NEW.**
-- **DEAD-4** — `script/create_messy_data.py`: multiple large commented-out blocks — a ~27-line block (lines 564-590, hardcoded embodiment poses, only ur5-wsg active), a ~20-line block (881-900, object-layout generation logic), plus ~10 more smaller dead blocks (116-124, 131-141, 374-392, 444-453, 538-546, 610-616, 838-855, 1004-1067). Severity **Medium**. **NEW.**
-- **DEAD-5** — `envs/camera/camera.py:194-204`: dead "sensor camera" construction block commented out inside the live camera-setup loop. Severity **Low**. **NEW.**
-- **DEAD-6** — `code_gen/prompt.py:47-63`: stale/superseded API-doc dict entries commented out in the LLM prompt template (`move_to_pose` entirely dead; an old `move_by_displacement` signature with a `quat` param superseded by the active, narrower-signature entry below) — risk of the code-gen agent's prompt drifting from the real `Base_Task` API. Severity **Low**. **NEW.**
-- **DEAD-7** — `description/objects_description/200_steak/`: **missing entirely (RESOLVED, CONFIRMED)** — `envs/cook_meat.py` (one of 4 "done" production tasks) references object `200_steak` at 4 call sites (lines 79, 119, 180, 233 — asset loading, contact-check name, and asset-relative path substitution), but its description directory doesn't exist at all under `description/objects_description/`. **Cross-check resolution:** a targeted follow-up verification confirmed `description/objects_description/200_steak/` genuinely does not exist (`ls`/`find` both empty), while the *separate* `assets/objects/200_steak/` directory does exist (with `collision/`, `visual/`, `model_data0.json`, `NOTICE`, `points_info.json`) — S7's "verified facts" spot-check had conflated these two distinct trees when it claimed "200_steak... exist[s]." All 4 of `cook_meat.py`'s actual references resolve against `assets/objects/200_steak/`, not the description tree, so there is no functional breakage today — but the description-tree gap is real and corroborates the project's own CLAUDE.md "non-fatal warning" note (which undersold it: the whole directory is absent, not just one file within it). Severity **Medium**.
+- [ ] **DEAD-1** `HIGH`: See Install & Build Tooling section above.
+  - Merged cross-reference row; canonical evidence is `collect_data.sh:7` plus missing `script/.update_path.sh`. **CONFIRMED.**
+
+- [ ] **DEAD-2** `MEDIUM`: `envs/robot/ik.py` is an orphaned stub.
+  - `envs/robot/ik.py` whole file is one `# TODO` line with no first-party references. **NEW.**
+
+- [ ] **DEAD-3** `LOW`: Invalid regex escape sequence may become a future SyntaxError.
+  - `script/create_object_data.py:779` contains non-raw string `'_(\d+)<(.*?)>'`. **NEW.**
+
+- [ ] **DEAD-4** `MEDIUM`: `script/create_messy_data.py` contains multiple large commented-out code blocks.
+  - Blocks at `script/create_messy_data.py:564-590,881-900,116-124,131-141,374-392,444-453,538-546,610-616,838-855,1004-1067`. **NEW.**
+
+- [ ] **DEAD-5** `LOW`: Sensor-camera construction block is commented out inside live setup loop.
+  - `envs/camera/camera.py:194-204`. **NEW.**
+
+- [ ] **DEAD-6** `LOW`: LLM prompt contains stale/superseded API-doc dict entries.
+  - `code_gen/prompt.py:47-63`; dead `move_to_pose` and stale `move_by_displacement` signature risk drift from `Base_Task` API. **NEW.**
+
+- [ ] **DEAD-7** `MEDIUM`: `description/objects_description/200_steak/` is missing.
+  - `envs/cook_meat.py:79,119,180,233` uses object `200_steak`; runtime resolves against `assets/objects/200_steak/`, so no current functional break, but the description-tree gap is real. **CONFIRMED.**
 
 ### Error Handling & Architecture Smells
 
-- **ARCH-1** — `script/collect_data.py:29`, `script/eval_policy_client.py:80`, `script/eval_policy.py:35`: bare `except:` around task-class lookup/instantiation masks real exceptions (e.g., a genuine bug in a task's `__init__`) behind a misleading "No such task" message. Severity **Medium**. **NEW.**
-- **ARCH-2** (`eval()` on CLI overrides) — see **SEC-3** below; S4 independently found one of the three sites (`eval_policy_client.py:616`, corrected from an earlier draft's `617` — re-verified: the `value = eval(value)` line is at 616, inside the `parse_override_pairs` closure), S5 has the fuller 3-site version — merged into the Security section.
-- **ARCH-3** — 30 bare `except:` clauses total across first-party scope (grep-enumerated) — most are benign best-effort cleanup, but a few (ARCH-1, and `envs/robot/robot.py:342` masking real point-cloud update failures behind a generic print) hide real errors. Full list: `eval_policy_client.py:80,194,617`; `test_render.py:52`; `place_phone_stand.py:188`; `policy_model_server.py:103`; `create_messy_data.py:368,780`; `add_annotation.py:251`; `eval_policy.py:35,478`; `collect_data.py:29,304,315,327,400`; `envs/robot/robot.py:342`; `envs/_base_task.py:162,977,979`; `envs/utils/create_actor.py:417,463,543,591`; `code_gen/task_generation.py:225`; `envs/utils/actor_utils.py:41`; `code_gen/task_generation_mm.py:103`; `envs/camera/camera.py:35`; `code_gen/test_gen_code.py:96,115`; `policy/Your_Policy/deploy_policy_double_env.py:5`. Severity **Low-Medium** (per-instance). **NEW.**
-- **ARCH-4** — `policy/Your_Policy/eval_double_env.sh:38-48` (corrected from an earlier draft's `~57-67`, which is actually the client-launch block — re-verified by reading the full file): **genuine bug** — the server-launch command (lines 38-48, `python script/policy_model_server.py ...`) is missing a trailing `&`, so `policy_model_server.py` runs in the foreground; since it calls `server_socket.listen(5)` then `while True:` (`policy_model_server.py:89,111` — the accept loop `_accept_connections`), this foreground invocation blocks forever — `SERVER_PID=$!` (line 50, correctly identified in the earlier draft) would be empty/wrong without backgrounding, and the trap/cleanup (line 53) and the entire **client**-launch section that actually starts at line 57 (not the server, as an earlier draft mis-cited) are unreachable dead code in practice. Severity **High**. **NEW, line citation corrected.**
-- **ARCH-5** — `policy/Your_Policy/deploy_policy_double_env.py:2-5`: bare `except:` wrapping a no-op `pass` placeholder — inert but sets a bad-practice template that's been copy-pasted into real per-policy deploy scripts. Severity **Low**. **NEW.**
-- **ARCH-6** — Multiple root/first-party shell scripts missing `set -e`: `collect_data.sh`, `task_config/create_task_config.sh`, `description/gen_task_instruction_templates.sh`, `description/gen_episode_instructions.sh`, `description/gen_object_descriptions.sh`, `script/_download_assets.sh`, `script/_install.sh` all lack `set -e` (only `build_domino_aarch64.sh` and `collect_demos.sbatch` have it). Severity **Medium** (the `script/_install.sh` instance is already documented in CLAUDE.md; the rest are newly noted). **NEW.** **Overlaps with INST-1 and INST-11** (S2's independent findings of missing `set -e` on `_install.sh` and `_download_assets.sh` specifically) — same underlying facts; two agents independently confirmed the `_install.sh`/`_download_assets.sh` instances.
-- **ARCH-7** — `description/gen_episode_instructions.sh`, `description/gen_task_instruction_templates.sh`: missing `#!/bin/bash` shebang entirely (only `gen_object_descriptions.sh` has one); they call `python utils/generate_*.py` with a path relative to `description/` but no `cd` — will fail with "can't open file" if invoked from repo root rather than from inside `description/`. Undocumented in README. Severity **Medium**. **NEW.**
-- **ARCH-8** — 26 TODO/FIXME/HACK-style markers repo-wide; notable cluster in `envs/_base_task.py`: vague/ambiguous markers, e.g., `together_move_to_pose` sets `plan_success=False` but the actual return is commented out and tagged `"# return TODO"` (~line 1317), a second branch `"return # TODO"` (~1321); `"return True # TODO: maybe need try error"` (~3818) on the main step-execution loop; two `"# TODO"` markers after `self.robot.set_gripper()` calls (~3781, ~3796) suggesting acknowledged-but-unresolved uncertainty in gripper control. Severity **Medium**. **NEW.**
-- **ARCH-9** — `envs/_base_task.py` is 4081 lines — a monolithic god-file shared as the base class for all 50 task files (next-largest in-scope file is `envs/robot/robot.py` at 729 lines, `script/create_object_data.py` at 1092). Severity **Low** (structural smell). **NEW.**
-- **ARCH-10** — `script/policy_model_server.py`: resource-exhaustion/DoS exposure distinct from SEC-2's auth gap, verified by reading `_accept_connections` (lines 109-125) and `_handle_client` (lines 127-180). Three compounding issues: (1) **unbounded per-client threads** — `_accept_connections` spawns a new daemon `threading.Thread` for every accepted connection with no cap on concurrent threads (line 116-118: `t = threading.Thread(target=self._handle_client, args=(client_socket,), daemon=True); t.start()`); a client that opens many connections without closing them grows the thread count without limit. (2) **unbounded client-supplied length prefix** — `_handle_client` reads a 4-byte big-endian length header (`msg_length = int.from_bytes(len_bytes, 'big')`, line 137) with **no maximum-size check** before looping to read that many bytes into an in-memory `chunks` list (lines 140-147); a malicious or buggy client can claim an up-to-4GiB (2^32-1) message and force the server to allocate and buffer it. (3) **no per-client socket timeout** — `server_socket.settimeout(self.wait_interval)` (line 88) only applies to the listening socket's `accept()` call; the accepted `client_socket` returned from `accept()` never has `settimeout()` called on it, so `client_socket.recv(4)` (line 133) and the chunked reads can block a thread indefinitely if a client connects and sends nothing — since threads are unbounded (per (1)), a handful of slow-loris-style silent connections can pin threads forever. Severity **Medium** (local-network-only per SEC-2's mitigating factor, but a real hang/memory-exhaustion risk on a shared HPC node once any other local process can reach `localhost`). **NEW.**
-- **ARCH-11** — `script/collect_data.py`: unbounded retry/seed-search loops with broad exception handling and no hard attempt cap, verified by reading the main collection loop (lines 135-186) and the Phase-2 seed-regeneration loop (lines 321-413+). The primary loop `while suc_num < args["episode_num"]:` (line 135) increments `epid` and retries on **every** failure path, including a catch-all `except Exception as e:` (line 172) that logs and continues rather than aborting; there is no counter comparing `epid` (attempts) against any maximum, so a systematic failure (e.g., a broken planner or curobo/warp-lang version mismatch, per the project's own CLAUDE.md gotcha) causes the loop to retry every incrementing seed forever with zero successes and zero visible progress signal beyond per-attempt print statements. The same pattern recurs in the Phase-2 regeneration loop: `regen_attempts = 0` is initialized (line 335) and incremented (line 413) but is **never read or compared** against any limit — it is dead bookkeeping, not an enforced cap. Severity **Medium**. **This generalizes/confirms, rather than newly discovers, a gotcha already documented in this project's own CLAUDE.md** ("The collector never aborts on systematic failure — it seed-searches indefinitely... If early seeds all fail with the same error, kill it and read the FIRST seed's error") — this finding traces that known behavior to its exact source lines and shows the "attempt counter" (`regen_attempts`) that looks like a safety cap is in fact unused. **NEW (source-level confirmation of a previously-known operational gotcha).**
+- [ ] **ARCH-1** `MEDIUM`: Bare `except:` around task lookup masks real instantiation failures.
+  - `script/collect_data.py:29`, `script/eval_policy_client.py:80`, `script/eval_policy.py:35`. **NEW.**
 
-**Not flagged / ruled out (S4):** all 50 `envs/*.py` task files uniformly implement `setup_demo`/`load_actors`/`play_once`/`check_success` (no structural drift); apparent "broken imports" in `code_gen/task_generation*.py` are template placeholders in f-strings for generating new task files, not real imports (verified by reading context); a full-scope AST-based relative-import resolver found zero missing relative-module imports.
+- [ ] **ARCH-2** `MEDIUM`: `eval()` on CLI overrides is covered by SEC-3.
+  - Merged into Security section for full per-site nuance at `policy_model_server.py:262`, `eval_policy_client.py:616`, and `eval_policy.py:477`. **NEW.**
+
+- [ ] **ARCH-3** `LOW-MEDIUM`: First-party scope has 30 bare `except:` clauses.
+  - Examples include `eval_policy_client.py:80,194,617`, `test_render.py:52`, `place_phone_stand.py:188`, `policy_model_server.py:103`, `create_messy_data.py:368,780`, `add_annotation.py:251`, `eval_policy.py:35,478`, `collect_data.py:29,304,315,327,400`, `envs/robot/robot.py:342`, `envs/_base_task.py:162,977,979`, `envs/utils/create_actor.py:417,463,543,591`, `code_gen/task_generation.py:225`, `envs/utils/actor_utils.py:41`, `code_gen/task_generation_mm.py:103`, `envs/camera/camera.py:35`, `code_gen/test_gen_code.py:96,115`, `policy/Your_Policy/deploy_policy_double_env.py:5`. **NEW.**
+
+- [ ] **ARCH-4** `HIGH`: `eval_double_env.sh` launches the server in the foreground forever.
+  - `policy/Your_Policy/eval_double_env.sh:38-48`; `policy_model_server.py:89,111` listens forever, so `SERVER_PID=$!` at line 50 and client/cleanup lines 57-72 are unreachable; earlier line citation was corrected. **NEW, line citation corrected.**
+
+- [ ] **ARCH-5** `LOW`: Placeholder policy deploy script has a bare `except:`/`pass` template.
+  - `policy/Your_Policy/deploy_policy_double_env.py:2-5`. **NEW.**
+
+- [ ] **ARCH-6** `MEDIUM`: Multiple first-party shell scripts are missing `set -e`.
+  - `collect_data.sh`, `task_config/create_task_config.sh`, `description/gen_task_instruction_templates.sh`, `description/gen_episode_instructions.sh`, `description/gen_object_descriptions.sh`, `script/_download_assets.sh`, and `script/_install.sh`; only `build_domino_aarch64.sh` and `collect_demos.sbatch` have it. **NEW except INST-1/11 overlap.**
+
+- [ ] **ARCH-7** `MEDIUM`: Two description-generation scripts lack shebangs and cwd setup.
+  - `description/gen_episode_instructions.sh`, `description/gen_task_instruction_templates.sh`; they call `python utils/generate_*.py` relative to `description/`, so repo-root invocation fails. **NEW.**
+
+- [ ] **ARCH-8** `MEDIUM`: Repo has 26 TODO/FIXME/HACK-style markers, clustered in the base task file.
+  - Notable markers in `envs/_base_task.py` around `~1317`, `~1321`, `~3781`, `~3796`, `~3818`, including commented-out returns and gripper-control uncertainty. **NEW.**
+
+- [ ] **ARCH-9** `LOW`: `envs/_base_task.py` is a 4081-line god-file.
+  - Next-largest in-scope files are `script/create_object_data.py` at 1092 lines and `envs/robot/robot.py` at 729 lines. **NEW.**
+
+- [ ] **ARCH-10** `MEDIUM`: `script/policy_model_server.py` has resource-exhaustion/DoS exposure distinct from SEC-2.
+  - Unbounded daemon thread per connection at `script/policy_model_server.py:109-125,116-118`; unbounded client length prefix at `:127-180,137,140-147`; listen-socket timeout at `:88` does not apply to accepted `client_socket.recv()` at `:133`. **NEW.**
+
+- [ ] **ARCH-11** `MEDIUM`: `script/collect_data.py` has unbounded retry/seed-search loops.
+  - Main loop at `script/collect_data.py:135` catches broad exception at `:172` and never compares attempts to a cap; regeneration counter at `:335,413` is never read; known CLAUDE.md gotcha now traced to source. **NEW.**
 
 ---
 
-## Testing / CI / Security / Git Hygiene
+## Testing, CI, Security & Git Hygiene (11 findings)
 
-*(Source: S5)*
-
-**Verification of prior-pass facts:** no `.github/`, `.gitlab-ci.yml`, `.travis.yml`, `.circleci/`, `azure-pipelines*`, or `Jenkinsfile` anywhere — confirmed. Root `LICENSE` = Apache 2.0 (11,357 bytes), root `.gitignore` = 781 bytes — confirmed. No `tests/` dir at root; only `script/test_render.py` and `code_gen/test_gen_code.py` — confirmed and read in full. **Nuance:** stray root `*_log.txt` files present on disk but `git status` shows a completely clean working tree — `.gitignore:41` has a root-level `/*.txt` rule silently ignoring them (`git check-ignore -v` confirms). This downgrades "stray logs" from a git-hygiene problem to a non-issue.
+Source: S5. Confirmed absent: CI config files, real root tests, linter config, pipe-to-shell installs, non-HTTPS asset/model URLs, `subprocess(shell=True)`, hardcoded real secrets/API keys (`code_gen/gpt_agent.py:3-5` and `script/add_annotation.py:206` are placeholder strings; `description/utils/agent.py:12-15` reads `AZURE_API_KEY` from env properly), AWS-style key patterns, and `.env`/credentials files.
 
 ### Testing / CI / Lint
 
-- **TEST-1** — No real automated tests anywhere in first-party scope. Severity **Medium**. `script/test_render.py` is a `gym.Env` subclass standing up the SAPIEN renderer, printing "Render Well"/"Render Error", and `exit()`-ing on failure — no assert, no pytest/unittest, requires GPU+Vulkan, manual visual inspection only. `code_gen/test_gen_code.py`, despite its name, is a full helper-function module for the LLM code-gen pipeline (`enrich_actors`, `class_decorator_gen`, `setup_task_config`, `run()` computing an empirical success rate over N episodes) — no assertions against expected values; it's a runtime evaluation harness, not a test.
-- **TEST-2** — No CI pipeline. Severity **Medium**. Confirmed absent. Combined with TEST-1: zero automated gate on any commit.
-- **TEST-3** — No linter/formatter config anywhere in first-party scope. Severity **Low**. `.flake8`/`.pylintrc`/`pyproject.toml` (ruff/black)/`.pre-commit-config.yaml`/`setup.cfg`/`tox.ini` all absent under root, `script/`, `envs/` (excl. curobo), `description/`, `code_gen/`, `task_config/`, `policy/Your_Policy/`. (5 `pyproject.toml` files exist but only inside `policy/PUMA`, `policy/DP`, `policy/pi05`, `policy/pi0`, `policy/openvla-oft` — all out of scope, packaging manifests not lint config.)
+- [ ] **TEST-1** `MEDIUM`: No real automated tests exist in first-party scope.
+  - `script/test_render.py` is a GPU/Vulkan renderer smoke class with prints/exit; `code_gen/test_gen_code.py` is a runtime helper/evaluation harness with no assertions. **NEW.**
+
+- [ ] **TEST-2** `MEDIUM`: No CI pipeline exists.
+  - No `.github/`, `.gitlab-ci.yml`, `.travis.yml`, `.circleci/`, `azure-pipelines*`, or `Jenkinsfile`. **CONFIRMED absent. NEW.**
+
+- [ ] **TEST-3** `LOW`: No first-party linter/formatter config exists.
+  - No `.flake8`, `.pylintrc`, ruff/black `pyproject.toml`, `.pre-commit-config.yaml`, `setup.cfg`, or `tox.ini` under root, `script/`, `envs/` excluding curobo, `description/`, `code_gen/`, `task_config/`, or `policy/Your_Policy/`; vendored policy pyprojects are out of scope. **NEW.**
 
 ### Security
 
-- **SEC-1** — `code_gen/task_generation.py:224`, `task_generation_mm.py:346-347`, `task_generation_simple.py:94`, `run_code.py:102-103`: `exec(f'now_task = {task_name}')` on an unsanitized CLI argument — code injection. Severity **High**. Pattern from `run_code.py:100-104`: `task_name=parser.parse_args().task_name.upper(); exec(f'now_task = {task_name}')` inside a try/except. The CLI arg is interpolated verbatim into the `exec()` string with no validation/quoting. **Caveat (re-verified, not previously stated):** all four sites are `argparse` positional CLI arguments consumed by standalone `code_gen/*.py` dev-tool scripts invoked directly by a local user (`parser.add_argument('task_name', type=str)` immediately above each `exec()` call) — there is no network/RPC surface reaching any of these four files, unlike SEC-2/SEC-3 below. The practical exploitability is therefore self-injection (a user who can already run arbitrary Python on the box types a malicious string into their own CLI invocation), not a remote-attacker vector. Kept at **High** because `exec()` on unsanitized input is still a code-injection anti-pattern worth fixing (e.g., a wrapper script or CI job that forwards untrusted input as `task_name` would turn this into a real vector), but the severity should be read with this caveat rather than assuming remote exploitability.
-- **SEC-2** — `script/policy_model_server.py` `_handle_client` (lines 154-163): unauthenticated RPC server dispatches an arbitrary attacker-chosen method by name. Severity **Medium-High**. `cmd=data.get("cmd"); method=getattr(self.model,cmd,None); result=method(obs) if obs is not None else method()`. A raw TCP socket server, length-prefixed JSON, no auth/TLS — any connecting client picks **any** attribute name via `cmd` and invokes it with client-supplied `obs`; no allowlist, no dunder/private check. `policy/Your_Policy/deploy_policy_double_env.py` confirms the intended production usage pattern (`model.call(func_name='get_action', obs=obs)`). **Mitigating factor:** `ModelServer.__init__` hardcodes `host='localhost'` (line 75), and `main()` never threads a host override from CLI/config (lines 218-225 only extract `policy_name`/`port`) — not remotely reachable by design today, but on a shared HPC environment any other local user/process on the same node could connect and invoke arbitrary model methods unauthenticated. **Related:** `json_to_numpy` (lines 63-70) reconstructs numpy arrays from client-supplied dtype/shape strings via `np.frombuffer(...).reshape(...)` with no validation. **See also ARCH-10 below** (new finding) for the same file's separate DoS/resource-exhaustion exposure (unbounded threads, unbounded message length, no per-client timeout) — a distinct issue from this auth gap.
-- **SEC-3** — `eval()` on config-override CLI values, **with an important distinction re-verified across the three sites (one is meaningfully gated, two are not):**
-  - `policy_model_server.py:262` — `cfg[key.lstrip('--')] = eval(val) if val.isnumeric() else val`. **Re-verified: this site IS gated** — `eval()` is only reached when `val.isnumeric()` is true, i.e. `val` consists solely of digit characters, so the only expressions ever passed to `eval()` are numeric literals; there is no path to executing an arbitrary expression here. This site should be read as **materially safer** than the other two, not equally severe.
-  - `eval_policy_client.py:616` — `value = eval(value)` inside a bare `try: ... except: pass` with **no gating check at all** — any override value is handed to `eval()` verbatim; genuinely unsafe (arbitrary expression execution), only "protected" by a swallowed exception if it fails.
-  - `eval_policy.py:477` — identical ungated pattern to `eval_policy_client.py:616`.
-  Severity **Medium** overall, but **the `policy_model_server.py:262` site specifically should not be scored the same as the other two** — exploitability there requires controlling a value string that is also all-digits, which collapses to "no exploitability beyond a numeric literal." The two ungated sites (`eval_policy_client.py:616`, `eval_policy.py:477`) retain the full Medium severity: exploitability still requires the invoking party to control the override string (today, a local CLI operator), but `eval` there accepts arbitrary expressions. **Merges with S4's ARCH-2** (`eval_policy_client.py:616`, corrected line — one of the same three sites, independently found by S4); S5's version is the fuller 3-site enumeration, kept as the canonical entry.
-- **SEC-4** — `pickle.load` on files the pipeline itself writes. Severity **Low-Medium**. Five sites: `extract_dynamic_gt.py:208,589`, `envs/_base_task.py:916`, `envs/utils/pkl2hdf5.py:50`, `envs/utils/lerobot_export.py:111`. All load `.pkl` files generated by the same collection pipeline (trusted provenance normally, not downloaded/external), but flagged because pickle is inherently unsafe if a file is ever corrupted/tampered (e.g., a malicious actor on a shared filesystem plants a crafted `.cache/*.pkl` before export), and none validate the loaded object's type/schema before use.
+- [ ] **SEC-1** `HIGH`: Dev-tool scripts use `exec(f'now_task = {task_name}')` on unsanitized CLI args.
+  - `code_gen/task_generation.py:224`, `task_generation_mm.py:346-347`, `task_generation_simple.py:94`, `run_code.py:102-103`; pattern from `run_code.py:100-104`; caveat: local CLI self-injection today, not a remote surface. **NEW.**
 
-**No findings (confirmed absent):** `curl|bash`/`wget|sh` pipe-to-shell installs; non-HTTPS asset/model URLs; `subprocess(shell=True)`; hardcoded real secrets/API keys (`code_gen/gpt_agent.py:3-5` and `script/add_annotation.py:206` are placeholder strings, not leaked creds; `description/utils/agent.py:12-15` reads `AZURE_API_KEY` from env properly — positive example); AWS-style key patterns; `.env`/credentials files.
+- [ ] **SEC-2** `MEDIUM-HIGH`: Unauthenticated TCP RPC server dispatches arbitrary model methods by client-selected name.
+  - `script/policy_model_server.py:154-163` uses `getattr(self.model, cmd, None)` with client `obs`; `host='localhost'` at `:75` mitigates remote reachability, but co-located local processes can connect; `json_to_numpy` at `:63-70` also trusts dtype/shape. **NEW.**
+
+- [ ] **SEC-3** `MEDIUM`: CLI override `eval()` exists at three sites, with one materially safer gated site.
+  - `policy_model_server.py:262` gates `eval(val)` behind `val.isnumeric()`; `eval_policy_client.py:616` and `eval_policy.py:477` evaluate override strings verbatim inside bare try/except. **NEW; merges S4 ARCH-2.**
+
+- [ ] **SEC-4** `LOW-MEDIUM`: `pickle.load` is used on pipeline-written files without schema validation.
+  - `extract_dynamic_gt.py:208,589`, `envs/_base_task.py:916`, `envs/utils/pkl2hdf5.py:50`, `envs/utils/lerobot_export.py:111`; normally trusted provenance, unsafe if tampered on shared filesystem. **NEW.**
 
 ### Git Hygiene
 
-- **GIT-1** — `.gitignore` has real coverage gaps. Severity **Low-Medium**. Present/working: `__pycache__/`, `**/checkpoints/`, `models/`, `data/*`, `data_lerobot/*`, `assets/*` (with allowlist exceptions), `.idea/`, `.vscode/`, `*.zip`, `logs/*`, `/*.txt`, `/*.json*`. Missing: no `.venv`/`venv/` pattern, no `.env` pattern (no preventive control if a secrets file is ever added), no generic `.cache` pattern (only `assets/*` incidentally sweeps `assets/.cache`), no `*.pyc` fallback outside `__pycache__/`, no extension-based catch for model-weight files (`*.pth`, `*.ckpt`, `*.safetensors`) — only indirect coverage via directory names.
-- **GIT-2** — Stray root `*_log.txt` files: **not a hygiene violation** (informational, not a finding). Verified via `git ls-files`, `git status --short`, `git log --diff-filter=A -- '*.txt'`, `git check-ignore -v` on each of 12 files: none tracked, none ever committed, all trace to `.gitignore:41`.
-- **GIT-3** — `assets/__MACOSX/` zip-extraction artifact present but **not tracked**. Severity **Low** (informational). Confirmed via `git status --short --ignored=matching` (shown as `!! assets/__MACOSX/`); `git ls-files` shows nothing — untracked/ignored under the `assets/*` rule.
-- **GIT-4** — Single-commit history limits hygiene assessment (informational, at time of this check). Per the project's own CLAUDE.md, the repo had exactly one local commit (`91f3d6c`), so no history of past hygiene mistakes to audit. **Superseded** — S7's later pass found the repo now has 3 commits after subsequent work (see **DOC-1** below).
+- [ ] **GIT-1** `LOW-MEDIUM`: `.gitignore` has practical coverage gaps.
+  - Present coverage includes `__pycache__/`, data/assets/models/logs patterns, root `/*.txt`, etc.; missing `.venv`/`venv/`, `.env`, generic `.cache`, `*.pyc`, and model-weight extension patterns like `*.pth`, `*.ckpt`, `*.safetensors`. **NEW.**
+
+- [x] **GIT-2** `N/A (INFORMATIONAL)`: Root `*_log.txt` files are ignored, not tracked.
+  - Verified by `git ls-files`, `git status --short`, `git log --diff-filter=A -- '*.txt'`, and `.gitignore:41`/`git check-ignore -v`. **INFORMATIONAL, not a hygiene violation.**
+
+- [ ] **GIT-3** `LOW`: `assets/__MACOSX/` extraction artifact exists but is ignored/untracked.
+  - `git status --short --ignored=matching` shows `!! assets/__MACOSX/`; `git ls-files` shows nothing. **NEW.**
+
+- [x] **GIT-4** `N/A (INFORMATIONAL)`: Single-commit history note is superseded.
+  - Earlier CLAUDE.md state said one commit `91f3d6c`; S7 later found 3 commits after subsequent work, see DOC-1. **SUPERSEDED informational.**
 
 ---
 
-## Vendored Third-Party Code — Shallow Pass
+## Vendored Third-Party Code — Shallow Pass (12 subprojects)
 
-*(Scope: `envs/curobo/` and `policy/*` — 12 policy subprojects. Per user decision, this pass was shallow-scan only, not deep-audited. Source: S6.)*
+Scope: `envs/curobo/` and `policy/*`. Per user decision, this was a shallow scan only: license/README/version-pin presence, not a deep code audit. (Source: S6)
 
 | Directory | LICENSE | README | Version-pin flags | Severity | Size |
 |---|---|---|---|---|---|
@@ -207,7 +337,7 @@ RoboDyna's core simulation/task code is functional, but the surrounding tooling 
 | `policy/DexVLA/` | Yes, MIT (Tony Z Zhao 2023 — reused header, likely copy-paste from ACT lineage, not DexVLA's actual authors) | Yes | Two inconsistent dep manifests: `conda_env.yaml` (py3.9/torch2.0.0) vs `Eval_Tiny_DexVLA_requirements.txt`/`environment.yml` (py3.10.13/torch2.4.1) — internally inconsistent, not just vs RoboDyna | Low-Medium | 716K / 67 files |
 | `policy/DP/` | **No** | None | `pyproject.toml` requires-python≥3.8, broad, no conflict | Low | 564K / 73 files |
 | `policy/DP3/` | **No** (checked `3D-Diffusion-Policy/` subdir too) | None | Nested `setup.py` bare stub, no version pins | Low | 352K / 45 files |
-| `policy/GO1/` | **No** | Yes | `requirements.txt` has no torch/python pin at all — too sparse to conflict | Low | 60K / 10 files (smallest) |
+| `policy/GO1/` | **No** | Yes | `requirements.txt` has no torch/python pin at all — too sparse to conflict | Low | 60K / 10 files |
 | `policy/LLaVA-VLA/` | **No** | **No** (no original_README, no requirements/setup/pyproject anywhere) | Can't assess — no manifest exists | Low-Medium | 436K / 39 files (weakest vendoring hygiene) |
 | `policy/openvla-oft/` | Yes, MIT (Kim, Finn, Liang 2025) | Yes (original_README.md, original_ALOHA.md, original_SETUP.md — renamed to avoid clobbering RoboDyna's docs) | `pyproject.toml` requires-python≥3.8 (up to 3.10 classifiers), no obvious conflict | Low | 1.5M / 128 files (best-documented) |
 | `policy/pi0/` | Yes, Apache 2.0 | None found (has `docs/` but no top-level README) | `pyproject.toml` requires-python≥3.11, torch≥2.5.1 — conflicts with RoboDyna base (py3.10, torch==2.4.1); has own `uv.lock`, isolated env by design; dangling `.gitmodules` referencing `third_party/aloha` and `third_party/libero`, neither dir exists on disk, no own `.git` | Low | 1.6M / 122 files |
@@ -216,55 +346,86 @@ RoboDyna's core simulation/task code is functional, but the surrounding tooling 
 | `policy/RDT/` | **No** | None | `requirements.txt`: transformers==4.41.0, diffusers==0.27.2, deepspeed==0.14.2, numpy<2.0 — no explicit torch/python pin | Low | 1.2M / 60 files (missing LICENSE + README both flagged) |
 | `policy/TinyVLA/` | Yes, MIT (Tony Z Zhao 2023, same reused header as ACT/DexVLA) | Yes | Same dual/inconsistent-manifest pattern as DexVLA; contains files literally named `Eval_Tiny_DexVLA_*` inside `TinyVLA/` (cross-contamination naming artifact confirming shared lineage/copy-paste) | Low-Medium | 312K / 37 files |
 
-**Curobo commit vs install-script cross-check: no mismatch.** Vendored `envs/curobo/.git` is a detached HEAD at commit `d64c4b005459db10c5dd867d8b30a87d5bda9bdb`; `git describe --tags` resolves exactly to `v0.7.8`. `script/_install.sh:57-64` explicitly clones NVlabs/curobo and checks out `v0.7.8` with an inline comment explaining the classic-API-vs-HEAD-restructure risk. Minor cosmetic note: `CHANGELOG.md`'s newest section header is "Version 0.7.7" — the checked-out `v0.7.8` tag exists in git but its changelog entry isn't in the file; cosmetic only.
+**Curobo commit vs install-script cross-check:** no mismatch. Vendored `envs/curobo/.git` is detached at `d64c4b005459db10c5dd867d8b30a87d5bda9bdb`, and `git describe --tags` resolves to `v0.7.8`; `script/_install.sh:57-64` explicitly clones NVlabs/curobo and checks out `v0.7.8`.
 
-**pi0/pi05 dangling submodule references:** confirmed vendoring-hygiene noise, low severity, inherited from upstream (not a RoboDyna bug). Both `pi0/.gitmodules` and `pi05/.gitmodules` declare identical submodules (`third_party/aloha`, `third_party/libero`) that don't exist on disk at all (not just uninitialized — absent); neither `pi0/` nor `pi05/` has its own `.git` (plain vendored snapshots, unlike curobo's full nested checkout). Risk: a future maintainer running `git submodule update` or grepping `.gitmodules` could be confused into thinking these are expected to resolve.
+**pi0/pi05 dangling submodule references:** confirmed vendoring-hygiene noise, low severity, inherited from upstream. Both `pi0/.gitmodules` and `pi05/.gitmodules` declare `third_party/aloha` and `third_party/libero`, neither exists on disk, and neither subproject has its own `.git`.
 
-**Cross-cutting observations:** Missing LICENSE in 6 of 12 policy dirs (DP, DP3, GO1, LLaVA-VLA, PUMA, RDT). Missing README in 7 of 12 (ACT, DP, DP3, LLaVA-VLA, pi0, pi05, RDT). Reused/copy-pasted LICENSE header across ACT/DexVLA/TinyVLA all crediting "Tony Z. Zhao 2023" — plausible given ACT-lineage forks, but the license text doesn't match the package name in the DexVLA/TinyVLA cases, not resolvable without deeper provenance research (out of scope). LLaVA-VLA has zero dependency manifests anywhere — the only vendored policy with no way to reconstruct its environment from the repo alone. pi0/pi05 pin python≥3.11/torch≥2.5.1 vs RoboDyna's torch==2.4.1 (py3.10) baseline — informational only, since pi0/pi05 use their own `uv.lock`-managed env by design (consistent with the project's own CLAUDE.md "conda env varies by policy" convention), not an actual runtime conflict.
-
-**No Critical/High findings** — consistent with expectations for a shallow vendored-code hygiene pass.
+**Cross-cutting observations:** Missing LICENSE in 6 of 12 policy dirs (DP, DP3, GO1, LLaVA-VLA, PUMA, RDT). Missing README in 7 of 12 (ACT, DP, DP3, LLaVA-VLA, pi0, pi05, RDT). LLaVA-VLA has no dependency manifest. pi0/pi05 intentionally conflict with RoboDyna's base env because they use their own `uv.lock` envs. No Critical/High findings in the shallow vendored pass.
 
 ---
 
-## Docs & Config Consistency — CLAUDE.md / SKILL.md / task_config
+## Docs & Config Consistency (11 findings)
 
-*(Source: S7)*
+Source: S7. Spot-verified: `sapien==3.0.3` at `requirements.txt:4`; `toppra` at `requirements.txt:27` and imports in `_base_task.py:9`, `robot.py:6`, `planner.py:14`, `test_render.py:18`; `pyarrow` at `requirements.txt:28` and `lerobot_v21.py:21-22`; curobo classic imports at `planner.py:21-33`; curobo `v0.7.8` at `_install.sh:65`; warp/scipy re-pin at `_install.sh:78`; collector import/save path at `collect_data.py:25,27,108`; hardcoded path examples at `repro_one.py:4-6`, `catch_ramp_ball.py:261`, `validate_asset.py:27`, `integrate_object.py:43`.
 
-**Verified (spot list, not exhaustive):** `sapien==3.0.3` pin matches `requirements.txt:4`/CLAUDE.md:59,100. `toppra` (line 27) imported by `_base_task.py:9`, `robot.py:6`, `planner.py:14`, `test_render.py:18` — CLAUDE.md:101. `pyarrow` (line 28) at `lerobot_v21.py:21-22` — CLAUDE.md:102. curobo classic-API imports at `planner.py:21-33`; git checkout `v0.7.8` at `_install.sh:65`; `wp.torch.device_from_torch` at `envs/curobo/src/curobo/geom/sdf/world_mesh.py:67`; warp-lang/scipy re-pin at `_install.sh:78` — CLAUDE.md:103-105. Collector codeless registry: `importlib.import_module` pattern at `collect_data.py:25,27`; save_path join at `collect_data.py:108` — CLAUDE.md:49,80 and SKILL.md:44. Hardcoded `/shared_work/markhsp/DOMINO` paths at `repro_one.py:4-6`, `catch_ramp_ball.py:261`, `validate_asset.py:27`, `integrate_object.py:43` — CLAUDE.md:122-126. Root LICENSE is Apache 2.0.
+### CLAUDE.md Accuracy
 
-**Correction to S7's spot-check:** S7's verified-facts list originally claimed object ref `200_steak` "exists and resolves" — this conflated `assets/objects/200_steak/` (which does exist) with `description/objects_description/200_steak/` (which does not). See **DEAD-7** above for the resolved fact: the description-tree directory is genuinely missing; the asset tree is fine.
+- [ ] **DOC-1** `MEDIUM`: CLAUDE.md git-state section describes an old single-commit state.
+  - CLAUDE.md says one commit `91f3d6c` and 1758 tracked files; actual repo has 3 commits, HEAD `608b73e`, and 1759 tracked files. **STALE.**
 
-### claude-md-accuracy
+- [ ] **DOC-2** `MEDIUM`: CLAUDE.md cites a root `.gitmodules` that does not exist.
+  - Root `ls .gitmodules` fails; only `policy/pi0/.gitmodules` and `policy/pi05/.gitmodules` exist, and root `git submodule status` is empty. **WRONG CITATION.**
 
-- **DOC-1** — `CLAUDE.md:23-24`: [STALE] git-state section describes a single old commit. Severity **Medium**. Doc says "single local commit `91f3d6c`... 1758 tracked files." Actual: `git log` shows 3 commits, HEAD is `608b73e` "Rewrite README RoboDyna-only; add grounded CLAUDE.md" (Jul 6); `git ls-files | wc -l` = 1759, not 1758. The "working tree clean" part still holds.
-- **DOC-2** — `CLAUDE.md:129`: [WRONG CITATION] no root `.gitmodules` exists. Severity **Medium**. Doc says `third_party/aloha` and `third_party/libero` are declared in `.gitmodules` (cites `.gitmodules`; `git submodule status`). Actual: `ls .gitmodules` → no such file; only `policy/pi0/.gitmodules` and `policy/pi05/.gitmodules` exist. No `third_party/` dir at repo root; `git submodule status` (root) is empty.
-- **DOC-3** — `CLAUDE.md:19`: [WRONG CITATION] "16 tasks" cites a prototype table row; real source uncited (and self-contradictory). Severity **Medium**. Doc cites `README.md:66` for the LeRobot exporter's 16-task claim; `README.md:66` is actually the `collect_falling_bowl` prototype-table row, making no LeRobot claim. The actual map is `envs/utils/lerobot_export.py:17-24` (`SUITE_TASK_INDEX`), never cited by the doc. The source itself is internally inconsistent: `lerobot_export.py:16`'s comment says "15-task suite" but the list at 17-24 has 16 entries (CLAUDE.md's number matches the list, not the comment).
-- **DOC-4** — `CLAUDE.md:17,18,51`: [WRONG CITATION] README line pointers in task/status claims point to wrong lines. Severity **Medium**. CLAUDE.md:17 cites `README.md:56-64` "Featured Tasks" table for the 4 done tasks — actual done-table is `README.md:44-47`; lines 56-64 are the "Prototype tasks" section, and no "Featured Tasks" heading exists (`README.md:40` is "## Tasks"). CLAUDE.md:18 cites `README.md:64` for `stab_moving_target` in-progress — `README.md:64` is actually the `catch_rat` prototype row; `stab_moving_target` is at `README.md:48`. CLAUDE.md:51 cites `README.md:70` for the codeless registry and `README.md:68-78` for task-class shape — `README.md:70` is actually the `dual_hole_punch` prototype row; the registry text is at `README.md:78-79`, and the task-class shape is at `README.md:81-84`. Underlying facts are correct; citations are broken (violates CLAUDE.md's own §1.1 grounding rule). Same class of issue as **README-7** above (S3 found the same drift independently, with an overlapping but non-identical set of citations).
-- **DOC-5** — `CLAUDE.md:36`: [WRONG] description-directory counts off by 2/1. Severity **Low**. Doc says "description/ (3.1M — 120 object description folders + 68 task-instruction JSON files)". Actual: `find description/objects_description -mindepth 1 -maxdepth 1 -type d | wc -l` = 118 (not 120); `find description/task_instruction -name '*.json' | wc -l` = 67 (not 68).
+- [ ] **DOC-3** `MEDIUM`: The "16 tasks" claim cites the wrong README row and misses the real source.
+  - CLAUDE.md cites `README.md:66`, now a prototype row; real map is `envs/utils/lerobot_export.py:17-24`, whose comment at line 16 says 15-task suite despite 16 literal entries. **WRONG CITATION.**
 
-### config-consistency
+- [ ] **DOC-4** `MEDIUM`: README task/status line pointers in CLAUDE.md are stale.
+  - CLAUDE.md cites `README.md:56-64`, `:64`, and `:70`; current done table is `README.md:44-47`, `stab_moving_target` is `README.md:48`, registry text is `README.md:78-79`, and task-class shape is `README.md:81-84`. **WRONG CITATION.**
 
-- **DOC-6** — `CLAUDE.md:11` / `README.md:6-7` vs configs: [INCONSISTENT] "all tasks run on ur5-wsg" contradicted by most active configs. Severity **Medium**. Doc says all tasks run on the dual-UR5 (`ur5-wsg`) embodiment. Actual: only `demo_dynamic.yml:6` and `debug_dynamic.yml:5` use `embodiment:[ur5-wsg,ur5-wsg,0.6]`. Other active top-level configs use `aloha-agilex`: `demo_clean.yml:7`, `demo_clean_dynamic.yml:5`, `demo_randomized.yml:7`, `demo_random_dynamic.yml:5` all use `embodiment:[aloha-agilex]` (and archived per-task configs too). `aloha-agilex` does resolve as a valid embodiment, but this contradicts the "standardized on ur5-wsg" claim.
-- **DOC-7** — `README.md:50` vs `demo_dynamic.yml:2` / `CLAUDE.md:87`: [INCONSISTENT] "done = 100-episode" vs the production config's `episode_num:50`. Severity **Medium**. README says "done = 100-episode production dataset collected & verified end-to-end." Actual: `task_config/demo_dynamic.yml:2` has `episode_num:50`, and CLAUDE.md:87 itself reports "data/cook_meat/demo_dynamic/ (50 episodes...)". The production config and CLAUDE.md both say 50, contradicting README's 100-episode definition of "done."
-- **DOC-8** — `README.md:126` (corrected from `:120`, re-verified against the current file — see README-3 above): [WRONG] README lists an object (`202_bread_toast`) that is absent from `assets/objects/`. Severity **Low**. Duplicate of **README-3** above — merged; independently found by 2 agents.
+- [ ] **DOC-5** `LOW`: CLAUDE.md description-directory counts are off.
+  - Actual counts: `description/objects_description` has 118 folders, not 120; `description/task_instruction` has 67 JSON files, not 68. **WRONG.**
 
-### skill-doc-accuracy
+### Config Consistency
 
-- **DOC-9** — `SKILL.md:4-5,18-19,28-30`: [STALE] SKILL.md written for the old DOMINO deployment, not RoboDyna. Severity **Low** (already documented in CLAUDE.md:126). `SKILL.md:18` says "adding task to benchmark at `/shared_work/markhsp/DOMINO`"; `:29` "conda activate `/shared_work/markhsp/envs/domino`"; `:28` "source `/shared_work/markhsp/miniforge3/...`"; names the project "RoboTwin 2.0/DOMINO" throughout, never "RoboDyna". `validate_asset.py:27` and `integrate_object.py:43` carry the same hardcoded defaults (see **PATH-6**). Already flagged in CLAUDE.md:126 — a known/consistent issue, not undocumented.
-- **DOC-10** — `SKILL.md:220`: [WRONG] SKILL.md points to a "DOMINO-benchmark skill" that is not bundled. Severity **Low**. Doc says "`sbatch collect_demos.sbatch <task> <config>` — see the DOMINO-benchmark skill". Actual: `.claude/skills/` contains only `SAPIEN-task-creator/` — no DOMINO-benchmark skill exists. Dangling reference.
+- [ ] **DOC-6** `MEDIUM`: "All tasks run on ur5-wsg" is contradicted by active configs.
+  - `demo_dynamic.yml:6` and `debug_dynamic.yml:5` use dual `ur5-wsg`; `demo_clean.yml:7`, `demo_clean_dynamic.yml:5`, `demo_randomized.yml:7`, and `demo_random_dynamic.yml:5` use `aloha-agilex`. **INCONSISTENT.**
 
-### licensing-hygiene
+- [ ] **DOC-7** `MEDIUM`: README says "done" means 100 episodes, but production config is 50.
+  - `task_config/demo_dynamic.yml:2` has `episode_num:50`; CLAUDE.md:87 also reports 50 episodes, contradicting README's 100-episode definition. **INCONSISTENT.**
 
-- **DOC-11** — `LICENSE:1-2`: [OK, with note] Apache-2.0 root LICENSE is coherent; vendored code retains its own licenses, but the docs don't say so. Severity **Low** (informational). Root LICENSE is Apache License 2.0, coherent for RoboDyna-authored code. Bundled subprojects each carry their own LICENSE (pi0, pi05, DexVLA, ACT, openvla-oft, TinyVLA); `envs/curobo/` (cloned at install, not committed) ships its own LICENSE + LICENSE_ASSETS. No silent single-umbrella over-claim, no obvious top-level conflict. Note: neither README.md nor CLAUDE.md explicitly acknowledges that bundled `policy/*` and `envs/curobo/` carry separate licenses. Some `policy/` subdirs (DP, DP3, GO1, RDT, PUMA, LLaVA-VLA) lack a top-level LICENSE (see vendored table above) — adjudicating that is outside this check's scope.
+- [ ] **DOC-8** `LOW`: README lists absent object `202_bread_toast`.
+  - Duplicate of README-3; `README.md:126` lists it, but `assets/objects/` lacks it. **CONFIRMED.**
+
+### SKILL.md Accuracy
+
+- [ ] **DOC-9** `LOW`: SKILL.md is written for old DOMINO paths, not RoboDyna.
+  - `SKILL.md:4-5,18-19,28-30` names `/shared_work/markhsp/DOMINO` and `/shared_work/markhsp/envs/domino`; same issue appears in `validate_asset.py:27` and `integrate_object.py:43`. **STALE.**
+
+- [ ] **DOC-10** `LOW`: SKILL.md references a missing DOMINO-benchmark skill.
+  - `SKILL.md:220`; `.claude/skills/` contains only `SAPIEN-task-creator/`. **WRONG.**
+
+### Licensing Hygiene
+
+- [ ] **DOC-11** `LOW (INFORMATIONAL)`: Root Apache-2.0 LICENSE is coherent, with vendored licenses kept separately.
+  - Root LICENSE is Apache 2.0; bundled subprojects with licenses include pi0, pi05, DexVLA, ACT, openvla-oft, TinyVLA, and `envs/curobo/`; several policy dirs lack top-level LICENSE, which is out of scope here. **OK, with note.**
+
+---
+
+## Codex Follow-Up Additions — 2026-07-07 (5 findings)
+
+Scope: targeted follow-up over the previously identified first-party coverage gap (`scripts/merge_lerobot_meta.py`, `data/process_stuck.py`) plus cheap repo-wide pattern checks for debug residue and expanded-scope policy-script hazards. (Source: scripts/merge_lerobot_meta.py:1; Source: data/process_stuck.py:1)
+
+- [ ] **LERO-1** `HIGH`: LeRobot writer resume metadata can silently desynchronize existing parquet/video files from rebuilt per-task metadata.
+  - `LeRobotV21Writer.__init__` resumes from existing parquet row counts but starts `_ep_lines`, `_stats_lines`, and `_task_strings` empty at `envs/utils/lerobot_v21.py:114,123`; `close()` overwrites per-task metadata at `envs/utils/lerobot_v21.py:215,217,220,223,236`; collector resume/export path is `script/collect_data.py:218,222,233,235`; later merge propagation is `scripts/merge_lerobot_meta.py:25,37,52`. **NEW.**
+
+- [ ] **LERO-2** `MEDIUM`: Fallback LeRobot `task_index` is not deterministic and can collide for tasks outside `SUITE_TASK_INDEX`.
+  - Fallback context is `envs/utils/lerobot_export.py:75,76,77`, with `self.task_index = len(SUITE_TASK_INDEX) + abs(hash(self.task_name)) % 1000` exactly at `envs/utils/lerobot_export.py:77`; Python `hash()` is process-salted and the modulo bucket can collide; the same file says "15-task suite" while the literal map has 16 names at `envs/utils/lerobot_export.py:16,17,22`. **NEW.**
+
+- [ ] **LERO-3** `LOW-MEDIUM`: `scripts/merge_lerobot_meta.py` lacks metadata consistency validation.
+  - Reads and merges task slices while silently overwriting duplicate `task_strings` and not rejecting duplicate `episode_index` values at `scripts/merge_lerobot_meta.py:26,34,37,38,39`; adopts first non-null global fields without equality checks at `scripts/merge_lerobot_meta.py:44,45,46,47,52,63,71,72,77`. **NEW.**
+
+- [ ] **DATA-1** `MEDIUM`: `data/process_stuck.py` is stale and dangerous for the current output layout.
+  - Mutates `seed.txt` in place without bounds check/dry run/backup at `data/process_stuck.py:10,15,20,22,25`; deletes/renames old-layout `data/episodeN.pkl` at `data/process_stuck.py:12,28,32` while current outputs are `_traj_data/episodeN.pkl`, `data/episodeN.hdf5`, and `video/episodeN.mp4` at `envs/_base_task.py:893,914,930,931`; current collector repair path is `script/collect_data.py:432,443,448,464,466,470`. **NEW.**
+
+- [ ] **DEAD-8** `LOW`: Debug breakpoint residue in `Base_Task.get_scene_contact()` can hang headless collection.
+  - Contact iteration enters `pdb.set_trace()` before printing details at `envs/_base_task.py:1480,1481,1482,1483,1484,1485`. **NEW.**
+
+**Expanded-scope follow-up:** `policy/*` remained shallow-scan scope in the original audit. One concrete policy-script hazard found during the follow-up: `policy/LLaVA-VLA/eval.sh` (Source: policy/LLaVA-VLA/eval.sh:9) still calls `/yourpath/RoboTwin/script/eval_policy.py` rather than the current RoboDyna checkout's relative `script/eval_policy.py`.
 
 ---
 
 ## Scope Note
 
-First-party RoboDyna code (`script/`, `envs/` excluding `envs/curobo/`, `description/`, `code_gen/`, `task_config/`, root-level scripts and docs) was **deep-audited** across all 6 passes. Vendored `policy/*` (12 subprojects) and `envs/curobo/` were **only shallow-scanned** per user decision (license/README/version-pin presence checks only — no code-level review of vendored logic). No code was modified during any audit pass, the synthesis, or the conflict-resolution check — this is a report-only deliverable.
+First-party RoboDyna code (`script/`, `envs/` excluding `envs/curobo/`, `description/`, `code_gen/`, `task_config/`, root-level scripts and docs) was deep-audited across the original 6 passes. Vendored `policy/*` and `envs/curobo/` were shallow-scanned only per user decision. No code was modified during the original audit, synthesis, or conflict-resolution pass.
 
-**Coverage gap identified during cross-model review (verified 2026-07-06):** two first-party locations were never in scope for any of the 6 passes and were not covered by this report at all:
-- **`scripts/`** (plural — distinct from the singular `script/` directory that WAS deep-audited) — confirmed to exist via `ls scripts/`, containing `merge_lerobot_meta.py` (a first-party LeRobot metadata-merging script) plus a `__pycache__/`.
-- **`data/process_stuck.py`** — confirmed to exist via `ls data/`, a first-party script sitting alongside the (gitignored) collected-data directories.
-
-Neither file was referenced by any of the 6 audit passes or by this synthesis prior to this cross-model review pass. Both are first-party Python and in principle subject to the same install/dependency/error-handling/security scrutiny applied elsewhere in this report. **Recommendation: a follow-up pass should deep-audit `scripts/merge_lerobot_meta.py` and `data/process_stuck.py`** before treating first-party coverage as complete — this report does not currently make any correctness/security claims about either file.
+The 2026-07-06 coverage gap was `scripts/` (plural, distinct from audited `script/`) and `data/process_stuck.py`. A targeted 2026-07-07 Codex follow-up covered those files and added LERO-1, LERO-2, LERO-3, DATA-1, and DEAD-8 above. (Source: scripts/merge_lerobot_meta.py:1; Source: data/process_stuck.py:1)
