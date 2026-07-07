@@ -308,6 +308,8 @@ def main():
 
     if rollout:
         print("******* Rolling out task (play_once)...****** ")
+        env.ep_num = f"_{env.__class__.__name__}_{env.ep_num}"
+
         if args.save_plan_fail_dir:
             _install_plan_fail_camera_saver(
                 env,
@@ -318,7 +320,7 @@ def main():
             )
         env.play_once()
         if env.save_data:
-            env.ep_num = f"_{env.__class__.__name__}_{env.ep_num}"
+            # env.ep_num = f"_{env.__class__.__name__}_{env.ep_num}"
             env.close_env(clear_cache=True)
             env.merge_pkl_to_hdf5_video()
             env.remove_data_cache()

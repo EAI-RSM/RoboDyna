@@ -23,7 +23,7 @@ from pathlib import Path
 import trimesh
 import imageio
 import glob
-
+from scene_utils import print_c
 
 from ._GLOBAL_CONFIGS import *
 
@@ -64,6 +64,7 @@ class Base_Task(gym.Env):
         ta.setup_logging("CRITICAL")  # hide logging
         
         seed = kwags.get("seed", 0)
+        print_c(f"Task seed: {seed}", color="yellow")
         np.random.seed(seed)
         torch.manual_seed(seed)
         random.seed(seed)
