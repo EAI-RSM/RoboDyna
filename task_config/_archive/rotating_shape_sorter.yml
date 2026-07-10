@@ -37,7 +37,7 @@ collect_data: true
 eval_video_log: true
 task_args:
   rotating_shape_sorter:
-    spin_speed: 0.9
+    spin_speed: 10.9
     r_tol: 0.06
     align_window: 0.18
     max_track_steps: 900

@@ -51,23 +51,61 @@ def load_pkl_file(pkl_path):
     return data
 
 
+def _encode_string_array(value):
+    arr = np.asarray(value, dtype=object)
+    flat = []
+    for item in arr.reshape(-1):
+        if item is None:
+            flat.append(b"")
+        elif isinstance(item, (bytes, np.bytes_)):
+            flat.append(bytes(item))
+        else:
+            flat.append(str(item).encode("utf-8"))
+    max_len = max((len(item) for item in flat), default=1)
+    encoded = np.asarray([item.ljust(max_len, b"\0") for item in flat], dtype=f"S{max_len}")
+    return encoded.reshape(arr.shape)
+
+
+def _create_dataset(hdf5_group, key, value):
+    arr = np.asarray(value)
+
+    if arr.dtype.kind in {"U", "S"}:
+        arr = _encode_string_array(arr)
+        hdf5_group.create_dataset(key, data=arr, dtype=arr.dtype)
+        return
+
+    if arr.dtype.kind == "O":
+        flat = arr.reshape(-1).tolist()
+        if all(isinstance(item, (str, bytes, np.str_, np.bytes_)) or item is None for item in flat):
+            arr = _encode_string_array(arr)
+            hdf5_group.create_dataset(key, data=arr, dtype=arr.dtype)
+            return
+        try:
+            numeric = np.asarray(value, dtype=np.float64)
+            hdf5_group.create_dataset(key, data=numeric)
+            return
+        except (TypeError, ValueError):
+            arr = _encode_string_array([str(item) for item in flat])
+            hdf5_group.create_dataset(key, data=arr, dtype=arr.dtype)
+            return
+
+    hdf5_group.create_dataset(key, data=arr)
+
+
 def create_hdf5_from_dict(hdf5_group, data_dict):
     for key, value in data_dict.items():
         if isinstance(value, dict):
             subgroup = hdf5_group.create_group(key)
             create_hdf5_from_dict(subgroup, value)
         elif isinstance(value, list):
-            value = np.array(value)
             if "rgb" in key:
-                encode_data, max_len = images_encoding(value)
+                encode_data, max_len = images_encoding(np.asarray(value))
                 hdf5_group.create_dataset(key, data=encode_data, dtype=f"S{max_len}")
             else:
-                hdf5_group.create_dataset(key, data=value)
+                _create_dataset(hdf5_group, key, value)
         else:
-            return
             try:
-                hdf5_group.create_dataset(key, data=str(value))
-                print("Not np array")
+                _create_dataset(hdf5_group, key, value)
             except Exception as e:
                 print(f"Error storing value for key '{key}': {e}")
 
