@@ -68,10 +68,13 @@ task_args:
     attach_z: 0.04
     dwell_steps: 40
   catch_marbles_trapdoors:
-    belt_base_speed: 0.0016
     press_hold_steps: 24
-    marble_dwell_steps: 900
-    drop_window: 0.045
+    final_dwell_steps: 100
+    button_press_depth: 0.03
+    door_open_angle_deg: 95.0
+    door_open_speed_deg: 220.0
+    ball_speed: 0.18
+    ball_bounce_height: 0.012
   catch_rat:
     num_appearances: 3
     pop_steps: 90

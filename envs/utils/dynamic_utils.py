@@ -220,8 +220,9 @@ class DynamicMotionHelper:
         for actor_key, actor_data in actors_state.items():
             actor = actor_data['actor']
             component = actor_data['component']
-            
-            actor.actor.set_pose(actor_data['pose'])
+
+            base_entity = actor.actor if hasattr(actor, "actor") else actor
+            base_entity.set_pose(actor_data['pose'])
             component.set_linear_velocity(actor_data['linear_velocity'])
             component.set_angular_velocity(actor_data['angular_velocity'])
         
@@ -259,4 +260,3 @@ class StepCounter:
     def get_count(self) -> int:
         """Get count result."""
         return self.counter
-
