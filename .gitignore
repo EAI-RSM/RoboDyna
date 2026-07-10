@@ -29,6 +29,9 @@ eval_result/
 assets/*
 !assets/_download.py
 !assets/static/
+!assets/background_texture/
+!assets/background_texture/custom/
+!assets/background_texture/custom/belt_tread_dark.png
 
 policy/weights/*
 

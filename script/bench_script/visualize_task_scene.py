@@ -25,6 +25,14 @@ EXAMPLES:
     # Roll out the task (run play_once) then view
     python bench_script/visualize_task_scene.py put_away_stapler bench_demo_clean --rollout
 
+    # Roll out with the previous viewer behavior (mostly arm motion + final frame)
+    python bench_script/visualize_task_scene.py put_away_stapler bench_demo_clean --rollout \\
+        --render-mode legacy
+
+    # Slow the visualization to quarter speed
+    python bench_script/visualize_task_scene.py put_away_stapler bench_demo_clean --rollout \\
+        --speed 0.25
+
     # With explicit bench subdir (for tasks under office/, study/, etc.)
     python bench_script/visualize_task_scene.py mouse_on_pad bench_demo_clean --bench-subdir office --rollout --seed 0
 
@@ -43,8 +51,10 @@ ARGUMENTS:
 OPTIONS:
     --seed N                   Random seed for scene initialization (default: 0)
     --render-freq N            Render every N simulation steps (default: 1)
+    --speed S                  Visualization speed multiplier; 1.0 is realtime, lower is slower
     --viewer-camera N          Match viewer to this scene camera name (default: demo_camera; use default to keep built-in pose)
     --rollout                  Run play_once() to roll out the task; if not set, only view initial setup
+    --render-mode M            Choose live or legacy viewer updates during rollout
     --bench-subdir S           Subdirectory under bench_envs (e.g. office, study). If set, imports bench_envs.<S>.<task_name>
     --no-render                Disable simulator rendering (run headless). Default: render on.
     --save-plan-fail-dir PATH  With --rollout, save camera RGB when a top-level env.move() fails planning
@@ -194,6 +204,70 @@ def _install_plan_fail_camera_saver(env, out_dir: Path, task_name: str, seed: in
     env.move = wrapped_move
 
 
+def _install_rollout_render_pacer(env, speed: float):
+    """
+    Pace viewer updates during ``play_once()`` without changing simulation timing.
+    The interval is based on the configured render frequency and the scene timestep.
+    """
+    viewer = getattr(env, "viewer", None)
+    if viewer is None:
+        return lambda: None
+
+    original_render = viewer.render
+    render_every = max(1, int(getattr(env, "render_freq", 1) or 1))
+    render_interval = float(env.scene.get_timestep()) * render_every / speed
+    last_render_time = [None]
+
+    def wrapped_render(*args, **kwargs):
+        now = time.perf_counter()
+        if last_render_time[0] is not None:
+            remaining = render_interval - (now - last_render_time[0])
+            if remaining > 0:
+                time.sleep(remaining)
+        result = original_render(*args, **kwargs)
+        last_render_time[0] = time.perf_counter()
+        return result
+
+    viewer.render = wrapped_render
+
+    def restore():
+        if viewer.render is wrapped_render:
+            viewer.render = original_render
+
+    return restore
+
+
+def _install_live_step_renderer(env):
+    """
+    Ensure visualization updates for task-specific loops that call ``scene.step()`` directly
+    instead of going through ``env.move(...)``. This keeps the viewer live during dwell /
+    conveyor / wait phases inside ``play_once()``.
+    """
+    viewer = getattr(env, "viewer", None)
+    if viewer is None:
+        return lambda: None
+
+    original_step = env.scene.step
+    step_counter = [0]
+    render_every = max(1, int(getattr(env, "render_freq", 1) or 1))
+
+    def wrapped_step(*args, **kwargs):
+        result = original_step(*args, **kwargs)
+        step_counter[0] += 1
+        if not viewer.closed and step_counter[0] % render_every == 0:
+            env._update_render()
+            viewer.render()
+        return result
+
+    env.scene.step = wrapped_step
+
+    def restore():
+        if env.scene.step is wrapped_step:
+            env.scene.step = original_step
+
+    return restore
+
+
 def main():
     parser = argparse.ArgumentParser(description="Visualize a benchmark task scene")
     # parser.add_argument("scene_name", type=str, help="Task module name (e.g. grab_roller_thing)")
@@ -201,7 +275,26 @@ def main():
     parser.add_argument("task_config", type=str, help="Task config name (e.g. bench_demo_clean)")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed for scene")
     parser.add_argument("--render-freq", type=int, default=3, help="Render every N steps (default 1)")
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=None,
+        help=(
+            "Visualization speed multiplier. 1.0 is realtime, 0.5 is half speed, "
+            "2.0 is double speed. Omit to render as fast as possible."
+        ),
+    )
     parser.add_argument("--rollout", action="store_true", help="Run play_once() to roll out the task")
+    parser.add_argument(
+        "--render-mode",
+        type=str,
+        choices=("live", "legacy"),
+        default="live",
+        help=(
+            "With --rollout, 'live' renders direct scene.step() phases during play_once; "
+            "'legacy' keeps the previous behavior (default: live)."
+        ),
+    )
     parser.add_argument("--bench-subdir", type=str, default=None,
                        help="Subdirectory under bench_envs (e.g. office, study)")
     parser.add_argument("--save_data", action="store_true", help="Save the visualization")
@@ -230,13 +323,17 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.speed is not None and args.speed <= 0:
+        parser.error("--speed must be greater than 0")
 
     # scene_name=args.scene_name
     task_name = args.task_name
     task_config = args.task_config
     seed = args.seed
     render_freq = args.render_freq
+    speed = args.speed
     rollout = args.rollout
+    render_mode = args.render_mode
     bench_subdir = args.bench_subdir
     enable_render = not args.no_render
 
@@ -309,6 +406,12 @@ def main():
     if rollout:
         print("******* Rolling out task (play_once)...****** ")
         env.ep_num = f"_{env.__class__.__name__}_{env.ep_num}"
+        restore_live_step_renderer = lambda: None
+        restore_rollout_render_pacer = lambda: None
+        if enable_render and render_mode == "live":
+            restore_live_step_renderer = _install_live_step_renderer(env)
+        if enable_render and speed is not None:
+            restore_rollout_render_pacer = _install_rollout_render_pacer(env, speed)
 
         if args.save_plan_fail_dir:
             _install_plan_fail_camera_saver(
@@ -318,7 +421,11 @@ def main():
                 cfg["seed"],
                 args.plan_fail_camera,
             )
-        env.play_once()
+        try:
+            env.play_once()
+        finally:
+            restore_live_step_renderer()
+            restore_rollout_render_pacer()
         if env.save_data:
             # env.ep_num = f"_{env.__class__.__name__}_{env.ep_num}"
             env.close_env(clear_cache=True)
@@ -333,9 +440,14 @@ def main():
         else:
             print("Close the viewer window to exit.")
         while not viewer.closed:
+            frame_start = time.perf_counter()
             env.scene.step()
             env.scene.update_render()
             viewer.render()
+            if speed is not None:
+                remaining = float(env.scene.get_timestep()) / speed - (time.perf_counter() - frame_start)
+                if remaining > 0:
+                    time.sleep(remaining)
     else:
         if not rollout:
             print("Scene ready (headless). Press Ctrl+C to exit.")

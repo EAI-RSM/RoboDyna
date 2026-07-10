@@ -2,7 +2,7 @@ render_freq: 0
 episode_num: 8                 # debug: small batch
 use_seed: false
 save_freq: 15
-embodiment: [ur5-wsg, ur5-wsg, 0.6]
+embodiment: [aloha-agilex] #[ur5-wsg, ur5-wsg, 0.6]
 language_num: 100
 use_dynamic: false            # static path by default; tasks with a moving element flip this themselves
 dynamic_level: 1              # dynamic complexity level(1,2,3)
