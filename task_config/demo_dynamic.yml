@@ -61,6 +61,8 @@ task_args:
     target_doneness_max: 0.55
     place_dx: 0.010           # center the steak in the bowl (+x)
     place_dy: -0.015          # center the steak in the bowl (-y)
+    board_scale_mult: 0.075 # cutting board size (steak spawns on top of it)
+    plate_scale_mult: 0.55    # serving plate size (cooked steak is placed on it)
   assemble_markers_cylinder:
     cyl_radius: 0.035
     cyl_half_len: 0.075

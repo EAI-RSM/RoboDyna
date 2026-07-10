@@ -1,5 +1,5 @@
 render_freq: 0
-episode_num: 8                 # debug: small batch
+episode_num: 2                 # smoke test
 use_seed: false
 save_freq: 15
 embodiment: [ur5-wsg, ur5-wsg, 0.6]
@@ -57,6 +57,8 @@ task_args:
   cook_meat:
     cook_steps: 1000
     target_doneness: 0.5
+    board_scale_mult: 0.07    # cutting board size (steak spawns on top of it)
+    plate_scale_mult: 0.55    # serving plate size (cooked steak is placed on it)
   assemble_markers_cylinder:
     cyl_radius: 0.035
     cyl_half_len: 0.075
