@@ -46,11 +46,16 @@ import yaml
 import importlib
 from copy import deepcopy
 from argparse import ArgumentParser
+from queue import Empty
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.multiprocessing as mp
 
 from envs import *  # noqa: F401,F403 -- provides CONFIGS_PATH and UnStableError
+
+
+WORKER_QUEUE_TIMEOUT_SECONDS = 30.0
+WORKER_SHUTDOWN_GRACE_SECONDS = 5.0
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
@@ -406,41 +411,154 @@ def _spawn_and_consume(
     per_worker_args: List[Tuple],
     queue,
     on_message: Callable[[Tuple], None],
+    is_complete: Optional[Callable[[], bool]] = None,
 ) -> List[Dict[str, Any]]:
     """Spawn one process per per_worker_args entry, consume queue messages until
-    every worker reported 'worker_done', then join. Returns the workers' stats.
+    every worker reports ``worker_done`` or ``is_complete`` confirms that the
+    phase's required outputs have arrived. Returns all reported worker stats.
 
-    Raises RuntimeError if a worker dies without reporting (avoids hanging on a
-    queue that will never produce the missing 'worker_done').
+    Output-aware completion is intended for phases such as seed search, where
+    every required output can be validated independently of worker sentinels.
+    Other phases remain sentinel-driven. A worker that exits before either
+    completion condition is met is reported with its PID and exit code.
     """
+    if not per_worker_args:
+        return []
+
+    worker_ids = [int(worker_args[0]) for worker_args in per_worker_args]
+    if len(set(worker_ids)) != len(worker_ids):
+        raise ValueError(f"worker IDs must be unique, got {worker_ids}")
+
     procs = [ctx.Process(target=worker_fn, args=wargs, daemon=False) for wargs in per_worker_args]
+    process_by_worker = dict(zip(worker_ids, procs))
     for p in procs:
         p.start()
 
     stats: List[Dict[str, Any]] = []
-    pending = len(procs)
-    while pending > 0:
-        try:
-            msg = queue.get(timeout=30)
-        except Exception:
-            dead = [p for p in procs if not p.is_alive()]
-            if len(dead) + pending > len(procs):
-                for p in procs:
-                    p.terminate()
-                raise RuntimeError(
-                    f"{len(dead) - (len(procs) - pending)} worker process(es) died "
-                    f"without reporting; aborting to avoid a hang.")
-            continue
+    done_workers = set()
+    completed_by_output = False
+    intentionally_terminated_pids = set()
+
+    def handle_message(msg: Tuple) -> None:
         if msg[0] == "worker_done":
-            pending -= 1
+            worker_id = int(msg[1])
+            if worker_id not in process_by_worker:
+                raise RuntimeError(f"unknown worker_done ID {worker_id}")
+            if worker_id in done_workers:
+                raise RuntimeError(f"duplicate worker_done from worker {worker_id}")
+            done_workers.add(worker_id)
             stats.append(msg[2])
         else:
             on_message(msg)
 
-    for p in procs:
-        p.join()
-        if p.exitcode not in (0, None):
-            print(f"\033[93mWarning: worker process {p.pid} exited with code {p.exitcode}\033[0m")
+    def terminate_kill_and_join(processes):
+        targeted = [process for process in processes if process.is_alive()]
+        for process in targeted:
+            process.terminate()
+        for process in targeted:
+            process.join(timeout=WORKER_SHUTDOWN_GRACE_SECONDS)
+        survivors = [process for process in targeted if process.is_alive()]
+        for process in survivors:
+            if hasattr(process, "kill"):
+                process.kill()
+            else:
+                process.terminate()
+        for process in survivors:
+            process.join(timeout=WORKER_SHUTDOWN_GRACE_SECONDS)
+        return targeted, [process for process in survivors if process.is_alive()]
+
+    def drain_available_messages() -> None:
+        while True:
+            try:
+                handle_message(queue.get_nowait())
+            except Empty:
+                break
+            except (EOFError, OSError) as error:
+                print(
+                    "\033[93mWarning: could not drain final worker stats: "
+                    f"{error}\033[0m"
+                )
+                break
+
+    def terminate_after_error(processes) -> None:
+        terminate_kill_and_join(processes)
+
+    try:
+        while len(done_workers) < len(procs):
+            if is_complete is not None and is_complete():
+                completed_by_output = True
+                break
+            try:
+                msg = queue.get(timeout=WORKER_QUEUE_TIMEOUT_SECONDS)
+            except Empty:
+                if is_complete is not None and is_complete():
+                    completed_by_output = True
+                    break
+                unreported_dead = []
+                for worker_id, process in process_by_worker.items():
+                    if worker_id not in done_workers and not process.is_alive():
+                        process.join(timeout=0)
+                        unreported_dead.append((worker_id, process))
+                if unreported_dead:
+                    details = ", ".join(
+                        f"worker={worker_id} pid={process.pid} exitcode={process.exitcode}"
+                        for worker_id, process in unreported_dead
+                    )
+                    raise RuntimeError(
+                        f"{len(unreported_dead)} worker process(es) exited without reporting: "
+                        f"{details}"
+                    )
+                continue
+            handle_message(msg)
+    except BaseException:
+        terminate_after_error(procs)
+        raise
+
+    if completed_by_output:
+        deadline = time.monotonic() + WORKER_SHUTDOWN_GRACE_SECONDS
+        for process in procs:
+            process.join(timeout=max(0.0, deadline - time.monotonic()))
+        try:
+            # Workers that exited during the grace period have flushed their
+            # feeder threads, so collect any final stats before force-stopping
+            # workers that are still performing unnecessary work or cleanup.
+            drain_available_messages()
+        except BaseException:
+            terminate_after_error(procs)
+            raise
+
+        still_alive = [process for process in procs if process.is_alive()]
+        if still_alive:
+            intentionally_terminated_pids.update(process.pid for process in still_alive)
+            targeted, survivors = terminate_kill_and_join(still_alive)
+            if survivors:
+                raise RuntimeError(
+                    "output complete, but workers could not be stopped: "
+                    + ", ".join(
+                        f"pid={process.pid} exitcode={process.exitcode}"
+                        for process in survivors
+                    )
+                )
+            print(
+                "\033[93mSeed outputs complete; stopped workers still finishing "
+                f"best-effort cleanup: {[process.pid for process in targeted]}\033[0m"
+            )
+    else:
+        # Preserve the existing sentinel-driven contract for render and
+        # regeneration: once every worker reports completion, allow normal
+        # Python/CUDA teardown to finish without imposing a new timeout.
+        for process in procs:
+            process.join()
+
+    for worker_id, process in process_by_worker.items():
+        if (
+            process.exitcode not in (0, None)
+            and process.pid not in intentionally_terminated_pids
+        ):
+            print(
+                f"\033[93mWarning: worker {worker_id} process {process.pid} "
+                f"exited with code {process.exitcode}\033[0m"
+            )
     return stats
 
 
@@ -476,17 +594,26 @@ def run(task_name: str, args: Dict[str, Any], num_workers: int) -> None:
                 seed_by_idx[idx] = seed
                 _write_seed_file(save_path, seed_by_idx)
 
+            def seed_phase_complete() -> bool:
+                return all(idx in seed_by_idx for idx in range(episode_num))
+
             stats = _spawn_and_consume(
                 ctx, seed_search_worker,
                 [(w, num_workers, task_name, args, start_seed, episode_num, counter, lock, queue)
                  for w in range(num_workers)],
-                queue, on_seed_msg)
+                queue, on_seed_msg, is_complete=seed_phase_complete)
 
             total_tries = sum(s.get("tries", 0) for s in stats)
             total_fails = sum(s.get("fails", 0) for s in stats)
             _write_seed_file(save_path, seed_by_idx)
-            print(f"\nComplete seed collection, failed \033[91m{total_fails}\033[0m times "
-                  f"/ {total_tries} tries \n")
+            if len(stats) == num_workers:
+                print(f"\nComplete seed collection, failed \033[91m{total_fails}\033[0m times "
+                      f"/ {total_tries} tries \n")
+            else:
+                print(
+                    "\nComplete seed collection; worker stats are partial "
+                    f"({len(stats)}/{num_workers} workers reported).\n"
+                )
     else:
         print("\033[93m" + "Use Saved Seeds List".center(30, "-") + "\033[0m")
         seed_by_idx = {i: s for i, s in enumerate(_read_seed_file(save_path))}
