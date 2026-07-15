@@ -41,6 +41,7 @@ class catch_marbles_trapdoors(Base_Task):
     DOOR_WIDTH_DEFAULT = 0.10
     DOOR_OPEN_ANGLE_DEG_DEFAULT = 95.0
     DOOR_OPEN_SPEED_DEG_DEFAULT = 220.0
+    DOOR_OPEN_DURATION_SEC_DEFAULT = 0.5
 
     BALL_RADIUS_DEFAULT = 0.012
     BALL_SPEED_DEFAULT = 0.18
@@ -59,6 +60,8 @@ class catch_marbles_trapdoors(Base_Task):
         self._door_open_with_ball_over = []
         self._door_angle_deg = []
         self._door_target_angle_deg = []
+        self._door_open_time_left = []
+        self._door_locked_closed = []
         self._door_x_bounds = []
         self._door_hinge_y = 0.0
         self._door_half_y = 0.0
@@ -67,6 +70,7 @@ class catch_marbles_trapdoors(Base_Task):
         self.door_width = float(self.DOOR_WIDTH_DEFAULT)
         self.door_open_angle_deg = float(self.DOOR_OPEN_ANGLE_DEG_DEFAULT)
         self.door_open_speed_deg = float(self.DOOR_OPEN_SPEED_DEG_DEFAULT)
+        self.door_open_duration_sec = float(self.DOOR_OPEN_DURATION_SEC_DEFAULT)
         self.button_colors = []
         self.button_color_names = []
         self.target_button_idx = -1
@@ -119,6 +123,7 @@ class catch_marbles_trapdoors(Base_Task):
         self.door_width = float(c.get("door_width", self.DOOR_WIDTH_DEFAULT))
         self.door_open_angle_deg = float(c.get("door_open_angle_deg", self.DOOR_OPEN_ANGLE_DEG_DEFAULT))
         self.door_open_speed_deg = float(c.get("door_open_speed_deg", self.DOOR_OPEN_SPEED_DEG_DEFAULT))
+        self.door_open_duration_sec = float(c.get("door_open_duration_sec", self.DOOR_OPEN_DURATION_SEC_DEFAULT))
         button_x_cfg = c.get("button_x", None)
         self.button_x = list(button_x_cfg) if button_x_cfg is not None else self._aligned_button_x_positions()
 
@@ -129,7 +134,6 @@ class catch_marbles_trapdoors(Base_Task):
         self.ball_bounce_freq = float(c.get("ball_bounce_freq", self.BALL_BOUNCE_FREQ_DEFAULT))
         self.ball_y_offset = float(c.get("ball_y_offset", self.BALL_Y_OFFSET_DEFAULT))
         self.ball_drop_settle_steps = int(c.get("ball_drop_settle_steps", self.BALL_DROP_SETTLE_STEPS_DEFAULT))
-
         self.table_z = 0.74 + self.table_z_bias
         self.box_center = np.array([0.0, self.box_y], dtype=np.float64)
 
@@ -171,6 +175,8 @@ class catch_marbles_trapdoors(Base_Task):
         self._door_open_with_ball_over = [False] * self.n_buttons
         self._door_angle_deg = [0.0] * self.n_buttons
         self._door_target_angle_deg = [0.0] * self.n_buttons
+        self._door_open_time_left = [0.0] * self.n_buttons
+        self._door_locked_closed = [False] * self.n_buttons
         self.door_tiles = []
         self._door_x_bounds = []
         self._build_upper_box_floor_tiles(upper_floor_z, self.button_colors)
@@ -378,6 +384,11 @@ class catch_marbles_trapdoors(Base_Task):
         dt = float(self.scene.get_timestep())
         step = abs(self.door_open_speed_deg) * dt
         for idx in range(len(self.door_tiles)):
+            if self._door_open[idx] and not self._door_locked_closed[idx]:
+                self._door_open_time_left[idx] = max(0.0, float(self._door_open_time_left[idx]) - dt)
+                if self._door_open_time_left[idx] <= 1e-9:
+                    self._door_target_angle_deg[idx] = 0.0
+                    self._door_locked_closed[idx] = True
             cur = float(self._door_angle_deg[idx])
             tgt = float(self._door_target_angle_deg[idx])
             if abs(cur - tgt) <= 1e-3:
@@ -532,7 +543,7 @@ class catch_marbles_trapdoors(Base_Task):
         return False
 
     def _press_button(self, arm_tag: ArmTag, btn_idx: int):
-        if not self.plan_success or self._button_pressed[btn_idx]:
+        if not self.plan_success or self._button_pressed[btn_idx] or self._door_locked_closed[btn_idx]:
             return
         btn = self.buttons[btn_idx]
         self.move(
@@ -555,6 +566,7 @@ class catch_marbles_trapdoors(Base_Task):
         self._button_pressed[btn_idx] = True
         self._door_open[btn_idx] = True
         self._door_open_with_ball_over[btn_idx] = opened_on_time
+        self._door_open_time_left[btn_idx] = max(0.0, float(self.door_open_duration_sec))
         self._door_target_angle_deg[btn_idx] = self.door_open_angle_deg
         self._dwell(self.press_hold_steps)
         self._buttons_held.discard(btn_idx)
@@ -602,15 +614,14 @@ class catch_marbles_trapdoors(Base_Task):
     # ----------------------------------------------------------- metric/obs
     def check_success(self):
         target_valid = 0 <= self.target_button_idx < len(self._door_open)
-        only_target_open = bool(
+        opened_door_indices = [int(i) for i, is_open in enumerate(self._door_open) if is_open]
+        wrong_door_opened = bool(
             target_valid
-            and self._door_open[self.target_button_idx]
-            and int(sum(self._door_open)) == 1
+            and any(i != self.target_button_idx for i in opened_door_indices)
         )
-        opened_when_ball_over = bool(
-            target_valid
-            and self._door_open_with_ball_over[self.target_button_idx]
-        )
+        target_door_opened = bool(target_valid and self._door_open[self.target_button_idx])
+        opened_when_ball_over = bool(target_valid and self._door_open_with_ball_over[self.target_button_idx])
+        ball_dropped = bool(self._ball_mode != "track")
         used_matching_door = bool(target_valid and self._ball_drop_door_idx == self.target_button_idx)
         ball_inside = self._ball_in_lower_box()
         self.info["buttons_pressed"] = int(sum(self._button_pressed))
@@ -620,15 +631,26 @@ class catch_marbles_trapdoors(Base_Task):
             if target_valid and self.target_button_idx < len(self.button_color_names)
             else ""
         )
-        self.info["opened_door_indices"] = [int(i) for i, is_open in enumerate(self._door_open) if is_open]
+        self.info["opened_door_indices"] = opened_door_indices
         self.info["door_open_with_ball_over"] = list(self._door_open_with_ball_over)
         self.info["ball_drop_door_idx"] = int(self._ball_drop_door_idx)
-        self.info["only_target_door_open"] = only_target_open
+        self.info["only_target_door_open"] = bool(target_door_opened and not wrong_door_opened)
         self.info["target_opened_when_ball_over"] = opened_when_ball_over
+        self.info["ball_dropped"] = ball_dropped
         self.info["used_matching_door"] = used_matching_door
         self.info["ball_in_lower_box"] = ball_inside
+        self.info["wrong_door_opened"] = wrong_door_opened
         self.info["mutex_violation"] = bool(self._mutex_violation)
-        return bool(only_target_open and opened_when_ball_over and not self._mutex_violation)
+        return bool(
+            target_valid
+            and target_door_opened
+            and opened_when_ball_over
+            and ball_dropped
+            and used_matching_door
+            and ball_inside
+            and not wrong_door_opened
+            and not self._mutex_violation
+        )
 
     def get_obs(self):
         obs = super().get_obs()
@@ -638,6 +660,8 @@ class catch_marbles_trapdoors(Base_Task):
             "door_open": list(self._door_open),
             "door_open_with_ball_over": list(self._door_open_with_ball_over),
             "door_angle_deg": list(self._door_angle_deg),
+            "door_open_time_left": list(map(float, self._door_open_time_left)),
+            "door_locked_closed": list(self._door_locked_closed),
             "buttons_held": held_mask,
             "buttons_held_count": int(sum(held_mask)),
             "mutex_violation": bool(self._mutex_violation),
