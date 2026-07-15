@@ -86,13 +86,18 @@ task_args:
     rim_radius: 0.055
     pour_every: 3
   cup_curtain_slot:
-    curtain_freq: 0.8
+    curtain_freq: 0.4
     curtain_amp: 0.05
-    belt_speed: 0.04
+    belt_speed: 0.3
     belt_range: 0.06
     placement_tol: 0.07
     gap_tol: 0.06
     reach_tol: 0.07
+    blue_curtains_enabled: true
+    blue_curtain_dynamic_enabled: false
+    place_cup_in_middle_of_yellow_tools: true
+    lift_off_only_after_place: false
+    post_place_lift_z: 0.10
   dual_hole_punch:
     n_pages: 3
     punch_tol: 0.035

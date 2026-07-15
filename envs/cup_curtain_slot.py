@@ -26,20 +26,31 @@ class cup_curtain_slot(Base_Task):
     CURTAIN_FREQ_DEFAULT = 0.8          # curtain oscillation: cycles per (sim-second-equivalent)
     CURTAIN_AMP_DEFAULT = 0.05          # lateral sway amplitude of the curtain group (m)
     CURTAIN_PHASE_DEFAULT = 0.0         # initial phase offset (rad)
-    BELT_SPEED_DEFAULT = 0.04           # belt lateral speed magnitude (m per "second")
-    BELT_RANGE_DEFAULT = 0.06           # belt travels +/- this in x before reversing (m)
+    BELT_SPEED_DEFAULT = 0.2           # belt lateral speed magnitude (m per "second")
+    BELT_RANGE_DEFAULT = 0.12           # belt travels +/- this in x before reversing (m)
     SLOT_START_DEFAULT = 0.0            # initial slot x offset within belt range (m)
     PLACEMENT_TOL_DEFAULT = 0.07        # tolerance for placement_score (m)
     GAP_TOL_DEFAULT = 0.06              # how close (in x) the gap center must be to the corridor for "open"
     REACH_TOL_DEFAULT = 0.07            # how close the slot x must be to the corridor
+    MOVING_COMPONENT_SPACING_DEFAULT = 0.075
+    BLUE_CURTAINS_ENABLED_DEFAULT = True
+    BLUE_CURTAIN_DYNAMIC_ENABLED_DEFAULT = False
+    PLACE_CUP_IN_MIDDLE_OF_YELLOW_TOOLS_DEFAULT = True
+    LIFT_OFF_ONLY_AFTER_PLACE_DEFAULT = False
+    POST_PLACE_LIFT_Z_DEFAULT = 0.10
 
     REACH_STEPS_EST = 60                # est. physics steps for the reach-through to complete
     N_STRIPS = 3                        # curtain vertical strips
     STRIP_GAP_IDX = 1                   # which inter-strip gap is "the gap" (center)
-    CURTAIN_Y = 0.0                     # mid-zone y of the curtain plane
-    BELT_Y = 0.06                       # far-mid y of the belt (behind the curtain)
+    CURTAIN_Y = 0.03                     # mid-zone y of the curtain plane
+    BELT_CENTER_Y_OFFSET = 0.12         # place the gray surface +0.2m from table center in y
     BELT_Z_OFF = 0.01                   # belt platform half-height sits this far above table
     DT = 1.0 / 250.0                    # matches default scene timestep
+    BELT_PLATE_HALF_X = 0.14 * 2.0      # double the original x half-size
+    BELT_PLATE_HALF_Y = 0.045 * 1.5     # 1.5x the original y half-size
+    MOVING_COMPONENT_HALF_X = 0.02 * 0.5
+    MOVING_COMPONENT_HALF_Z = 0.018
+    BLUE_CUP_RGBA = [0.10, 0.35, 0.95, 1.0]
 
     def setup_demo(self, **kwags):
         # capture task-scoped params BEFORE init (kwags not stored on self otherwise)
@@ -50,6 +61,7 @@ class cup_curtain_slot(Base_Task):
         # load_actors recreates them -- otherwise set_kinematic_target on a freed body segfaults.
         self.curtain_strips = []
         self.belt_pegs = []
+        self.belt_plate = None
         self._attempt_active = False
         if hasattr(self, "_kin_step"):
             del self._kin_step
@@ -65,12 +77,29 @@ class cup_curtain_slot(Base_Task):
         self.placement_tol = float(c.get("placement_tol", self.PLACEMENT_TOL_DEFAULT))
         self.gap_tol = float(c.get("gap_tol", self.GAP_TOL_DEFAULT))
         self.reach_tol = float(c.get("reach_tol", self.REACH_TOL_DEFAULT))
+        self.slot_spacing = float(c.get("moving_component_spacing",
+                                        c.get("slot_spacing", self.MOVING_COMPONENT_SPACING_DEFAULT)))
+        self.blue_curtains_enabled = bool(c.get("blue_curtains_enabled",
+                                                c.get("curtain_enabled", self.BLUE_CURTAINS_ENABLED_DEFAULT)))
+        self.blue_curtain_dynamic_enabled = bool(
+            c.get("blue_curtain_dynamic_enabled",
+                  c.get("blue_curtain_dynamic", self.BLUE_CURTAIN_DYNAMIC_ENABLED_DEFAULT))
+        )
+        self.place_cup_in_middle_of_yellow_tools = bool(
+            c.get(
+                "place_cup_in_middle_of_yellow_tools",
+                self.PLACE_CUP_IN_MIDDLE_OF_YELLOW_TOOLS_DEFAULT,
+            )
+        )
+        self.lift_off_only_after_place = bool(
+            c.get("lift_off_only_after_place", self.LIFT_OFF_ONLY_AFTER_PLACE_DEFAULT)
+        )
+        self.post_place_lift_z = float(c.get("post_place_lift_z", self.POST_PLACE_LIFT_Z_DEFAULT))
 
         # seed-randomized curtain phase / belt start / slot start
         self.curtain_phase = float(c.get("curtain_phase",
                                          np.random.uniform(0, 2 * np.pi)))
-        self.slot_start = float(c.get("slot_start",
-                                      np.random.uniform(-0.5, 0.5) * self.belt_range))
+        slot_start_cfg = c.get("slot_start", None)
         self.belt_dir = float(np.random.choice([-1.0, 1.0]))
 
         # internal step counter drives BOTH dynamics (two-pass determinism)
@@ -82,6 +111,27 @@ class cup_curtain_slot(Base_Task):
         self._belt_frozen_offset = None
 
         z0 = 0.74 + self.table_z_bias
+        self.belt_center_x = float(c.get("belt_center_x", self.table_xy_bias[0]))
+        self.belt_y = float(c.get("belt_y", self.table_xy_bias[1] + self.BELT_CENTER_Y_OFFSET))
+        self.curtain_y = float(c.get("curtain_y", self.CURTAIN_Y))
+        self.belt_plate_half_size = (
+            self.BELT_PLATE_HALF_X,
+            self.BELT_PLATE_HALF_Y,
+            0.004,
+        )
+        self.moving_component_half_size = (
+            self.MOVING_COMPONENT_HALF_X,
+            self.belt_plate_half_size[1],
+            self.MOVING_COMPONENT_HALF_Z,
+        )
+        self.belt_motion_limit = max(
+            0.0,
+            self.belt_plate_half_size[0] - self.moving_component_half_size[0] - self.slot_spacing,
+        )
+        if slot_start_cfg is None:
+            self.slot_start = float(np.random.uniform(-self.belt_motion_limit, self.belt_motion_limit))
+        else:
+            self.slot_start = float(np.clip(float(slot_start_cfg), -self.belt_motion_limit, self.belt_motion_limit))
 
         # ----- the cup: RIGHT side, near zone, the arm starts by grasping it (= "held") -----
         # Spawn recipe mirrors the working sibling pick_cup_behind_fan (qpos lays the cup so the
@@ -98,47 +148,81 @@ class cup_curtain_slot(Base_Task):
             model_id=self.cup_id, convex=True, is_static=False,
         )
         self.cup.set_mass(0.15)
+        self._set_cup_color(self.BLUE_CUP_RGBA)
+        for comp in self.cup.actor.get_components():
+            if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
+                try:
+                    comp.set_linear_damping(3.0)
+                    comp.set_angular_damping(8.0)
+                except Exception:
+                    pass
+        self.cup_height = float(self._actor_world_size(self.cup)[2])
 
         # ----- the curtain: a row of thin vertical strips in the mid zone -----
         # Strips span the right half so a single-arm (right) task stays same-side. The curtain
         # corridor is centred on the cup so the whole grasp->reach-through->deposit stays in one
         # reachable column. Strips are short (the cup is lifted and threaded through the gap).
-        self.curtain_center_x = float(np.clip(self.cup_x, 0.10, 0.16))
-        self.strip_half = (0.015, 0.004, 0.022)   # (x,y,z) half-sizes: thin, short strips
-        self.strip_spacing = 0.045
+        curtain_gap_width = max(
+            2.0 * max(self.slot_spacing - self.moving_component_half_size[0], 0.005),
+            0.02,
+        )
+        strip_full_x = curtain_gap_width / max(self.N_STRIPS, 1)
+        strip_gap_x = 0.5 * strip_full_x
+        strip_half_x = 0.5 * strip_full_x
+        curtain_half_z = 0.75 * self.cup_height
+        self.strip_half = (strip_half_x, 0.004, curtain_half_z)
+        self.strip_spacing = strip_full_x + strip_gap_x
         self._strip_base_x = []            # rest x of each strip (group-relative removed)
         self.curtain_strips = []
         n = self.N_STRIPS
-        for i in range(n):
-            bx = self.curtain_center_x + (i - (n - 1) / 2.0) * self.strip_spacing
-            self._strip_base_x.append(bx)
-            strip = create_box(
-                scene=self,
-                pose=sapien.Pose([bx, self.CURTAIN_Y, z0 + self.strip_half[2]],
-                                 [1, 0, 0, 0]),
-                half_size=self.strip_half,
-                color=(0.20, 0.45, 0.75),
-                name=f"curtain_strip_{i}",
-                is_static=False,
-            )
-            for comp in strip.actor.get_components():
-                if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
-                    comp.set_kinematic(True)
-            self.curtain_strips.append(strip)
+        strip_offsets = [
+            (i - (n - 1) / 2.0) * self.strip_spacing
+            for i in range(n)
+        ]
+        curtain_half_span_x = (max(abs(off) for off in strip_offsets) + self.strip_half[0]) if strip_offsets else 0.0
+        self.curtain_motion_limit = max(0.0, self.belt_plate_half_size[0] - curtain_half_span_x)
+        if self.blue_curtains_enabled and not self.blue_curtain_dynamic_enabled:
+            x_low = self.belt_center_x - self.curtain_motion_limit
+            x_high = self.belt_center_x + self.curtain_motion_limit
+            self.curtain_center_x = float(np.random.uniform(x_low, x_high)) if x_high > x_low else float(self.belt_center_x)
+            belt_front_y = self.belt_y - self.belt_plate_half_size[1] - self.strip_half[1] - 0.01
+            y_low = float(c.get("static_curtain_y_min", min(self.CURTAIN_Y, belt_front_y)))
+            y_high = float(c.get("static_curtain_y_max", belt_front_y))
+            if y_high < y_low:
+                y_low = y_high
+            self.curtain_y = float(np.random.uniform(y_low, y_high)) if y_high > y_low else float(y_low)
+        else:
+            self.curtain_center_x = float(self.belt_center_x)
+        if self.blue_curtains_enabled:
+            for i, off in enumerate(strip_offsets):
+                bx = self.curtain_center_x + off
+                self._strip_base_x.append(bx)
+                strip = create_box(
+                    scene=self,
+                    pose=sapien.Pose([bx, self.curtain_y, z0 + self.strip_half[2]],
+                                     [1, 0, 0, 0]),
+                    half_size=self.strip_half,
+                    color=(0.20, 0.45, 0.75),
+                    name=f"curtain_strip_{i}",
+                    is_static=not self.blue_curtain_dynamic_enabled,
+                )
+                if self.blue_curtain_dynamic_enabled:
+                    for comp in strip.actor.get_components():
+                        if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
+                            comp.set_kinematic(True)
+                self.curtain_strips.append(strip)
 
         # ----- the belt: a kinematic platform carrying cup-slots, ONE empty -----
         # The belt row sits just behind the curtain. The empty slot is a gap in a row of
         # short walls; we track its x. The whole row translates laterally (belt motion).
         self.slot_z = z0 + self.BELT_Z_OFF
-        self.belt_center_x = self.curtain_center_x
-        self.slot_spacing = 0.075
         self.n_slots = 3
         self.empty_slot_idx = 1            # the center slot is empty
         # belt base platform (kinematic, collidable floor of the belt) -- thin so the cup rests on it
         self.belt_plate = create_box(
             scene=self,
-            pose=sapien.Pose([self.belt_center_x, self.BELT_Y, z0 + 0.004], [1, 0, 0, 0]),
-            half_size=(0.14, 0.045, 0.004),
+            pose=sapien.Pose([self.belt_center_x, self.belt_y, z0 + self.belt_plate_half_size[2]], [1, 0, 0, 0]),
+            half_size=self.belt_plate_half_size,
             color=(0.35, 0.35, 0.40),
             name="belt_plate",
             is_static=False,
@@ -157,8 +241,9 @@ class cup_curtain_slot(Base_Task):
             bx = self.belt_center_x + (i - (self.n_slots - 1) / 2.0) * self.slot_spacing
             peg = create_box(
                 scene=self,
-                pose=sapien.Pose([bx, self.BELT_Y, z0 + 0.022], [1, 0, 0, 0]),
-                half_size=(0.02, 0.02, 0.018),
+                pose=sapien.Pose([bx, self.belt_y, z0 + self.BELT_Z_OFF + self.moving_component_half_size[2]],
+                                 [1, 0, 0, 0]),
+                half_size=self.moving_component_half_size,
                 color=(0.8, 0.7, 0.3),
                 name=f"belt_peg_{i}",
                 is_static=False,
@@ -175,10 +260,10 @@ class cup_curtain_slot(Base_Task):
 
         # reserve space so randomized clutter never lands on the scene
         self.add_prohibit_area(self.cup, padding=0.05)
-        self.add_prohibit_area([self.curtain_center_x, self.CURTAIN_Y, z0, 1, 0, 0, 0],
-                               padding=0.20)
-        self.add_prohibit_area([self.belt_center_x, self.BELT_Y, z0, 1, 0, 0, 0],
-                               padding=0.20)
+        if self.blue_curtains_enabled:
+            for strip in self.curtain_strips:
+                self.add_prohibit_area(strip, padding=0.03)
+        self.add_prohibit_area(self.belt_plate, padding=0.04)
 
         # apply the initial dynamic transforms (kin_step = 0)
         self._apply_kinematics(initial=True)
@@ -189,36 +274,45 @@ class cup_curtain_slot(Base_Task):
         return self._kin_step * self.DT
 
     def _curtain_offset(self, t=None):
+        if not getattr(self, "blue_curtain_dynamic_enabled", False):
+            return 0.0
         if t is None:
             t = self._t()
-        return self.curtain_amp * np.sin(2 * np.pi * self.curtain_freq * t + self.curtain_phase)
+        limit = float(getattr(self, "curtain_motion_limit", 0.0))
+        if limit <= 1e-6:
+            return 0.0
+        return limit * np.sin(2 * np.pi * self.curtain_freq * t + self.curtain_phase)
 
     def _belt_offset(self, t=None):
-        """Triangle-wave belt travel within +/- belt_range."""
+        """Triangle-wave belt travel until one yellow mover reaches the belt edge."""
         if getattr(self, "_belt_frozen_offset", None) is not None:
             return self._belt_frozen_offset
         if t is None:
             t = self._t()
-        if self.belt_range <= 1e-6:
+        travel_limit = float(getattr(self, "belt_motion_limit", 0.0))
+        if travel_limit <= 1e-6:
             return self.slot_start
-        # triangle wave in [-range, range], starting from slot_start moving belt_dir
-        period = 4 * self.belt_range / max(self.belt_speed, 1e-6)
+        # Triangle wave in [-limit, limit], where the limit is set by the outer yellow mover
+        # reaching the corresponding edge of the gray belt plate.
+        period = 4 * travel_limit / max(self.belt_speed, 1e-6)
         phase = (self.belt_dir * self.belt_speed * t + self.slot_start)
         # fold into triangle wave
-        m = (phase + self.belt_range) % (2 * self.belt_range)
-        tri = m - self.belt_range
+        m = (phase + travel_limit) % (2 * travel_limit)
+        tri = m - travel_limit
         # reflect to make it continuous triangle (so motion reverses smoothly)
-        period2 = 2 * self.belt_range
-        k = int(np.floor((phase + self.belt_range) / period2))
+        period2 = 2 * travel_limit
+        k = int(np.floor((phase + travel_limit) / period2))
         if k % 2 == 1:
             tri = -tri
-        return float(np.clip(tri, -self.belt_range, self.belt_range))
+        return float(np.clip(tri, -travel_limit, travel_limit))
 
     def slot_x(self, t=None):
         return self._slot_base_x + self._belt_offset(t)
 
     def gap_center_x(self, t=None):
         """World x of the curtain gap (the STRIP_GAP_IDX-th inter-strip gap)."""
+        if not self.blue_curtains_enabled or len(self._strip_base_x) <= self.STRIP_GAP_IDX + 1:
+            return float(self.curtain_center_x)
         i = self.STRIP_GAP_IDX
         rest = 0.5 * (self._strip_base_x[i] + self._strip_base_x[i + 1])
         return rest + self._curtain_offset(t)
@@ -232,14 +326,38 @@ class cup_curtain_slot(Base_Task):
             if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
                 comp.set_kinematic_target(target_pose)
 
+    def _set_cup_color(self, rgba):
+        if getattr(self, "cup", None) is None:
+            return
+        for comp in self.cup.actor.get_components():
+            if isinstance(comp, sapien.render.RenderBodyComponent):
+                for shape in comp.render_shapes:
+                    try:
+                        shape.material.set_base_color(rgba)
+                    except Exception:
+                        pass
+
+    def _actor_world_size(self, actor):
+        if not hasattr(actor, "config") or actor.config is None:
+            return np.array([0.0, 0.0, 0.0], dtype=np.float64)
+        scale = actor.config.get("scale", [1.0, 1.0, 1.0])
+        if isinstance(scale, (int, float)):
+            scale = [float(scale)] * 3
+        extents = np.array(actor.config.get("extents", [0.0, 0.0, 0.0]), dtype=np.float64)
+        local_half = 0.5 * extents * np.array(scale, dtype=np.float64)
+        rot = actor.get_pose().to_transformation_matrix()[:3, :3]
+        world_half = np.abs(rot) @ local_half
+        return 2.0 * world_half
+
     def _apply_kinematics(self, initial=False):
         """Push current step-driven targets onto the kinematic bodies."""
-        co = self._curtain_offset()
-        for i, strip in enumerate(self.curtain_strips):
-            p = strip.get_pose()
-            self._set_body(strip,
-                           sapien.Pose([self._strip_base_x[i] + co, p.p[1], p.p[2]], p.q),
-                           initial=initial)
+        if self.blue_curtains_enabled and self.blue_curtain_dynamic_enabled:
+            co = self._curtain_offset()
+            for i, strip in enumerate(self.curtain_strips):
+                p = strip.get_pose()
+                self._set_body(strip,
+                               sapien.Pose([self._strip_base_x[i] + co, p.p[1], p.p[2]], p.q),
+                               initial=initial)
         bo = self._belt_offset()
         for j, peg in enumerate(self.belt_pegs):
             p = peg.get_pose()
@@ -248,9 +366,9 @@ class cup_curtain_slot(Base_Task):
                            initial=initial)
 
     def _check_curtain_contact(self):
-        if self._curtain_hit or not self._attempt_active:
+        if self._curtain_hit or not self._attempt_active or not self.blue_curtains_enabled:
             return
-        for i in range(self.N_STRIPS):
+        for i in range(len(self.curtain_strips)):
             try:
                 if self.check_actors_contact("021_cup", f"curtain_strip_{i}"):
                     self._curtain_hit = True
@@ -267,7 +385,7 @@ class cup_curtain_slot(Base_Task):
         # base hook first (drives any built-in DOMINO motion), then our step-driven dynamics
         super()._update_kinematic_tasks()
         # this hook can fire (via base scene setup) before load_actors builds our scene
-        if not hasattr(self, "_kin_step") or not getattr(self, "curtain_strips", None):
+        if not hasattr(self, "_kin_step") or getattr(self, "belt_plate", None) is None:
             return
         self._kin_step += 1
         self._apply_kinematics()
@@ -287,7 +405,8 @@ class cup_curtain_slot(Base_Task):
         The corridor is the curtain center column (where the arm reaches straight ahead)."""
         slot = self.slot_x(t)
         gap = self.gap_center_x(t)
-        gap_ok = abs(gap - self.curtain_center_x) < self.gap_tol     # gap is over the corridor
+        gap_ok = ((not self.blue_curtains_enabled)
+                  or abs(gap - self.curtain_center_x) < self.gap_tol)  # gap is over the corridor
         reach_ok = abs(slot - self.curtain_center_x) < self.reach_tol  # slot is at the corridor
         return gap_ok and reach_ok
 
@@ -311,6 +430,34 @@ class cup_curtain_slot(Base_Task):
         """Stop the belt so the deposited cup settles into a fixed slot position."""
         self._belt_frozen_offset = self._belt_offset()
 
+    def _find_cup_grasp(self, arm_tag: ArmTag):
+        # Try the cup's side contact points first; fall back to the generic grasp search.
+        candidates = [
+            (0, 0.10),
+            (1, 0.10),
+            (0, 0.08),
+            (1, 0.08),
+            (None, 0.10),
+            (2, 0.10),
+            (3, 0.10),
+        ]
+        for contact_point_id, pre_grasp_dis in candidates:
+            pre_g, g = self.choose_grasp_pose(
+                self.cup,
+                arm_tag=arm_tag,
+                pre_dis=pre_grasp_dis,
+                target_dis=0.0,
+                contact_point_id=contact_point_id,
+            )
+            if pre_g is not None and g is not None:
+                return contact_point_id, pre_grasp_dis
+        return None, None
+
+    def _placement_target_x(self, t=None):
+        if self.place_cup_in_middle_of_yellow_tools:
+            return float(self.slot_x(t))
+        return float(self.curtain_center_x)
+
     # ------------------------------------------------------------- policy
     def _dbg(self, tag):
         import os
@@ -320,28 +467,64 @@ class cup_curtain_slot(Base_Task):
     def play_once(self):
         arm_tag = ArmTag("right")     # single-arm, right (cup spawns on the right half)
 
-        # 1) right arm picks up the cup (establishes "holding the cup") and lifts it clear of
-        #    the (short) curtain. Grasp recipe mirrors the working pick_cup_behind_fan sibling.
-        self.move(self.grasp_actor(self.cup, arm_tag=arm_tag, pre_grasp_dis=0.1))
+        # 1) Pick up the blue cup, lift it, and align with the corridor that bisects the moving
+        #    gap between the two yellow shapes.
+        grasp_contact_id, pre_grasp_dis = self._find_cup_grasp(arm_tag)
+        if pre_grasp_dis is None:
+            self.plan_success = False
+            self.info["info"] = {
+                "{A}": f"021_cup/base{self.cup_id}",
+                "{a}": str(arm_tag),
+            }
+            return self.info
+        self.move(self.close_gripper(arm_tag, pos=0.6))
+        self.move(
+            self.grasp_actor(
+                self.cup,
+                arm_tag=arm_tag,
+                pre_grasp_dis=pre_grasp_dis,
+                gripper_pos=0.0,
+                contact_point_id=grasp_contact_id,
+            )
+        )
         self._dbg("after_grasp")
+        if not self.plan_success:
+            self.info["info"] = {
+                "{A}": f"021_cup/base{self.cup_id}",
+                "{a}": str(arm_tag),
+            }
+            return self.info
+        self._dwell(6)
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.10, move_axis="arm"))
         self._dbg("after_lift")
+        align_dx = float(self.curtain_center_x - self.cup.get_pose().p[0])
+        if abs(align_dx) > 1e-4:
+            self.move(self.move_by_displacement(arm_tag=arm_tag, x=align_dx))
+            self._dbg("after_xalign")
         self._attempt_active = True            # from here a curtain collision fails the attempt
 
-        # 2) track BOTH moving things; dwell until the curtain gap is open over the corridor AND
-        #    the empty slot will be at the corridor by the time the reach completes.
+        # 2) Wait until the moving gap between the yellow shapes will arrive under that corridor
+        #    by the time the forward reach completes. If the blue curtain exists, its gap must be
+        #    open at the same time.
         self._dwell(8)                         # observe the dynamics a moment
         self._wait_for_window(lead_steps=self.REACH_STEPS_EST, max_steps=1500)
         self._reach_step = self._kin_step
 
-        # 3) pass the cup forward through the gap to above the slot, freeze the belt so the slot
-        #    holds still, nudge in x to centre over the (now fixed) slot, then lower it in.
-        dy = self.BELT_Y - self.cup_y          # reach from the near cup row to the belt row
+        # 3) Reach to the gray surface, track the live yellow-shape gap, then lock that gap in
+        #    place and fine-center before lowering the cup between the shapes.
+        dy = self.belt_y - self.cup_y          # reach from the near cup row to the belt row
         self.move(self.move_by_displacement(arm_tag=arm_tag, y=dy))
         self._dbg("after_reach")
-        self._freeze_belt()                    # stop belt so the cup settles in a fixed slot
-        dx = float(np.clip(self.slot_x() - self.cup.get_pose().p[0], -0.05, 0.05))
-        self.move(self.move_by_displacement(arm_tag=arm_tag, x=dx))
+        target_x_live = self._placement_target_x()
+        dx_live = float(np.clip(target_x_live - self.cup.get_pose().p[0], -0.05, 0.05))
+        if abs(dx_live) > 1e-4:
+            self.move(self.move_by_displacement(arm_tag=arm_tag, x=dx_live))
+            self._dbg("after_gap_track")
+        # self._freeze_belt()                    # lock the current yellow-shape gap for release
+        target_x_lock = self._placement_target_x()
+        dx_lock = float(np.clip(target_x_lock - self.cup.get_pose().p[0], -0.03, 0.03))
+        if abs(dx_lock) > 1e-4:
+            self.move(self.move_by_displacement(arm_tag=arm_tag, x=dx_lock))
         self._dbg("after_xcorrect")
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=-0.09))
         self._dbg("after_lower")
@@ -352,10 +535,11 @@ class cup_curtain_slot(Base_Task):
         # let it settle (curtain keeps swaying; records frames)
         self._dwell(15)
 
-        # 4) retract up and home
-        self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.10, move_axis="arm"))
+        # 4) lift off after placing, then optionally return home.
+        self.move(self.move_by_displacement(arm_tag=arm_tag, z=self.post_place_lift_z, move_axis="arm"))
         self._dbg("after_retract")
-        self.move(self.back_to_origin(arm_tag))
+        if not self.lift_off_only_after_place:
+            self.move(self.back_to_origin(arm_tag))
 
         self.info["info"] = {
             "{A}": f"021_cup/base{self.cup_id}",
@@ -363,11 +547,14 @@ class cup_curtain_slot(Base_Task):
         }
         return self.info
 
+    def play_once_bk(self):
+        return self.play_once()
+
     # ------------------------------------------------------------- metric
     def _center_offset(self):
-        """Horizontal distance from the cup bottom to the (current) empty slot center."""
+        """Horizontal distance from the cup bottom to the gap center between yellow shapes."""
         cup_p = np.array(self.cup.get_functional_point(0, "pose").p[:2])
-        slot_p = np.array([self.slot_x(), self.BELT_Y])
+        slot_p = np.array([self.slot_x(), self.belt_y])
         return float(np.linalg.norm(cup_p - slot_p))
 
     def placement_score(self):
@@ -402,8 +589,14 @@ class cup_curtain_slot(Base_Task):
             "curtain_offset": float(self._curtain_offset()),
             "gap_center_x": float(self.gap_center_x()),
             "slot_x": float(self.slot_x()),
+            "belt_motion_limit": float(getattr(self, "belt_motion_limit", 0.0)),
             "window_open": bool(self._window_open()),
             "curtain_hit": bool(self._curtain_hit),
             "placement_score": float(self.placement_score()),
+            "blue_curtains_enabled": bool(self.blue_curtains_enabled),
+            "blue_curtain_dynamic_enabled": bool(getattr(self, "blue_curtain_dynamic_enabled", False)),
+            "moving_component_spacing": float(self.slot_spacing),
+            "place_cup_in_middle_of_yellow_tools": bool(self.place_cup_in_middle_of_yellow_tools),
+            "lift_off_only_after_place": bool(self.lift_off_only_after_place),
         }
         return obs
