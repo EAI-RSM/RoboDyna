@@ -1,5 +1,5 @@
 {
-  "full_description": "press the red or green key to stamp each matching <colored tile> on the belt",
+  "full_description": "press the matching red or green key for each colored tile, but press neither key when the empty slot pauses under the stamp",
   "schema": "{A} notifies the colored tiles on the belt, {a} notifies the arms that press the keys",
   "preference": "num of words should not exceed 14",
   "seen": [
@@ -22,13 +22,15 @@
     "Mark the {A} on the belt with the matching key color",
     "Use {a} to press the correct key for each {A}",
     "Press the matching color key with {a} as {A} pass",
-    "Have {a} stamp each {A} with the matching key"
+    "Have {a} stamp each {A} with the matching key",
+    "Skip both keys when the empty slot reaches the stamp"
   ],
   "unseen": [
     "With {a}, press the matching key to stamp every {A}",
     "Press the color-matched key so each {A} is stamped right",
     "Use {a} to stamp all the {A} with the correct key",
     "Tap the matching key with {a} to mark each moving {A}",
-    "Press red or green with {a} and stamp every {A} correctly"
+    "Press red or green with {a} and stamp every {A} correctly",
+    "Do not press a key while the missing tile slot is under the stamp"
   ]
 }

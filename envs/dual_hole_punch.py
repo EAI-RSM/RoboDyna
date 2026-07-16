@@ -461,10 +461,13 @@ class dual_hole_punch(Base_Task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_belt_active", False):
             return
-        # The belt advances only when _belt_running is enabled. Stepwise mode enables it only
-        # during explicit dwell loops, while continuous mode also enables it during press/release
-        # arm motions so the tiles keep streaming past the punch heads.
-        if not getattr(self, "_belt_running", False):
+        # In continuous mode the belt advances on every physics step once active, independent
+        # of stamping logic. In stepwise mode it only advances when explicit belt motion is
+        # requested via _belt_running.
+        belt_advancing = bool(getattr(self, "belt_continous_motion", False)) or bool(
+            getattr(self, "_belt_running", False)
+        )
+        if not belt_advancing:
             # still refresh page poses so they render at their held position, but don't advance
             self._refresh_pages_at_current_step()
             self._update_punch_heads()

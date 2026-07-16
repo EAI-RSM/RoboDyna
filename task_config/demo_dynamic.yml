@@ -114,8 +114,8 @@ task_args:
     belt_inward_reach: 0.13
     belt_outward_scale: 2.0
     equal_tile_spacing: true
-    belt_speed: 0.0022
-    belt_continous_motion: false
+    belt_speed: 0.0002
+    belt_continous_motion: true
     missing_tile_mode: true
     tile_pause_steps: 60
     square_gap: 0.015
@@ -193,12 +193,11 @@ task_args:
   quality_control:
     n_tiles: 6
     color_mode: alternating   # alternating | random
-    spacing_mode: random      # equal | random
+    spacing_mode: random      # equal | random inter-slot gaps
     tile_spacing: 0.08        # equal-mode center-to-center gap
     spacing_min: 0.07         # random-mode min gap
-    spacing_max: 0.22         # random-mode max gap (creates empty stamp windows)
-    empty_gap_prob: 0.35      # chance to insert a large empty gap between tiles
-    empty_gap_size: 0.20
+    spacing_max: 0.14         # random-mode max gap
+    include_empty_slot: true  # random tile-sized empty slot that pauses under stamp
   packing:
     n_cubes: 5
     belt_gap: 0.10            # gap between the two belts, centered at x=0

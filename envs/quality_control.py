@@ -12,13 +12,13 @@ class quality_control(Base_Task):
     key that matches each tile's color so the descending stamp marks it.
 
     Tiles start in a light shade of red or green. A correct stamp darkens the tile; an
-    incorrect stamp (wrong key) turns it black. Pressing any key while no tile is under the
-    stamp is an empty-press failure. Success requires every tile stamped correctly and no
-    empty presses.
+    incorrect stamp (wrong key) turns it black. A randomly placed empty slot — the same
+    size as a tile — travels with the sequence and pauses under the stamp like a tile;
+    pressing any key during that empty window is a failure. Success requires every tile
+    stamped correctly and no empty presses.
 
-    Tile gaps are either equal (`spacing_mode=equal`) or randomly sampled
-    (`spacing_mode=random`); random / intentionally enlarged gaps create empty windows
-    under the stamp.
+    Inter-slot gaps are either equal (`spacing_mode=equal`) or randomly sampled
+    (`spacing_mode=random`).
 
     Belt motion and stamp-head descent are step-driven via `_update_kinematic_tasks` so the
     plan / render collection passes stay identical."""
@@ -29,9 +29,8 @@ class quality_control(Base_Task):
     TILE_SPACING_DEFAULT = 0.08       # center-to-center spacing for equal mode
     SPACING_MODE_DEFAULT = "equal"    # "equal" | "random"
     SPACING_MIN_DEFAULT = 0.07        # random-mode min center-to-center gap
-    SPACING_MAX_DEFAULT = 0.22        # random-mode max (large enough for empty stamp)
-    EMPTY_GAP_PROB_DEFAULT = 0.35     # chance to insert a large empty gap (both modes)
-    EMPTY_GAP_SIZE_DEFAULT = 0.20     # center-to-center size of an intentional empty gap
+    SPACING_MAX_DEFAULT = 0.14        # random-mode max center-to-center gap
+    INCLUDE_EMPTY_SLOT_DEFAULT = True # randomly insert one tile-sized empty slot
     COLOR_MODE_DEFAULT = "alternating"  # "alternating" | "random"
 
     # geometry of the fixed installation (table-local; z added to table top)
@@ -81,6 +80,7 @@ class quality_control(Base_Task):
         # _init_task_env_ (BEFORE load_actors) and throughout check_stable.
         self._stamp_ready = False
         self._belt_running = False
+        self._stamp_active = False
         super()._init_task_env_(**kwags)
 
     # --------------------------------------------------------------- actors
@@ -100,8 +100,11 @@ class quality_control(Base_Task):
         self.spacing_max = float(cfg.get("spacing_max", self.SPACING_MAX_DEFAULT))
         if self.spacing_max < self.spacing_min:
             self.spacing_min, self.spacing_max = self.spacing_max, self.spacing_min
-        self.empty_gap_prob = float(cfg.get("empty_gap_prob", self.EMPTY_GAP_PROB_DEFAULT))
-        self.empty_gap_size = float(cfg.get("empty_gap_size", self.EMPTY_GAP_SIZE_DEFAULT))
+        self.include_empty_slot = bool(
+            cfg.get("include_empty_slot", self.INCLUDE_EMPTY_SLOT_DEFAULT)
+        )
+        # empty slot has the same along-belt size as a tile
+        self.empty_slot_size = float(2.0 * self.TILE_HALF[1])
 
         self.belt_speed = float(cfg.get("belt_speed",
                                         self.BELT_SPEED_DEFAULT * np.random.uniform(0.8, 1.25)))
@@ -179,7 +182,30 @@ class quality_control(Base_Task):
 
         # ---- tiles riding the belt (light red / light green) ----
         self.tile_colors = self._sample_tile_colors(self.n_tiles)
-        self.tile_gaps, self.tile_ys = self._sample_tile_layout(self.n_tiles)
+        slot_count = self.n_tiles + int(self.include_empty_slot)
+        self.slot_gaps, self.slot_ys = self._sample_tile_layout(slot_count)
+        self.tile_gaps = list(self.slot_gaps)
+        self.empty_slot_index = (
+            int(np.random.randint(slot_count)) if self.include_empty_slot else -1
+        )
+        self.empty_slot_y = (
+            float(self.slot_ys[self.empty_slot_index])
+            if self.include_empty_slot else None
+        )
+        self._empty_slot_init_y = self.empty_slot_y
+        self.tile_ys = [
+            float(y)
+            for slot_idx, y in enumerate(self.slot_ys)
+            if slot_idx != self.empty_slot_index
+        ]
+        self.slot_sequence = []
+        tile_idx = 0
+        for slot_idx in range(slot_count):
+            if slot_idx == self.empty_slot_index:
+                self.slot_sequence.append(("empty", None))
+            else:
+                self.slot_sequence.append(("tile", tile_idx))
+                tile_idx += 1
         self.tiles = []
         self.tile_marked = []
         self.tile_correct = []
@@ -218,6 +244,9 @@ class quality_control(Base_Task):
         self.stamp_key_color = None   # color of the key that triggered the current stroke
         self.empty_press = False      # True if a key was pressed with no tile under stamp
         self.empty_press_count = 0
+        self.empty_slot_presented = False
+        self.empty_slot_paused = False
+        self._stamp_active = False
         self._belt_accum = 0.0
         self.n_correct = 0
 
@@ -236,21 +265,21 @@ class quality_control(Base_Task):
         return [first if (i % 2 == 0) else other for i in range(n)]
 
     def _sample_tile_layout(self, n):
-        """Return (gaps, ys). gaps[i] is the center-to-center distance from tile i to i+1.
+        """Return (gaps, ys) for `n` slots (tiles and/or one empty slot).
 
-        equal: constant `tile_spacing`, with optional random large empty gaps.
-        random: each gap ~ Uniform(spacing_min, spacing_max), plus optional empty gaps.
-        Large gaps leave the stamp empty between tiles — pressing then is a failure.
+        equal: constant `tile_spacing` between consecutive slot centres.
+        random: each gap ~ Uniform(spacing_min, spacing_max).
+        The empty slot (if any) occupies the same along-belt size as a tile; it is a
+        missing actor in the sequence, not a larger gap.
         """
+        # keep centre-to-centre at least one tile length so slots don't overlap
+        min_gap = max(float(self.empty_slot_size), float(self.spacing_min))
         gaps = []
         for _ in range(max(0, n - 1)):
             if self.spacing_mode == "random":
-                gap = float(np.random.uniform(self.spacing_min, self.spacing_max))
+                gap = float(np.random.uniform(min_gap, max(min_gap, self.spacing_max)))
             else:
-                gap = float(self.tile_spacing)
-            # randomly enlarge some gaps so the stamp sees an empty window
-            if self.empty_gap_prob > 0.0 and np.random.rand() < self.empty_gap_prob:
-                gap = max(gap, float(self.empty_gap_size))
+                gap = max(float(self.tile_spacing), min_gap)
             gaps.append(gap)
 
         ys = [float(self.BELT_Y_START)]
@@ -275,6 +304,10 @@ class quality_control(Base_Task):
         self.n_correct = 0
         self.empty_press = False
         self.empty_press_count = 0
+        self.empty_slot_y = self._empty_slot_init_y
+        self.empty_slot_presented = False
+        self.empty_slot_paused = False
+        self._stamp_active = False
         self._set_pose_z(self.stamp, self.stamp_up_z)
         self._recolor_stamp(None)
         self.stamp_phase = "up"
@@ -321,6 +354,8 @@ class quality_control(Base_Task):
 
     # ----------------------------------------------------- step-driven dynamics
     def _advance_belt(self):
+        if self.empty_slot_y is not None:
+            self.empty_slot_y -= self.belt_speed
         for i, t in enumerate(self.tiles):
             if self.tile_hidden[i]:
                 continue
@@ -348,6 +383,12 @@ class quality_control(Base_Task):
                     best_d, best_i = d, i
         return best_i
 
+    def _empty_slot_under_stamp(self):
+        """True when the tile-sized empty slot is centred under the stamp."""
+        if self.empty_slot_y is None:
+            return False
+        return abs(float(self.empty_slot_y) - self.stamp_y) < self.TILE_HALF[1]
+
     def _record_mark(self):
         """At stamp contact, mark the tile under the stamp — or flag an empty press."""
         pressed = self.stamp_key_color
@@ -355,7 +396,7 @@ class quality_control(Base_Task):
             return
         best_i = self._tile_under_stamp(require_unmarked=True)
         if best_i is None:
-            # key pressed with nothing under the stamp → failure
+            # key pressed with nothing under the stamp (incl. empty slot) → failure
             self.empty_press = True
             self.empty_press_count += 1
             return
@@ -375,14 +416,8 @@ class quality_control(Base_Task):
                 pass
         self.n_correct = int(sum(1 for c in self.tile_correct if c))
 
-    def _update_kinematic_tasks(self):
-        super()._update_kinematic_tasks()
-
-        if not getattr(self, "_stamp_ready", False) or not getattr(self, "_belt_running", False):
-            return
-
-        self._advance_belt()
-
+    def _step_stamp(self):
+        """Advance the stamp head state machine (independent of belt motion)."""
         if self.stamp_phase == "up":
             self._set_pose_z(self.stamp, self.stamp_up_z)
             if self.stamp_requested:
@@ -415,8 +450,23 @@ class quality_control(Base_Task):
                 self._recolor_stamp(None)
                 self.stamp_key_color = None
 
+    def _update_kinematic_tasks(self):
+        super()._update_kinematic_tasks()
+
+        if not getattr(self, "_stamp_ready", False):
+            return
+        # belt advance only while running; stamp can still fire during empty pauses
+        if getattr(self, "_belt_running", False):
+            self._advance_belt()
+        if getattr(self, "_belt_running", False) or getattr(self, "_stamp_active", False):
+            self._step_stamp()
+
     def _press_key(self, color):
-        """Fire the stamp with the given key color (red or green)."""
+        """Fire the stamp with the given key color (red or green).
+
+        Empty-press failure is decided at stamp contact in `_record_mark` (the expert
+        presses with a lead so the tile is not under the stamp yet at request time).
+        """
         self.stamp_key_color = color
         self.stamp_requested = True
 
@@ -430,6 +480,24 @@ class quality_control(Base_Task):
             if self.save_freq and (i % self.save_freq == 0):
                 self._take_picture()
         self._belt_running = prev
+
+    def _stationary_dwell(self, steps):
+        """Pause the belt (empty slot under stamp) while still allowing stamp actuation.
+
+        Matches a tile inspection window: the empty footprint stays under the stamp
+        for `steps`, and any key press during this window counts as empty_press.
+        """
+        prev_belt = self._belt_running
+        prev_stamp = getattr(self, "_stamp_active", False)
+        self._belt_running = False
+        self._stamp_active = True
+        for i in range(int(steps)):
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (i % self.save_freq == 0):
+                self._take_picture()
+        self._belt_running = prev_belt
+        self._stamp_active = prev_stamp
 
     # ------------------------------------------------------------- policy
     def _key_tip_pose(self, color, tip_z_above_top):
@@ -468,15 +536,45 @@ class quality_control(Base_Task):
         self.move(self._hover_key("red"), self._hover_key("green"))
 
         lead = self.belt_speed * self.STAMP_TRAVEL_STEPS
+        # empty slot pauses for the same duration as a tile stamp cycle
         cycle_steps = (2 * self.STAMP_TRAVEL_STEPS + self.STAMP_HOLD_STEPS) + 4
         press = self.KEY_PRESS_DEPTH
 
         max_wait = 8000
         waited = 0
         idx = 0
-        n = self.n_tiles
+        n = len(self.slot_sequence)
         while idx < n and waited < max_wait:
-            i = idx
+            slot_kind, tile_idx = self.slot_sequence[idx]
+            if slot_kind == "empty":
+                d = float(self.empty_slot_y - self.stamp_y)
+                # trigger when the empty tile-sized footprint reaches the stamp
+                if d <= -self.TILE_HALF[1]:
+                    idx += 1
+                    continue
+                if d <= lead + 1e-6:
+                    # pause under the stamp — do NOT press either key
+                    self.empty_slot_presented = True
+                    self._stationary_dwell(cycle_steps)
+                    self.empty_slot_paused = True
+                    if dbg:
+                        print(
+                            f"[qc] empty slot {idx}: size={self.empty_slot_size:.3f} "
+                            f"paused={self.empty_slot_paused} "
+                            f"empty_press={self.empty_press}",
+                            flush=True,
+                        )
+                    idx += 1
+                else:
+                    step = max(
+                        1,
+                        int(min(8, (d - lead) / max(self.belt_speed, 1e-6))),
+                    )
+                    self._belt_dwell(step)
+                    waited += step
+                continue
+
+            i = int(tile_idx)
             if self.tile_marked[i] or self.tile_hidden[i]:
                 idx += 1
                 continue
@@ -519,6 +617,8 @@ class quality_control(Base_Task):
 
         if dbg:
             print(f"[qc] done colors={self.tile_colors} gaps={self.tile_gaps} "
+                  f"empty_slot_index={self.empty_slot_index} "
+                  f"empty_slot_paused={self.empty_slot_paused} "
                   f"marked={self.tile_marked} correct={self.tile_correct} "
                   f"hidden={self.tile_hidden} empty_press={self.empty_press} "
                   f"plan={self.plan_success}", flush=True)
@@ -533,6 +633,8 @@ class quality_control(Base_Task):
     def check_success(self):
         # empty key-press (no tile under stamp) is an immediate failure
         if self.empty_press:
+            return False
+        if self.include_empty_slot and not self.empty_slot_paused:
             return False
         # every tile must be stamped with the matching color
         if not all(self.tile_marked):
@@ -554,6 +656,18 @@ class quality_control(Base_Task):
             "tile_correct": [bool(c) for c in self.tile_correct],
             "tile_hidden": [bool(h) for h in self.tile_hidden],
             "tile_positions": [float(t.get_pose().p[1]) for t in self.tiles],
+            "slot_sequence": [kind for kind, _ in self.slot_sequence],
+            "empty_slot_index": int(self.empty_slot_index),
+            "empty_slot_y": (
+                None if self.empty_slot_y is None else float(self.empty_slot_y)
+            ),
+            "empty_slot_size": float(self.empty_slot_size),
+            "empty_slot_presented": bool(self.empty_slot_presented),
+            "empty_slot_paused": bool(self.empty_slot_paused),
+            "empty_slot_under_stamp": bool(
+                self._empty_slot_under_stamp()
+                if getattr(self, "_stamp_ready", False) else False
+            ),
             "empty_press": bool(self.empty_press),
             "empty_press_count": int(self.empty_press_count),
             "stamp_z": float(self.stamp.get_pose().p[2]),
