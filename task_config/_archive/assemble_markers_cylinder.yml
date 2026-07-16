@@ -37,9 +37,15 @@ collect_data: true
 eval_video_log: true
 task_args:
   assemble_markers_cylinder:
-    cyl_radius: 0.035
-    cyl_half_len: 0.075
+    side_cyl_radius: 0.018
+    side_cyl_half_len: 0.10
+    center_cyl_radius: 0.09
+    center_cyl_half_len: 0.10
+    side_group_x_offset: 0.18
+    side_group_y_offset: 0.13
     attach_dist: 0.06
     attach_z: 0.04
     dwell_steps: 40
+    center_table_clearance: 0.005
+    rotation_direction: counter_clockwise
 save_failed_cases: true

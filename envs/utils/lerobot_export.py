@@ -19,7 +19,7 @@ SUITE_TASK_INDEX = {name: i for i, name in enumerate([
     "stab_moving_target", "dual_hole_punch", "catch_marbles_trapdoors", "stamp_moving_files",
     "assemble_markers_cylinder", "collect_falling_bowl", "rotating_shape_sorter",
     "two_type_sorting_catch", "pick_ripe_apple", "cup_curtain_slot",
-    "catch_ramp_ball",
+    "catch_ramp_ball", "goalkeeper",
 ])}
 
 # sim camera name -> LeRobot video feature key

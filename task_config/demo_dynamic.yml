@@ -62,11 +62,17 @@ task_args:
     place_dx: 0.010           # center the steak in the bowl (+x)
     place_dy: -0.015          # center the steak in the bowl (-y)
   assemble_markers_cylinder:
-    cyl_radius: 0.035
-    cyl_half_len: 0.075
+    side_cyl_radius: 0.018
+    side_cyl_half_len: 0.10
+    center_cyl_radius: 0.09
+    center_cyl_half_len: 0.10
     attach_dist: 0.06
     attach_z: 0.04
     dwell_steps: 40
+    side_group_x_offset: 0.18
+    side_group_y_offset: 0.13
+    center_table_clearance: 0.005
+    rotation_direction: counter_clockwise
   catch_marbles_trapdoors:
     press_hold_steps: 24
     final_dwell_steps: 100
@@ -101,6 +107,20 @@ task_args:
   dual_hole_punch:
     n_pages: 3
     punch_tol: 0.035
+  goalkeeper:
+    ball_speed_min: 0.07
+    ball_speed_max: 0.09
+    ball_angle_deg_min: -10.0
+    ball_angle_deg_max: 10.0
+    goal_center_y: 0.05
+    goal_center_y_jitter: 0.0
+    green_area_x_len: 0.10
+    green_area_y_extra: 0.05
+    red_line_x: 0.2
+    goal_x: 0.30
+    keeper_x: 0.16
+    keeper_goal_clearance: 0.05
+    keeper_pose_tol: 0.03
   pick_cup_behind_fan:
     fan_omega_deg: 2.0
     gap_frac: 0.40
