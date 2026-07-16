@@ -54,6 +54,7 @@ class dual_hole_punch(Base_Task):
     BELT_Y = -0.05
     SURF_DZ = 0.016                     # page sits this high above belt-slab center top
     PUNCH_ANIM_STEPS = 24
+    TILE_PAUSE_STEPS_DEFAULT = PUNCH_ANIM_STEPS + 4
     PAGE_EXIT_MARGIN = 0.002
     HIDE_Z = -10.0
     PUNCH_REST_Z_EXTRA = 0.03
@@ -81,6 +82,9 @@ class dual_hole_punch(Base_Task):
         if mode in ("single_random", "single", "one_missing", "random_one", "enabled", "on", "true"):
             return "single_random"
         return "none"
+
+    def _get_tile_pause_steps(self):
+        return max(1, int(self._cfg.get("tile_pause_steps", self.TILE_PAUSE_STEPS_DEFAULT)))
 
     def _sample_start_margin(self):
         base_margin = max(
@@ -209,6 +213,11 @@ class dual_hole_punch(Base_Task):
         self.page_arrival_eff = {}
         self.aligned_square_offsets = {}
         self.page_hidden = {}
+        self.page_missed = {}
+        self.tile_pause_steps = self._get_tile_pause_steps()
+        self.invalid_empty_press = False
+        self.invalid_empty_press_count = 0
+        self.invalid_empty_press_sides = []
         self.punch_model_id = int(np.random.choice(self.PUNCH_MODEL_IDS))
         shared_belt_timing = self._sample_belt_timing()
 
@@ -306,6 +315,7 @@ class dual_hole_punch(Base_Task):
             self.page_target_x[side] = tx_list
             self.page_start_x[side] = sx_list
             self.page_punched[side] = [bool(v) for v in self.page_missing[side]]
+            self.page_missed[side] = [False] * self.n_pages
             self.page_offset[side] = [None] * self.n_pages
             self.page_hidden[side] = [bool(v) for v in self.page_missing[side]]
             self._sides[side] = sign
@@ -421,6 +431,15 @@ class dual_hole_punch(Base_Task):
     def _trigger_punch_head(self, side):
         self._punch_press[side] = self.PUNCH_ANIM_STEPS
 
+    def _mark_invalid_empty_press(self, side):
+        if self.missing_tile_mode == "none":
+            return
+        self.invalid_empty_press = True
+        self.invalid_empty_press_count += 1
+        self.invalid_empty_press_sides.append(str(side))
+        if os.environ.get("DHP_DEBUG"):
+            print(f"[dhp] INVALID_EMPTY_PRESS side={side} step={self._belt_step}", flush=True)
+
     def _fire_punch(self, side, k=Ellipsis):
         """Register a punch on `side` at the current belt step: punch whichever page is
         under the head, recording its x-offset from the punch center, and trigger the
@@ -428,7 +447,13 @@ class dual_hole_punch(Base_Task):
         self._trigger_punch_head(side)
         if k is Ellipsis:
             k = self._under_head[side]
-        if k is None or self.page_punched[side][k]:
+        if k is None:
+            self._mark_invalid_empty_press(side)
+            return
+        if self.missing_tile_mode != "none" and not self._page_is_under_stamp(side, k):
+            self._mark_invalid_empty_press(side)
+            return
+        if self.page_punched[side][k]:
             return
         x = self._page_x_at(side, k, self._belt_step)
         off = abs(x - self.page_target_x[side][k])
@@ -518,17 +543,42 @@ class dual_hole_punch(Base_Task):
             travel_steps.append(int(np.ceil(travel / speed)))
         return max(40, max(travel_steps) + 8)
 
-    def _press_ready_sides(self, ready_by_side, descend=0.05):
+    def _mark_missed_ready_pages(self, ready_by_side):
+        for side, k in ready_by_side.items():
+            if self.page_punched[side][k]:
+                continue
+            self.page_missed[side][k] = True
+            self.page_punched[side][k] = True
+            if os.environ.get("DHP_DEBUG"):
+                print(f"[dhp] MISS {side} page{k} step={self._belt_step}", flush=True)
+
+    def _build_press_plan(self, ready_by_side, descend=0.05):
         pressed_sides = [side for side in ("left", "right") if side in ready_by_side]
         if not pressed_sides:
-            return []
+            return [], None, None
         if len(pressed_sides) == 2:
-            self.move(
+            return (
+                pressed_sides,
                 self._button_press_actions("left", descend),
                 self._button_press_actions("right", descend),
             )
+        return pressed_sides, self._button_press_actions(pressed_sides[0], descend), None
+
+    def _estimate_press_duration(self, ready_by_side, descend=0.05):
+        pressed_sides, action1, action2 = self._build_press_plan(ready_by_side, descend=descend)
+        if not pressed_sides:
+            return 0, pressed_sides, action1, action2
+        duration = self.calculate_move_duration(action1, action2)
+        return int(duration), pressed_sides, action1, action2
+
+    def _press_ready_sides(self, ready_by_side, descend=0.05):
+        pressed_sides, action1, action2 = self._build_press_plan(ready_by_side, descend=descend)
+        if not pressed_sides:
+            return []
+        if action2 is not None:
+            self.move(action1, action2)
         else:
-            self.move(self._button_press_actions(pressed_sides[0], descend))
+            self.move(action1)
         for side in pressed_sides:
             self._fire_punch(side, ready_by_side[side])
         return pressed_sides
@@ -556,8 +606,9 @@ class dual_hole_punch(Base_Task):
         self._belt_active = True
 
         # 2) Advance the belts only to the next actual square-arrival step. Once a square is
-        #    on the stamp, its arm presses and keeps the key held for the whole stopped dwell.
-        #    If both sides arrive on the same stop, both arms press together.
+        #    on the stamp, the belt pauses for a fixed number of controller steps. If the
+        #    press can complete within that pause window it succeeds; otherwise the window
+        #    expires, the tile is marked missed, and the belt advances anyway.
         while not all(all(self.page_punched[s]) for s in ("left", "right")):
             next_steps = []
             for side in ("left", "right"):
@@ -571,10 +622,20 @@ class dual_hole_punch(Base_Task):
             ready_by_side = self._ready_pages_at_current_step()
             if not ready_by_side:
                 continue
-            pressed_sides = self._press_ready_sides(ready_by_side, descend=0.05)
+            press_duration, _, _, _ = self._estimate_press_duration(ready_by_side, descend=0.05)
+            pressed_sides = []
+            pause_remaining = self.tile_pause_steps
+            if press_duration <= self.tile_pause_steps:
+                pressed_sides = self._press_ready_sides(ready_by_side, descend=0.05)
+                pause_remaining = max(0, self.tile_pause_steps - press_duration)
+            elif os.environ.get("DHP_DEBUG"):
+                print(
+                    f"[dhp] PAUSE_WINDOW_MISS step={step_target} duration={press_duration} window={self.tile_pause_steps}",
+                    flush=True,
+                )
             self._dbg(f"after press @step={step_target} sides={pressed_sides}")
-            # keep the aligned squares parked exactly under the stamps during the full punch cycle
-            self._belt_idle(self.PUNCH_ANIM_STEPS + 4, advance_belts=False)
+            self._belt_idle(pause_remaining, advance_belts=False)
+            self._mark_missed_ready_pages(ready_by_side)
             self._release_pressed_sides(pressed_sides, ascend=0.05)
 
         # let stamped squares clear the inner belt edge and disappear before ending the episode
@@ -607,10 +668,11 @@ class dual_hole_punch(Base_Task):
 
     def check_success(self):
         all_punched = all(all(self.page_punched[s]) for s in ("left", "right"))
+        any_missed = any(any(self.page_missed[s]) for s in ("left", "right"))
         self.punch_score_L = self._side_score("left")
         self.punch_score_R = self._side_score("right")
         self.punch_score_mean = 0.5 * (self.punch_score_L + self.punch_score_R)
-        return bool(all_punched)
+        return bool(all_punched and not any_missed and not self.invalid_empty_press)
 
     # record per-belt punch state into the trajectory (per frame)
     def get_obs(self):
@@ -627,6 +689,12 @@ class dual_hole_punch(Base_Task):
             "missing_tile_index": self.missing_tile_index,
             "left_missing_tiles": [bool(v) for v in self.page_missing["left"]],
             "right_missing_tiles": [bool(v) for v in self.page_missing["right"]],
+            "tile_pause_steps": int(self.tile_pause_steps),
+            "left_missed_tiles": [bool(v) for v in self.page_missed["left"]],
+            "right_missed_tiles": [bool(v) for v in self.page_missed["right"]],
+            "invalid_empty_press": bool(self.invalid_empty_press),
+            "invalid_empty_press_count": int(self.invalid_empty_press_count),
+            "invalid_empty_press_sides": list(self.invalid_empty_press_sides),
             "square_gaps": [float(g) for g in self.square_gaps["left"]],
             "left_square_offsets": [float(o) for o in self.square_offsets["left"]],
             "right_square_offsets": [float(o) for o in self.square_offsets["right"]],

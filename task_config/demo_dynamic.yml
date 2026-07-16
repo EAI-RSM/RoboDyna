@@ -115,6 +115,7 @@ task_args:
     belt_outward_scale: 2.0
     placement_mode: equal
     missing_tile_mode: single_random
+    tile_pause_steps: 28
     square_gap: 0.015
     square_gap_min: 0.010
     square_gap_max: 0.030
@@ -165,6 +166,7 @@ task_args:
     sway_amp: 0.10
     sway_period: 900
     target_speed: 1.0
+    target_y_offset: 0.050
     motion_x_min: 0.03
     motion_x_max: 0.24
     target_center_x_min: 0.12
@@ -172,6 +174,7 @@ task_args:
     blocker_enabled: true
     blocker_dynamic: true
     blocker_radius: 0.040
+    blocker_thickness: 0.002
     blocker_y_gap: 0.050
     blocker_z_offset: 0.0
     blocker_x_offset: 0.0
@@ -220,9 +223,9 @@ task_args:
     drop_time: 0.60
     roll_time_min: 4.0
     roll_time_max: 7.0
-    launch_speed: 0.45
+    launch_speed: 0.70
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
-    bowl_id: 1
-    bowl_inner_radius: 0.045
+    bowl_id: 4
+    bowl_inner_radius: 0.070

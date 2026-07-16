@@ -43,6 +43,7 @@ task_args:
     belt_outward_scale: 2.0
     placement_mode: equal
     missing_tile_mode: single_random
+    tile_pause_steps: 28
     square_gap: 0.015
     square_gap_min: 0.010
     square_gap_max: 0.030
