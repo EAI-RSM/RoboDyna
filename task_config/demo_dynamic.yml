@@ -113,9 +113,11 @@ task_args:
     punch_tol: 0.035
     belt_inward_reach: 0.13
     belt_outward_scale: 2.0
-    placement_mode: equal
-    missing_tile_mode: single_random
-    tile_pause_steps: 28
+    equal_tile_spacing: true
+    belt_speed: 0.0022
+    belt_continous_motion: false
+    missing_tile_mode: true
+    tile_pause_steps: 60
     square_gap: 0.015
     square_gap_min: 0.010
     square_gap_max: 0.030
@@ -188,9 +190,18 @@ task_args:
     amp_x: 0.010
     amp_y: 0.025
     amp_z: 0.018
-  stamp_moving_files:
-    n_files: 4
-    stamp_tol: 0.035
+  quality_control:
+    n_tiles: 6
+    color_mode: alternating   # alternating | random
+    spacing_mode: random      # equal | random
+    tile_spacing: 0.08        # equal-mode center-to-center gap
+    spacing_min: 0.07         # random-mode min gap
+    spacing_max: 0.22         # random-mode max gap (creates empty stamp windows)
+    empty_gap_prob: 0.35      # chance to insert a large empty gap between tiles
+    empty_gap_size: 0.20
+  packing:
+    n_cubes: 5
+    belt_gap: 0.10            # gap between the two belts, centered at x=0
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90
@@ -223,12 +234,6 @@ task_args:
     ball_radius: 0.018
     drop_height: 0.14
     drop_time: 0.60
-    roll_time_min: 4.0
-    roll_time_max: 7.0
-    roll_acceleration: 0.35
-    launch_speed: 0.72
-    idle_time_min: 1.0
-    idle_time_max: 2.0
     ball_path_mode: angled   # straight, angled, or random
     angled_path_min_deg: 15.0
     angled_path_max_deg: 25.0
@@ -238,6 +243,12 @@ task_args:
     initial_forward_speed_max: 1.10
     physics_max_steps: 1200
     red_line_gap: 0.05
+    roll_time_min: 4.0
+    roll_time_max: 7.0
+    roll_acceleration: 0.35
+    launch_speed: 0.72
+    idle_time_min: 1.0
+    idle_time_max: 2.0
     settle_steps: 150
     bowl_id: 1
     bowl_scale_mult: 0.65

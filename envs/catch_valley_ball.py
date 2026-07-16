@@ -325,7 +325,7 @@ class catch_valley_ball(Base_Task):
             is_static=False,
             scale_mult=self.bowl_scale_mult,
         )
-        self.bowl.set_mass(0.08)
+        self.bowl.set_mass(0.30)
         bowl_rigid = self._get_rigid(self.bowl)
         if bowl_rigid is not None:
             bowl_material = sapien.physx.PhysxMaterial(
@@ -754,7 +754,7 @@ class catch_valley_ball(Base_Task):
                 self.red_line_x + self.bowl_outer_radius + 0.005,
             ),
             self.landing[1],
-            self.table_top,
+            self.table_top - 0.040,
         ])
         displacement = target - bowl_now
         self.move(self.move_by_displacement(
@@ -764,8 +764,10 @@ class catch_valley_ball(Base_Task):
             z=float(displacement[2]),
             move_axis="world",
         ))
-        self.move(self.open_gripper(arm_tag))
+        # Detach at table height first; the bowl then rests on the table while
+        # the fingers open instead of following a moving gripper and dropping.
         self._unweld_bowl()
+        self.move(self.open_gripper(arm_tag))
         self.move(self.back_to_origin(arm_tag))
 
         self._bowl_ready = True

@@ -49,6 +49,9 @@ class dual_hole_punch(Base_Task):
     BELT_EDGE_MARGIN_DEFAULT = 0.025
     SQUARE_PLACEMENT_MODE_DEFAULT = "equal"
     MISSING_TILE_MODE_DEFAULT = "none"
+    BELT_CONTINOUS_MOTION_DEFAULT = False
+    BELT_SPEED_MIN_DEFAULT = 0.0016
+    BELT_SPEED_MAX_DEFAULT = 0.0028
 
     # belt center y (toward the robot's working area) and surface z above table
     BELT_Y = -0.05
@@ -64,24 +67,48 @@ class dual_hole_punch(Base_Task):
         self._cfg = kwags.get("task_args", {}).get("dual_hole_punch", {})
         super()._init_task_env_(**kwags)
 
-    def _normalize_placement_mode(self):
-        mode = str(
-            self._cfg.get(
+    def _normalize_tile_spacing_mode(self):
+        raw_mode = self._cfg.get("equal_tile_spacing", None)
+        if raw_mode is None:
+            raw_mode = self._cfg.get(
                 "placement_mode",
                 self._cfg.get("square_placement_mode", self.SQUARE_PLACEMENT_MODE_DEFAULT),
             )
-        ).strip().lower()
+        if isinstance(raw_mode, bool):
+            return "equal" if raw_mode else "variable"
+        if isinstance(raw_mode, (int, float)):
+            return "equal" if int(raw_mode) != 0 else "variable"
+        mode = str(raw_mode).strip().lower()
         if mode in ("equal", "fixed", "constant", "opt1"):
             return "equal"
         return "variable"
 
     def _normalize_missing_tile_mode(self):
-        mode = str(
-            self._cfg.get("missing_tile_mode", self.MISSING_TILE_MODE_DEFAULT)
-        ).strip().lower()
+        raw_mode = self._cfg.get("missing_tile_mode", self.MISSING_TILE_MODE_DEFAULT)
+        if isinstance(raw_mode, bool):
+            return "single_random" if raw_mode else "none"
+        if isinstance(raw_mode, (int, float)):
+            return "single_random" if int(raw_mode) != 0 else "none"
+        mode = str(raw_mode).strip().lower()
         if mode in ("single_random", "single", "one_missing", "random_one", "enabled", "on", "true"):
             return "single_random"
         return "none"
+
+    def _normalize_belt_continous_motion(self):
+        raw_mode = self._cfg.get(
+            "belt_continous_motion",
+            self._cfg.get("belt_motion_mode", self.BELT_CONTINOUS_MOTION_DEFAULT),
+        )
+        if isinstance(raw_mode, bool):
+            return raw_mode
+        if isinstance(raw_mode, (int, float)):
+            return int(raw_mode) != 0
+        mode = str(raw_mode).strip().lower()
+        if mode in ("continuous", "moving", "run", "stream", "always_on", "true", "on", "yes"):
+            return True
+        if mode in ("stop_per_tile", "stepwise", "paused", "false", "off", "no"):
+            return False
+        return bool(self.BELT_CONTINOUS_MOTION_DEFAULT)
 
     def _get_tile_pause_steps(self):
         return max(1, int(self._cfg.get("tile_pause_steps", self.TILE_PAUSE_STEPS_DEFAULT)))
@@ -114,12 +141,12 @@ class dual_hole_punch(Base_Task):
         return offsets, gaps
 
     def _build_square_layouts(self):
-        self.placement_mode = self._normalize_placement_mode()
+        self.tile_spacing_mode = self._normalize_tile_spacing_mode()
         self.square_offsets = {}
         self.square_gaps = {}
         start_margin = self._sample_start_margin()
         offsets, gaps = self._sample_square_layout(
-            self.placement_mode,
+            self.tile_spacing_mode,
             start_margin=start_margin,
         )
         for side in ("left", "right"):
@@ -176,7 +203,15 @@ class dual_hole_punch(Base_Task):
         return float(inward_reach), float(outward_reach)
 
     def _sample_belt_timing(self):
-        speed = float(np.random.uniform(0.0016, 0.0028))  # m per physics step
+        belt_speed_cfg = self._cfg.get("belt_speed", None)
+        if belt_speed_cfg is not None:
+            speed = max(1e-8, float(belt_speed_cfg))
+        else:
+            speed_min = float(self._cfg.get("belt_speed_min", self.BELT_SPEED_MIN_DEFAULT))
+            speed_max = float(self._cfg.get("belt_speed_max", self.BELT_SPEED_MAX_DEFAULT))
+            speed_lo = min(speed_min, speed_max)
+            speed_hi = max(speed_min, speed_max)
+            speed = float(np.random.uniform(speed_lo, speed_hi))
         phase = int(np.random.randint(0, 60))             # start delay (steps)
         return speed, phase
 
@@ -214,6 +249,7 @@ class dual_hole_punch(Base_Task):
         self.aligned_square_offsets = {}
         self.page_hidden = {}
         self.page_missed = {}
+        self.belt_continous_motion = self._normalize_belt_continous_motion()
         self.tile_pause_steps = self._get_tile_pause_steps()
         self.invalid_empty_press = False
         self.invalid_empty_press_count = 0
@@ -364,6 +400,17 @@ class dual_hole_punch(Base_Task):
         self.pages[side][k].actor.set_pose(sapien.Pose([p.p[0], p.p[1], self.HIDE_Z], p.q))
         self.page_hidden[side][k] = True
 
+    def _move_with_belt_motion(self, action1, action2=None, advance_belts=False):
+        prev = self._belt_running
+        self._belt_running = bool(advance_belts)
+        try:
+            if action2 is not None:
+                self.move(action1, action2)
+            else:
+                self.move(action1)
+        finally:
+            self._belt_running = prev
+
     def _page_has_exited_belt(self, side, x):
         sign = self._sides[side]
         inner_edge_x = self.belt_inner_edge_x[side]
@@ -414,11 +461,9 @@ class dual_hole_punch(Base_Task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_belt_active", False):
             return
-        # The belt advances only during explicit dwell loops (_run_belts_to / _belt_idle), NOT
-        # during the arm-motion planning steps -- otherwise an arm move (hundreds of sim steps)
-        # would whisk the page far past the head before the press registers. Freezing the belt
-        # while the grippers travel keeps the punch timing controllable and deterministic across
-        # the collector's plan + render passes (both replay the same step counts).
+        # The belt advances only when _belt_running is enabled. Stepwise mode enables it only
+        # during explicit dwell loops, while continuous mode also enables it during press/release
+        # arm motions so the tiles keep streaming past the punch heads.
         if not getattr(self, "_belt_running", False):
             # still refresh page poses so they render at their held position, but don't advance
             self._refresh_pages_at_current_step()
@@ -440,6 +485,14 @@ class dual_hole_punch(Base_Task):
         if os.environ.get("DHP_DEBUG"):
             print(f"[dhp] INVALID_EMPTY_PRESS side={side} step={self._belt_step}", flush=True)
 
+    def _mark_missed_page(self, side, k):
+        if self.page_punched[side][k]:
+            return
+        self.page_missed[side][k] = True
+        self.page_punched[side][k] = True
+        if os.environ.get("DHP_DEBUG"):
+            print(f"[dhp] MISS {side} page{k} step={self._belt_step}", flush=True)
+
     def _fire_punch(self, side, k=Ellipsis):
         """Register a punch on `side` at the current belt step: punch whichever page is
         under the head, recording its x-offset from the punch center, and trigger the
@@ -450,8 +503,8 @@ class dual_hole_punch(Base_Task):
         if k is None:
             self._mark_invalid_empty_press(side)
             return
-        if self.missing_tile_mode != "none" and not self._page_is_under_stamp(side, k):
-            self._mark_invalid_empty_press(side)
+        if not self._page_satisfies_stamp_criterion(side, k):
+            self._mark_missed_page(side, k)
             return
         if self.page_punched[side][k]:
             return
@@ -524,6 +577,37 @@ class dual_hole_punch(Base_Task):
         tol = max(1e-6, 0.25 * self.belt_speed[side])
         return abs(x - self._punch_x[side]) <= tol
 
+    @staticmethod
+    def _interval_overlap_length(center_a, half_a, center_b, half_b):
+        lo = max(center_a - half_a, center_b - half_b)
+        hi = min(center_a + half_a, center_b + half_b)
+        return max(0.0, hi - lo)
+
+    def _page_stamp_overlap_ratio(self, side, k):
+        page_x = self._page_x_at(side, k, self._belt_step)
+        punch_x = self._punch_x[side]
+        x_overlap = self._interval_overlap_length(
+            page_x,
+            self.PAGE_HALF[0],
+            punch_x,
+            self.PUNCH_HALF[0],
+        )
+        y_overlap = self._interval_overlap_length(
+            self.BELT_Y,
+            self.PAGE_HALF[1],
+            self._punch_y[side],
+            self.PUNCH_HALF[1],
+        )
+        page_area = (2.0 * self.PAGE_HALF[0]) * (2.0 * self.PAGE_HALF[1])
+        if page_area <= 1e-8:
+            return 0.0
+        return float((x_overlap * y_overlap) / page_area)
+
+    def _page_satisfies_stamp_criterion(self, side, k):
+        if self.belt_continous_motion:
+            return self._page_stamp_overlap_ratio(side, k) > 0.5
+        return self._page_is_under_stamp(side, k)
+
     def _ready_pages_at_current_step(self):
         ready_by_side = {}
         for side in ("left", "right"):
@@ -543,14 +627,30 @@ class dual_hole_punch(Base_Task):
             travel_steps.append(int(np.ceil(travel / speed)))
         return max(40, max(travel_steps) + 8)
 
+    def _pages_arriving_at_step(self, step_target):
+        pages_by_side = {}
+        for side in ("left", "right"):
+            k = self._next_unpunched_page(side)
+            if k is None:
+                continue
+            if self._page_arrival_step(side, k) == step_target:
+                pages_by_side[side] = k
+        return pages_by_side
+
     def _mark_missed_ready_pages(self, ready_by_side):
         for side, k in ready_by_side.items():
-            if self.page_punched[side][k]:
+            self._mark_missed_page(side, k)
+
+    def _mark_overdue_pages(self):
+        marked_any = False
+        for side in ("left", "right"):
+            k = self._next_unpunched_page(side)
+            if k is None:
                 continue
-            self.page_missed[side][k] = True
-            self.page_punched[side][k] = True
-            if os.environ.get("DHP_DEBUG"):
-                print(f"[dhp] MISS {side} page{k} step={self._belt_step}", flush=True)
+            if self._belt_step > self._page_arrival_step(side, k) and not self._page_satisfies_stamp_criterion(side, k):
+                self._mark_missed_page(side, k)
+                marked_any = True
+        return marked_any
 
     def _build_press_plan(self, ready_by_side, descend=0.05):
         pressed_sides = [side for side in ("left", "right") if side in ready_by_side]
@@ -571,45 +671,49 @@ class dual_hole_punch(Base_Task):
         duration = self.calculate_move_duration(action1, action2)
         return int(duration), pressed_sides, action1, action2
 
-    def _press_ready_sides(self, ready_by_side, descend=0.05):
+    def _press_ready_sides(self, ready_by_side, descend=0.05, advance_belts=False):
         pressed_sides, action1, action2 = self._build_press_plan(ready_by_side, descend=descend)
         if not pressed_sides:
             return []
-        if action2 is not None:
-            self.move(action1, action2)
-        else:
-            self.move(action1)
+        self._move_with_belt_motion(action1, action2, advance_belts=advance_belts)
         for side in pressed_sides:
             self._fire_punch(side, ready_by_side[side])
         return pressed_sides
 
-    def _release_pressed_sides(self, pressed_sides, ascend=0.05):
+    def _release_pressed_sides(self, pressed_sides, ascend=0.05, advance_belts=False):
         if not pressed_sides:
             return
         if len(pressed_sides) == 2:
-            self.move(
+            self._move_with_belt_motion(
                 self._button_release_actions("left", ascend),
                 self._button_release_actions("right", ascend),
+                advance_belts=advance_belts,
             )
         else:
-            self.move(self._button_release_actions(pressed_sides[0], ascend))
+            self._move_with_belt_motion(
+                self._button_release_actions(pressed_sides[0], ascend),
+                advance_belts=advance_belts,
+            )
 
     def play_once(self):
         # 1) Bring both grippers to hover over their buttons simultaneously (truly dual-arm).
-        self.move(
+        continuous_motion = self.belt_continous_motion
+        self._move_with_belt_motion(
             self._hover_button("left"),
             self._hover_button("right"),
+            advance_belts=False,
         )
         self._dbg("after hover")
 
         # start the belts running
         self._belt_active = True
 
-        # 2) Advance the belts only to the next actual square-arrival step. Once a square is
-        #    on the stamp, the belt pauses for a fixed number of controller steps. If the
-        #    press can complete within that pause window it succeeds; otherwise the window
-        #    expires, the tile is marked missed, and the belt advances anyway.
+        # 2) Stepwise mode stops on each tile until the required key press happens.
+        #    Continuous mode keeps the belt moving and times the press so the punch lands
+        #    while the tile still sufficiently overlaps the stamp head.
         while not all(all(self.page_punched[s]) for s in ("left", "right")):
+            if continuous_motion and self._mark_overdue_pages():
+                continue
             next_steps = []
             for side in ("left", "right"):
                 k = self._next_unpunched_page(side)
@@ -618,25 +722,32 @@ class dual_hole_punch(Base_Task):
             if not next_steps:
                 break
             step_target = min(next_steps)
+            if continuous_motion:
+                target_by_side = self._pages_arriving_at_step(step_target)
+                if not target_by_side:
+                    if self._mark_overdue_pages():
+                        continue
+                    break
+                press_duration, _, _, _ = self._estimate_press_duration(target_by_side, descend=0.05)
+                press_start_step = max(self._belt_step, step_target - press_duration)
+                self._run_belts_to(press_start_step)
+                pressed_sides = self._press_ready_sides(
+                    target_by_side,
+                    descend=0.05,
+                    advance_belts=True,
+                )
+                self._dbg(f"after press @step={step_target} sides={pressed_sides}")
+                self._release_pressed_sides(pressed_sides, ascend=0.05, advance_belts=True)
+                continue
+
             self._run_belts_to(step_target)
             ready_by_side = self._ready_pages_at_current_step()
             if not ready_by_side:
                 continue
-            press_duration, _, _, _ = self._estimate_press_duration(ready_by_side, descend=0.05)
-            pressed_sides = []
-            pause_remaining = self.tile_pause_steps
-            if press_duration <= self.tile_pause_steps:
-                pressed_sides = self._press_ready_sides(ready_by_side, descend=0.05)
-                pause_remaining = max(0, self.tile_pause_steps - press_duration)
-            elif os.environ.get("DHP_DEBUG"):
-                print(
-                    f"[dhp] PAUSE_WINDOW_MISS step={step_target} duration={press_duration} window={self.tile_pause_steps}",
-                    flush=True,
-                )
-            self._dbg(f"after press @step={step_target} sides={pressed_sides}")
-            self._belt_idle(pause_remaining, advance_belts=False)
+            pressed_sides = self._press_ready_sides(ready_by_side, descend=0.05, advance_belts=False)
             self._mark_missed_ready_pages(ready_by_side)
-            self._release_pressed_sides(pressed_sides, ascend=0.05)
+            self._dbg(f"after press @step={step_target} sides={pressed_sides}")
+            self._release_pressed_sides(pressed_sides, ascend=0.05, advance_belts=False)
 
         # let stamped squares clear the inner belt edge and disappear before ending the episode
         self._belt_idle(self._final_belt_runout_steps(), advance_belts=True)
@@ -647,6 +758,7 @@ class dual_hole_punch(Base_Task):
 
     def _run_belts_to(self, step_target, max_extra=400):
         """Advance the belts until self._belt_step reaches step_target, recording frames."""
+        prev = self._belt_running
         self._belt_running = True
         try:
             guard = 0
@@ -657,7 +769,7 @@ class dual_hole_punch(Base_Task):
                     self._take_picture()
                 guard += 1
         finally:
-            self._belt_running = False
+            self._belt_running = prev
 
     # ------------------------------------------------------------- scoring
     def _side_score(self, side):
@@ -682,11 +794,14 @@ class dual_hole_punch(Base_Task):
             "right_punched": [bool(b) for b in self.page_punched["right"]],
             "left_offsets": [None if o is None else float(o) for o in self.page_offset["left"]],
             "right_offsets": [None if o is None else float(o) for o in self.page_offset["right"]],
-            "placement_mode": self.placement_mode,
-            "square_placement_mode": self.placement_mode,
+            "equal_tile_spacing": self.tile_spacing_mode == "equal",
+            "tile_spacing_mode": self.tile_spacing_mode,
+            "placement_mode": self.tile_spacing_mode,
+            "square_placement_mode": self.tile_spacing_mode,
             "missing_tile_mode": self.missing_tile_mode,
             "missing_tile_side": self.missing_tile_side,
             "missing_tile_index": self.missing_tile_index,
+            "belt_continous_motion": bool(self.belt_continous_motion),
             "left_missing_tiles": [bool(v) for v in self.page_missing["left"]],
             "right_missing_tiles": [bool(v) for v in self.page_missing["right"]],
             "tile_pause_steps": int(self.tile_pause_steps),
@@ -702,6 +817,8 @@ class dual_hole_punch(Base_Task):
             "right_square_gaps": [float(g) for g in self.square_gaps["right"]],
             "left_belt_outward_reach": float(self.belt_outward_reach["left"]),
             "right_belt_outward_reach": float(self.belt_outward_reach["right"]),
+            "belt_speed_left": float(self.belt_speed["left"]),
+            "belt_speed_right": float(self.belt_speed["right"]),
             "punch_score_L": float(self._side_score("left")),
             "punch_score_R": float(self._side_score("right")),
             "punch_tol": float(self.punch_tol),

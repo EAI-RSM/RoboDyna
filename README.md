@@ -43,7 +43,7 @@ under `data_lerobot/`. (`data/`, `data_lerobot/`, `logs/` and most assets are gi
 | **catch_ramp_ball** | A ball rolls down a ramp and off the front edge; the arm predicts the landing point and pre-positions a cup to catch it. | ✅ **done** | <img src="assets/static/demos/catch_ramp_ball.gif" width="320"/> |
 | **sort_apples_belt** | 4–10 red/green apples stream down a conveyor (2–3 in flight); press the matching side button to aim a pivoting-blade diverter that routes each into its color-matched basket. Button physically drives the diverter (policy-evaluable). | ✅ **done** | <img src="assets/static/demos/sort_apples_belt.gif" width="320"/> |
 | **pick_ripe_apple** | Two apples ripen green→red→black **independently** on left/right boards; each arm observes its side and grasps at red (observe-then-act), dropping it into a bowl. Ripeness freezes once an apple leaves its board. | ✅ **done** | <img src="assets/static/demos/pick_ripe_apple.gif" width="320"/> |
-| **hit_target** | A moving target sways across the table; the arm grasps a dart, leads the motion, and attaches the dart inside the yellow center square. | 🚧 **in progress** | <img src="assets/static/demos/hit_target.gif" width="320"/> |
+| **hit_target** | A moving target sways across the table (optional moving blocker in front); the arm grasps a dart, leads the motion, and sticks the tip in the yellow center. | 🚧 **in progress** | <img src="assets/static/demos/hit_target.gif" width="320"/> |
 
 > ✅ **done** = 100-episode production dataset collected & verified end-to-end.
 > 🚧 **in progress** = task built and running; tuning / validation ongoing.
@@ -56,7 +56,7 @@ demo dataset or demo clip yet):
 | Task | Description | Demo (partial) |
 |------|-------------|----------------|
 | `toast_bread` | Pick a bread slice, place it on the toaster/steamer, let a per-step timer brown it (pale → golden → brown → burnt), and remove it at a target level. | <img src="assets/static/demos/toast_bread.gif" width="240"/> |
-| `place_block_belt` | Set a tall, top-heavy block onto a moving conveyor so it rides to the far end without tipping over. | <img src="assets/static/demos/place_block_belt.gif" width="240"/> |
+| `place_block_belt` | Set a tall, top-heavy block onto a moving conveyor so it rides upright into a bowl at the exit. | <img src="assets/static/demos/place_block_belt.gif" width="240"/> |
 | `rotating_shape_sorter` | Drop three prisms (rectangular / triangular / cylindrical) into their matching holes on a continuously rotating sorter cap. | <img src="assets/static/demos/rotating_shape_sorter.gif" width="240"/> |
 | `two_type_sorting_catch` | Dual-arm catch: two interleaved object types fall along left/right-biased curves; sort each to its side. | <img src="assets/static/demos/two_type_sorting_catch.gif" width="240"/> |
 | `catch_rat` | Whack-a-mole: strike "rats" popping from a grid of holes spanning both arms' zones. | <img src="assets/static/demos/catch_rat.gif" width="240"/> |
@@ -64,10 +64,11 @@ demo dataset or demo clip yet):
 | `catch_valley_ball` | Place a small bowl beyond the 5 cm red boundary to catch a ball leaving a curved down-then-up ramp. Episodes use either a straight path or an angled path that rebounds from the side rails. | <img src="assets/static/demos/catch_valley_ball.gif" width="240"/> |
 | `catch_marbles_trapdoors` | Time button presses to drop marbles through trapdoors on four belts as they pass the drop point. | <img src="assets/static/demos/catch_marbles_trapdoors.gif" width="240"/> |
 | `cup_curtain_slot` | Single-arm: carry a cup through a laterally swaying curtain of strips and into a slot. | <img src="assets/static/demos/cup_curtain_slot.gif" width="240"/> |
-| `dual_hole_punch` | Both arms press buttons to hole-punch files on two independent belts simultaneously. | <img src="assets/static/demos/dual_hole_punch.gif" width="240"/> |
+| `dual_hole_punch` | Both arms press buttons to hole-punch files on two independent belts that pause at each punch stop. | <img src="assets/static/demos/dual_hole_punch.gif" width="240"/> |
 | `pick_cup_behind_fan` | Retrieve a water-filled cup from behind a spinning 3-blade fan without hitting the blades or spilling. | <img src="assets/static/demos/pick_cup_behind_fan.gif" width="240"/> |
 | `assemble_markers_cylinder` | Dual-arm assembly: attach four markers evenly (90° apart) around a vertical magnetic cylinder. | <img src="assets/static/demos/assemble_markers_cylinder.gif" width="240"/> |
-| `stamp_moving_files` | Press a button to stamp file-boxes as they pass under a fixed gantry on a conveyor. | <img src="assets/static/demos/stamp_moving_files.gif" width="240"/> |
+| `quality_control` | Press the matching red or green key to stamp colored tiles as they pass under a gantry on a centered conveyor. | <img src="assets/static/demos/quality_control.gif" width="240"/> |
+| `goalkeeper` | Place a square blocker fully inside the green zone before the red deadline line to keep a moving ball out of the goal. | <img src="assets/static/demos/goalkeeper.gif" width="240"/> |
 
 ## 🛠️ Adding a task
 

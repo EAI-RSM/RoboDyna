@@ -41,8 +41,10 @@ task_args:
     punch_tol: 0.035
     belt_inward_reach: 0.13
     belt_outward_scale: 2.0
-    placement_mode: equal
-    missing_tile_mode: single_random
+    equal_tile_spacing: true
+    belt_speed: 0.0022
+    belt_continous_motion: false
+    missing_tile_mode: true
     tile_pause_steps: 28
     square_gap: 0.015
     square_gap_min: 0.010
