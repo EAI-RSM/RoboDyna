@@ -198,23 +198,38 @@ task_args:
     idle_time_max: 4.0
     settle_steps: 70
   catch_valley_ball:
-    ramp_half_width: 0.20
+    ramp_half_width: 0.125
     ramp_thickness: 0.012
-    ramp_valley_y: 0.08
+    ramp_center_y: 0.08
+    ramp_valley_x: -0.02
     ramp_valley_height: 0.025
-    down_run: 0.16
-    down_rise: 0.10
-    up_run: 0.14
-    up_rise: 0.07
-    rail_height: 0.035
+    down_run: 0.27
+    down_rise: 0.13
+    up_run: 0.20
+    up_rise: 0.055
+    curve_segments: 16
+    rail_height: 0.055
     ball_radius: 0.018
-    drop_height: 0.12
+    drop_height: 0.14
     drop_time: 0.60
     roll_time_min: 4.0
     roll_time_max: 7.0
-    launch_speed: 0.70
+    roll_acceleration: 0.35
+    launch_speed: 0.72
     idle_time_min: 1.0
     idle_time_max: 2.0
+    ball_path_mode: random   # straight, angled, or random
+    angled_path_min_deg: 15.0
+    angled_path_max_deg: 25.0
+    drop_forward_angle_min_deg: -8.0
+    drop_forward_angle_max_deg: 12.0
+    initial_forward_speed_min: 0.90
+    initial_forward_speed_max: 1.10
+    physics_max_steps: 1200
+    red_line_gap: 0.05
     settle_steps: 150
-    bowl_id: 4
-    bowl_inner_radius: 0.070
+    bowl_id: 1
+    bowl_scale_mult: 0.65
+    bowl_inner_radius: 0.028
+    bowl_outer_radius: 0.037
+    bowl_height: 0.040
