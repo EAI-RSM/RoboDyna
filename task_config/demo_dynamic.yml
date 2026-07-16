@@ -192,15 +192,19 @@ task_args:
     amp_z: 0.018
   quality_control:
     n_tiles: 6
-    color_mode: alternating   # alternating | random
-    spacing_mode: random      # equal | random inter-slot gaps
+    color_mode: alternating   # alternating | random (non-black tiles)
+    spacing_mode: random      # equal | random inter-tile gaps
     tile_spacing: 0.08        # equal-mode center-to-center gap
     spacing_min: 0.07         # random-mode min gap
     spacing_max: 0.14         # random-mode max gap
-    include_empty_slot: true  # random tile-sized empty slot that pauses under stamp
+    black_frac_max: 0.50      # randomly blacken up to this fraction; no key on black
   packing:
-    n_cubes: 5
+    n_items: 5                # apples + oranges total (gradual spawn on moving belts)
     belt_gap: 0.10            # gap between the two belts, centered at x=0
+    belt_speed: 0.0025        # m per belt tick (items travel -y toward the robot)
+    spawn_gap: 0.14           # y-gap between consecutive spawns on the same belt
+    pick_y: 0.06              # expert picks when a fruit reaches this y
+    basket_y: -0.14           # breadbaskets sit beside the near end of the belts
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90

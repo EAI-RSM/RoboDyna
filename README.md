@@ -64,7 +64,7 @@ demo dataset or demo clip yet):
 | `catch_valley_ball` | Place a small bowl beyond the 10 cm red boundary to catch a ball leaving a curved down-then-up ramp. Episodes use either a straight path or an angled path that rebounds from the side rails. | <img src="assets/static/demos/catch_valley_ball.gif" width="240"/> |
 | `catch_marbles_trapdoors` | Time button presses to drop marbles through trapdoors on four belts as they pass the drop point. | <img src="assets/static/demos/catch_marbles_trapdoors.gif" width="240"/> |
 | `cup_curtain_slot` | Single-arm: carry a cup through a laterally swaying curtain of strips and into a slot. | <img src="assets/static/demos/cup_curtain_slot.gif" width="240"/> |
-| `dual_hole_punch` | Both arms press buttons to hole-punch files on two independent belts that pause at each punch stop. | <img src="assets/static/demos/dual_hole_punch.gif" width="240"/> |
+| `dual_hole_punch` | Both arms press buttons to hole-punch files on two independent continuously moving belts (optional missing-tile side). | <img src="assets/static/demos/dual_hole_punch.gif" width="240"/> |
 | `pick_cup_behind_fan` | Retrieve a water-filled cup from behind a spinning 3-blade fan without hitting the blades or spilling. | <img src="assets/static/demos/pick_cup_behind_fan.gif" width="240"/> |
 | `assemble_markers_cylinder` | Dual-arm assembly: attach four markers evenly (90° apart) around a vertical magnetic cylinder. | <img src="assets/static/demos/assemble_markers_cylinder.gif" width="240"/> |
 | `quality_control` | Press the matching red or green key to stamp colored tiles as they pass under a gantry on a centered conveyor. | <img src="assets/static/demos/quality_control.gif" width="240"/> |
