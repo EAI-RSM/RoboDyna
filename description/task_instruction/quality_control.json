@@ -1,0 +1,34 @@
+{
+  "full_description": "press the red or green key to stamp each matching <colored tile> on the belt",
+  "schema": "{A} notifies the colored tiles on the belt, {a} notifies the arms that press the keys",
+  "preference": "num of words should not exceed 14",
+  "seen": [
+    "Press the matching key with {a} for each {A}",
+    "Use {a} to stamp every {A} with the matching color key",
+    "Match key color to each {A} using {a}",
+    "Have {a} press red or green to stamp the {A}",
+    "Stamp each {A} by pressing the matching key with {a}",
+    "Press the color-matched key with {a} for every {A}",
+    "Use {a} to quality-check the {A} on the belt",
+    "Tap the matching key with {a} as each {A} arrives",
+    "Press red or green with {a} to mark each {A}",
+    "Have {a} stamp every {A} with the correct key",
+    "Match each {A} color by pressing the key with {a}",
+    "Direct {a} to press the key matching each {A}",
+    "Stamp the {A} correctly using {a} on the keys",
+    "Let {a} press the matching keys for all the {A}",
+    "Quality-control each {A} by pressing the matching key",
+    "Press the right key with {a} for every passing {A}",
+    "Mark the {A} on the belt with the matching key color",
+    "Use {a} to press the correct key for each {A}",
+    "Press the matching color key with {a} as {A} pass",
+    "Have {a} stamp each {A} with the matching key"
+  ],
+  "unseen": [
+    "With {a}, press the matching key to stamp every {A}",
+    "Press the color-matched key so each {A} is stamped right",
+    "Use {a} to stamp all the {A} with the correct key",
+    "Tap the matching key with {a} to mark each moving {A}",
+    "Press red or green with {a} and stamp every {A} correctly"
+  ]
+}

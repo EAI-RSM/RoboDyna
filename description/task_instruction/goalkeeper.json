@@ -1,0 +1,34 @@
+{
+  "full_description": "place the square blocker in the green zone before the red line to keep the ball out of the goal",
+  "schema": "{A} notifies the goalkeeper square, {B} notifies the goal frame, {a} notifies the arm that places the blocker",
+  "preference": "num of words should not exceed 14",
+  "seen": [
+    "Place {A} in the green zone to block the ball from {B}",
+    "Use {a} to put {A} in front of {B} before the red line",
+    "Move {A} into the green area and keep the ball out of {B}",
+    "With {a}, place {A} to defend {B}",
+    "Block the ball from {B} by placing {A} in the green zone",
+    "Put {A} fully inside the green zone before the deadline",
+    "Use {a} to station {A} in front of {B}",
+    "Place the goalkeeper square to stop the ball at {B}",
+    "Defend {B} by placing {A} in the green area",
+    "Have {a} set {A} down before the red line",
+    "Stop the ball from entering {B} with {A}",
+    "Position {A} in the green zone using {a}",
+    "Place {A} to keep the moving ball out of {B}",
+    "Block {B} by putting {A} in the marked green area",
+    "Use {a} to place {A} and protect {B}",
+    "Set {A} in the green zone before the ball crosses the red line",
+    "Defend the goal by placing {A} with {a}",
+    "Put {A} in front of {B} in time",
+    "Keep the ball out of {B} by placing {A}",
+    "Place {A} fully in the green zone to save {B}"
+  ],
+  "unseen": [
+    "With {a}, place {A} in the green zone before the red deadline",
+    "Stop the ball at {B} by seating {A} in the green area",
+    "Use {a} to plant {A} and keep the ball out of {B}",
+    "Place the blocker in the green zone in time to defend {B}",
+    "Have {a} put {A} down before the ball reaches {B}"
+  ]
+}

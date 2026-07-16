@@ -105,8 +105,8 @@ task_args:
     belt_inward_reach: 0.13
     belt_outward_scale: 2.0
     equal_tile_spacing: true
-    belt_speed: 0.02
-    belt_continous_motion: false
+    belt_speed: 0.2
+    belt_continous_motion: true
     missing_tile_mode: true
     tile_pause_steps: 28
     square_gap: 0.015
@@ -231,7 +231,7 @@ task_args:
     initial_forward_speed_min: 0.90
     initial_forward_speed_max: 1.10
     physics_max_steps: 1200
-    red_line_gap: 0.05
+    red_line_gap: 0.10
     roll_time_min: 4.0
     roll_time_max: 7.0
     roll_acceleration: 0.35

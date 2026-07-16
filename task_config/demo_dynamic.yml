@@ -242,7 +242,7 @@ task_args:
     initial_forward_speed_min: 0.90
     initial_forward_speed_max: 1.10
     physics_max_steps: 1200
-    red_line_gap: 0.05
+    red_line_gap: 0.10
     roll_time_min: 4.0
     roll_time_max: 7.0
     roll_acceleration: 0.35

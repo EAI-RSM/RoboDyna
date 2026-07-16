@@ -61,7 +61,7 @@ demo dataset or demo clip yet):
 | `two_type_sorting_catch` | Dual-arm catch: two interleaved object types fall along left/right-biased curves; sort each to its side. | <img src="assets/static/demos/two_type_sorting_catch.gif" width="240"/> |
 | `catch_rat` | Whack-a-mole: strike "rats" popping from a grid of holes spanning both arms' zones. | <img src="assets/static/demos/catch_rat.gif" width="240"/> |
 | `collect_falling_bowl` | Catch spheres falling along curved (gravity + lateral) trajectories into a bowl. | <img src="assets/static/demos/collect_falling_bowl.gif" width="240"/> |
-| `catch_valley_ball` | Place a small bowl beyond the 5 cm red boundary to catch a ball leaving a curved down-then-up ramp. Episodes use either a straight path or an angled path that rebounds from the side rails. | <img src="assets/static/demos/catch_valley_ball.gif" width="240"/> |
+| `catch_valley_ball` | Place a small bowl beyond the 10 cm red boundary to catch a ball leaving a curved down-then-up ramp. Episodes use either a straight path or an angled path that rebounds from the side rails. | <img src="assets/static/demos/catch_valley_ball.gif" width="240"/> |
 | `catch_marbles_trapdoors` | Time button presses to drop marbles through trapdoors on four belts as they pass the drop point. | <img src="assets/static/demos/catch_marbles_trapdoors.gif" width="240"/> |
 | `cup_curtain_slot` | Single-arm: carry a cup through a laterally swaying curtain of strips and into a slot. | <img src="assets/static/demos/cup_curtain_slot.gif" width="240"/> |
 | `dual_hole_punch` | Both arms press buttons to hole-punch files on two independent belts that pause at each punch stop. | <img src="assets/static/demos/dual_hole_punch.gif" width="240"/> |
