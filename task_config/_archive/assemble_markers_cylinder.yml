@@ -41,6 +41,8 @@ task_args:
     side_cyl_half_len: 0.10
     center_cyl_radius: 0.09
     center_cyl_half_len: 0.10
+    center_x: 0.0
+    center_y: 0.0
     side_group_x_offset: 0.18
     side_group_y_offset: 0.13
     attach_dist: 0.06

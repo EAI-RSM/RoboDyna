@@ -12,16 +12,18 @@ class dual_hole_punch(Base_Task):
     """Dual hole-punch on two independent belts, serviced simultaneously by both arms.
 
     Two parallel belts (LEFT belt entirely in the left zone, RIGHT belt entirely in the
-    right zone) each carry a row of paper pages toward a fixed gantry-mounted punch head.
+    right zone) each carry a row of square punch cards toward a fixed gantry-mounted
+    punch head. The card placement along each belt can be configured as equal-spacing
+    or variable-spacing. The two belts always share the same square pattern, so matching
+    indexed squares reach the stamp line together. Optionally, one tile can be removed
+    from a random side; at that stop only the side with a square should press.
     Each belt has its own button placed in its arm's near reach. The left arm presses the
     left button to fire the left punch head; the right arm presses the right button to fire
-    the right punch head. The two belts have independent (randomized) speeds, page spacings
-    and per-page target offsets, and run AT THE SAME TIME.
+    the right punch head.
 
     The punch heads are NOT on the arms -- they are fixed gantry actuators that descend on
-    their own button press. Each arm only presses its side's button. Both presses are issued
-    together via self.move(left_action, right_action) so the two belts are serviced truly
-    simultaneously.
+    their own button press. Each arm only presses its side's button. If both squares align
+    together both arms press simultaneously; otherwise only the ready side presses.
 
     A press counts toward whichever page is currently under that side's punch head; the
     punch offset is the |page_center_x - punch_x| at the instant of the press. Per belt we
@@ -29,31 +31,162 @@ class dual_hole_punch(Base_Task):
     """
 
     # ---- belt geometry (per side; mirrored across x=0) ---------------------
-    N_PAGES_DEFAULT = 3                 # pages per belt
+    N_PAGES_DEFAULT = 4                 # moving squares per belt
     PUNCH_TOL_DEFAULT = 0.035           # offset tolerance (m) for full score
-    BELT_HALF = (0.13, 0.05, 0.008)     # belt slab half-extents (x,y,z)
-    PAGE_HALF = (0.022, 0.028, 0.004)   # page half-extents
+    BELT_HALF = (0.13, 0.05, 0.008)     # legacy reference half-extents (x,y,z)
+    PAGE_HALF = (0.022, 0.022, 0.004)   # square punch-card half-extents
     BUTTON_HALF = (0.018, 0.018, 0.016) # button box half-extents (graspable / pressable)
     PUNCH_HALF = (0.02, 0.02, 0.05)     # gantry punch-head half-extents
+    PUNCH_MODEL = "100_seal"
+    PUNCH_MODEL_IDS = (2, 3, 4)
+    PUNCH_Q = [0.5, 0.5, 0.5, 0.5]
+    BELT_INWARD_REACH_DEFAULT = 0.13
+    BELT_OUTWARD_SCALE_DEFAULT = 2.0
+    SQUARE_START_MARGIN_DEFAULT = 0.035
+    SQUARE_GAP_DEFAULT = 0.015
+    SQUARE_GAP_MIN_DEFAULT = 0.010
+    SQUARE_GAP_MAX_DEFAULT = 0.030
+    BELT_EDGE_MARGIN_DEFAULT = 0.025
+    SQUARE_PLACEMENT_MODE_DEFAULT = "equal"
+    MISSING_TILE_MODE_DEFAULT = "none"
 
     # belt center y (toward the robot's working area) and surface z above table
     BELT_Y = -0.05
     SURF_DZ = 0.016                     # page sits this high above belt-slab center top
+    PUNCH_ANIM_STEPS = 24
+    PAGE_EXIT_MARGIN = 0.002
+    HIDE_Z = -10.0
+    PUNCH_REST_Z_EXTRA = 0.03
 
     def setup_demo(self, **kwags):
         # capture task-scoped params from the (general) config's task_args block
         self._cfg = kwags.get("task_args", {}).get("dual_hole_punch", {})
         super()._init_task_env_(**kwags)
 
+    def _normalize_placement_mode(self):
+        mode = str(
+            self._cfg.get(
+                "placement_mode",
+                self._cfg.get("square_placement_mode", self.SQUARE_PLACEMENT_MODE_DEFAULT),
+            )
+        ).strip().lower()
+        if mode in ("equal", "fixed", "constant", "opt1"):
+            return "equal"
+        return "variable"
+
+    def _normalize_missing_tile_mode(self):
+        mode = str(
+            self._cfg.get("missing_tile_mode", self.MISSING_TILE_MODE_DEFAULT)
+        ).strip().lower()
+        if mode in ("single_random", "single", "one_missing", "random_one", "enabled", "on", "true"):
+            return "single_random"
+        return "none"
+
+    def _sample_start_margin(self):
+        base_margin = max(
+            float(self._cfg.get("square_start_margin", self.SQUARE_START_MARGIN_DEFAULT)),
+            self.PAGE_HALF[0] + 0.004,
+        )
+        return base_margin
+
+    def _sample_square_layout(self, placement_mode, start_margin):
+        start_margin = max(float(start_margin), self.PAGE_HALF[0] + 0.004)
+        fixed_gap = max(0.0, float(self._cfg.get("square_gap", self.SQUARE_GAP_DEFAULT)))
+        gap_min = max(0.0, float(self._cfg.get("square_gap_min", self.SQUARE_GAP_MIN_DEFAULT)))
+        gap_max = max(gap_min, float(self._cfg.get("square_gap_max", self.SQUARE_GAP_MAX_DEFAULT)))
+
+        offsets = []
+        gaps = []
+        offset = start_margin
+        center_step_base = 2.0 * self.PAGE_HALF[0]
+        for k in range(self.n_pages):
+            offsets.append(float(offset))
+            if k == self.n_pages - 1:
+                break
+            gap = fixed_gap if placement_mode == "equal" else float(np.random.uniform(gap_min, gap_max))
+            gap = max(0.0, float(gap))
+            gaps.append(gap)
+            offset += center_step_base + gap
+        return offsets, gaps
+
+    def _build_square_layouts(self):
+        self.placement_mode = self._normalize_placement_mode()
+        self.square_offsets = {}
+        self.square_gaps = {}
+        start_margin = self._sample_start_margin()
+        offsets, gaps = self._sample_square_layout(
+            self.placement_mode,
+            start_margin=start_margin,
+        )
+        for side in ("left", "right"):
+            self.square_offsets[side] = list(offsets)
+            self.square_gaps[side] = list(gaps)
+
+    def _sample_missing_tile(self):
+        self.missing_tile_mode = self._normalize_missing_tile_mode()
+        self.missing_tile_side = None
+        self.missing_tile_index = None
+        self.page_missing = {side: [False] * self.n_pages for side in ("left", "right")}
+        if self.missing_tile_mode != "single_random" or self.n_pages <= 0:
+            return
+        self.missing_tile_side = str(np.random.choice(["left", "right"]))
+        self.missing_tile_index = int(np.random.randint(0, self.n_pages))
+        self.page_missing[self.missing_tile_side][self.missing_tile_index] = True
+
+    def _build_arrival_schedule(self, side, speed):
+        speed = max(float(speed), 1e-8)
+        arrival_eff_steps = []
+        aligned_offsets = []
+        prev_eff = None
+        prev_offset = None
+        for offset in self.square_offsets[side]:
+            if prev_eff is None:
+                eff = max(0, int(round(offset / speed)))
+            else:
+                gap_eff = max(1, int(round((offset - prev_offset) / speed)))
+                eff = prev_eff + gap_eff
+            arrival_eff_steps.append(eff)
+            aligned_offsets.append(float(eff * speed))
+            prev_eff = eff
+            prev_offset = offset
+        return arrival_eff_steps, aligned_offsets
+
+    def _belt_reaches_for_side(self, side):
+        inward_reach = float(
+            self._cfg.get("belt_inward_reach", self.BELT_INWARD_REACH_DEFAULT)
+        )
+        outward_reach_cfg = self._cfg.get("belt_outward_reach", None)
+        if outward_reach_cfg is None:
+            outward_reach = inward_reach * float(
+                self._cfg.get("belt_outward_scale", self.BELT_OUTWARD_SCALE_DEFAULT)
+            )
+        else:
+            outward_reach = float(outward_reach_cfg)
+        edge_margin = float(self._cfg.get("belt_edge_margin", self.BELT_EDGE_MARGIN_DEFAULT))
+        required_offsets = getattr(self, "aligned_square_offsets", {}).get(
+            side,
+            self.square_offsets[side],
+        )
+        required_outward = required_offsets[-1] + self.PAGE_HALF[0] + edge_margin
+        outward_reach = max(outward_reach, required_outward)
+        return float(inward_reach), float(outward_reach)
+
+    def _sample_belt_timing(self):
+        speed = float(np.random.uniform(0.0016, 0.0028))  # m per physics step
+        phase = int(np.random.randint(0, 60))             # start delay (steps)
+        return speed, phase
+
     # ------------------------------------------------------------ actors
     def load_actors(self):
-        self.n_pages = int(self._cfg.get("n_pages", self.N_PAGES_DEFAULT))
+        self.n_pages = max(1, int(self._cfg.get("n_pages", self.N_PAGES_DEFAULT)))
         self.punch_tol = float(self._cfg.get("punch_tol", self.PUNCH_TOL_DEFAULT))
+        self._build_square_layouts()
+        self._sample_missing_tile()
 
         z0 = 0.74 + self.table_z_bias       # table top surface z
 
-        # Per-side independent randomization: belt speed (m/step via px/step),
-        # page spacing, and per-page target offset. Side sign: left=-1, right=+1.
+        # Side sign: left=-1, right=+1. Belt timing and square layouts are shared, so
+        # matching indexed squares stay synchronized between the two sides.
         self._sides = {}
         self.belt = {}
         self.punch_head = {}
@@ -69,18 +202,40 @@ class dual_hole_punch(Base_Task):
         self._punch_rest_z = {}   # side -> punch head rest z
         self._punch_y = {}        # side -> punch/belt y
         self._punch_press = {}    # side -> remaining descend frames (visual)
+        self.belt_inner_reach = {}
+        self.belt_outward_reach = {}
+        self.belt_bounds_x = {}
+        self.belt_inner_edge_x = {}
+        self.page_arrival_eff = {}
+        self.aligned_square_offsets = {}
+        self.page_hidden = {}
+        self.punch_model_id = int(np.random.choice(self.PUNCH_MODEL_IDS))
+        shared_belt_timing = self._sample_belt_timing()
 
         for sign, side in ((-1.0, "left"), (1.0, "right")):
-            # belt slab is centered in the side's zone; gantry/punch at the inner end so the
-            # button (outer) is in the arm's comfortable near reach.
-            belt_cx = sign * 0.20
+            punch_x = sign * 0.20
+            speed, phase = shared_belt_timing
+            self.belt_speed[side] = speed
+            self.belt_phase[side] = phase
+            arrival_eff_steps, aligned_offsets = self._build_arrival_schedule(side, speed)
+            self.page_arrival_eff[side] = arrival_eff_steps
+            self.aligned_square_offsets[side] = aligned_offsets
+            inward_reach, outward_reach = self._belt_reaches_for_side(side)
+            inner_edge_x = punch_x - sign * inward_reach
+            outer_edge_x = punch_x + sign * outward_reach
+            belt_cx = 0.5 * (inner_edge_x + outer_edge_x)
+            belt_half_x = 0.5 * abs(outer_edge_x - inner_edge_x)
+            self.belt_inner_reach[side] = inward_reach
+            self.belt_outward_reach[side] = outward_reach
+            self.belt_bounds_x[side] = (float(min(inner_edge_x, outer_edge_x)), float(max(inner_edge_x, outer_edge_x)))
+            self.belt_inner_edge_x[side] = float(inner_edge_x)
             self._punch_y[side] = self.BELT_Y
 
             # belt slab (static scenery)
             belt = create_box(
                 self,
                 pose=sapien.Pose([belt_cx, self.BELT_Y, z0 + self.BELT_HALF[2]], [1, 0, 0, 0]),
-                half_size=self.BELT_HALF,
+                half_size=(belt_half_x, self.BELT_HALF[1], self.BELT_HALF[2]),
                 color=(0.15, 0.15, 0.18),
                 name=f"belt_{side}",
                 is_static=True,
@@ -88,25 +243,21 @@ class dual_hole_punch(Base_Task):
             self.belt[side] = belt
             belt_top_z = z0 + 2 * self.BELT_HALF[2]
 
-            # punch head: fixed gantry actuator at the INNER end of the belt (toward center),
-            # so the page travels outward-to-inner OR the punch is mid-belt. We place the punch
-            # near the belt center and feed pages from the inner end toward the outer end is
-            # awkward; instead pages start at the inner end and move outward to the punch which
-            # sits at the OUTER-middle, keeping the button reachable. Simpler & reliable: punch
-            # at the belt center x.
-            punch_x = belt_cx
+            # punch head: fixed gantry actuator near the inner working area, while the longer
+            # outward belt segment holds the queued cards before they travel inward to the head.
             self._punch_x[side] = punch_x
-            punch_rest_z = belt_top_z + self.PAGE_HALF[2] * 2 + self.PUNCH_HALF[2] + 0.04
+            punch_rest_z = belt_top_z + self.PAGE_HALF[2] * 2 + self.PUNCH_HALF[2] + self.PUNCH_REST_Z_EXTRA
             self._punch_rest_z[side] = punch_rest_z
-            head = create_box(
+            head = create_actor(
                 self,
-                pose=sapien.Pose([punch_x, self.BELT_Y, punch_rest_z], [1, 0, 0, 0]),
-                half_size=self.PUNCH_HALF,
-                color=(0.55, 0.05, 0.05),
-                name=f"punch_{side}",
+                pose=sapien.Pose([punch_x, self.BELT_Y, punch_rest_z], self.PUNCH_Q),
+                modelname=self.PUNCH_MODEL,
+                model_id=self.punch_model_id,
+                convex=True,
                 is_static=False,
             )
             self._make_kinematic(head)
+            head.set_name(f"punch_{side}")
             self.punch_head[side] = head
             self._punch_press[side] = 0
 
@@ -122,29 +273,23 @@ class dual_hole_punch(Base_Task):
             )
             self.button[side] = button
 
-            # independent belt dynamics
-            speed = float(np.random.uniform(0.0016, 0.0028))    # m per physics step
-            phase = int(np.random.randint(0, 60))               # start delay (steps)
-            spacing = float(np.random.uniform(0.060, 0.080))    # m between pages
-            start_margin = 0.035                                # page0 sits just outboard of punch
-            self.belt_speed[side] = speed
-            self.belt_phase[side] = phase
-
-            # pages queue on the OUTER side of the punch head and march inward toward it. Page 0
-            # is nearest the head (arrives first); each higher-index page starts one spacing
-            # further out, so they reach the head in index order k = 0, 1, 2, ...
+            # cards queue on the OUTER side of the punch head and march inward toward it. Page 0
+            # is nearest the head (arrives first); each higher-index page uses the configured
+            # placement interval pattern, so they reach the head in index order k = 0, 1, 2, ...
             pages = []
             tx_list = []
             sx_list = []
-            for k in range(self.n_pages):
-                sx = punch_x + sign * (start_margin + k * spacing)   # further out = arrives later
+            for k, offset in enumerate(self.aligned_square_offsets[side]):
+                sx = punch_x + sign * offset                          # further out = arrives later
                 # per-page randomized target offset relative to punch center
                 toff = float(np.random.uniform(-0.012, 0.012))
                 tx = punch_x + toff
+                missing = bool(self.page_missing[side][k])
+                page_z = self.HIDE_Z if missing else belt_top_z + self.PAGE_HALF[2]
                 page = create_box(
                     self,
                     pose=sapien.Pose(
-                        [sx, self.BELT_Y, belt_top_z + self.PAGE_HALF[2]],
+                        [sx, self.BELT_Y, page_z],
                         [1, 0, 0, 0],
                     ),
                     half_size=self.PAGE_HALF,
@@ -160,8 +305,9 @@ class dual_hole_punch(Base_Task):
             self.pages[side] = pages
             self.page_target_x[side] = tx_list
             self.page_start_x[side] = sx_list
-            self.page_punched[side] = [False] * self.n_pages
+            self.page_punched[side] = [bool(v) for v in self.page_missing[side]]
             self.page_offset[side] = [None] * self.n_pages
+            self.page_hidden[side] = [bool(v) for v in self.page_missing[side]]
             self._sides[side] = sign
 
             # reserve space so clutter / randomizers stay clear
@@ -201,6 +347,58 @@ class dual_hole_punch(Base_Task):
         cur = p.get_pose()
         p.actor.set_pose(sapien.Pose([x, cur.p[1], cur.p[2]], cur.q))
 
+    def _hide_page(self, side, k):
+        if self.page_hidden[side][k]:
+            return
+        p = self.pages[side][k].get_pose()
+        self.pages[side][k].actor.set_pose(sapien.Pose([p.p[0], p.p[1], self.HIDE_Z], p.q))
+        self.page_hidden[side][k] = True
+
+    def _page_has_exited_belt(self, side, x):
+        sign = self._sides[side]
+        inner_edge_x = self.belt_inner_edge_x[side]
+        return sign * (x - inner_edge_x) <= -(self.PAGE_HALF[0] + self.PAGE_EXIT_MARGIN)
+
+    def _refresh_pages_at_current_step(self):
+        for side in ("left", "right"):
+            best_k, best_d = None, 1e9
+            for k in range(self.n_pages):
+                if self.page_hidden[side][k]:
+                    continue
+                x = self._page_x_at(side, k, self._belt_step)
+                if self.page_punched[side][k] and self._page_has_exited_belt(side, x):
+                    self._hide_page(side, k)
+                    continue
+                self._set_page_pose(side, k, x)
+                if self.page_punched[side][k]:
+                    continue
+                d = abs(x - self._punch_x[side])
+                if d < best_d:
+                    best_d, best_k = d, k
+            self._under_head[side] = best_k if best_d < 0.05 else None
+
+    def _update_punch_heads(self):
+        for side in ("left", "right"):
+            if self._punch_press[side] <= 0:
+                continue
+            self._punch_press[side] -= 1
+            frac = 1.0 - self._punch_press[side] / max(1, self.PUNCH_ANIM_STEPS)
+            tri = 1.0 - abs(2 * frac - 1.0)
+            drop = tri * 0.045
+            h = self.punch_head[side]
+            hp = h.get_pose()
+            h.actor.set_pose(sapien.Pose([hp.p[0], hp.p[1], self._punch_rest_z[side] - drop], hp.q))
+
+    def _align_page_under_punch(self, side, k):
+        """Snap page `k` so its center is exactly under the punch at the current held step."""
+        x = self._page_x_at(side, k, self._belt_step)
+        dx = self._punch_x[side] - x
+        if abs(dx) > 0.0:
+            self.page_start_x[side][k] += dx
+            x = self._page_x_at(side, k, self._belt_step)
+        self._set_page_pose(side, k, x)
+        self._under_head[side] = k
+
     def _update_kinematic_tasks(self):
         # base hook (drives any DOMINO dynamic objects); runs EVERY physics step
         super()._update_kinematic_tasks()
@@ -213,42 +411,23 @@ class dual_hole_punch(Base_Task):
         # the collector's plan + render passes (both replay the same step counts).
         if not getattr(self, "_belt_running", False):
             # still refresh page poses so they render at their held position, but don't advance
-            for side in ("left", "right"):
-                for k in range(self.n_pages):
-                    self._set_page_pose(side, k, self._page_x_at(side, k, self._belt_step))
+            self._refresh_pages_at_current_step()
+            self._update_punch_heads()
             return
         self._belt_step += 1
-        for side in ("left", "right"):
-            best_k, best_d = None, 1e9
-            for k in range(self.n_pages):
-                x = self._page_x_at(side, k, self._belt_step)
-                self._set_page_pose(side, k, x)
-                # only an UNPUNCHED page can be the current target under the head
-                if self.page_punched[side][k]:
-                    continue
-                d = abs(x - self._punch_x[side])
-                if d < best_d:
-                    best_d, best_k = d, k
-            # the closest still-unpunched page, if it is genuinely near the head
-            self._under_head[side] = best_k if best_d < 0.05 else None
-            # animate punch head descending while a press is active
-            if self._punch_press[side] > 0:
-                self._punch_press[side] -= 1
-                frac = 1.0 - self._punch_press[side] / max(1, self._punch_total)
-                # simple down-then-up triangle
-                tri = 1.0 - abs(2 * frac - 1.0)
-                drop = tri * 0.045
-                h = self.punch_head[side]
-                hp = h.get_pose()
-                h.actor.set_pose(sapien.Pose([hp.p[0], hp.p[1], self._punch_rest_z[side] - drop], hp.q))
+        self._refresh_pages_at_current_step()
+        self._update_punch_heads()
 
-    def _fire_punch(self, side):
+    def _trigger_punch_head(self, side):
+        self._punch_press[side] = self.PUNCH_ANIM_STEPS
+
+    def _fire_punch(self, side, k=Ellipsis):
         """Register a punch on `side` at the current belt step: punch whichever page is
         under the head, recording its x-offset from the punch center, and trigger the
         head's visual descent."""
-        self._punch_total = 24
-        self._punch_press[side] = self._punch_total
-        k = self._under_head[side]
+        self._trigger_punch_head(side)
+        if k is Ellipsis:
+            k = self._under_head[side]
         if k is None or self.page_punched[side][k]:
             return
         x = self._page_x_at(side, k, self._belt_step)
@@ -266,9 +445,10 @@ class dual_hole_punch(Base_Task):
                     except Exception:
                         pass
 
-    def _belt_idle(self, steps):
-        """Advance the belts `steps` physics steps while recording frames (no arm motion)."""
-        self._belt_running = True
+    def _belt_idle(self, steps, advance_belts=True):
+        """Dwell for `steps` physics steps while optionally advancing the belts."""
+        prev = self._belt_running
+        self._belt_running = bool(advance_belts)
         try:
             for i in range(steps):
                 self._update_kinematic_tasks()
@@ -276,7 +456,7 @@ class dual_hole_punch(Base_Task):
                 if self.save_freq and (i % self.save_freq == 0):
                     self._take_picture()
         finally:
-            self._belt_running = False
+            self._belt_running = prev
 
     # -------------------------------------------------------- press poses
     def _button_press_actions(self, side, descend):
@@ -284,6 +464,10 @@ class dual_hole_punch(Base_Task):
         `descend` onto its button (relative move along the world -z)."""
         arm = ArmTag(side)
         return self.move_by_displacement(arm_tag=arm, z=-descend)
+
+    def _button_release_actions(self, side, ascend):
+        arm = ArmTag(side)
+        return self.move_by_displacement(arm_tag=arm, z=ascend)
 
     def _hover_button(self, side):
         """Move the side's gripper to hover just above its button (top-down)."""
@@ -302,10 +486,63 @@ class dual_hole_punch(Base_Task):
 
     def _page_arrival_step(self, side, k):
         """The belt step at which page k of `side` is centered on its punch head."""
-        sign = self._sides[side]
-        # page_start_x - sign*speed*eff = punch_x  ->  eff = (start - punch)/(sign*speed)
-        eff = (self.page_start_x[side][k] - self._punch_x[side]) / (sign * self.belt_speed[side])
-        return int(round(eff)) + self.belt_phase[side]
+        return int(self.page_arrival_eff[side][k]) + self.belt_phase[side]
+
+    def _next_unpunched_page(self, side):
+        for k in range(self.n_pages):
+            if not self.page_punched[side][k]:
+                return k
+        return None
+
+    def _page_is_under_stamp(self, side, k):
+        x = self._page_x_at(side, k, self._belt_step)
+        tol = max(1e-6, 0.25 * self.belt_speed[side])
+        return abs(x - self._punch_x[side]) <= tol
+
+    def _ready_pages_at_current_step(self):
+        ready_by_side = {}
+        for side in ("left", "right"):
+            k = self._next_unpunched_page(side)
+            if k is None:
+                continue
+            if self._page_is_under_stamp(side, k):
+                ready_by_side[side] = k
+                self._under_head[side] = k
+        return ready_by_side
+
+    def _final_belt_runout_steps(self):
+        travel_steps = []
+        for side in ("left", "right"):
+            speed = max(self.belt_speed[side], 1e-8)
+            travel = self.belt_inner_reach[side] + self.PAGE_HALF[0] + self.PAGE_EXIT_MARGIN
+            travel_steps.append(int(np.ceil(travel / speed)))
+        return max(40, max(travel_steps) + 8)
+
+    def _press_ready_sides(self, ready_by_side, descend=0.05):
+        pressed_sides = [side for side in ("left", "right") if side in ready_by_side]
+        if not pressed_sides:
+            return []
+        if len(pressed_sides) == 2:
+            self.move(
+                self._button_press_actions("left", descend),
+                self._button_press_actions("right", descend),
+            )
+        else:
+            self.move(self._button_press_actions(pressed_sides[0], descend))
+        for side in pressed_sides:
+            self._fire_punch(side, ready_by_side[side])
+        return pressed_sides
+
+    def _release_pressed_sides(self, pressed_sides, ascend=0.05):
+        if not pressed_sides:
+            return
+        if len(pressed_sides) == 2:
+            self.move(
+                self._button_release_actions("left", ascend),
+                self._button_release_actions("right", ascend),
+            )
+        else:
+            self.move(self._button_release_actions(pressed_sides[0], ascend))
 
     def play_once(self):
         # 1) Bring both grippers to hover over their buttons simultaneously (truly dual-arm).
@@ -318,42 +555,30 @@ class dual_hole_punch(Base_Task):
         # start the belts running
         self._belt_active = True
 
-        # 2) Build a single timeline of "page reaches its punch head" events across BOTH belts
-        #    (each belt has its own speed/phase, so the events interleave). We service them in
-        #    time order: at each event we run the belts up to that step, then press BOTH buttons
-        #    together (a truly simultaneous dual-arm action). Each side's punch independently
-        #    fires on whatever page is currently under its head, so a press cleanly catches the
-        #    arriving page; the other arm's press either catches its own arriving page or fires
-        #    harmlessly. This clears every page on both belts.
-        events = []
-        for side in ("left", "right"):
-            for k in range(self.n_pages):
-                events.append((self._page_arrival_step(side, k), side, k))
-        events.sort(key=lambda e: e[0])
-
-        for step_target, side, k in events:
-            if all(all(self.page_punched[s]) for s in ("left", "right")):
+        # 2) Advance the belts only to the next actual square-arrival step. Once a square is
+        #    on the stamp, its arm presses and keeps the key held for the whole stopped dwell.
+        #    If both sides arrive on the same stop, both arms press together.
+        while not all(all(self.page_punched[s]) for s in ("left", "right")):
+            next_steps = []
+            for side in ("left", "right"):
+                k = self._next_unpunched_page(side)
+                if k is not None:
+                    next_steps.append(self._page_arrival_step(side, k))
+            if not next_steps:
                 break
+            step_target = min(next_steps)
             self._run_belts_to(step_target)
-            # press BOTH buttons at once: descend both grippers together
-            self.move(
-                self._button_press_actions("left", 0.05),
-                self._button_press_actions("right", 0.05),
-            )
-            # fire each side's punch on whatever page is under its head right now
-            self._fire_punch("left")
-            self._fire_punch("right")
-            self._dbg(f"after press @ev({side},{k})")
-            # let the punch-head descent animation play out on camera
-            self._belt_idle(28)
-            # lift both grippers back up together, ready for the next event
-            self.move(
-                self.move_by_displacement(ArmTag("left"), z=0.05),
-                self.move_by_displacement(ArmTag("right"), z=0.05),
-            )
+            ready_by_side = self._ready_pages_at_current_step()
+            if not ready_by_side:
+                continue
+            pressed_sides = self._press_ready_sides(ready_by_side, descend=0.05)
+            self._dbg(f"after press @step={step_target} sides={pressed_sides}")
+            # keep the aligned squares parked exactly under the stamps during the full punch cycle
+            self._belt_idle(self.PUNCH_ANIM_STEPS + 4, advance_belts=False)
+            self._release_pressed_sides(pressed_sides, ascend=0.05)
 
-        # let any trailing pages roll to the end so the final frames are clean
-        self._belt_idle(40)
+        # let stamped squares clear the inner belt edge and disappear before ending the episode
+        self._belt_idle(self._final_belt_runout_steps(), advance_belts=True)
         self._belt_active = False
 
         self.info["info"] = {"{a}": "left", "{b}": "right"}
@@ -395,6 +620,20 @@ class dual_hole_punch(Base_Task):
             "right_punched": [bool(b) for b in self.page_punched["right"]],
             "left_offsets": [None if o is None else float(o) for o in self.page_offset["left"]],
             "right_offsets": [None if o is None else float(o) for o in self.page_offset["right"]],
+            "placement_mode": self.placement_mode,
+            "square_placement_mode": self.placement_mode,
+            "missing_tile_mode": self.missing_tile_mode,
+            "missing_tile_side": self.missing_tile_side,
+            "missing_tile_index": self.missing_tile_index,
+            "left_missing_tiles": [bool(v) for v in self.page_missing["left"]],
+            "right_missing_tiles": [bool(v) for v in self.page_missing["right"]],
+            "square_gaps": [float(g) for g in self.square_gaps["left"]],
+            "left_square_offsets": [float(o) for o in self.square_offsets["left"]],
+            "right_square_offsets": [float(o) for o in self.square_offsets["right"]],
+            "left_square_gaps": [float(g) for g in self.square_gaps["left"]],
+            "right_square_gaps": [float(g) for g in self.square_gaps["right"]],
+            "left_belt_outward_reach": float(self.belt_outward_reach["left"]),
+            "right_belt_outward_reach": float(self.belt_outward_reach["right"]),
             "punch_score_L": float(self._side_score("left")),
             "punch_score_R": float(self._side_score("right")),
             "punch_tol": float(self.punch_tol),

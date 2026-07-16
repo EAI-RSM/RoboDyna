@@ -43,7 +43,7 @@ under `data_lerobot/`. (`data/`, `data_lerobot/`, `logs/` and most assets are gi
 | **catch_ramp_ball** | A ball rolls down a ramp and off the front edge; the arm predicts the landing point and pre-positions a cup to catch it. | ✅ **done** | <img src="assets/static/demos/catch_ramp_ball.gif" width="320"/> |
 | **sort_apples_belt** | 4–10 red/green apples stream down a conveyor (2–3 in flight); press the matching side button to aim a pivoting-blade diverter that routes each into its color-matched basket. Button physically drives the diverter (policy-evaluable). | ✅ **done** | <img src="assets/static/demos/sort_apples_belt.gif" width="320"/> |
 | **pick_ripe_apple** | Two apples ripen green→red→black **independently** on left/right boards; each arm observes its side and grasps at red (observe-then-act), dropping it into a bowl. Ripeness freezes once an apple leaves its board. | ✅ **done** | <img src="assets/static/demos/pick_ripe_apple.gif" width="320"/> |
-| **stab_moving_target** | A concentric-ring target sways across the table; the arm grasps a dart, leads the target's motion, and drives the dart tip into the bullseye. | 🚧 **in progress** | <img src="assets/static/demos/stab_moving_target.gif" width="320"/> |
+| **hit_target** | A moving target sways across the table; the arm grasps a dart, leads the motion, and attaches the dart inside the yellow center square. | 🚧 **in progress** | <img src="assets/static/demos/hit_target.gif" width="320"/> |
 
 > ✅ **done** = 100-episode production dataset collected & verified end-to-end.
 > 🚧 **in progress** = task built and running; tuning / validation ongoing.

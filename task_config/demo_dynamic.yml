@@ -66,11 +66,15 @@ task_args:
     side_cyl_half_len: 0.10
     center_cyl_radius: 0.09
     center_cyl_half_len: 0.10
+    center_x: 0.0
+    center_y: 0.0
     attach_dist: 0.06
     attach_z: 0.04
     dwell_steps: 40
     side_group_x_offset: 0.18
-    side_group_y_offset: 0.13
+    side_group_y_offset: 0.10
+    side_group_x_jitter: 0.03
+    side_group_y_jitter: 0.01
     center_table_clearance: 0.005
     rotation_direction: counter_clockwise
   catch_marbles_trapdoors:
@@ -105,8 +109,15 @@ task_args:
     lift_off_only_after_place: false
     post_place_lift_z: 0.10
   dual_hole_punch:
-    n_pages: 3
+    n_pages: 4
     punch_tol: 0.035
+    belt_inward_reach: 0.13
+    belt_outward_scale: 2.0
+    placement_mode: equal
+    missing_tile_mode: single_random
+    square_gap: 0.015
+    square_gap_min: 0.010
+    square_gap_max: 0.030
   goalkeeper:
     ball_speed_min: 0.07
     ball_speed_max: 0.09
@@ -148,12 +159,25 @@ task_args:
     belt_speed_scale: 1.0
     advance_every: 4
     gate_default_left: true
-  stab_moving_target:
-    r_outer: 0.075
-    n_rings: 4
+  hit_target:
+    board_half_size: 0.075
+    center_half_size: 0.018
     sway_amp: 0.10
     sway_period: 900
     target_speed: 1.0
+    motion_x_min: 0.03
+    motion_x_max: 0.24
+    target_center_x_min: 0.12
+    target_center_x_max: 0.15
+    blocker_enabled: true
+    blocker_dynamic: true
+    blocker_radius: 0.040
+    blocker_y_gap: 0.050
+    blocker_z_offset: 0.0
+    blocker_x_offset: 0.0
+    blocker_speed_min: 0.70
+    blocker_speed_max: 1.45
+    blocker_speed_min_delta: 0.10
   ring_on_moving_peg:
     r_ring: 0.028
     catch_r: 0.07
@@ -181,3 +205,24 @@ task_args:
     idle_time_min: 2.0      # s; robot stays still before grasping
     idle_time_max: 4.0
     settle_steps: 70
+  catch_valley_ball:
+    ramp_half_width: 0.20
+    ramp_thickness: 0.012
+    ramp_valley_y: 0.08
+    ramp_valley_height: 0.025
+    down_run: 0.16
+    down_rise: 0.10
+    up_run: 0.14
+    up_rise: 0.07
+    rail_height: 0.035
+    ball_radius: 0.018
+    drop_height: 0.12
+    drop_time: 0.60
+    roll_time_min: 4.0
+    roll_time_max: 7.0
+    launch_speed: 0.45
+    idle_time_min: 1.0
+    idle_time_max: 2.0
+    settle_steps: 150
+    bowl_id: 1
+    bowl_inner_radius: 0.045
