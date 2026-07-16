@@ -46,7 +46,7 @@ class catch_valley_ball(Base_Task):
     LAUNCH_SPEED_DEFAULT = 0.72
     ROLL_ACCELERATION_DEFAULT = 0.35
     PHYSICS_MAX_STEPS_DEFAULT = 1200
-    RED_LINE_GAP_DEFAULT = 0.05
+    RED_LINE_GAP_DEFAULT = 0.10
     IDLE_TIME_MIN_DEFAULT = 1.0
     IDLE_TIME_MAX_DEFAULT = 2.0
     SETTLE_STEPS_DEFAULT = 150
@@ -508,6 +508,18 @@ class catch_valley_ball(Base_Task):
             rigid.set_angular_velocity(np.zeros(3))
         self._bowl_welded = False
 
+    def _fix_bowl_at_placed_pose(self):
+        """Lock the bowl only after the arm has released it on the table."""
+        rigid = self._get_rigid(self.bowl)
+        if rigid is None:
+            return
+        placed_pose = self.bowl.get_pose()
+        rigid.set_linear_velocity(np.zeros(3))
+        rigid.set_angular_velocity(np.zeros(3))
+        rigid.set_disable_gravity(True)
+        rigid.set_kinematic(True)
+        rigid.set_kinematic_target(placed_pose)
+
     def _update_release_velocity(self):
         horizontal_speed = self.launch_speed * np.cos(self.up_angle)
         self.release_velocity = np.array([
@@ -768,6 +780,8 @@ class catch_valley_ball(Base_Task):
         # the fingers open instead of following a moving gripper and dropping.
         self._unweld_bowl()
         self.move(self.open_gripper(arm_tag))
+        self._dwell(20)
+        self._fix_bowl_at_placed_pose()
         self.move(self.back_to_origin(arm_tag))
 
         self._bowl_ready = True

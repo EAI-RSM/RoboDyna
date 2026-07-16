@@ -614,7 +614,7 @@ class dual_hole_punch(Base_Task):
             k = self._next_unpunched_page(side)
             if k is None:
                 continue
-            if self._page_is_under_stamp(side, k):
+            if self._page_satisfies_stamp_criterion(side, k):
                 ready_by_side[side] = k
                 self._under_head[side] = k
         return ready_by_side
@@ -712,8 +712,22 @@ class dual_hole_punch(Base_Task):
         #    Continuous mode keeps the belt moving and times the press so the punch lands
         #    while the tile still sufficiently overlaps the stamp head.
         while not all(all(self.page_punched[s]) for s in ("left", "right")):
-            if continuous_motion and self._mark_overdue_pages():
+            if continuous_motion:
+                ready_by_side = self._ready_pages_at_current_step()
+                if ready_by_side:
+                    pressed_sides = self._press_ready_sides(
+                        ready_by_side,
+                        descend=0.05,
+                        advance_belts=True,
+                    )
+                    self._dbg(f"after press @step={self._belt_step} sides={pressed_sides}")
+                    self._release_pressed_sides(pressed_sides, ascend=0.05, advance_belts=True)
+                elif self._mark_overdue_pages():
+                    continue
+                else:
+                    self._belt_idle(1, advance_belts=True)
                 continue
+
             next_steps = []
             for side in ("left", "right"):
                 k = self._next_unpunched_page(side)
@@ -722,24 +736,6 @@ class dual_hole_punch(Base_Task):
             if not next_steps:
                 break
             step_target = min(next_steps)
-            if continuous_motion:
-                target_by_side = self._pages_arriving_at_step(step_target)
-                if not target_by_side:
-                    if self._mark_overdue_pages():
-                        continue
-                    break
-                press_duration, _, _, _ = self._estimate_press_duration(target_by_side, descend=0.05)
-                press_start_step = max(self._belt_step, step_target - press_duration)
-                self._run_belts_to(press_start_step)
-                pressed_sides = self._press_ready_sides(
-                    target_by_side,
-                    descend=0.05,
-                    advance_belts=True,
-                )
-                self._dbg(f"after press @step={step_target} sides={pressed_sides}")
-                self._release_pressed_sides(pressed_sides, ascend=0.05, advance_belts=True)
-                continue
-
             self._run_belts_to(step_target)
             ready_by_side = self._ready_pages_at_current_step()
             if not ready_by_side:
