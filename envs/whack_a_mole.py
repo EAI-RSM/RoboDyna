@@ -50,9 +50,9 @@ class whack_a_mole(Base_Task):
     RABBIT_MODEL = "222_rabbit"
     # Mesh is Y-up; rotate so height aligns with world Z.
     MOLE_Q = [0.70710678, 0.70710678, 0.0, 0.0]
-    MOLE_COLOR = [0.45, 0.32, 0.22]
+    MOLE_COLOR = [0.02, 0.02, 0.02]           # fully black
     MOLE_TOUCHED_COLOR = [0.20, 0.85, 0.28]  # green when hit
-    RABBIT_COLOR = [0.95, 0.95, 0.97]         # white (distinct from brown moles)
+    RABBIT_COLOR = [0.72, 0.52, 0.35]         # light brown (distinct from black moles)
     RABBIT_TOUCHED_COLOR = [0.92, 0.12, 0.10]  # red on illegal touch
     CUBE_COLOR = [0.15, 0.45, 0.95]            # blue — held mallet cubes
     MOLE_SCALE_MULT = 1.80        # 1.5x prior size
@@ -65,15 +65,17 @@ class whack_a_mole(Base_Task):
     POP_SPEED = 0.08              # m/s while rising / falling
     # Fail if a held cube underside reaches this close to the board top.
     BOARD_CUBE_CONTACT_EPS = 0.001
-    # Require true mesh contact (not mere proximity) for a hit.
-    # Kinematic cube ↔ dynamic mole contacts often report a small positive
-    # separation; treat <= 2 mm as touching.
-    HIT_SEPARATION_MAX = 0.002
+    # PhysX mesh contact (optional). Kinematic cube ↔ dynamic mole contacts
+    # often report a small positive separation; treat <= 8 mm as touching.
+    HIT_SEPARATION_MAX = 0.008
     # Cube center must be this close in XY to the critter center (m).
-    HIT_XY_TOL = 0.02
+    HIT_XY_TOL = 0.03
     # Contact counts only on the cube underside: critter top must sit in this
     # band around the cube bottom face (m).
-    HIT_BOTTOM_BAND = 0.006
+    HIT_BOTTOM_BAND = 0.015
+    # Geometric press: cube underside within this distance of / into the crown
+    # counts as a bottom-face hit even if PhysX contact was cleared by set_pose.
+    HIT_GEOM_EPS = 0.006
     # Raise the whole table (and board) by this amount (m).
     TABLE_HEIGHT_BIAS_DEFAULT = 0.05
 
@@ -970,11 +972,14 @@ class whack_a_mole(Base_Task):
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
         self._global_step = getattr(self, "_global_step", 0) + 1
+        # Seat cubes at the current EE pose first so geometric bottom-face
+        # checks see the true underside height this step.
         self._update_hammer_cubes()
         if not getattr(self, "_mole_state", None) and not getattr(self, "_rabbit_state", None):
             return
 
-        # Poll BEFORE teleporting: set_pose on a dynamic body clears the
+        # Hit/fail checks use geometry (primary) + optional PhysX contact.
+        # Poll BEFORE teleporting moles: set_pose on a dynamic body clears the
         # PhysX contact manifold from the previous scene.step().
         self._poll_mole_hits()
         self._poll_rabbit_hits()
@@ -1087,21 +1092,27 @@ class whack_a_mole(Base_Task):
         return float(p[2] + height * 0.5)
 
     def _cube_bottom_contact_with_critter(self, actors, states, idx):
-        """True iff the critter contacts the underside of a held cube.
+        """True iff the critter is hit by the underside of a held cube.
 
         Requires:
           1) cube XY over the critter,
-          2) critter top in a thin band around the cube bottom face,
-          3) PhysX contact point on/near that bottom face (sep <= 2 mm).
-        Side brushes against the cube walls do not count.
+          2) cube underside in the upper-half band of the critter
+             (rejects side brushes against the cube walls),
+          3) either PhysX mesh contact (sep <= HIT_SEPARATION_MAX) OR a
+             geometric press of the underside onto/into the crown
+             (bottom_z <= top_z + HIT_GEOM_EPS). Geometric fallback is needed
+             because kinematic cube set_pose can clear the contact manifold.
         """
         if not getattr(self, "_cubes_ready", False):
             return False
         cp = np.array(actors[idx].get_pose().p, dtype=float)
-        top_z = self._critter_top_z(actors, states, idx)
+        height = float(states[idx].get("height", self.mole_height))
+        center_z = float(cp[2])
+        top_z = float(center_z + 0.5 * height)
         xy_tol = float(self._cfg.get("hit_xy_tol", self.HIT_XY_TOL))
         band = float(self._cfg.get("hit_bottom_band", self.HIT_BOTTOM_BAND))
         sep_max = float(self._cfg.get("hit_separation_max", self.HIT_SEPARATION_MAX))
+        geom_eps = float(self._cfg.get("hit_geom_eps", self.HIT_GEOM_EPS))
         actor_name = actors[idx].get_name()
         half = float(self.cube_half)
 
@@ -1110,9 +1121,15 @@ class whack_a_mole(Base_Task):
             if float(np.linalg.norm(p[:2] - cp[:2])) > xy_tol:
                 continue
             bottom_z = float(p[2] - half)
-            # Mole crown must be at the cube underside, not halfway up the side.
-            if top_z < bottom_z - band or top_z > bottom_z + band:
+            # Underside must be near/into the crown, not still hovering, and
+            # not sunk past the mole midline (that would be a side crush).
+            if bottom_z > top_z + band:
                 continue
+            if bottom_z < center_z:
+                continue
+            # Geometric bottom-face press (robust when PhysX contacts are gone).
+            if bottom_z <= top_z + geom_eps:
+                return True
             cube_name = f"hammer_cube_{arm}"
             for contact in self.scene.get_contacts():
                 name0 = contact.bodies[0].entity.name
@@ -1124,30 +1141,13 @@ class whack_a_mole(Base_Task):
                     continue
                 for pt in (getattr(contact, "points", None) or []):
                     sep = getattr(pt, "separation", None)
-                    touching = False
                     if sep is not None:
-                        touching = float(sep) <= sep_max
-                    else:
-                        imp = getattr(pt, "impulse", None)
-                        touching = (
-                            imp is not None
-                            and float(np.linalg.norm(imp)) > 1e-8
-                        )
-                    if not touching:
+                        if float(sep) <= sep_max:
+                            return True
                         continue
-                    pos = getattr(pt, "position", None)
-                    if pos is None:
-                        # no point position — geometric bottom band already passed
+                    imp = getattr(pt, "impulse", None)
+                    if imp is not None and float(np.linalg.norm(imp)) > 1e-8:
                         return True
-                    pos = np.asarray(pos, dtype=float)
-                    # Reject side contacts: point must sit near the bottom face.
-                    if float(pos[2]) > bottom_z + band:
-                        continue
-                    if abs(float(pos[0]) - p[0]) > half + 0.008:
-                        continue
-                    if abs(float(pos[1]) - p[1]) > half + 0.008:
-                        continue
-                    return True
         return False
 
     def _cube_critter_hit(self, actors, states, idx):
@@ -1355,7 +1355,8 @@ class whack_a_mole(Base_Task):
         """
         if depth is None:
             cube_bottom = self._cube_bottom_z(arm_tag)
-            # Default: press into a fully raised mole's top (~2 mm into crown).
+            # Default: press several mm into a fully raised mole's crown so the
+            # underside reliably enters the bottom-hit window.
             mole_top = self.board_top_z + self.mole_height
             if mole_idx is not None and getattr(self, "_mole_state", None):
                 if 0 <= int(mole_idx) < len(self._mole_state):
@@ -1363,8 +1364,8 @@ class whack_a_mole(Base_Task):
                         self.moles, self._mole_state, int(mole_idx))
             # Hard floor: keep the cube face well clear of the board deck.
             board_clear = self.board_top_z + 0.045
-            # Press ~8 mm into the authored crown so collision meshes actually meet.
-            target_bottom = max(board_clear, mole_top - 0.008)
+            # Seat the cube underside onto the mole crown (bottom-face hit window).
+            target_bottom = max(board_clear, mole_top - 0.010)
             depth = max(0.01, float(cube_bottom - target_bottom))
         return self.move_by_displacement(
             arm_tag=arm_tag, z=-float(depth), move_axis="world")
