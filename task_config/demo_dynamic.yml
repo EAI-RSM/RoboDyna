@@ -1,6 +1,7 @@
 render_freq: 0
-episode_num: 1
+episode_num: 2
 use_seed: false
+save_failed_cases: true
 save_freq: 15
 embodiment: [ur5-wsg, ur5-wsg, 0.6] #[aloha-agilex] #
 language_num: 100
@@ -85,6 +86,25 @@ task_args:
     door_open_speed_deg: 220.0
     ball_speed: 0.18
     ball_bounce_height: 0.012
+  marble_shelf_maze:
+    n_shelves: 4
+    shelf_length: 0.15
+    glass_gap: 0.05
+    level_gap: 0.09
+    offset_min: 0.085
+    offset_max: 0.11
+    bottom_clearance: 0.16
+    ball_radius: 0.012
+    roll_off_speed: 0.06
+    tilt_angle_deg: 45.0
+    tilt_duration_sec: 0.5
+    fall_settle_steps: 160
+    final_fall_settle_steps: 220
+    button_press_depth: 0.03
+    press_hold_steps: 20
+    post_press_dwell: 10
+    bowl_scale_mult: 0.65
+    bowl_catch_radius: 0.032
   catch_rat:
     num_appearances: 3
     pop_steps: 90
@@ -96,13 +116,15 @@ task_args:
     pop_steps: 90
     touch_tol: 0.04
     hole_count: 9
-    hole_size: 0.055
+    hole_size: 0.0825         # 1.5x former openings
+    hole_bar_thickness: 0.014
     cube_hole_scale: 1.20     # blue mallet cube side = hole_size * scale (>1 so it can't enter)
     cube_grasp_drop_z: 0.05   # lower cube 5 cm below finger midpoint
-    mole_scale_mult: 1.20     # slightly larger moles
-    mole_height: 0.0702       # world height after mole_scale_mult
-    rabbit_scale_mult: 1.60   # match enlarged mole world height
-    rabbit_height: 0.0702
+    mole_scale_mult: 1.80     # 1.5x prior mole size
+    mole_height: 0.1053       # world height after mole_scale_mult
+    rabbit_scale_mult: 2.40   # match enlarged mole world height
+    rabbit_height: 0.1053
+    table_height_bias: 0.05   # raise table (+board) 5 cm
     board_z_lift: 0.12        # play surface ~12 cm above table; solid base sits on table
     board_color: [0.98, 0.82, 0.05]  # yellow
   collect_falling_bowl:
@@ -243,9 +265,10 @@ task_args:
     n_per_color: 3            # number of each colored fruit (apples + oranges)
     # n_apple: 3              # optional per-color override (falls back to n_per_color)
     # n_orange: 3
-    spawn_mode: parallel      # single | parallel (aliases: opt1 | opt2)
+    spawn_mode: random        # single | parallel | random (aliases: opt1 | opt2 | opt3)
     # single: one fruit at a time; next spawns only after drop-in-basket or belt exit
     # parallel: one apple+orange wave; next wave only after both packed or left the belt
+    # random: each wave randomly picks single (1 fruit) or pair (apple+orange) — count varies run to run
     spawn_delay_s: 2.0        # unused (compat); spawn is gated on drop / belt-exit
     belt_gap: 0.10            # gap between the two belts, centered at x=0
     belt_speed: 0.0008        # shared default speed (m per belt tick); both belts use this
@@ -260,6 +283,7 @@ task_args:
     basket_y: 0.0             # table midline (toward belts)
     basket_x: 0.34            # nudged out so the bigger basket clears the belts
     basket_scale: 1.15        # bigger opening — easier drop-in target
+    pick_lift: 0.22           # carry height above pick station before sliding to the basket
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90

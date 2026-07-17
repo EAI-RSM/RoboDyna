@@ -92,13 +92,15 @@ task_args:
     pop_steps: 90
     touch_tol: 0.04
     hole_count: 9
-    hole_size: 0.055
+    hole_size: 0.0825         # 1.5x former openings
+    hole_bar_thickness: 0.014
     cube_hole_scale: 1.20     # blue mallet cube side = hole_size * scale (>1 so it can't enter)
     cube_grasp_drop_z: 0.05   # lower cube 5 cm below finger midpoint
-    mole_scale_mult: 1.20     # slightly larger moles
-    mole_height: 0.0702       # world height after mole_scale_mult
-    rabbit_scale_mult: 1.60   # match enlarged mole world height
-    rabbit_height: 0.0702
+    mole_scale_mult: 1.80     # 1.5x prior mole size
+    mole_height: 0.1053       # world height after mole_scale_mult
+    rabbit_scale_mult: 2.40   # match enlarged mole world height
+    rabbit_height: 0.1053
+    table_height_bias: 0.05   # raise table (+board) 5 cm
     board_z_lift: 0.12        # play surface ~12 cm above table; solid base sits on table
     board_color: [0.98, 0.82, 0.05]  # yellow
   collect_falling_bowl:

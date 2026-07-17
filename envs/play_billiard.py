@@ -74,7 +74,7 @@ class play_billiard(Base_Task):
     CUE_RADIUS = 0.0072  # 1.2× prior 6 mm shaft for a more graspable stick
     CUE_HALF_LEN = 0.060
     CUE_COLOR = [0.72, 0.52, 0.28]
-    CUE_TIP_COLOR = [0.92, 0.92, 0.85]
+    CUE_TIP_COLOR = [0.05, 0.35, 1.0]  # vivid blue tip (was off-white)
     CUE_MASS = 0.05
     # After measuring the natural grasp weld, raise the cue this much in world +Z
     # so the shaft seats into the finger pads (measured pose often sits below them).
@@ -87,8 +87,14 @@ class play_billiard(Base_Task):
     HOVER_CLEARANCE = 0.10
     SETTLE_STEPS_DEFAULT = 500
     STRIKE_IMPULSE = 0.48
-    # Require tip within this of the ball surface before applying impulse.
-    STRIKE_CONTACT_GAP = 0.006
+    # Tip apex → ball-center distance at surface touch ≈ ball_r + 2*cue_r
+    # (apex sits one cue radius past the tip-sphere center). Extra slack for
+    # alignment error; PhysX contact is still required to fire the impulse.
+    STRIKE_CONTACT_GAP = 0.008
+    # Collision ignore pair: cue ↔ robot links share this g2/g3 so they do not
+    # collide after weld, while cue ↔ ball (default g3) still generates contacts.
+    _CUE_ROBOT_IGNORE_BIT = 1 << 8
+    _CUE_ROBOT_IGNORE_ID = 0xB111
     POCKET_SINK_Z = 0.012
 
     def setup_demo(self, **kwags):
@@ -508,7 +514,11 @@ class play_billiard(Base_Task):
 
         shaft_mat = sapien.render.RenderMaterial(base_color=[*self.CUE_COLOR, 1.0])
         tip_mat = sapien.render.RenderMaterial(base_color=[*self.CUE_TIP_COLOR, 1.0])
+        tip_mat.roughness = 0.45
+        tip_mat.metallic = 0.0
+        tip_mat.emission = [0.02, 0.08, 0.22, 1.0]  # slight glow; keep tip diameter readable
         butt_mat = sapien.render.RenderMaterial(base_color=[*self.CUE_COLOR, 1.0])
+        # Tip sphere radius matches shaft (CUE_RADIUS) — flush diameter with the rod.
         builder.add_cylinder_visual(radius=r, half_length=half, material=shaft_mat)
         builder.add_sphere_visual(pose=sapien.Pose([half, 0, 0]), radius=r, material=tip_mat)
         builder.add_sphere_visual(pose=sapien.Pose([-half, 0, 0]), radius=r, material=butt_mat)
@@ -662,13 +672,33 @@ class play_billiard(Base_Task):
 
     # ---------------------------------------------------- weld / kinematics
     def _disable_cue_robot_collision(self):
-        """Drop cue↔robot collision after weld (strike uses tip geometry + impulse)."""
+        """Ignore cue↔robot collisions after weld; keep cue↔ball contacts.
+
+        Previously set cue groups to [0,0,0,0], which disabled *all* cue
+        collisions (including the ball), so strikes never registered real
+        contact and the impulse had to fire on tip proximity alone.
+        """
         rigid = self._get_rigid(self.cue)
         if rigid is None:
             return
+        ignore_bit = int(self._CUE_ROBOT_IGNORE_BIT)
+        ignore_id = int(self._CUE_ROBOT_IGNORE_ID) & 0xFFFF
         try:
             for shape in rigid.get_collision_shapes():
-                shape.set_collision_groups([0, 0, 0, 0])
+                # g0/g1 = default contact type/affinity so cue still hits balls.
+                shape.set_collision_groups([1, 1, ignore_bit, ignore_id])
+            for articulation in (self.robot.left_entity, self.robot.right_entity):
+                if articulation is None:
+                    continue
+                for link in articulation.get_links():
+                    for shape in link.get_collision_shapes():
+                        g0, g1, g2, g3 = shape.get_collision_groups()
+                        shape.set_collision_groups([
+                            int(g0),
+                            int(g1),
+                            int(g2) | ignore_bit,
+                            (int(g3) & ~0xFFFF) | ignore_id,
+                        ])
         except Exception:
             pass
 
@@ -698,6 +728,39 @@ class play_billiard(Base_Task):
             rigid.set_kinematic_target(seated)
         self._disable_cue_robot_collision()
         self._cue_welded = True
+
+    def _cue_ball_contacting(self):
+        """True only when PhysX reports touching cue↔ball contact.
+
+        Accepts a contact pair if any point is penetrating/near-touching
+        (separation <= 1 mm) or carries a non-zero impulse.
+        """
+        if self.cue is None or self.primary_ball is None:
+            return False
+        cue_name = self.cue.get_name()
+        ball_name = self.primary_ball.get_name()
+        try:
+            for contact in self.scene.get_contacts():
+                n0 = contact.bodies[0].entity.name
+                n1 = contact.bodies[1].entity.name
+                if not (
+                    (n0 == cue_name and n1 == ball_name)
+                    or (n1 == cue_name and n0 == ball_name)
+                ):
+                    continue
+                points = getattr(contact, "points", None) or []
+                if not points:
+                    return True
+                for pt in points:
+                    sep = float(getattr(pt, "separation", 0.0))
+                    impulse = np.asarray(
+                        getattr(pt, "impulse", [0, 0, 0]), dtype=np.float64
+                    )
+                    if sep <= 1e-3 or float(np.linalg.norm(impulse)) > 1e-8:
+                        return True
+        except Exception:
+            pass
+        return False
 
     def _update_welded_cue(self):
         if not self._cue_welded:
@@ -737,22 +800,20 @@ class play_billiard(Base_Task):
         return d / n
 
     def _try_apply_strike_impulse(self):
-        """Impart velocity only after real tip–ball contact, along the stick direction."""
+        """Impart velocity only after real cue–ball PhysX contact, along the stick."""
         if not self._strike_armed or self._strike_done or self._primary_pocketed:
             return
         tip = self._tip_xyz()
         ball_p = np.asarray(self.primary_ball.get_pose().p, dtype=np.float64)
-        contact_thresh = self.ball_radius + self.CUE_RADIUS + self.STRIKE_CONTACT_GAP
         dist = float(np.linalg.norm(tip - ball_p))
-        touching = False
-        try:
-            touching = bool(
-                self.check_actors_contact(self.cue.get_name(), self.primary_ball.get_name())
-            )
-        except Exception:
-            touching = False
-        # Require actual contact, or tip pressed into the contact gap (no early telekinesis).
-        if not touching and dist > contact_thresh:
+        # Apex-to-center envelope for a tip-sphere touch (see STRIKE_CONTACT_GAP).
+        contact_thresh = (
+            self.ball_radius + 2.0 * self.CUE_RADIUS + self.STRIKE_CONTACT_GAP
+        )
+        if dist > contact_thresh:
+            return
+        # Hard gate: PhysX must report actual touching contact (no proximity kick).
+        if not self._cue_ball_contacting():
             return
         rigid = self._primary_rigid
         if rigid is None:
@@ -773,6 +834,13 @@ class play_billiard(Base_Task):
             pass
         self._strike_done = True
         self._strike_armed = False
+        if os.environ.get("PLAY_BILLIARD_DEBUG"):
+            print(
+                f"[PLAY_BILLIARD] strike_impulse: tip_dist={dist:.4f} "
+                f"dir={np.round(direction, 3).tolist()} "
+                f"impulse={self.strike_impulse}",
+                flush=True,
+            )
 
     def _ball_inside_hollow(self, p):
         """True once the ball has fallen through a pocket into the hollow box."""
@@ -872,14 +940,17 @@ class play_billiard(Base_Task):
                 break
 
     def _dbg(self, tag):
-        import os
         if os.environ.get("PLAY_BILLIARD_DEBUG"):
             tip = np.asarray(self.cue.get_functional_point(0, "list")[:3])
             ball = np.asarray(self.primary_ball.get_pose().p)
+            dist = float(np.linalg.norm(tip - ball))
+            touching = bool(self._cue_ball_contacting()) if self._cue_welded else False
             print(
                 f"[PLAY_BILLIARD] {tag}: plan={self.plan_success} "
                 f"tip={np.round(tip, 3).tolist()} ball={np.round(ball, 3).tolist()} "
-                f"pocketed={self._primary_pocketed} robot_touch={self._robot_ball_contact}",
+                f"tip_dist={dist:.4f} cue_contact={touching} "
+                f"strike_done={self._strike_done} pocketed={self._primary_pocketed} "
+                f"robot_touch={self._robot_ball_contact}",
                 flush=True,
             )
 
@@ -1020,9 +1091,11 @@ class play_billiard(Base_Task):
 
         # Refresh ball pose, then lower and home tip onto the contact point.
         ball_xy = self._ball_xy(self.primary_ball)
-        contact_gap = self.ball_radius + self.CUE_RADIUS + 0.002
+        # Leave a small pre-contact gap; tip-sphere touch ≈ ball_r + 2*cue_r in apex dist.
+        contact_gap = self.ball_radius + 2.0 * self.CUE_RADIUS + 0.003
         contact_xy = ball_xy - self._aim_dir * contact_gap
         behind = ball_xy - self._aim_dir * self.APPROACH_GAP
+        strike_z = float(self.ball_z)
 
         def _home_tip_xy(target_xy, tol=0.008, hops=5):
             for _ in range(hops):
@@ -1048,30 +1121,48 @@ class play_billiard(Base_Task):
         if self.plan_success:
             _home_tip_xy(behind, tol=0.010)
         if self.plan_success:
-            self._move_tip_z_to(arm, float(self.ball_z), max_step=0.06)
+            self._move_tip_z_to(arm, strike_z, max_step=0.06)
         if self.plan_success:
             _home_tip_xy(contact_xy, tol=0.006, hops=6)
+        if self.plan_success:
+            # Re-seat Z after XY hops (planner often lifts the tip).
+            self._move_tip_z_to(arm, strike_z, max_step=0.04)
         self._dbg("after_align_z")
 
         # Strike: push through the ball along aim. Impulse only after tip–ball contact.
         self._strike_armed = True
         self._strike_done = False
-        for _ in range(5):
+        through_xy = ball_xy + self._aim_dir * self.STRIKE_PUSH
+        for _ in range(8):
             if self._strike_done or self._primary_pocketed or not self.plan_success:
                 break
             tip = self._tip_xyz()
+            # Keep tip at ball height so the blue tip can actually touch.
+            dz = float(strike_z - tip[2])
+            if abs(dz) > 0.008:
+                self._move_tip_z_to(arm, strike_z, max_step=0.03)
+                tip = self._tip_xyz()
             ball_p = np.asarray(self.primary_ball.get_pose().p, dtype=np.float64)
-            # Correct lateral error relative to the aim line, then advance.
+            # Correct lateral error, then advance toward/through the ball.
             to_ball = ball_p[:2] - tip[:2]
             along = float(np.dot(to_ball, self._aim_dir))
             lateral = to_ball - self._aim_dir * along
-            corr = lateral * 0.6 + self._aim_dir * 0.010
+            # If already past the ball center, keep driving toward through_xy.
+            advance = self._aim_dir * (0.018 if along > -0.005 else 0.012)
+            target = tip[:2] + lateral * 0.7 + advance
+            # Clamp progress so we don't overshoot the through point badly.
+            to_through = through_xy - tip[:2]
+            if float(np.linalg.norm(to_through)) < 0.008:
+                break
             self.move(
                 self.move_by_displacement(
-                    arm_tag=arm, x=float(corr[0]), y=float(corr[1]), move_axis="world"
+                    arm_tag=arm,
+                    x=float(target[0] - tip[0]),
+                    y=float(target[1] - tip[1]),
+                    move_axis="world",
                 )
             )
-            self._dwell(12)
+            self._dwell(10)
         self._dbg("after_strike")
         retract = -self._aim_dir * 0.04
         tip = self._tip_xyz()

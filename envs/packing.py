@@ -19,6 +19,10 @@ class packing(Base_Task):
     - ``parallel``: red apples left / yellow oranges right, one wave at a time.
       The next pair spawns only after both current fruits are dropped or gone,
       and the dual-arm pack cycle has finished.
+    - ``random``: each wave independently rolls a coin and spawns either a
+      single fruit (apple xor orange) or an apple+orange pair — same
+      "wait until fully clear" gating as the other modes, just with the
+      count randomized per wave.
 
     Success requires every fruit to rest in its color-matched basket.
     """
@@ -28,7 +32,7 @@ class packing(Base_Task):
     BELT_SPEED_DEFAULT = 0.0008       # m advanced per belt tick (slow enough to pick)
     ADVANCE_EVERY_DEFAULT = 3         # physics steps between belt ticks
     SPAWN_GAP_DEFAULT = 0.16          # y-gap between consecutive spawns on a belt
-    SPAWN_MODE_DEFAULT = "parallel"   # "single" | "parallel"
+    SPAWN_MODE_DEFAULT = "parallel"   # "single" | "parallel" | "random"
     SPAWN_DELAY_S_DEFAULT = 2.0       # unused (kept for config compat); spawn waits on drop/despawn
 
     # same belt slab dimensions as quality_control
@@ -61,8 +65,8 @@ class packing(Base_Task):
     BASKET_CATCH_R = 0.12              # scaled up to match the larger basket opening
     BASKET_Y = 0.0                    # table midline (toward the belts / "higher")
     BASKET_X = 0.34                   # nudged out so the bigger basket clears the belts
-    # simple carry motion: lift a bit off the belt, then slide over the basket
-    PICK_LIFT = 0.12
+    # simple carry motion: lift well clear of the belt/basket rims, then slide over
+    PICK_LIFT = 0.22
 
     N_SLATS = 5
     APPLE_COLOR = [0.85, 0.12, 0.10]
@@ -101,9 +105,12 @@ class packing(Base_Task):
             mode = "single"
         elif mode in ("opt2", "simultaneous", "dual", "both"):
             mode = "parallel"
-        if mode not in ("single", "parallel"):
+        elif mode in ("opt3", "mixed", "randomized", "rand"):
+            mode = "random"
+        if mode not in ("single", "parallel", "random"):
             mode = self.SPAWN_MODE_DEFAULT
         self.spawn_mode = mode
+        self.pick_lift = float(cfg.get("pick_lift", self.PICK_LIFT))
         self.spawn_delay_s = float(cfg.get("spawn_delay_s", self.SPAWN_DELAY_S_DEFAULT))
 
         self.belt_gap = float(cfg.get("belt_gap", self.BELT_GAP_DEFAULT))
@@ -389,6 +396,7 @@ class packing(Base_Task):
 
     def _maybe_spawn(self):
         """Spawn the next fruit / pair only after the current wave is fully clear."""
+        import os
         if self._spawned >= self.n_items:
             return
         # wait until drop/despawn of the current wave AND the pack cycle finished
@@ -397,6 +405,37 @@ class packing(Base_Task):
             return
 
         if self.spawn_mode == "single":
+            for i in range(self.n_items):
+                if self._spawned_mask[i] or self._packed[i] or self._missed[i]:
+                    continue
+                self._spawn(i)
+                self._spawned_mask[i] = True
+                self._spawned = int(sum(self._spawned_mask))
+                return
+            return
+
+        if self.spawn_mode == "random":
+            # each wave independently rolls single-vs-pair (falls back to
+            # single automatically if only one color remains outstanding)
+            want_pair = bool(np.random.rand() < 0.5)
+            if bool(os.environ.get("PACKING_DEBUG")):
+                print(f"[packing]  random spawn wave: "
+                      f"{'pair' if want_pair else 'single'}", flush=True)
+            if want_pair:
+                spawned_sides = set()
+                for i in range(self.n_items):
+                    if self._spawned_mask[i] or self._packed[i] or self._missed[i]:
+                        continue
+                    side = self.item_sides[i]
+                    if side in spawned_sides:
+                        continue
+                    self._spawn(i)
+                    self._spawned_mask[i] = True
+                    spawned_sides.add(side)
+                    if len(spawned_sides) >= 2:
+                        break
+                self._spawned = int(sum(self._spawned_mask))
+                return
             for i in range(self.n_items):
                 if self._spawned_mask[i] or self._packed[i] or self._missed[i]:
                     continue
@@ -447,6 +486,12 @@ class packing(Base_Task):
              else self.robot.get_right_ee_pose())
         return np.array(p[:3], dtype=float)
 
+    def _ee_pose_full(self, arm):
+        """Full 6-DOF planning-EE pose (position + orientation), as a sapien.Pose."""
+        p = (self.robot.get_left_ee_pose() if arm == "left"
+             else self.robot.get_right_ee_pose())
+        return sapien.Pose(list(p[:3]), list(p[3:7]))
+
     def _tcp_pos(self, arm):
         """Gripper-center pose (fingertips), not the retracted planning EE frame."""
         p = (self.robot.get_left_tcp_pose() if arm == "left"
@@ -454,13 +499,22 @@ class packing(Base_Task):
         return np.array(p[:3], dtype=float)
 
     def _weld_fruit_to_ee(self, idx, arm):
-        """Rigidly attach fruit to the EE so lifts/carries cannot slip."""
+        """Rigidly attach fruit to the EE so lifts/carries cannot slip or rotate.
+
+        The offset is captured once, as a full 6-DOF pose (position +
+        orientation) expressed in the planning-EE's own local frame:
+        ``local_offset = ee_pose.inv() * fruit_pose``. Every subsequent step,
+        ``_update_welded_fruits`` recomputes ``ee_pose_now * local_offset`` —
+        a proper rigid-body transform composition, not a world-frame
+        translation — so the fruit stays glued to the gripper (zero slip,
+        zero relative rotation) even while the wrist reorients during the
+        lift/slide.
+        """
         arm_name = "left" if str(arm) == "left" else "right"
-        # offset in planning-EE frame (same frame used by _update_welded_fruits)
         self._weld_arm[idx] = arm_name
-        self._weld_offset[idx] = (
-            np.array(self.items[idx].get_pose().p, dtype=float) - self._ee_pos(arm_name)
-        )
+        ee_pose = self._ee_pose_full(arm_name)
+        fruit_pose = self.items[idx].get_pose()
+        self._weld_offset[idx] = ee_pose.inv() * fruit_pose
         rigid = self._item_comps[idx]
         if rigid is not None:
             rigid.set_disable_gravity(True)
@@ -476,14 +530,20 @@ class packing(Base_Task):
         self._welded[idx] = True
 
     def _update_welded_fruits(self):
+        """Re-glue every welded fruit to its gripper's current pose.
+
+        Called every physics step (see ``_update_kinematic_tasks``), including
+        during arm motion, waits, and dwells — not just once at attach time —
+        so the fruit rigidly tracks the full gripper pose (no drift/wobble)
+        for the entire carry until ``_release_fruit``.
+        """
         if not getattr(self, "_welded", None):
             return
         for i in range(self.n_items):
             if not self._welded[i]:
                 continue
-            target = self._ee_pos(self._weld_arm[i]) + self._weld_offset[i]
-            q = self.items[i].get_pose().q
-            pose = sapien.Pose(target.tolist(), q)
+            ee_pose = self._ee_pose_full(self._weld_arm[i])
+            pose = ee_pose * self._weld_offset[i]
             self.items[i].actor.set_pose(pose)
             rigid = self._item_comps[i]
             if rigid is not None:
@@ -893,8 +953,8 @@ class packing(Base_Task):
             self.plan_success = True
 
     def _carry_and_drop(self, idx, arm, target_xy):
-        """Lift a bit, slide over the basket via displacement, then release."""
-        self.move(self.move_by_displacement(arm, z=self.PICK_LIFT, move_axis="world"))
+        """Lift well clear of the belt, slide over the basket via displacement, then release."""
+        self.move(self.move_by_displacement(arm, z=self.pick_lift, move_axis="world"))
         self.plan_success = True
 
         self._slide_over_basket(idx, arm, target_xy)
@@ -1051,10 +1111,10 @@ class packing(Base_Task):
             if dbg:
                 print("[packing]  pair: both attached", flush=True)
 
-            # lift a bit, slide over the baskets via displacement, release
+            # lift well clear of the belt, slide over the baskets via displacement, release
             self.move(
-                self.move_by_displacement(left, z=self.PICK_LIFT, move_axis="world"),
-                self.move_by_displacement(right, z=self.PICK_LIFT, move_axis="world"),
+                self.move_by_displacement(left, z=self.pick_lift, move_axis="world"),
+                self.move_by_displacement(right, z=self.pick_lift, move_axis="world"),
             )
             self.plan_success = True
             self._slide_pair_over_baskets(idx_l, idx_r, left, right, target_l, target_r)
@@ -1116,7 +1176,7 @@ class packing(Base_Task):
             guard += 1
             ready = self._ready_by_side()
             left_i, right_i = ready["left"], ready["right"]
-            if (self.spawn_mode == "parallel"
+            if (self.spawn_mode in ("parallel", "random")
                     and left_i is not None and right_i is not None):
                 self._pack_pair(left_i, right_i)
             elif left_i is not None:
@@ -1131,7 +1191,7 @@ class packing(Base_Task):
             left_i, right_i = ready["left"], ready["right"]
             if left_i is None and right_i is None:
                 break
-            if (self.spawn_mode == "parallel"
+            if (self.spawn_mode in ("parallel", "random")
                     and left_i is not None and right_i is not None):
                 self._pack_pair(left_i, right_i)
             elif left_i is not None:

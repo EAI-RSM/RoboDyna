@@ -9,13 +9,14 @@ class whack_a_mole(Base_Task):
     """Whack-a-mole. A fixed green board with a grid of holes spans both arms' reach.
     Up to N moles (default 4) continuously bob out of / back into their holes. Each
     arm starts with a blue cube gripped between its fingers (slightly larger than
-    a hole) so the gripper cannot enter a hole. A hit requires physical mesh contact
-    between a held cube and a mole that is above the board surface; hovering or
-    buried moles do not count. Hit moles turn green and stay down.
+    a hole) so the gripper cannot enter a hole. A hit requires the mole to make
+    real mesh contact with the underside (bottom face) of a held cube while above
+    the board surface; side brushes or hovering nearby do not count. Hit moles
+    turn green and stay down.
 
     Optional rabbit distractors (num_distractors, up to M) occupy other holes and
     also bob. Touching a rabbit turns it red and fails the episode. Touching the
-    hole board with a robot link or a held cube also fails the episode.
+    hole board with any robot link or a held cube also fails the episode.
 
     difficulty=easy  — hit one mole at a time with the arm on that side.
     difficulty=hard  — hit two non-adjacent opposite-side moles with both arms at once.
@@ -32,18 +33,19 @@ class whack_a_mole(Base_Task):
     PRE_POP_STEPS_DEFAULT = 16
     TOUCH_TOL_DEFAULT = 0.04
     HOLE_COUNT_DEFAULT = 9
-    HOLE_SIZE_DEFAULT = 0.055
-    HOLE_BAR_THICKNESS_DEFAULT = 0.02
+    HOLE_SIZE_DEFAULT = 0.0825    # 1.5x former 0.055 openings
+    HOLE_BAR_THICKNESS_DEFAULT = 0.014
     CUBE_HOLE_SCALE_DEFAULT = 1.20  # cube side / hole_size (>1 so it can't enter a hole)
 
-    # XY half-extents of the hole board. Z half is computed so the board sits
-    # on the table while the play surface stays raised (board_z_lift).
-    BOARD_HALF_XY = [0.30, 0.13]
+    # XY half-extents of the hole board (sized for 1.5x openings, still in reach).
+    # Z half is computed so the board sits on the table while the play surface
+    # stays raised (board_z_lift).
+    BOARD_HALF_XY = [0.33, 0.16]
     BOARD_TOP_HALF_Z = 0.048          # original thin-deck half-height (for top lift math)
     BOARD_COLOR = [0.98, 0.82, 0.05]  # yellow box
     # Raise the play surface above the table; the solid base fills down to the tabletop.
     BOARD_Z_LIFT_DEFAULT = 0.12
-    HIDE_DEPTH = 0.080
+    HIDE_DEPTH = 0.100
     MOLE_MODEL = "221_mole"
     RABBIT_MODEL = "222_rabbit"
     # Mesh is Y-up; rotate so height aligns with world Z.
@@ -53,16 +55,27 @@ class whack_a_mole(Base_Task):
     RABBIT_COLOR = [0.95, 0.95, 0.97]         # white (distinct from brown moles)
     RABBIT_TOUCHED_COLOR = [0.92, 0.12, 0.10]  # red on illegal touch
     CUBE_COLOR = [0.15, 0.45, 0.95]            # blue — held mallet cubes
-    MOLE_SCALE_MULT = 1.20        # slightly larger than authored asset
-    MOLE_HEIGHT = 0.0702          # world height after mole_scale_mult
+    MOLE_SCALE_MULT = 1.80        # 1.5x prior size
+    MOLE_HEIGHT = 0.1053          # world height after mole_scale_mult
     # Rabbit mesh is shorter at default scale; scale_mult matches mole world height.
-    RABBIT_SCALE_MULT = 1.60
-    RABBIT_HEIGHT = 0.0702        # world height after scale_mult (match moles)
+    RABBIT_SCALE_MULT = 2.40
+    RABBIT_HEIGHT = 0.1053        # world height after scale_mult (match moles)
     # Drop the gripped cube below the finger-pad midpoint (world -Z).
     CUBE_GRASP_DROP_Z = 0.05
     POP_SPEED = 0.08              # m/s while rising / falling
     # Fail if a held cube underside reaches this close to the board top.
     BOARD_CUBE_CONTACT_EPS = 0.001
+    # Require true mesh contact (not mere proximity) for a hit.
+    # Kinematic cube ↔ dynamic mole contacts often report a small positive
+    # separation; treat <= 2 mm as touching.
+    HIT_SEPARATION_MAX = 0.002
+    # Cube center must be this close in XY to the critter center (m).
+    HIT_XY_TOL = 0.02
+    # Contact counts only on the cube underside: critter top must sit in this
+    # band around the cube bottom face (m).
+    HIT_BOTTOM_BAND = 0.006
+    # Raise the whole table (and board) by this amount (m).
+    TABLE_HEIGHT_BIAS_DEFAULT = 0.05
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("whack_a_mole", {})
@@ -83,6 +96,11 @@ class whack_a_mole(Base_Task):
         self.hammer_cubes = {}
         self._cube_comps = {}
         self._cube_weld = {}
+        # Lift table (+board) 5 cm by default.
+        table_lift = float(self._cfg.get(
+            "table_height_bias", self.TABLE_HEIGHT_BIAS_DEFAULT))
+        kwags = dict(kwags)
+        kwags["table_height_bias"] = float(kwags.get("table_height_bias", 0.0)) + table_lift
         super()._init_task_env_(**kwags)
 
     # ---------------------------------------------------------------- board
@@ -458,7 +476,6 @@ class whack_a_mole(Base_Task):
             self.rabbits, self._rabbit_rigids, self._rabbit_state, idx,
             raised=raised, z=z)
 
-    @staticmethod
     @staticmethod
     def _set_critter_color(shapes, rgb):
         col = list(rgb)[:3] + [1.0]
@@ -1064,30 +1081,87 @@ class whack_a_mole(Base_Task):
     def _mole_above_surface(self, idx):
         return self._critter_above_surface(self.moles, self._mole_state, idx)
 
-    def _cube_actor_mesh_contact(self, actor_name):
-        """True iff a held cube has PhysX mesh contact with the named actor."""
-        cube_names = {f"hammer_cube_{arm}" for arm in getattr(self, "hammer_cubes", {})}
-        if not cube_names:
+    def _critter_top_z(self, actors, states, idx):
+        p = np.array(actors[idx].get_pose().p, dtype=float)
+        height = float(states[idx].get("height", self.mole_height))
+        return float(p[2] + height * 0.5)
+
+    def _cube_bottom_contact_with_critter(self, actors, states, idx):
+        """True iff the critter contacts the underside of a held cube.
+
+        Requires:
+          1) cube XY over the critter,
+          2) critter top in a thin band around the cube bottom face,
+          3) PhysX contact point on/near that bottom face (sep <= 2 mm).
+        Side brushes against the cube walls do not count.
+        """
+        if not getattr(self, "_cubes_ready", False):
             return False
-        for cube_name in cube_names:
-            try:
-                if self.check_actors_contact(actor_name, cube_name):
-                    return True
-            except Exception:
+        cp = np.array(actors[idx].get_pose().p, dtype=float)
+        top_z = self._critter_top_z(actors, states, idx)
+        xy_tol = float(self._cfg.get("hit_xy_tol", self.HIT_XY_TOL))
+        band = float(self._cfg.get("hit_bottom_band", self.HIT_BOTTOM_BAND))
+        sep_max = float(self._cfg.get("hit_separation_max", self.HIT_SEPARATION_MAX))
+        actor_name = actors[idx].get_name()
+        half = float(self.cube_half)
+
+        for arm, cube in getattr(self, "hammer_cubes", {}).items():
+            p = np.array(cube.get_pose().p, dtype=float)
+            if float(np.linalg.norm(p[:2] - cp[:2])) > xy_tol:
                 continue
+            bottom_z = float(p[2] - half)
+            # Mole crown must be at the cube underside, not halfway up the side.
+            if top_z < bottom_z - band or top_z > bottom_z + band:
+                continue
+            cube_name = f"hammer_cube_{arm}"
+            for contact in self.scene.get_contacts():
+                name0 = contact.bodies[0].entity.name
+                name1 = contact.bodies[1].entity.name
+                if not (
+                    (name0 == actor_name and name1 == cube_name)
+                    or (name1 == actor_name and name0 == cube_name)
+                ):
+                    continue
+                for pt in (getattr(contact, "points", None) or []):
+                    sep = getattr(pt, "separation", None)
+                    touching = False
+                    if sep is not None:
+                        touching = float(sep) <= sep_max
+                    else:
+                        imp = getattr(pt, "impulse", None)
+                        touching = (
+                            imp is not None
+                            and float(np.linalg.norm(imp)) > 1e-8
+                        )
+                    if not touching:
+                        continue
+                    pos = getattr(pt, "position", None)
+                    if pos is None:
+                        # no point position — geometric bottom band already passed
+                        return True
+                    pos = np.asarray(pos, dtype=float)
+                    # Reject side contacts: point must sit near the bottom face.
+                    if float(pos[2]) > bottom_z + band:
+                        continue
+                    if abs(float(pos[0]) - p[0]) > half + 0.008:
+                        continue
+                    if abs(float(pos[1]) - p[1]) > half + 0.008:
+                        continue
+                    return True
         return False
 
-    def _cube_mole_mesh_contact(self, idx):
-        return self._cube_actor_mesh_contact(self.moles[idx].get_name())
+    def _cube_critter_hit(self, actors, states, idx):
+        """Hit = contact between the critter and the cube bottom face."""
+        return self._cube_bottom_contact_with_critter(actors, states, idx)
 
     def _poll_mole_hits(self):
-        """Every physics step: cube–mole mesh contact above surface -> green + snap down."""
+        """Every physics step: cube-bottom contact above surface -> green + snap down."""
         for idx, st in enumerate(self._mole_state):
             if st["touched"]:
                 continue
             if not self._mole_above_surface(idx):
                 continue
-            if self._cube_mole_mesh_contact(idx):
+            if self._cube_critter_hit(self.moles, self._mole_state, idx):
                 self._mark_touched(idx)
 
     def _mark_rabbit_touched(self, idx):
@@ -1106,7 +1180,7 @@ class whack_a_mole(Base_Task):
         self.plan_success = False
 
     def _poll_rabbit_hits(self):
-        """Cube–rabbit contact above surface -> red + episode fail."""
+        """Cube-bottom–rabbit contact above surface -> red + episode fail."""
         if not getattr(self, "_rabbit_state", None):
             return
         for idx, st in enumerate(self._rabbit_state):
@@ -1114,14 +1188,15 @@ class whack_a_mole(Base_Task):
                 continue
             if not self._critter_above_surface(self.rabbits, self._rabbit_state, idx):
                 continue
-            if self._cube_actor_mesh_contact(self.rabbits[idx].get_name()):
+            if self._cube_critter_hit(self.rabbits, self._rabbit_state, idx):
                 self._mark_rabbit_touched(idx)
 
     def _collect_robot_link_names(self):
-        """Arm/wrist links used for board-touch failure (exclude gripper pads).
+        """Arm/wrist links that must not touch the board.
 
-        Finger pads often graze the lattice while the held cube is still clear;
-        those contacts are ignored. Wrist/forearm/body contact still fails.
+        Gripper finger pads are excluded (their collision hulls are oversized and
+        falsely report board contact while the held cube is still clear). The
+        cube itself is checked separately via `_cube_board_contact`.
         """
         names = set()
         robot = getattr(self, "robot", None)
@@ -1137,7 +1212,7 @@ class whack_a_mole(Base_Task):
                 if name in ignore:
                     continue
                 lname = name.lower()
-                if "finger" in lname or "gripper" in lname:
+                if "finger" in lname:
                     continue
                 names.add(name)
         return names
@@ -1231,7 +1306,8 @@ class whack_a_mole(Base_Task):
         return float(cube_bottom_z + self.cube_half - local_z)
 
     def _hover_ee_z(self, arm_tag):
-        target_bottom = float(self.board_top_z + self.mole_height + 0.06)
+        # stay well above a fully raised mole so proximity never counts as a hit
+        target_bottom = float(self.board_top_z + self.mole_height + 0.08)
         return self._ee_z_for_cube_bottom(arm_tag, target_bottom)
 
     def _cube_xy_err(self, idx, arm_tag):
@@ -1271,19 +1347,24 @@ class whack_a_mole(Base_Task):
                 move_axis="world",
             ))
 
-    def _press_down(self, arm_tag, depth=None):
-        """Press until the cube underside is clear of the board top.
+    def _press_down(self, arm_tag, depth=None, mole_idx=None):
+        """Press onto a raised mole top — never down to the board deck.
 
-        Raised moles stick above the board, so the descending cube's mesh must
-        physically contact them before the underside reaches the surface.
-        Stopping short of the board avoids a board-touch failure.
+        Target the critter crown so the cube gets real mesh contact while the
+        gripper / arm stay clear of the hole board (board touch = fail).
         """
         if depth is None:
             cube_bottom = self._cube_bottom_z(arm_tag)
-            # stay above the board contact threshold used by _cube_board_contact
-            eps = float(self._cfg.get(
-                "board_cube_contact_eps", self.BOARD_CUBE_CONTACT_EPS))
-            target_bottom = self.board_top_z + eps + 0.006
+            # Default: press into a fully raised mole's top (~2 mm into crown).
+            mole_top = self.board_top_z + self.mole_height
+            if mole_idx is not None and getattr(self, "_mole_state", None):
+                if 0 <= int(mole_idx) < len(self._mole_state):
+                    mole_top = self._critter_top_z(
+                        self.moles, self._mole_state, int(mole_idx))
+            # Hard floor: keep the cube face well clear of the board deck.
+            board_clear = self.board_top_z + 0.045
+            # Press ~8 mm into the authored crown so collision meshes actually meet.
+            target_bottom = max(board_clear, mole_top - 0.008)
             depth = max(0.01, float(cube_bottom - target_bottom))
         return self.move_by_displacement(
             arm_tag=arm_tag, z=-float(depth), move_axis="world")
@@ -1341,13 +1422,13 @@ class whack_a_mole(Base_Task):
         if self._cube_xy_err(idx, arm) > 0.03:
             self._approach_hole(idx, arm)
             self._pin_raised([idx])
-        self.move(self._press_down(arm))
+        self.move(self._press_down(arm, mole_idx=idx))
         # hold the press so PhysX can register cube–mole mesh contact
-        self._dwell(30)
+        self._dwell(40)
         if not self.touched[idx] and not getattr(self, "board_hit", False):
-            # retry once at the same safe height (do not push into the board)
-            self._wait_until_raised([idx], max_steps=400)
-            self._dwell(20)
+            # small extra push into the mole crown only (still clear of the board)
+            self.move(self._press_down(arm, mole_idx=idx))
+            self._dwell(25)
         self.move(self._press_up(arm))
 
     def _play_pair(self, i, j):
@@ -1367,8 +1448,11 @@ class whack_a_mole(Base_Task):
         self._wait_until_raised([i, j], sync=True)
         if self.touched[i] and self.touched[j]:
             return
-        self.move(self._press_down(arm_i), self._press_down(arm_j))
-        self._dwell(30)
+        self.move(
+            self._press_down(arm_i, mole_idx=i),
+            self._press_down(arm_j, mole_idx=j),
+        )
+        self._dwell(40)
         self.move(self._press_up(arm_i), self._press_up(arm_j))
 
     # ------------------------------------------------------------- success
