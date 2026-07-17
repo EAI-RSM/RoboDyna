@@ -85,6 +85,15 @@ task_args:
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
+  whack_a_mole:
+    num_moles: 4
+    num_distractors: 0        # rabbit distractors (0..M, M=4); touching one fails
+    difficulty: easy
+    pop_steps: 90
+    touch_tol: 0.04
+    hole_count: 9
+    hole_size: 0.055
+    cube_hole_scale: 1.30
   collect_falling_bowl:
     num_objects: 4
     emit_interval: 40
@@ -112,6 +121,32 @@ task_args:
     square_gap: 0.015
     square_gap_min: 0.010
     square_gap_max: 0.030
+  dispense_gummy:
+    tube_capacity: 4
+    target_color: yellow
+    ball_diameter: 0.03
+    ball_slot_gap: 0.003
+    tube_inner_radius: 0.017
+    tube_wall_thickness: 0.003
+    tube_bottom_z_offset: 0.075
+    tube_center_y: 0.03
+    tube_x_left: -0.06
+    tube_x_right: 0.06
+    bowl_radius: 0.06
+    bowl_align_tol: 0.035
+    bowl_catch_z_tol: 0.025
+    belt_thickness: 0.015
+    belt_move_steps: 30
+    belt_key_x: 0.26
+    belt_key_y_left: -0.14
+    belt_key_y_right: -0.06
+    key_x: -0.26
+    key_y: -0.13
+    dispense_steps: 20
+    press_hold_steps: 5
+    post_press_dwell: 8
+    left_stack: [yellow, blue, yellow, blue]
+    right_stack: [blue, yellow, blue, yellow]
   goalkeeper:
     ball_speed_min: 0.07
     ball_speed_max: 0.09
@@ -188,12 +223,22 @@ task_args:
     spacing_max: 0.14
     black_frac_max: 0.50      # randomly blacken up to this fraction; no key on black
   packing:
-    n_items: 5
+    n_per_color: 3
+    spawn_mode: parallel      # single | parallel
+    spawn_delay_s: 2.0
     belt_gap: 0.10
-    belt_speed: 0.0025
-    spawn_gap: 0.14
-    pick_y: 0.06
-    basket_y: -0.14
+    belt_speed: 0.0008
+    # belt_speed_left: 0.0008
+    # belt_speed_right: 0.0012
+    advance_every: 3
+    spawn_gap: 0.16
+    pick_y: 0.24
+    pick_y_end: -0.16
+    pick_station_y: 0.02
+    fruit_scale: 0.80
+    basket_y: -0.16
+    basket_x: 0.30
+    basket_scale: 0.75
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90
@@ -247,3 +292,14 @@ task_args:
     bowl_inner_radius: 0.028
     bowl_outer_radius: 0.037
     bowl_height: 0.040
+  play_billiard:
+    pocket_mode: any          # any | top_three
+    blocker_mode: none        # none | path_to_top | unused_tops
+    num_extra_balls: 0        # 0–2
+    ball_radius: 0.012
+    table_cx: 0.0
+    table_cy: 0.1
+    table_half_len: 0.22
+    table_half_wid: 0.14
+    settle_steps: 500
+    strike_impulse: 0.55

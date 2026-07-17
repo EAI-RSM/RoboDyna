@@ -17,3 +17,9 @@ Large_D435:
   fovy: 37
   w: 640
   h: 480
+
+# Wider third-person demo view (visualize_task_scene / episode preview videos).
+Demo_D435:
+  fovy: 50
+  w: 640
+  h: 480

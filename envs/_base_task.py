@@ -292,10 +292,11 @@ class Base_Task(gym.Env):
         if self.render_freq:
             self.viewer = Viewer(self.renderer)
             self.viewer.set_scene(self.scene)
+            # Defaults match ur5-wsg demo_camera (zoomed out so both arms are framed).
             self.viewer.set_camera_xyz(
-                x=kwargs.get("camera_xyz_x", 0.4),
-                y=kwargs.get("camera_xyz_y", 0.22),
-                z=kwargs.get("camera_xyz_z", 1.5),
+                x=kwargs.get("camera_xyz_x", 0.835),
+                y=kwargs.get("camera_xyz_y", 0.405),
+                z=kwargs.get("camera_xyz_z", 2.207),
             )
             self.viewer.set_camera_rpy(
                 r=kwargs.get("camera_rpy_r", 0),

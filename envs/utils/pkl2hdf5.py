@@ -145,10 +145,13 @@ def pkl_files_to_hdf5_and_video(pkl_files, hdf5_path, video_path, fps=30.0):
         pkl_file = load_pkl_file(pkl_file_path)
         append_data_to_structure(data_list, pkl_file)
 
-    # preview video = head (left) + countertop (right) side by side; fall back to whatever single
-    # camera exists for embodiments without both.
+    # Prefer third-person demo_camera (visualize_task_scene view) when present; else
+    # head + countertop side-by-side; else any single static camera.
     obs = data_list["observation"]
-    vid = _stack_camera_streams(obs, ["head_camera", "countertop_camera"])
+    if "demo_camera" in obs and "rgb" in obs["demo_camera"]:
+        vid = np.array(obs["demo_camera"]["rgb"])
+    else:
+        vid = _stack_camera_streams(obs, ["head_camera", "countertop_camera"])
     if vid is None:
         _vid_cam = next((c for c in ("countertop_camera", "head_camera", "front_camera")
                          if c in obs and "rgb" in obs[c]), None)

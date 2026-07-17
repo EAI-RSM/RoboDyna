@@ -89,6 +89,15 @@ task_args:
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
+  whack_a_mole:
+    num_moles: 4
+    num_distractors: 0        # rabbit distractors (0..M, M=4); touching one fails
+    difficulty: easy          # easy = one mole at a time; hard = two simultaneous (both arms)
+    pop_steps: 90
+    touch_tol: 0.04
+    hole_count: 9
+    hole_size: 0.055
+    cube_hole_scale: 1.30     # mallet cube side = hole_size * scale (larger than holes)
   collect_falling_bowl:
     num_objects: 4
     emit_interval: 40
@@ -121,6 +130,32 @@ task_args:
     square_gap: 0.015
     square_gap_min: 0.010
     square_gap_max: 0.030
+  dispense_gummy:
+    tube_capacity: 4
+    target_color: yellow
+    ball_diameter: 0.03
+    ball_slot_gap: 0.003
+    tube_inner_radius: 0.017
+    tube_wall_thickness: 0.003
+    tube_bottom_z_offset: 0.075
+    tube_center_y: 0.03
+    tube_x_left: -0.06
+    tube_x_right: 0.06
+    bowl_radius: 0.06
+    bowl_align_tol: 0.035
+    bowl_catch_z_tol: 0.025
+    belt_thickness: 0.015
+    belt_move_steps: 30
+    belt_key_x: 0.26
+    belt_key_y_left: -0.14
+    belt_key_y_right: -0.06
+    key_x: -0.26
+    key_y: -0.13
+    dispense_steps: 24
+    press_hold_steps: 6
+    post_press_dwell: 10
+    left_stack: [yellow, blue, yellow, blue]
+    right_stack: [blue, yellow, blue, yellow]
   goalkeeper:
     ball_speed_min: 0.07
     ball_speed_max: 0.09
@@ -199,12 +234,26 @@ task_args:
     spacing_max: 0.14         # random-mode max gap
     black_frac_max: 0.50      # randomly blacken up to this fraction; no key on black
   packing:
-    n_items: 5                # apples + oranges total (gradual spawn on moving belts)
+    n_per_color: 3            # number of each colored fruit (apples + oranges)
+    # n_apple: 3              # optional per-color override (falls back to n_per_color)
+    # n_orange: 3
+    spawn_mode: parallel      # single | parallel (aliases: opt1 | opt2)
+    # single: one fruit at a time, either color on either belt; next after spawn_delay_s
+    # parallel: apples left / oranges right; both arms pick when both are present
+    spawn_delay_s: 2.0        # single-mode delay after pick before next fruit appears
     belt_gap: 0.10            # gap between the two belts, centered at x=0
-    belt_speed: 0.0025        # m per belt tick (items travel -y toward the robot)
-    spawn_gap: 0.14           # y-gap between consecutive spawns on the same belt
-    pick_y: 0.06              # expert picks when a fruit reaches this y
-    basket_y: -0.14           # breadbaskets sit beside the near end of the belts
+    belt_speed: 0.0008        # shared default speed (m per belt tick); both belts use this
+    # belt_speed_left: 0.0008 # optional per-belt override (falls back to belt_speed)
+    # belt_speed_right: 0.0012
+    advance_every: 3          # physics steps between belt ticks
+    spawn_gap: 0.16
+    pick_y: 0.24              # start arm approach; fruit keeps rolling
+    pick_y_end: -0.16         # past this, too late; fruit loops to far end
+    pick_station_y: 0.02      # hover/grab line; fruit rolls through without pausing
+    fruit_scale: 0.80         # larger fruit -> easier grasp
+    basket_y: -0.16
+    basket_x: 0.30
+    basket_scale: 0.75
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90
@@ -258,3 +307,18 @@ task_args:
     bowl_inner_radius: 0.028
     bowl_outer_radius: 0.037
     bowl_height: 0.040
+  play_billiard:
+    # pocket_mode: any = any of 6 holes; top_three = one of top-left/mid/right
+    pocket_mode: any
+    # blocker_mode: none | path_to_top (blockers on way to a top hole)
+    #              | unused_tops (blockers on top holes that are not the goal)
+    blocker_mode: none
+    num_extra_balls: 0      # 0–2 colored blocker balls
+    ball_radius: 0.012
+    # pocket diameter = 1.2 × ball diameter (omit to use that default)
+    table_cx: 0.0
+    table_cy: 0.1
+    table_half_len: 0.22    # doubled playing surface
+    table_half_wid: 0.14
+    settle_steps: 500
+    strike_impulse: 0.55
