@@ -55,20 +55,19 @@ demo dataset or demo clip yet):
 
 | Task | Description | Demo (partial) |
 |------|-------------|----------------|
-| `toast_bread` | Pick a bread slice, place it on the toaster/steamer, let a per-step timer brown it (pale → golden → brown → burnt), and remove it at a target level. | <img src="assets/static/demos/toast_bread.gif" width="240"/> |
 | `place_block_belt` | Set a tall, top-heavy block onto a moving conveyor so it rides upright into a bowl at the exit. | <img src="assets/static/demos/place_block_belt.gif" width="240"/> |
 | `rotating_shape_sorter` | Drop three prisms (rectangular / triangular / cylindrical) into their matching holes on a continuously rotating sorter cap. | <img src="assets/static/demos/rotating_shape_sorter.gif" width="240"/> |
-| `two_type_sorting_catch` | Dual-arm catch: two interleaved object types fall along left/right-biased curves; sort each to its side. | <img src="assets/static/demos/two_type_sorting_catch.gif" width="240"/> |
-| `catch_rat` | Whack-a-mole: strike "rats" popping from a grid of holes spanning both arms' zones. | <img src="assets/static/demos/catch_rat.gif" width="240"/> |
-| `collect_falling_bowl` | Catch spheres falling along curved (gravity + lateral) trajectories into a bowl. | <img src="assets/static/demos/collect_falling_bowl.gif" width="240"/> |
+| `whack_a_mole` | Whack-a-mole: hit popping moles with held blue cubes; optional rabbit distractors fail the episode if touched. | <img src="assets/static/demos/whack_a_mole.gif" width="240"/> |
 | `catch_valley_ball` | Place a small bowl beyond the 10 cm red boundary to catch a ball leaving a curved down-then-up ramp. Episodes use either a straight path or an angled path that rebounds from the side rails. | <img src="assets/static/demos/catch_valley_ball.gif" width="240"/> |
 | `catch_marbles_trapdoors` | Time button presses to drop marbles through trapdoors on four belts as they pass the drop point. | <img src="assets/static/demos/catch_marbles_trapdoors.gif" width="240"/> |
 | `cup_curtain_slot` | Single-arm: carry a cup through a laterally swaying curtain of strips and into a slot. | <img src="assets/static/demos/cup_curtain_slot.gif" width="240"/> |
 | `dual_hole_punch` | Both arms press buttons to hole-punch files on two independent continuously moving belts (optional missing-tile side). | <img src="assets/static/demos/dual_hole_punch.gif" width="240"/> |
-| `pick_cup_behind_fan` | Retrieve a water-filled cup from behind a spinning 3-blade fan without hitting the blades or spilling. | <img src="assets/static/demos/pick_cup_behind_fan.gif" width="240"/> |
 | `assemble_markers_cylinder` | Dual-arm assembly: attach four markers evenly (90° apart) around a vertical magnetic cylinder. | <img src="assets/static/demos/assemble_markers_cylinder.gif" width="240"/> |
 | `quality_control` | Press the matching red or green key to stamp colored tiles as they pass under a gantry on a centered conveyor. | <img src="assets/static/demos/quality_control.gif" width="240"/> |
 | `goalkeeper` | Place a square blocker fully inside the green zone before the red deadline line to keep a moving ball out of the goal. | <img src="assets/static/demos/goalkeeper.gif" width="240"/> |
+| `dispense_gummy` | Press the dispense key and belt arrow keys so only the target-colored gummies land in the bowl. | <img src="assets/static/demos/dispense_gummy.gif" width="240"/> |
+| `play_billiard` | Grasp a cue and strike the red primary ball into a pocket without robot-link contact with the ball. | <img src="assets/static/demos/play_billiard.gif" width="240"/> |
+| `packing` | Pack apples and oranges from two moving belts into color-matched baskets (single or parallel spawn). | <img src="assets/static/demos/packing.gif" width="240"/> |
 
 ## 🛠️ Adding a task
 
