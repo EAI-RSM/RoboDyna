@@ -2,11 +2,14 @@ from ._base_task import Base_Task
 from .utils import *
 from .utils.actor_utils import Actor
 import os
+import tempfile
 import sapien
 import sapien.render
 import sapien.physx
 import numpy as np
 import transforms3d as t3d
+from shapely.geometry import Point, Polygon
+from trimesh.creation import extrude_polygon
 
 
 class play_billiard(Base_Task):
@@ -68,11 +71,14 @@ class play_billiard(Base_Task):
     BALL_MASS = 0.04
 
     # ----- cue rod (local +X = tip direction; cylinder + spherical ends)
-    CUE_RADIUS = 0.006
+    CUE_RADIUS = 0.0072  # 1.2× prior 6 mm shaft for a more graspable stick
     CUE_HALF_LEN = 0.060
     CUE_COLOR = [0.72, 0.52, 0.28]
     CUE_TIP_COLOR = [0.92, 0.92, 0.85]
     CUE_MASS = 0.05
+    # After measuring the natural grasp weld, raise the cue this much in world +Z
+    # so the shaft seats into the finger pads (measured pose often sits below them).
+    CUE_WELD_LIFT_Z = 0.02
 
     # ----- strike / settle
     APPROACH_GAP = 0.050
@@ -149,34 +155,51 @@ class play_billiard(Base_Task):
         self._loaded = True
 
     # ------------------------------------------------------------- table build
-    def _add_lid_panel(self, x, y, hx, hy, name):
-        """Thin green lid panel with collision (leave gaps at pockets)."""
-        if hx < 0.004 or hy < 0.004:
-            return
-        create_box(
-            self,
-            pose=sapien.Pose([x, y, self._lid_z], [1, 0, 0, 0]),
-            half_size=[hx, hy, self.LID_HALF_Z],
-            color=tuple(self.FELT_COLOR),
-            is_static=True,
-            name=name,
-        )
-
-    def _add_circular_pocket_visual(self, px, py, index):
-        """Non-colliding dark disc so the opening reads as a round hole from above."""
+    def _add_pocket_floor_well_visual(self, px, py, index):
+        """Dark disc on the inner floor, visible through the lid cutout (no collision)."""
         well_mat = sapien.render.RenderMaterial(base_color=[*self.POCKET_COLOR, 1.0])
         builder = self.scene.create_actor_builder()
         builder.add_cylinder_visual(
             pose=sapien.Pose([0, 0, 0], self.Z_CYL_Q),
-            radius=self.pocket_radius,
-            half_length=0.0010,
+            radius=self.pocket_radius * 0.95,
+            half_length=0.0008,
             material=well_mat,
         )
-        # Slightly below the lid plane so it sits in the opening (no collision).
         builder.set_initial_pose(
-            sapien.Pose([px, py, self.felt_top - 0.001], [1, 0, 0, 0])
+            sapien.Pose([px, py, self.floor_top + 0.001], [1, 0, 0, 0])
         )
-        builder.build_static(name=f"pocket_well_{index}")
+        builder.build_static(name=f"pocket_floor_well_{index}")
+
+    def _build_felt_lid_with_holes(self, cx, cy, hl, hw):
+        """Single green felt lid mesh with true circular pocket openings."""
+        pr = float(self.pocket_radius)
+        thickness = 2.0 * self.LID_HALF_Z
+        poly = Polygon([(-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw)])
+        for p in self._pocket_centers:
+            local = Point(float(p[0] - cx), float(p[1] - cy))
+            poly = poly.difference(local.buffer(pr, resolution=24))
+        if poly.is_empty:
+            raise RuntimeError("pocket cutouts removed the entire felt lid")
+        if poly.geom_type == "MultiPolygon":
+            poly = max(poly.geoms, key=lambda g: g.area)
+
+        mesh = extrude_polygon(poly, height=thickness)
+        mesh.apply_translation([0.0, 0.0, -0.5 * thickness])
+        try:
+            mesh.fix_normals()
+        except Exception:
+            pass
+
+        lid_path = os.path.join(tempfile.gettempdir(), "play_billiard_felt_lid.obj")
+        mesh.export(lid_path)
+
+        felt_mat = sapien.render.RenderMaterial(base_color=[*self.FELT_COLOR, 1.0])
+        builder = self.scene.create_actor_builder()
+        builder.set_physx_body_type("static")
+        builder.add_nonconvex_collision_from_file(filename=lid_path)
+        builder.add_visual_from_file(filename=lid_path, material=felt_mat)
+        builder.set_initial_pose(sapien.Pose([cx, cy, self._lid_z], [1, 0, 0, 0]))
+        builder.build_static(name="felt_lid")
 
     def _build_hollow_box(self, cx, cy, hl, hw):
         """10 cm hollow wood box: floor + four walls (empty interior)."""
@@ -242,39 +265,11 @@ class play_billiard(Base_Task):
         # 1) Hollow 10 cm wood box (empty cavity under the lid).
         self._build_hollow_box(cx, cy, hl, hw)
 
-        # 2) Green lid with real openings at each pocket (ball can fall through).
-        # Center panel.
-        self._add_lid_panel(cx, cy, hl - pin - pr, hw - pin - pr, "felt_center")
-        # Long-edge bands (±Y), split around corner + side pockets.
-        for sign_y, tag in ((-1.0, "neg"), (1.0, "pos")):
-            y_outer = cy + sign_y * (hw - 0.5 * rim)
-            y_inner = cy + sign_y * (hw - pin - pr)
-            y = 0.5 * (y_outer + y_inner)
-            hy = abs(y_outer - y_inner) * 0.5
-            x_bounds = [
-                (cx - hl, cx - hl + pin - pr),
-                (cx - hl + pin + pr, cx - pr),
-                (cx + pr, cx + hl - pin - pr),
-                (cx + hl - pin + pr, cx + hl),
-            ]
-            for j, (x0, x1) in enumerate(x_bounds):
-                self._add_lid_panel(
-                    0.5 * (x0 + x1), y, 0.5 * (x1 - x0), hy, f"felt_long_{tag}_{j}"
-                )
-        # Short-edge bands (±X) between the two corner pockets.
-        for sign_x, tag in ((-1.0, "neg"), (1.0, "pos")):
-            x_outer = cx + sign_x * (hl - 0.5 * rim)
-            x_inner = cx + sign_x * (hl - pin - pr)
-            x = 0.5 * (x_outer + x_inner)
-            hx = abs(x_outer - x_inner) * 0.5
-            y0, y1 = cy - hw + pin + pr, cy + hw - pin - pr
-            self._add_lid_panel(
-                x, 0.5 * (y0 + y1), hx, 0.5 * (y1 - y0), f"felt_short_{tag}"
-            )
-
-        # Circular dark discs (visual only) marking each pocket opening.
+        # 2) Green felt lid with genuine circular cutouts (balls fall through).
+        self._build_felt_lid_with_holes(cx, cy, hl, hw)
+        # Dark well pads on the inner floor — seen through the holes, not lid paint.
         for i, p in enumerate(self._pocket_centers):
-            self._add_circular_pocket_visual(float(p[0]), float(p[1]), i)
+            self._add_pocket_floor_well_visual(float(p[0]), float(p[1]), i)
 
         # 3) Very low rails (cue clears them); gaps near pockets.
         rail_z = self.felt_top + self.RAIL_HALF_H
@@ -483,15 +478,18 @@ class play_billiard(Base_Task):
 
     # ------------------------------------------------------------- cue
     def _spawn_cue(self):
-        # Near zone on the same side as the primary ball / arm.
-        table_near_y = self.table_cy - self.table_half_wid
+        """Lie the cue flat beside the table, shaft along +Y (same side as arm)."""
+        side_clear = 0.09
         if self._arm_side == "right":
-            cue_x = float(np.random.uniform(0.12, 0.20))
+            cue_x = float(self.table_cx + self.table_half_len + side_clear)
         else:
-            cue_x = float(np.random.uniform(-0.20, -0.12))
-        cue_y = float(np.random.uniform(-0.18, min(-0.12, table_near_y - 0.06)))
-        cue_z = self.z0 + self.CUE_RADIUS
-        pose = sapien.Pose([cue_x, cue_y, cue_z], [1, 0, 0, 0])
+            cue_x = float(self.table_cx - self.table_half_len - side_clear)
+        cue_y = float(self.table_cy + np.random.uniform(-0.04, 0.04))
+        # Flat on the workspace table (same z as the original front-of-table spawn).
+        cue_z = float(self.z0 + self.CUE_RADIUS)
+        # Local +X (tip) → world +Y so the shaft runs along the table short side.
+        along_y_q = t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], np.pi / 2).tolist()
+        pose = sapien.Pose([cue_x, cue_y, cue_z], along_y_q)
         self.cue = self._build_cue(pose)
         self.cue.set_mass(self.CUE_MASS)
         self._cue_rigid = self._get_rigid(self.cue)
@@ -524,7 +522,8 @@ class play_billiard(Base_Task):
             "extents": [2 * tip_x, 2 * r, 2 * r],
             "transform_matrix": np.eye(4).tolist(),
             "target_pose": [np.eye(4).tolist()],
-            # Top-down grasp on the shaft.
+            # Top-down grasp on a flat shaft (local +X = tip). World yaw in
+            # _spawn_cue aligns the shaft with +Y; these frames stay local.
             "contact_points_pose": [
                 [
                     [1, 0, 0, -0.015],
@@ -674,19 +673,29 @@ class play_billiard(Base_Task):
             pass
 
     def _weld_cue_to_ee(self, arm_tag):
-        """Lock cue to EE using the post-grasp relative pose (natural pick)."""
+        """Lock cue to EE using the post-grasp relative pose (natural pick).
+
+        Keeps the measured EE↔cue transform, then applies a world +Z lift
+        (CUE_WELD_LIFT_Z) into the jaw aperture so the stick is not welded
+        below/outside the finger pads.
+        """
         ee = np.asarray(self.get_arm_pose(str(arm_tag)), dtype=np.float64)
         ee_T = self._pose_to_mat(ee)
         cue_T = self.cue.get_pose().to_transformation_matrix()
         self._cue_ee_T = np.linalg.inv(ee_T) @ cue_T
+        # World +Z → EE-local translation so _update_welded_cue keeps the lift.
+        lift_world = np.array([0.0, 0.0, float(self.CUE_WELD_LIFT_Z)], dtype=np.float64)
+        self._cue_ee_T[:3, 3] += ee_T[:3, :3].T @ lift_world
         self._cue_arm = str(arm_tag)
+        seated = self._mat_to_pose(ee_T @ self._cue_ee_T)
+        self.cue.actor.set_pose(seated)
         rigid = self._get_rigid(self.cue)
         if rigid is not None:
             rigid.set_disable_gravity(True)
             rigid.set_kinematic(True)
             rigid.set_linear_velocity(np.zeros(3))
             rigid.set_angular_velocity(np.zeros(3))
-            rigid.set_kinematic_target(self.cue.get_pose())
+            rigid.set_kinematic_target(seated)
         self._disable_cue_robot_collision()
         self._cue_welded = True
 

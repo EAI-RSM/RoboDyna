@@ -87,13 +87,20 @@ task_args:
     grasp_tol: 0.05
   whack_a_mole:
     num_moles: 4
-    num_distractors: 0        # yellow rabbit distractors (0..M, M=4); touching one fails
+    num_distractors: 0        # white rabbit distractors (0..M, M=4); touching one fails
     difficulty: easy
     pop_steps: 90
     touch_tol: 0.04
     hole_count: 9
     hole_size: 0.055
-    cube_hole_scale: 1.08     # blue mallet cube side = hole_size * scale (>1 so it can't enter)
+    cube_hole_scale: 1.20     # blue mallet cube side = hole_size * scale (>1 so it can't enter)
+    cube_grasp_drop_z: 0.05   # lower cube 5 cm below finger midpoint
+    mole_scale_mult: 1.20     # slightly larger moles
+    mole_height: 0.0702       # world height after mole_scale_mult
+    rabbit_scale_mult: 1.60   # match enlarged mole world height
+    rabbit_height: 0.0702
+    board_z_lift: 0.12        # play surface ~12 cm above table; solid base sits on table
+    board_color: [0.98, 0.82, 0.05]  # yellow
   collect_falling_bowl:
     num_objects: 4
     emit_interval: 40
@@ -235,9 +242,9 @@ task_args:
     pick_y_end: -0.16
     pick_station_y: 0.02
     fruit_scale: 0.80
-    basket_y: -0.16
-    basket_x: 0.30
-    basket_scale: 0.75
+    basket_y: 0.0
+    basket_x: 0.34
+    basket_scale: 1.15
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90

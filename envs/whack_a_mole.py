@@ -8,19 +8,20 @@ import numpy as np
 class whack_a_mole(Base_Task):
     """Whack-a-mole. A fixed green board with a grid of holes spans both arms' reach.
     Up to N moles (default 4) continuously bob out of / back into their holes. Each
-    arm starts with a blue cube gripped between its fingers (slightly larger than a
-    hole) so the gripper cannot enter a hole. A hit requires physical mesh contact
+    arm starts with a blue cube gripped between its fingers (slightly larger than
+    a hole) so the gripper cannot enter a hole. A hit requires physical mesh contact
     between a held cube and a mole that is above the board surface; hovering or
     buried moles do not count. Hit moles turn green and stay down.
 
     Optional rabbit distractors (num_distractors, up to M) occupy other holes and
-    also bob. Touching a rabbit turns it red and fails the episode.
+    also bob. Touching a rabbit turns it red and fails the episode. Touching the
+    hole board with a robot link or a held cube also fails the episode.
 
     difficulty=easy  — hit one mole at a time with the arm on that side.
     difficulty=hard  — hit two non-adjacent opposite-side moles with both arms at once.
 
-    Success = every mole has been touched from above at least once, and no rabbit
-    has been touched.
+    Success = every mole has been touched from above at least once, no rabbit has
+    been touched, and neither arm nor held cube has touched the board.
     """
 
     NUM_MOLES_DEFAULT = 4
@@ -33,10 +34,15 @@ class whack_a_mole(Base_Task):
     HOLE_COUNT_DEFAULT = 9
     HOLE_SIZE_DEFAULT = 0.055
     HOLE_BAR_THICKNESS_DEFAULT = 0.02
-    CUBE_HOLE_SCALE_DEFAULT = 1.08  # cube side / hole_size (>1 so it can't enter a hole)
+    CUBE_HOLE_SCALE_DEFAULT = 1.20  # cube side / hole_size (>1 so it can't enter a hole)
 
-    BOARD_HALF = [0.30, 0.13, 0.048]
-    BOARD_COLOR = [0.22, 0.62, 0.28]  # green box
+    # XY half-extents of the hole board. Z half is computed so the board sits
+    # on the table while the play surface stays raised (board_z_lift).
+    BOARD_HALF_XY = [0.30, 0.13]
+    BOARD_TOP_HALF_Z = 0.048          # original thin-deck half-height (for top lift math)
+    BOARD_COLOR = [0.98, 0.82, 0.05]  # yellow box
+    # Raise the play surface above the table; the solid base fills down to the tabletop.
+    BOARD_Z_LIFT_DEFAULT = 0.12
     HIDE_DEPTH = 0.080
     MOLE_MODEL = "221_mole"
     RABBIT_MODEL = "222_rabbit"
@@ -44,12 +50,19 @@ class whack_a_mole(Base_Task):
     MOLE_Q = [0.70710678, 0.70710678, 0.0, 0.0]
     MOLE_COLOR = [0.45, 0.32, 0.22]
     MOLE_TOUCHED_COLOR = [0.20, 0.85, 0.28]  # green when hit
-    RABBIT_COLOR = [0.98, 0.82, 0.05]         # yellow (distinct from brown moles)
+    RABBIT_COLOR = [0.95, 0.95, 0.97]         # white (distinct from brown moles)
     RABBIT_TOUCHED_COLOR = [0.92, 0.12, 0.10]  # red on illegal touch
     CUBE_COLOR = [0.15, 0.45, 0.95]            # blue — held mallet cubes
-    MOLE_HEIGHT = 0.0585          # authored world height after scale
-    RABBIT_HEIGHT = 0.0585        # match mole size
+    MOLE_SCALE_MULT = 1.20        # slightly larger than authored asset
+    MOLE_HEIGHT = 0.0702          # world height after mole_scale_mult
+    # Rabbit mesh is shorter at default scale; scale_mult matches mole world height.
+    RABBIT_SCALE_MULT = 1.60
+    RABBIT_HEIGHT = 0.0702        # world height after scale_mult (match moles)
+    # Drop the gripped cube below the finger-pad midpoint (world -Z).
+    CUBE_GRASP_DROP_Z = 0.05
     POP_SPEED = 0.08              # m/s while rising / falling
+    # Fail if a held cube underside reaches this close to the board top.
+    BOARD_CUBE_CONTACT_EPS = 0.001
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("whack_a_mole", {})
@@ -64,6 +77,8 @@ class whack_a_mole(Base_Task):
         self._rabbit_shapes = []
         self._rabbit_state = []
         self.distractor_hit = False
+        self.board_hit = False
+        self._robot_link_names = set()
         self.holes = []
         self.hammer_cubes = {}
         self._cube_comps = {}
@@ -76,9 +91,20 @@ class whack_a_mole(Base_Task):
         self.hole_bar_thickness = float(
             self._cfg.get("hole_bar_thickness", self.HOLE_BAR_THICKNESS_DEFAULT))
         self.hole_count = int(self._cfg.get("hole_count", self.HOLE_COUNT_DEFAULT))
+        # Play-surface height above the table (= former float gap + thin deck).
+        self.board_z_lift = float(
+            self._cfg.get("board_z_lift", self.BOARD_Z_LIFT_DEFAULT))
+        # Thicken the base so the board sits on the table with the top raised.
+        top_above_table = self.board_z_lift + 2.0 * float(self.BOARD_TOP_HALF_Z)
+        board_half_z = 0.5 * top_above_table
+        self.BOARD_HALF = [
+            float(self.BOARD_HALF_XY[0]),
+            float(self.BOARD_HALF_XY[1]),
+            float(board_half_z),
+        ]
         board_cy = float(np.random.uniform(0.0, 0.05))
         self.board_center = np.array(
-            [0.0, board_cy, self.table_top + self.BOARD_HALF[2]], dtype=float)
+            [0.0, board_cy, self.table_top + board_half_z], dtype=float)
         board_color = self._cfg.get("board_color", self.BOARD_COLOR)
         self.board = create_hollow_box_with_holes(
             self.scene,
@@ -136,6 +162,8 @@ class whack_a_mole(Base_Task):
         self._rabbit_shapes = []
         self._rabbit_state = []
         self.distractor_hit = False
+        self.board_hit = False
+        self._robot_link_names = set()
         self.holes = []
         self.hole_rc = []
         self.touched = []
@@ -163,15 +191,15 @@ class whack_a_mole(Base_Task):
         self.table_top = 0.74 + self.table_z_bias
 
         self.create_board()
-        # Hide yellow wrist mounts + gray finger-pad meshes so only the blue
-        # mallet cube reads as the in-hand object (pads otherwise look like a
-        # gray cube covering the painted mallet).
+        self._robot_link_names = self._collect_robot_link_names()
+        # Hide yellow wrist camera-mount meshes; gray out leftover UR yellow plastic.
         self._hide_wrist_camera_mounts()
         self._gray_out_arm_yellow_parts()
-        self._hide_finger_pad_visuals()
         # Mallet cube: slightly larger than a hole so it cannot fall in.
         self.cube_side = float(self.hole_size) * self.cube_hole_scale
         self.cube_half = self.cube_side * 0.5
+        self.cube_grasp_drop_z = float(
+            self._cfg.get("cube_grasp_drop_z", self.CUBE_GRASP_DROP_Z))
         if self.num_moles > self.num_holes:
             raise ValueError(f"num_moles ({self.num_moles}) > hole_count ({self.num_holes})")
         max_distractors = min(
@@ -211,6 +239,7 @@ class whack_a_mole(Base_Task):
         rigids,
         shapes_out,
         states,
+        scale_mult=1.0,
     ):
         """Spawn one bobbing critter (mole or rabbit) in a hole."""
         pose_p = self._critter_pose_p(hole_idx, raised=False, height=height)
@@ -221,6 +250,7 @@ class whack_a_mole(Base_Task):
             model_id=0,
             convex=True,
             is_static=False,
+            scale_mult=scale_mult,
         )
         actor.set_name(name)
         actor.set_mass(0.05)
@@ -272,6 +302,8 @@ class whack_a_mole(Base_Task):
         self._set_critter_pose(actors, rigids, states, idx, raised=raised0, z=z0)
 
     def _spawn_moles(self):
+        scale_mult = float(
+            self._cfg.get("mole_scale_mult", self.MOLE_SCALE_MULT))
         for i, hole_idx in enumerate(self.mole_holes):
             self._spawn_poppable(
                 hole_idx=hole_idx,
@@ -284,9 +316,12 @@ class whack_a_mole(Base_Task):
                 rigids=self._mole_rigids,
                 shapes_out=self._mole_shapes,
                 states=self._mole_state,
+                scale_mult=scale_mult,
             )
 
     def _spawn_rabbits(self):
+        scale_mult = float(
+            self._cfg.get("rabbit_scale_mult", self.RABBIT_SCALE_MULT))
         for i, hole_idx in enumerate(self.rabbit_holes):
             # offset phase so rabbits are not synced with moles
             self._spawn_poppable(
@@ -300,6 +335,7 @@ class whack_a_mole(Base_Task):
                 rigids=self._rabbit_rigids,
                 shapes_out=self._rabbit_shapes,
                 states=self._rabbit_state,
+                scale_mult=scale_mult,
             )
 
     def _assign_holes(self, n, exclude=None):
@@ -423,13 +459,40 @@ class whack_a_mole(Base_Task):
             raised=raised, z=z)
 
     @staticmethod
+    @staticmethod
     def _set_critter_color(shapes, rgb):
         col = list(rgb)[:3] + [1.0]
         for s in shapes:
+            mats = []
             try:
-                s.material.set_base_color(col)
+                parts = list(s.get_parts())
             except Exception:
-                pass
+                parts = []
+            if parts:
+                for part in parts:
+                    try:
+                        mats.append(part.get_material())
+                    except Exception:
+                        try:
+                            mats.append(part.material)
+                        except Exception:
+                            pass
+            else:
+                try:
+                    mats.append(s.material)
+                except Exception:
+                    pass
+            for mat in mats:
+                if mat is None:
+                    continue
+                try:
+                    mat.set_base_color(col)
+                    mat.base_color = col
+                except Exception:
+                    try:
+                        mat.set_base_color(col)
+                    except Exception:
+                        pass
 
     def _set_mole_color(self, idx, rgb):
         self._set_critter_color(self._mole_shapes[idx], rgb)
@@ -579,8 +642,70 @@ class whack_a_mole(Base_Task):
                                 except Exception:
                                     pass
 
+    def _paint_link_cube_color(self, entity, link_name):
+        """Paint a gripper link to match the held mallet cube color."""
+        rgba = list(self.CUBE_COLOR)[:3] + [1.0]
+        try:
+            link = entity.find_link_by_name(link_name)
+        except Exception:
+            link = None
+        if link is None:
+            return
+        ent = link.entity if hasattr(link, "entity") else link
+        for comp in ent.get_components():
+            if not isinstance(comp, sapien.render.RenderBodyComponent):
+                continue
+            try:
+                comp.visibility = 1.0
+                if not comp.is_enabled:
+                    comp.enable()
+            except Exception:
+                pass
+            for shape in comp.render_shapes:
+                mats = []
+                try:
+                    parts = list(shape.get_parts())
+                except Exception:
+                    parts = []
+                if parts:
+                    for part in parts:
+                        try:
+                            mats.append(part.get_material())
+                        except Exception:
+                            try:
+                                mats.append(part.material)
+                            except Exception:
+                                pass
+                else:
+                    try:
+                        mats.append(shape.get_material())
+                    except Exception:
+                        try:
+                            mats.append(shape.material)
+                        except Exception:
+                            pass
+                for mat in mats:
+                    if mat is None:
+                        continue
+                    try:
+                        mat.set_base_color(rgba)
+                        mat.base_color = rgba
+                        mat.set_metallic(0.0)
+                        mat.set_roughness(0.35)
+                        mat.set_emission([0.0, 0.0, 0.0, 1.0])
+                    except Exception:
+                        try:
+                            mat.set_base_color(rgba)
+                        except Exception:
+                            pass
+
+    def _paint_inhand_cube(self):
+        """Keep the held mallet cube painted (finger pads stay gripper-gray)."""
+        for cube in getattr(self, "hammer_cubes", {}).values():
+            self._paint_cube(cube)
+
     def _paint_cube(self, cube):
-        """Force the held mallet cube to the configured blue in RGB renders."""
+        """Force the held mallet cube to CUBE_COLOR in RGB renders."""
         rgba = list(self.CUBE_COLOR)[:3] + [1.0]
         for c in cube.actor.get_components():
             if not isinstance(c, sapien.render.RenderBodyComponent):
@@ -628,6 +753,10 @@ class whack_a_mole(Base_Task):
             n = float(np.linalg.norm(tip_dir))
             if n > 1e-6:
                 mid = mid + (0.035 / n) * tip_dir
+        # Seat the mallet slightly below the pads so its underside hits moles.
+        drop = float(getattr(self, "cube_grasp_drop_z", self.CUBE_GRASP_DROP_Z))
+        mid = mid.copy()
+        mid[2] -= drop
         return mid
 
     def _grasp_local_T_for_arm(self, arm_tag):
@@ -637,16 +766,34 @@ class whack_a_mole(Base_Task):
         mid = self._finger_midpoint_world(arm_tag)
         local = np.eye(4)
         if mid is None:
-            # fallback: EE +Z points back to the wrist
+            # fallback: EE +Z points back to the wrist, plus grasp drop
+            drop = float(getattr(self, "cube_grasp_drop_z", self.CUBE_GRASP_DROP_Z))
             local[2, 3] = -0.045
+            local[2, 3] -= drop
             return local
-        # keep EE orientation; only translate to the finger midpoint
+        # keep EE orientation; only translate to the finger midpoint (with drop)
         ee_R_inv = ee_T[:3, :3].T
         local[:3, 3] = ee_R_inv @ (mid - ee_T[:3, 3])
         return local
 
+    def _gripper_pos_for_cube(self):
+        """Normalized gripper pos whose finger gap matches the cube width.
+
+        WSG scale maps pos 0 → nearly closed and pos 1 → fully open. We only
+        close until the pads sit against the cube faces (not fully shut).
+        """
+        scale = list(getattr(self.robot, "left_gripper_scale", [0.01, -0.06]))
+        s0, s1 = float(scale[0]), float(scale[1])
+        # Left joint ≈ -half_gap; symmetric right mimic makes gap ≈ cube_side.
+        half_gap = float(self.cube_half) + 0.001  # tiny clearance so pads kiss faces
+        target_joint = -half_gap
+        if abs(s1 - s0) < 1e-9:
+            return 0.55
+        pos = (target_joint - s0) / (s1 - s0)
+        return float(np.clip(pos, 0.05, 0.95))
+
     def _spawn_and_grip_cubes(self):
-        """Seat a cube between each gripper's fingers and close the jaws on it.
+        """Seat a cube between each gripper's fingers and pinch to its sides.
 
         The cube lives in the grasp aperture (between fingers), not as an EE tip
         attachment. Collision stays on so the oversized face blocks hole entry.
@@ -699,19 +846,23 @@ class whack_a_mole(Base_Task):
             self._cube_comps[str(arm)] = rigid
             self._cube_weld[str(arm)] = local_T.copy()
 
-        # close jaws around the cube (visual "gripped between fingers")
+        # Pinch to the cube sides only — do not fully close the jaws.
+        grip_pos = self._gripper_pos_for_cube()
+        self._cube_grip_pos = grip_pos
         prev_plan = self.plan_success
-        self.move(self.close_gripper(left, pos=0.0), self.close_gripper(right, pos=0.0))
+        self.move(
+            self.close_gripper(left, pos=grip_pos),
+            self.close_gripper(right, pos=grip_pos),
+        )
         if not self.plan_success:
             self.plan_success = prev_plan
 
-        # re-seat at the closed-jaw finger midpoint and lock the weld
+        # re-seat at the pinched-jaw finger midpoint and lock the weld
         for arm in ("left", "right"):
             local_T = self._grasp_local_T_for_arm(ArmTag(arm))
             ee = np.array(self.get_arm_pose(ArmTag(arm)), dtype=float)
             pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
             self.hammer_cubes[arm].actor.set_pose(pose)
-            self._paint_cube(self.hammer_cubes[arm])
             rigid = self._cube_comps.get(arm)
             if rigid is not None:
                 try:
@@ -719,6 +870,8 @@ class whack_a_mole(Base_Task):
                 except Exception:
                     pass
             self._cube_weld[arm] = local_T.copy()
+        self._paint_inhand_cube()
+        self._hide_wrist_camera_mounts()
         self._cubes_ready = True
 
     def _update_hammer_cubes(self):
@@ -729,15 +882,16 @@ class whack_a_mole(Base_Task):
             ee = np.array(self.get_arm_pose(ArmTag(arm)), dtype=float)
             pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
             self.hammer_cubes[arm].actor.set_pose(pose)
-            # keep blue material applied (some passes reset render state)
-            if self._global_step % 30 == 0:
-                self._paint_cube(self.hammer_cubes[arm])
             rigid = self._cube_comps.get(arm)
             if rigid is not None:
                 try:
                     rigid.set_kinematic_target(pose)
                 except Exception:
                     pass
+            # keep blue cube paint; keep wrist mounts hidden
+            if self._global_step % 30 == 0:
+                self._paint_inhand_cube()
+                self._hide_wrist_camera_mounts()
 
     def _advance_pop_cycle(self, actors, rigids, states, set_pose):
         """Advance one bobbing group (moles or rabbits) for a single sim step."""
@@ -807,6 +961,7 @@ class whack_a_mole(Base_Task):
         # PhysX contact manifold from the previous scene.step().
         self._poll_mole_hits()
         self._poll_rabbit_hits()
+        self._poll_board_hits()
 
         if getattr(self, "_mole_state", None):
             self._advance_pop_cycle(
@@ -962,6 +1117,96 @@ class whack_a_mole(Base_Task):
             if self._cube_actor_mesh_contact(self.rabbits[idx].get_name()):
                 self._mark_rabbit_touched(idx)
 
+    def _collect_robot_link_names(self):
+        """Arm/wrist links used for board-touch failure (exclude gripper pads).
+
+        Finger pads often graze the lattice while the held cube is still clear;
+        those contacts are ignored. Wrist/forearm/body contact still fails.
+        """
+        names = set()
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return names
+        ignore = set(getattr(robot, "gripper_name", []) or [])
+        ignore.update({"finger_left", "finger_right"})
+        for articulation in (robot.left_entity, robot.right_entity):
+            if articulation is None:
+                continue
+            for link in articulation.get_links():
+                name = link.get_name()
+                if name in ignore:
+                    continue
+                lname = name.lower()
+                if "finger" in lname or "gripper" in lname:
+                    continue
+                names.add(name)
+        return names
+
+    def _mark_board_hit(self):
+        """Illegal contact with the hole board — fail the episode."""
+        if getattr(self, "board_hit", False):
+            return
+        self.board_hit = True
+        self.plan_success = False
+
+    def _cube_over_board(self, arm):
+        """True if the held cube XY footprint overlaps the board top."""
+        cube = getattr(self, "hammer_cubes", {}).get(str(arm))
+        if cube is None or not hasattr(self, "board_center"):
+            return False
+        p = np.array(cube.get_pose().p, dtype=float)
+        half = float(self.cube_half)
+        bx, by = float(self.board_center[0]), float(self.board_center[1])
+        hx, hy = float(self.BOARD_HALF[0]), float(self.BOARD_HALF[1])
+        return (
+            (p[0] + half) >= (bx - hx)
+            and (p[0] - half) <= (bx + hx)
+            and (p[1] + half) >= (by - hy)
+            and (p[1] - half) <= (by + hy)
+        )
+
+    def _cube_board_contact(self):
+        """Cube–board touch. Cubes do not PhysX-collide with the board (group 2
+        only), so detect via underside depth over the board footprint."""
+        if not getattr(self, "_cubes_ready", False):
+            return False
+        eps = float(self._cfg.get(
+            "board_cube_contact_eps", self.BOARD_CUBE_CONTACT_EPS))
+        for arm in getattr(self, "hammer_cubes", {}):
+            if not self._cube_over_board(arm):
+                continue
+            if self._cube_bottom_z(ArmTag(arm)) <= self.board_top_z + eps:
+                return True
+        return False
+
+    def _robot_board_contact(self):
+        """True iff a non-finger robot link has PhysX contact with the board."""
+        board_name = "hole_board"
+        if hasattr(self, "board") and self.board is not None:
+            try:
+                board_name = self.board.get_name()
+            except Exception:
+                pass
+        link_names = getattr(self, "_robot_link_names", None) or set()
+        if not link_names:
+            return False
+        for contact in self.scene.get_contacts():
+            name0 = contact.bodies[0].entity.name
+            name1 = contact.bodies[1].entity.name
+            if (
+                (name0 == board_name and name1 in link_names)
+                or (name1 == board_name and name0 in link_names)
+            ):
+                return True
+        return False
+
+    def _poll_board_hits(self):
+        """Arm or held-cube contact with the hole board -> episode fail."""
+        if getattr(self, "board_hit", False):
+            return
+        if self._cube_board_contact() or self._robot_board_contact():
+            self._mark_board_hit()
+
     def _cube_bottom_z(self, arm_tag):
         """World Z of the lowest point of the held cube."""
         arm = str(arm_tag)
@@ -1027,15 +1272,18 @@ class whack_a_mole(Base_Task):
             ))
 
     def _press_down(self, arm_tag, depth=None):
-        """Press until the cube underside reaches just above the board top.
+        """Press until the cube underside is clear of the board top.
 
         Raised moles stick above the board, so the descending cube's mesh must
-        physically contact them before the underside hits the surface.
+        physically contact them before the underside reaches the surface.
+        Stopping short of the board avoids a board-touch failure.
         """
         if depth is None:
             cube_bottom = self._cube_bottom_z(arm_tag)
-            # stop with the cube face barely above the board (never into a hole)
-            target_bottom = self.board_top_z + 0.002
+            # stay above the board contact threshold used by _cube_board_contact
+            eps = float(self._cfg.get(
+                "board_cube_contact_eps", self.BOARD_CUBE_CONTACT_EPS))
+            target_bottom = self.board_top_z + eps + 0.006
             depth = max(0.01, float(cube_bottom - target_bottom))
         return self.move_by_displacement(
             arm_tag=arm_tag, z=-float(depth), move_axis="world")
@@ -1080,7 +1328,7 @@ class whack_a_mole(Base_Task):
 
     def _play_single(self, idx):
         arm = self._arm_for_hole(self.mole_holes[idx])
-        # keep gripper closed so the cube stays between the fingers
+        # keep the pinch on the cube sides (not fully closed)
         self._approach_hole(idx, arm)
         if self._cube_xy_err(idx, arm) > 0.03:
             # one more full approach if still misaligned
@@ -1096,10 +1344,9 @@ class whack_a_mole(Base_Task):
         self.move(self._press_down(arm))
         # hold the press so PhysX can register cube–mole mesh contact
         self._dwell(30)
-        if not self.touched[idx]:
-            # small extra push if the first press missed the contact window
-            self.move(self.move_by_displacement(
-                arm_tag=arm, z=-0.008, move_axis="world"))
+        if not self.touched[idx] and not getattr(self, "board_hit", False):
+            # retry once at the same safe height (do not push into the board)
+            self._wait_until_raised([idx], max_steps=400)
             self._dwell(20)
         self.move(self._press_up(arm))
 
@@ -1128,6 +1375,8 @@ class whack_a_mole(Base_Task):
     def check_success(self):
         if getattr(self, "distractor_hit", False):
             return False
+        if getattr(self, "board_hit", False):
+            return False
         if not getattr(self, "touched", None):
             return False
         return bool(all(self.touched) and len(self.touched) == self.num_moles)
@@ -1140,6 +1389,7 @@ class whack_a_mole(Base_Task):
             "num_distractors": int(getattr(self, "num_distractors", 0)),
             "touched": [bool(t) for t in getattr(self, "touched", [])],
             "distractor_hit": bool(getattr(self, "distractor_hit", False)),
+            "board_hit": bool(getattr(self, "board_hit", False)),
             "raised": [bool(st.get("raised", False)) for st in getattr(self, "_mole_state", [])],
             "rabbit_raised": [
                 bool(st.get("raised", False)) for st in getattr(self, "_rabbit_state", [])

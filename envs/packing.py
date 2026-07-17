@@ -41,9 +41,9 @@ class packing(Base_Task):
     PICK_Y = 0.24                     # begin moving the arm into place (fruit keeps rolling)
     PICK_Y_END = -0.16                # give up past this (still moving; never park)
     PICK_STATION_Y = 0.02             # hover / grab y; fruit rolls through here
-    # when TCP is this close to a still-moving fruit, snap it into the fingers
-    SNAP_XY_MAX = 0.07
-    SNAP_Z_MAX = 0.14
+    # attach only once the gripper has approached within ~2 cm
+    ATTACH_XY = 0.02
+    ATTACH_Z_MAX = 0.055              # TCP may sit slightly above the fruit
     HIDE_Z = -10.0
 
     FRUIT_MODEL = "035_apple"
@@ -57,12 +57,12 @@ class packing(Base_Task):
     # orientation that exposes a top-down contact frame (see pick_ripe_apple);
     # rotates local +y -> world +z, so mesh center offset affects ride height
     FRUIT_Q = [0.707, 0.707, 0.0, 0.0]
-    BASKET_SCALE = 0.75               # smaller breadbaskets
-    BASKET_CATCH_R = 0.08
-    BASKET_Y = -0.16
-    BASKET_X = 0.30                   # farther outboard from the belts
-    # release height: fruit center above basket floor (modest, not a high dump)
-    DROP_ABOVE_BASKET = 0.06
+    BASKET_SCALE = 1.15                # bigger opening — easier drop-in target
+    BASKET_CATCH_R = 0.12              # scaled up to match the larger basket opening
+    BASKET_Y = 0.0                    # table midline (toward the belts / "higher")
+    BASKET_X = 0.34                   # nudged out so the bigger basket clears the belts
+    # simple carry motion: lift a bit off the belt, then slide over the basket
+    PICK_LIFT = 0.12
 
     N_SLATS = 5
     APPLE_COLOR = [0.85, 0.12, 0.10]
@@ -372,11 +372,6 @@ class packing(Base_Task):
     def _end_spawn_hold(self):
         self._spawn_hold_depth = max(0, int(getattr(self, "_spawn_hold_depth", 0)) - 1)
 
-    def _drop_height(self, idx):
-        """World-z for fruit center when releasing above the basket."""
-        ftype = self.item_types[idx]
-        return float(self.basket_base_z[ftype] + self.fruit_r + self.DROP_ABOVE_BASKET)
-
     def _despawn_off_belt(self, idx):
         """Fruit reached the near end without a pick — hide it and free the wave."""
         import os
@@ -574,8 +569,8 @@ class packing(Base_Task):
         slot = self._place_counts[ftype] + int(slot_offset)
         c = self.basket_centers[ftype]
         offsets = [
-            (0.0, 0.0), (0.02, 0.012), (-0.02, 0.012),
-            (0.02, -0.012), (-0.02, -0.012),
+            (0.0, 0.0), (0.028, 0.017), (-0.028, 0.017),
+            (0.028, -0.017), (-0.028, -0.017),
         ]
         ox, oy = offsets[slot % len(offsets)]
         return c + np.array([ox, oy], dtype=float)
@@ -585,19 +580,20 @@ class packing(Base_Task):
         cx = self.belt_cx[side]
         self._set_fruit_pose(idx, cx, self.pick_station_y, self._fruit_ride_z)
         try:
+            # hover close enough that a short descend can reach the attach distance
             pre_pose, _ = self.choose_grasp_pose(
-                self.items[idx], arm_tag=arm, pre_dis=0.12, target_dis=0.0,
+                self.items[idx], arm_tag=arm, pre_dis=0.05, target_dis=0.0,
             )
         finally:
             self._restore_fruit_stream_pose(idx)
         return pre_pose
 
     def _wait_fruit_at_station(self, idx, side):
-        """Dwell until fruit is near the station. Fruit keeps moving (no pause)."""
+        """Dwell until the fruit nears the pick station (belt keeps moving)."""
         import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         speed = max(self.belt_speed[side], 1e-6)
-        arrive_lead = 100.0 * speed
+        arrive_lead = 60.0 * speed  # small lead so the reach can still catch it
         max_wait = int((self.BELT_Y_FAR - self.BELT_Y_NEAR) / speed) + 80
         for _ in range(max_wait):
             y = self._item_y[idx]
@@ -612,25 +608,57 @@ class packing(Base_Task):
             self._belt_dwell(max(1, self.advance_every))
         return False
 
+    def _wait_pair_at_station(self, idx_l, idx_r):
+        """Dwell until both fruits near the pick station together."""
+        speed = max(min(self.belt_speed.values()), 1e-6)
+        arrive_lead = 60.0 * speed
+        max_wait = int((self.BELT_Y_FAR - self.BELT_Y_NEAR) / speed) + 100
+        for _ in range(max_wait):
+            yl, yr = self._item_y[idx_l], self._item_y[idx_r]
+            if yl is None or yr is None:
+                return False
+            if yl < self.pick_y_end or yr < self.pick_y_end:
+                return False
+            if yl <= self.pick_station_y + arrive_lead and yr <= self.pick_station_y + arrive_lead:
+                return True
+            self._belt_dwell(max(1, self.advance_every))
+        return False
+
     def _tcp_near_fruit(self, idx, arm):
-        """True if the gripper TCP is close enough to snap-capture the fruit."""
+        """True if the gripper has approached close enough to attach (~2 cm)."""
         arm_name = "left" if str(arm) == "left" else "right"
         tcp = self._tcp_pos(arm_name)
         fp = np.array(self.items[idx].get_pose().p, dtype=float)
         xy = float(np.linalg.norm(fp[:2] - tcp[:2]))
         dz = float(tcp[2] - fp[2])
-        return xy <= self.SNAP_XY_MAX and 0.0 <= dz <= self.SNAP_Z_MAX
+        return xy <= self.ATTACH_XY and 0.0 <= dz <= self.ATTACH_Z_MAX
 
-    def _snap_fruit_into_gripper(self, idx, arm):
-        """Place the still-moving fruit between the fingers and weld it on."""
+    def _fruit_gripper_dist(self, idx, arm):
+        arm_name = "left" if str(arm) == "left" else "right"
+        tcp = self._tcp_pos(arm_name)
+        fp = np.array(self.items[idx].get_pose().p, dtype=float)
+        xy = float(np.linalg.norm(fp[:2] - tcp[:2]))
+        dz = float(tcp[2] - fp[2])
+        return xy, dz
+
+    def _plan_final_grasp(self, idx, arm):
+        """Grasp pose right at the fruit's current position (no teleport)."""
+        try:
+            _, grasp_pose = self.choose_grasp_pose(
+                self.items[idx], arm_tag=arm, pre_dis=0.05, target_dis=0.0,
+            )
+        except Exception:
+            return None
+        return grasp_pose
+
+    def _attach_fruit_to_gripper(self, idx, arm):
+        """Place fruit between the fingers and weld (no gripper close — fast)."""
         import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         arm_name = "left" if str(arm) == "left" else "right"
         tcp = self._tcp_pos(arm_name)
-        # nest the fruit in the gripper center, just below the TCP
         pos = tcp.copy()
         pos[2] -= 0.015
-        # leave the belt stream immediately so close_gripper steps cannot roll it away
         self._item_y[idx] = None
         self.items[idx].actor.set_pose(sapien.Pose(pos.tolist(), self.FRUIT_Q))
         rigid = self._item_comps[idx]
@@ -645,140 +673,114 @@ class packing(Base_Task):
                 )
             except Exception:
                 pass
-        if dbg:
-            print(f"[packing]  snap {self.item_types[idx]}_{idx} into "
-                  f"{arm_name} tcp={np.round(tcp, 3)}", flush=True)
-        self.plan_success = True
-        self.move(self.close_gripper(arm, pos=0.0))
-        self.plan_success = True
-        # re-seat after close (fingers may shift TCP slightly) then weld
-        tcp = self._tcp_pos(arm_name)
-        pos = tcp.copy()
-        pos[2] -= 0.015
-        self.items[idx].actor.set_pose(sapien.Pose(pos.tolist(), self.FRUIT_Q))
         self._weld_fruit_to_ee(idx, arm)
+        if dbg:
+            print(f"[packing]  attach {self.item_types[idx]}_{idx} at "
+                  f"{arm_name} tcp={np.round(tcp, 3)}", flush=True)
 
-    def _track_toward_fruit(self, idx, arm):
-        """One hop that follows the moving fruit down-belt and down in z."""
-        belt = self.item_sides[idx]
-        speed = max(self.belt_speed[belt], 1e-6)
-        y = self._item_y[idx]
-        if y is None:
-            return None
-        arm_name = "left" if str(arm) == "left" else "right"
-        ee = self._ee_pos(arm_name)
-        tcp = self._tcp_pos(arm_name)
-        fp = np.array(self.items[idx].get_pose().p, dtype=float)
-        # aim slightly ahead along the belt; target TCP just above the fruit
-        aim_y = float(y) - 20.0 * speed
-        aim_x = self.belt_cx[belt]
-        aim_tcp_z = self._fruit_ride_z + 0.03
-        # convert TCP aim -> planning-EE displacement (TCP is ~0.12 further along approach)
-        dz_tcp = aim_tcp_z - float(tcp[2])
-        return (
-            float(np.clip(aim_x - ee[0], -0.12, 0.12)),
-            float(np.clip(aim_y - ee[1], -0.12, 0.12)),
-            float(np.clip(dz_tcp, -0.10, 0.06)),
-            float(np.linalg.norm(fp[:2] - tcp[:2])),
-        )
-
-    def _chase_and_snap(self, idx, arm):
-        """Follow a still-moving fruit; when close, snap it into the gripper."""
-        import os
-        dbg = bool(os.environ.get("PACKING_DEBUG"))
-        lose_y = self.BELT_Y_NEAR + 0.02
-
-        for hop in range(14):
-            y = self._item_y[idx]
-            if y is None or y < lose_y:
-                if dbg:
-                    print(f"[packing]  chase lost y={y}", flush=True)
-                return False
-            if self._tcp_near_fruit(idx, arm):
-                self._snap_fruit_into_gripper(idx, arm)
-                return True
-            hop_info = self._track_toward_fruit(idx, arm)
-            if hop_info is None:
-                return False
-            dx, dy, dz, xy = hop_info
-            if dbg and hop % 3 == 0:
-                print(f"[packing]  chase hop={hop} xy={xy:.3f} y={y:.3f}",
-                      flush=True)
-            self.move(self.move_by_displacement(
-                arm, x=dx, y=dy, z=dz, move_axis="world",
-            ))
-            self.plan_success = True
-
-        if self._tcp_near_fruit(idx, arm):
-            self._snap_fruit_into_gripper(idx, arm)
-            return True
-        # last chance: still roughly under the gripper → force snap
-        if self._item_y[idx] is not None and self._item_y[idx] >= lose_y:
+    def _close_on_attached(self, *arm_idx_pairs):
+        """Close gripper(s) on already-attached fruit and re-seat the weld."""
+        acts = []
+        for arm, idx in arm_idx_pairs:
+            if idx is None:
+                continue
+            acts.append(self.close_gripper(arm, pos=0.0))
+        if not acts:
+            return
+        self.plan_success = True
+        if len(acts) == 1:
+            self.move(acts[0])
+        else:
+            self.move(*acts)
+        self.plan_success = True
+        for arm, idx in arm_idx_pairs:
+            if idx is None:
+                continue
             arm_name = "left" if str(arm) == "left" else "right"
             tcp = self._tcp_pos(arm_name)
-            fp = np.array(self.items[idx].get_pose().p, dtype=float)
-            if (float(np.linalg.norm(fp[:2] - tcp[:2])) <= 0.10
-                    and float(tcp[2] - fp[2]) <= 0.18):
+            pos = tcp.copy()
+            pos[2] -= 0.015
+            self.items[idx].actor.set_pose(sapien.Pose(pos.tolist(), self.FRUIT_Q))
+            self._weld_fruit_to_ee(idx, arm)
+
+    def _snap_fruit_into_gripper(self, idx, arm):
+        """Attach fruit then close the gripper (single-arm path)."""
+        self._attach_fruit_to_gripper(idx, arm)
+        self._close_on_attached((arm, idx))
+
+    def _reach_and_attach(self, idx, arm):
+        """Reach straight for the fruit; attach once the gripper ends up close.
+
+        A plain move-to-grasp-pose motion (like reaching for any static
+        object) — at most one extra correction reach if the fruit rolled a
+        little further while the arm was moving.
+        """
+        import os
+        dbg = bool(os.environ.get("PACKING_DEBUG"))
+        for attempt in range(3):
+            if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
+                return False
+            grasp_pose = self._plan_final_grasp(idx, arm)
+            if grasp_pose is None:
+                if dbg:
+                    print("[packing]  no final grasp pose", flush=True)
+                return False
+            self.plan_success = True
+            self.move(self.move_to_pose(arm, grasp_pose))
+            self.plan_success = True
+            if self._item_y[idx] is not None and self._tcp_near_fruit(idx, arm):
                 self._snap_fruit_into_gripper(idx, arm)
                 return True
         if dbg:
-            print("[packing]  chase timed out without snap", flush=True)
+            print("[packing]  reach finished but not close enough to attach",
+                  flush=True)
         return False
 
-    def _chase_and_snap_pair(self, idx_l, idx_r, arm_l, arm_r):
-        """Chase both moving fruits; snap each when its gripper is close enough."""
+    def _reach_and_attach_pair(self, idx_l, idx_r, arm_l, arm_r):
+        """Reach for both fruits together; attach whichever ends up close.
+
+        Both arms attach (without closing) as soon as they are near enough,
+        then both grippers close together so one fruit never has to wait on
+        the other's gripper-close motion.
+        """
         import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
-        lose_y = self.BELT_Y_NEAR + 0.02
         got_l = got_r = False
-
-        for hop in range(14):
-            yl, yr = self._item_y[idx_l], self._item_y[idx_r]
-            # already snapped fruits have item_y=None
-            if not got_l and (yl is None or yl < lose_y):
-                pass
-            if not got_r and (yr is None or yr < lose_y):
-                pass
-            if not got_l and self._item_y[idx_l] is not None and self._tcp_near_fruit(idx_l, arm_l):
-                self._snap_fruit_into_gripper(idx_l, arm_l)
-                got_l = True
-            if not got_r and self._item_y[idx_r] is not None and self._tcp_near_fruit(idx_r, arm_r):
-                self._snap_fruit_into_gripper(idx_r, arm_r)
-                got_r = True
-            if got_l and got_r:
-                return True, True
-
-            acts_l = acts_r = None
-            if not got_l and self._item_y[idx_l] is not None and self._item_y[idx_l] >= lose_y:
-                hl = self._track_toward_fruit(idx_l, arm_l)
-                if hl is not None:
-                    acts_l = self.move_by_displacement(
-                        arm_l, x=hl[0], y=hl[1], z=hl[2], move_axis="world",
-                    )
-            if not got_r and self._item_y[idx_r] is not None and self._item_y[idx_r] >= lose_y:
-                hr = self._track_toward_fruit(idx_r, arm_r)
-                if hr is not None:
-                    acts_r = self.move_by_displacement(
-                        arm_r, x=hr[0], y=hr[1], z=hr[2], move_axis="world",
-                    )
-            if acts_l is not None and acts_r is not None:
-                self.move(acts_l, acts_r)
-            elif acts_l is not None:
-                self.move(acts_l)
-            elif acts_r is not None:
-                self.move(acts_r)
-            else:
+        for attempt in range(3):
+            need_l = (not got_l and self._item_y[idx_l] is not None
+                      and self._item_y[idx_l] >= self.pick_y_end)
+            need_r = (not got_r and self._item_y[idx_r] is not None
+                      and self._item_y[idx_r] >= self.pick_y_end)
+            if not need_l and not need_r:
+                break
+            pose_l = self._plan_final_grasp(idx_l, arm_l) if need_l else None
+            pose_r = self._plan_final_grasp(idx_r, arm_r) if need_r else None
+            acts = []
+            if pose_l is not None:
+                acts.append(self.move_to_pose(arm_l, pose_l))
+            if pose_r is not None:
+                acts.append(self.move_to_pose(arm_r, pose_r))
+            if not acts:
                 break
             self.plan_success = True
+            self.move(*acts)
+            self.plan_success = True
+            if need_l and self._item_y[idx_l] is not None and self._tcp_near_fruit(idx_l, arm_l):
+                self._attach_fruit_to_gripper(idx_l, arm_l)
+                got_l = True
+            if need_r and self._item_y[idx_r] is not None and self._tcp_near_fruit(idx_r, arm_r):
+                self._attach_fruit_to_gripper(idx_r, arm_r)
+                got_r = True
 
-        if not got_l and self._item_y[idx_l] is not None and self._tcp_near_fruit(idx_l, arm_l):
-            self._snap_fruit_into_gripper(idx_l, arm_l)
-            got_l = True
-        if not got_r and self._item_y[idx_r] is not None and self._tcp_near_fruit(idx_r, arm_r):
-            self._snap_fruit_into_gripper(idx_r, arm_r)
-            got_r = True
+        pairs = []
+        if got_l:
+            pairs.append((arm_l, idx_l))
+        if got_r:
+            pairs.append((arm_r, idx_r))
+        if pairs:
+            self._close_on_attached(*pairs)
         if dbg:
-            print(f"[packing]  pair chase done gotL={got_l} gotR={got_r}", flush=True)
+            print(f"[packing]  pair reach done gotL={got_l} gotR={got_r}", flush=True)
         return got_l, got_r
 
     def _settle_after_drop(self, idx, target_xy):
@@ -820,94 +822,13 @@ class packing(Base_Task):
                 idx, self.belt_cx[side], self.BELT_Y_FAR, self._fruit_ride_z
             )
 
-    def _move_fruit_above_basket(self, idx, arm, target_xy):
-        """Carry welded fruit to a modest height above its basket (XY then Z)."""
-        fruit = self.items[idx]
-        # clear the belt
-        self.move(self.move_by_displacement(arm, z=0.10, move_axis="world"))
-        self.plan_success = True
-        for _ in range(4):
-            ap = np.array(fruit.get_pose().p, dtype=float)
-            dxy = target_xy - ap[:2]
-            if float(np.linalg.norm(dxy)) < 0.02:
-                break
-            self.move(self.move_by_displacement(
-                arm,
-                x=float(np.clip(dxy[0], -0.16, 0.16)),
-                y=float(np.clip(dxy[1], -0.16, 0.16)),
-                move_axis="world",
-            ))
-            self.plan_success = True
-        drop_z = self._drop_height(idx)
-        for _ in range(4):
-            fz = float(fruit.get_pose().p[2])
-            dz = drop_z - fz
-            if abs(dz) < 0.012:
-                break
-            self.move(self.move_by_displacement(
-                arm, z=float(np.clip(dz, -0.14, 0.08)), move_axis="world",
-            ))
-            self.plan_success = True
-        # gripper is above the basket — next fruit wave may spawn
-        self._over_basket[idx] = True
-
-    def _move_pair_above_baskets(self, idx_l, idx_r, arm_l, arm_r, target_l, target_r):
-        """Carry both welded fruits to modest heights above their baskets."""
-        # clear the belts
-        self.move(
-            self.move_by_displacement(arm_l, z=0.10, move_axis="world"),
-            self.move_by_displacement(arm_r, z=0.10, move_axis="world"),
-        )
-        self.plan_success = True
-        for _ in range(4):
-            pl = np.array(self.items[idx_l].get_pose().p, dtype=float)
-            pr = np.array(self.items[idx_r].get_pose().p, dtype=float)
-            dl = target_l - pl[:2]
-            dr = target_r - pr[:2]
-            if (float(np.linalg.norm(dl)) < 0.02
-                    and float(np.linalg.norm(dr)) < 0.02):
-                break
-            self.move(
-                self.move_by_displacement(
-                    arm_l,
-                    x=float(np.clip(dl[0], -0.16, 0.16)),
-                    y=float(np.clip(dl[1], -0.16, 0.16)),
-                    move_axis="world",
-                ),
-                self.move_by_displacement(
-                    arm_r,
-                    x=float(np.clip(dr[0], -0.16, 0.16)),
-                    y=float(np.clip(dr[1], -0.16, 0.16)),
-                    move_axis="world",
-                ),
-            )
-            self.plan_success = True
-        drop_l = self._drop_height(idx_l)
-        drop_r = self._drop_height(idx_r)
-        for _ in range(4):
-            zl = float(self.items[idx_l].get_pose().p[2])
-            zr = float(self.items[idx_r].get_pose().p[2])
-            dzl = drop_l - zl
-            dzr = drop_r - zr
-            if abs(dzl) < 0.012 and abs(dzr) < 0.012:
-                break
-            self.move(
-                self.move_by_displacement(
-                    arm_l, z=float(np.clip(dzl, -0.14, 0.08)), move_axis="world",
-                ),
-                self.move_by_displacement(
-                    arm_r, z=float(np.clip(dzr, -0.14, 0.08)), move_axis="world",
-                ),
-            )
-            self.plan_success = True
-        self._over_basket[idx_l] = True
-        self._over_basket[idx_r] = True
-
     def _intercept_and_grasp(self, idx, arm, side):
-        """Hover above the belt, chase the still-moving fruit, snap when close.
+        """Hover above the belt, wait for the fruit, then reach and attach.
 
-        Fruit never pauses on the belt. When the gripper TCP is near enough,
-        the fruit is placed between the fingers and welded.
+        The fruit never pauses on the belt. The arm hovers over the pick
+        station, waits for the fruit to arrive, then does a single reaching
+        move to it; once the gripper ends up within ~2 cm, the fruit is
+        placed between the fingers and welded.
         """
         import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
@@ -942,21 +863,48 @@ class packing(Base_Task):
         if not self._wait_fruit_at_station(idx, side):
             return False
 
-        # Arm is already hovering at the station; fruit has rolled underneath.
-        # Snap it between the fingers — no pause, no multi-hop chase.
-        if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
-            return False
-        self._snap_fruit_into_gripper(idx, arm)
-        return True
+        return self._reach_and_attach(idx, arm)
+
+    def _slide_over_basket(self, idx, arm, target_xy, tries=3):
+        """Displacement move(s) toward the basket XY (retries if one plan undershoots)."""
+        for _ in range(tries):
+            fp = np.array(self.items[idx].get_pose().p, dtype=float)
+            dxy = target_xy - fp[:2]
+            if float(np.linalg.norm(dxy)) < 0.02:
+                break
+            self.move(self.move_by_displacement(
+                arm, x=float(dxy[0]), y=float(dxy[1]), move_axis="world",
+            ))
+            self.plan_success = True
+
+    def _slide_pair_over_baskets(self, idx_l, idx_r, arm_l, arm_r, target_l, target_r, tries=3):
+        """Displacement move(s) for both arms toward their basket XY, together."""
+        for _ in range(tries):
+            pl = np.array(self.items[idx_l].get_pose().p, dtype=float)
+            pr = np.array(self.items[idx_r].get_pose().p, dtype=float)
+            dl = target_l - pl[:2]
+            dr = target_r - pr[:2]
+            if float(np.linalg.norm(dl)) < 0.02 and float(np.linalg.norm(dr)) < 0.02:
+                break
+            self.move(
+                self.move_by_displacement(arm_l, x=float(dl[0]), y=float(dl[1]), move_axis="world"),
+                self.move_by_displacement(arm_r, x=float(dr[0]), y=float(dr[1]), move_axis="world"),
+            )
+            self.plan_success = True
 
     def _carry_and_drop(self, idx, arm, target_xy):
-        """Carry welded fruit above the basket, release from a modest height, settle."""
-        self._move_fruit_above_basket(idx, arm, target_xy)
+        """Lift a bit, slide over the basket via displacement, then release."""
+        self.move(self.move_by_displacement(arm, z=self.PICK_LIFT, move_axis="world"))
+        self.plan_success = True
+
+        self._slide_over_basket(idx, arm, target_xy)
+        # gripper is above the basket — next fruit wave may spawn
+        self._over_basket[idx] = True
+
         self.move(self.open_gripper(arm))
         self._release_fruit(idx)
         self._belt_dwell(70)
         self._settle_after_drop(idx, target_xy)
-        self.move(self.move_by_displacement(arm, z=0.06, move_axis="arm"))
         self.move(self.back_to_origin(arm))
         self.plan_success = True
 
@@ -1049,26 +997,10 @@ class packing(Base_Task):
                 self._pack_item(idx_r)
                 return
 
-            # wait until both fruits are near the station (they keep rolling)
-            speed = max(min(self.belt_speed.values()), 1e-6)
-            max_wait = int((self.BELT_Y_FAR - self.BELT_Y_NEAR) / speed) + 100
-            arrive_lead = 100.0 * speed
-            for _ in range(max_wait):
-                yl, yr = self._item_y[idx_l], self._item_y[idx_r]
-                if yl is None or yr is None:
-                    break
-                if yl < self.pick_y_end or yr < self.pick_y_end:
-                    break
-                if (yl <= self.pick_station_y + arrive_lead
-                        and yr <= self.pick_station_y + arrive_lead):
-                    break
-                self._belt_dwell(max(1, self.advance_every))
-
-            if (self._item_y[idx_l] is None or self._item_y[idx_r] is None
-                    or self._item_y[idx_l] < self.pick_y_end
-                    or self._item_y[idx_r] < self.pick_y_end):
+            if not self._wait_pair_at_station(idx_l, idx_r):
                 if dbg:
-                    print("[packing]  pair: fruit missed — fallback single", flush=True)
+                    print("[packing]  pair: wait at station failed — fallback",
+                          flush=True)
                 self._grasping_idxs.discard(idx_l)
                 self._grasping_idxs.discard(idx_r)
                 if self._item_y[idx_l] is not None:
@@ -1077,12 +1009,12 @@ class packing(Base_Task):
                     self._pack_item(idx_r)
                 return
 
-            # Both fruits under the hovering grippers — snap in place (no chase).
-            if (self._item_y[idx_l] is None or self._item_y[idx_r] is None
-                    or self._item_y[idx_l] < self.pick_y_end
-                    or self._item_y[idx_r] < self.pick_y_end):
+            ok_l, ok_r = self._reach_and_attach_pair(idx_l, idx_r, left, right)
+
+            if not ok_l and not ok_r:
                 if dbg:
-                    print("[packing]  pair: missed at snap — fallback", flush=True)
+                    print("[packing]  pair: neither close enough — fallback",
+                          flush=True)
                 self._grasping_idxs.discard(idx_l)
                 self._grasping_idxs.discard(idx_r)
                 if self._item_y[idx_l] is not None:
@@ -1091,14 +1023,44 @@ class packing(Base_Task):
                     self._pack_item(idx_r)
                 return
 
-            self._snap_fruit_into_gripper(idx_l, left)
-            self._snap_fruit_into_gripper(idx_r, right)
+            if ok_l and not ok_r:
+                if dbg:
+                    print("[packing]  pair: only left attached", flush=True)
+                # the other fruit is still time-critical on the belt — try it
+                # first; the attached one is welded and safe to carry after
+                self._grasping_idxs.discard(idx_r)
+                if self._item_y[idx_r] is not None:
+                    self._pack_item(idx_r)
+                else:
+                    self.move(self.back_to_origin(right))
+                    self.plan_success = True
+                self._carry_and_drop(idx_l, left, target_l)
+                return
+            if ok_r and not ok_l:
+                if dbg:
+                    print("[packing]  pair: only right attached", flush=True)
+                self._grasping_idxs.discard(idx_l)
+                if self._item_y[idx_l] is not None:
+                    self._pack_item(idx_l)
+                else:
+                    self.move(self.back_to_origin(left))
+                    self.plan_success = True
+                self._carry_and_drop(idx_r, right, target_r)
+                return
+
             if dbg:
-                print("[packing]  pair: both snapped into grippers", flush=True)
+                print("[packing]  pair: both attached", flush=True)
 
-            self._move_pair_above_baskets(
-                idx_l, idx_r, left, right, target_l, target_r,
+            # lift a bit, slide over the baskets via displacement, release
+            self.move(
+                self.move_by_displacement(left, z=self.PICK_LIFT, move_axis="world"),
+                self.move_by_displacement(right, z=self.PICK_LIFT, move_axis="world"),
             )
+            self.plan_success = True
+            self._slide_pair_over_baskets(idx_l, idx_r, left, right, target_l, target_r)
+            self._over_basket[idx_l] = True
+            self._over_basket[idx_r] = True
+
             self.move(self.open_gripper(left), self.open_gripper(right))
             self._release_fruit(idx_l)
             self._release_fruit(idx_r)
@@ -1106,11 +1068,6 @@ class packing(Base_Task):
             self._settle_after_drop(idx_l, target_l)
             self._settle_after_drop(idx_r, target_r)
 
-            self.move(
-                self.move_by_displacement(left, z=0.06, move_axis="arm"),
-                self.move_by_displacement(right, z=0.06, move_axis="arm"),
-            )
-            self.plan_success = True
             self.move(self.back_to_origin(left), self.back_to_origin(right))
             self.plan_success = True
         finally:
