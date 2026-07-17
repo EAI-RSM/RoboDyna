@@ -17,6 +17,7 @@ class dispense_gummy(Base_Task):
     """
 
     TUBE_CAPACITY_DEFAULT = 4
+    DIFFICULTY_OPTION_DEFAULT = 1
     BALL_DIAMETER_DEFAULT = 0.03
     BALL_SLOT_GAP_DEFAULT = 0.003
     TUBE_INNER_RADIUS_DEFAULT = 0.017
@@ -35,13 +36,15 @@ class dispense_gummy(Base_Task):
     KEY_HALF_DEFAULT = [0.028, 0.028, 0.016]
     KEY_HOVER_DIS_DEFAULT = 0.06
     KEY_PRESS_DEPTH_DEFAULT = 0.055
+    KEY_TRAVEL_DEFAULT = 0.008
+    KEY_SPRING_STEP_DEFAULT = 0.0015
     BELT_THICKNESS_DEFAULT = 0.015
     BELT_MOVE_STEPS_DEFAULT = 30
     BELT_KEY_X_DEFAULT = 0.26
     BELT_KEY_Y_LEFT_DEFAULT = -0.14
     BELT_KEY_Y_RIGHT_DEFAULT = -0.06
     BELT_KEY_PRESS_XY_DEFAULT = 0.045
-    BELT_KEY_PRESS_DZ_DEFAULT = 0.15
+    BELT_KEY_PRESS_DZ_DEFAULT = 0.17
     EE_TO_TCP = 0.12
 
     DISPENSE_STEPS_DEFAULT = 24
@@ -81,8 +84,12 @@ class dispense_gummy(Base_Task):
         self._bowl_target_x = 0.0
         self._bowl_station_idx = 0
         self._belt_key_latched = {"left": False, "right": False}
+        self._dispense_key_latched = False
+        self._belt_key_depression = {"left": 0.0, "right": 0.0}
+        self._dispense_key_depression = 0.0
         self.belt_keys = {}
         self.belt_key_xy = {}
+        self.belt_key_arrows = {}
         super()._init_task_env_(**kwags)
         self._configure_observer_camera()
 
@@ -144,14 +151,15 @@ class dispense_gummy(Base_Task):
             return None
         return self._tube_stack_colors[side][idx]
 
-    def _current_target_side(self):
-        target_sides = [
+    def _current_target_sides(self):
+        return [
             side for side in self._tube_order
             if self._current_bottom_color(side) == self.target_color
         ]
-        if len(target_sides) != 1:
-            return None
-        return target_sides[0]
+
+    def _current_target_side(self):
+        target_sides = self._current_target_sides()
+        return target_sides[0] if len(target_sides) == 1 else None
 
     def _bowl_center_world(self):
         if self.bowl is None:
@@ -196,6 +204,58 @@ class dispense_gummy(Base_Task):
                 self._request_bowl_station(-1 if side == "left" else 1)
             self._belt_key_latched[side] = pressed
 
+    def _detect_dispense_key_press(self):
+        if getattr(self, "dispense_key", None) is None or not hasattr(self, "robot"):
+            return
+        try:
+            ee = np.asarray(self.robot.get_left_ee_pose()[:3], dtype=np.float64)
+        except Exception:
+            return
+        pressed = bool(
+            abs(ee[0] - self.key_x) <= self.belt_key_press_xy
+            and abs(ee[1] - self.key_y) <= self.belt_key_press_xy
+            and ee[2] <= self.dispense_key_top_z + self.belt_key_press_dz
+        )
+        if pressed and not self._dispense_key_latched:
+            self._request_dispense()
+        self._dispense_key_latched = pressed
+
+    def _spring_key(self, actor, depression, pressed, rest_xyz):
+        target = self.key_travel if pressed else 0.0
+        delta = float(np.clip(target - depression, -self.key_spring_step, self.key_spring_step))
+        depression = float(np.clip(depression + delta, 0.0, self.key_travel))
+        pose = actor.get_pose()
+        self._set_entity_pose(
+            actor,
+            sapien.Pose([rest_xyz[0], rest_xyz[1], rest_xyz[2] - depression], pose.q),
+        )
+        return depression
+
+    def _animate_keys(self):
+        if getattr(self, "dispense_key", None) is not None:
+            self._dispense_key_depression = self._spring_key(
+                self.dispense_key,
+                self._dispense_key_depression,
+                self._dispense_key_latched,
+                self.dispense_key_rest_xyz,
+            )
+        for side, key in self.belt_keys.items():
+            self._belt_key_depression[side] = self._spring_key(
+                key,
+                self._belt_key_depression[side],
+                self._belt_key_latched[side],
+                self.belt_key_rest_xyz[side],
+            )
+            for arrow, rest_xyz in self.belt_key_arrows.get(side, []):
+                pose = arrow.get_pose()
+                self._set_entity_pose(
+                    arrow,
+                    sapien.Pose(
+                        [rest_xyz[0], rest_xyz[1], rest_xyz[2] - self._belt_key_depression[side]],
+                        pose.q,
+                    ),
+                )
+
     def _caught_ball_pose(self, slot_idx):
         bowl_p = self._bowl_center_world()
         level = slot_idx // 4
@@ -235,6 +295,8 @@ class dispense_gummy(Base_Task):
         for side in self._tube_order:
             remaining = self._tube_records[side][self._dispensed_count[side]:]
             for slot_idx, record in enumerate(remaining):
+                if record is None:
+                    continue
                 record["state"] = "tube"
                 self._set_entity_pose(record["actor"], self._slot_pose(side, slot_idx))
 
@@ -296,18 +358,21 @@ class dispense_gummy(Base_Task):
             ("head_lower", [-0.011, -0.005], -0.75, [0.009, 0.0025, 0.001]),
         ]
         c, s = np.cos(rotation), np.sin(rotation)
+        arrows = []
         for name, (local_x, local_y), local_yaw, half_size in parts:
             x = key_x + c * local_x - s * local_y
             y = key_y + s * local_x + c * local_y
             yaw = local_yaw + rotation
             q = [np.cos(yaw / 2.0), 0.0, 0.0, np.sin(yaw / 2.0)]
-            create_visual_box(
+            arrow = create_visual_box(
                 self,
                 sapien.Pose([x, y, z], q),
                 half_size=half_size,
                 color=color,
                 name=f"{side}_arrow_{name}",
             )
+            arrows.append((arrow, [x, y, z]))
+        return arrows
 
     def _build_transparent_tube(self, name, center_xyz, radius, half_length):
         entity = sapien.Entity()
@@ -330,7 +395,8 @@ class dispense_gummy(Base_Task):
         return entity
 
     def _validate_stack_pattern(self):
-        allowed = {"yellow", "blue"}
+        alternate_color = "blue" if self.target_color == "yellow" else "yellow"
+        allowed = {self.target_color, alternate_color} if self.difficulty_option == 1 else {self.target_color, "gap"}
         lengths = [len(self._tube_stack_colors[side]) for side in self._tube_order]
         if lengths[0] != lengths[1]:
             raise ValueError("dispense_gummy requires left_stack and right_stack to have the same length")
@@ -340,17 +406,58 @@ class dispense_gummy(Base_Task):
             left_color = self._tube_stack_colors["left"][depth]
             right_color = self._tube_stack_colors["right"][depth]
             if left_color not in allowed or right_color not in allowed:
-                raise ValueError("dispense_gummy supports only yellow and blue gummy colors")
-            if {left_color, right_color} != allowed:
                 raise ValueError(
-                    "dispense_gummy requires exactly one yellow and one blue bottom ball on each press"
+                    f"dispense_gummy option {self.difficulty_option} supports only {sorted(allowed)}"
                 )
+            target_count = int(left_color == self.target_color) + int(right_color == self.target_color)
+            if target_count > 1:
+                raise ValueError(
+                    "dispense_gummy cannot place target gummies at the same depth in both tubes"
+                )
+        target_counts = [
+            sum(color == self.target_color for color in self._tube_stack_colors[side])
+            for side in self._tube_order
+        ]
+        if min(target_counts) < 1 or target_counts[0] == target_counts[1]:
+            raise ValueError(
+                "dispense_gummy requires different target-gummy counts, with at least one per tube"
+            )
+
+    def _generate_stack_pattern(self):
+        if self.tube_capacity < 3:
+            raise ValueError("dispense_gummy randomized difficulty requires tube_capacity >= 3")
+        possible_counts = [
+            (left_count, right_count)
+            for left_count in range(1, self.tube_capacity)
+            for right_count in range(1, self.tube_capacity)
+            if left_count != right_count and left_count + right_count <= self.tube_capacity
+        ]
+        left_count, right_count = possible_counts[np.random.randint(len(possible_counts))]
+        depths = np.random.permutation(self.tube_capacity)
+        left_depths = set(int(i) for i in depths[:left_count])
+        right_depths = set(int(i) for i in depths[left_count:left_count + right_count])
+        filler = (
+            ("blue" if self.target_color == "yellow" else "yellow")
+            if self.difficulty_option == 1
+            else "gap"
+        )
+        return {
+            "left": [
+                self.target_color if depth in left_depths else filler
+                for depth in range(self.tube_capacity)
+            ],
+            "right": [
+                self.target_color if depth in right_depths else filler
+                for depth in range(self.tube_capacity)
+            ],
+        }
 
     def _request_dispense(self):
         if self._active_drops:
             return
 
-        target_side = self._current_target_side()
+        target_sides = self._current_target_sides()
+        target_side = target_sides[0] if len(target_sides) == 1 else None
         bowl_side = self._bowl_aligned_side()
         event = {
             "press_index": int(len(self.press_history)),
@@ -360,7 +467,7 @@ class dispense_gummy(Base_Task):
         }
         self.press_history.append(event)
 
-        if target_side is None:
+        if len(target_sides) > 1:
             self.invalid_pattern = True
             return
 
@@ -369,6 +476,9 @@ class dispense_gummy(Base_Task):
             if idx >= len(self._tube_records[side]):
                 continue
             record = self._tube_records[side][idx]
+            self._dispensed_count[side] += 1
+            if record is None:
+                continue
             caught = bowl_side == side
             if caught:
                 end_pose = sapien.Pose(
@@ -390,8 +500,6 @@ class dispense_gummy(Base_Task):
                     "end_pose": end_pose,
                 }
             )
-            self._dispensed_count[side] += 1
-
         self._pending_restack = True
 
     def _finish_drop(self, drop):
@@ -434,6 +542,8 @@ class dispense_gummy(Base_Task):
         self.key_half = list(cfg.get("key_half", self.KEY_HALF_DEFAULT))
         self.key_hover_dis = float(cfg.get("key_hover_dis", self.KEY_HOVER_DIS_DEFAULT))
         self.key_press_depth = float(cfg.get("key_press_depth", self.KEY_PRESS_DEPTH_DEFAULT))
+        self.key_travel = float(cfg.get("key_travel", self.KEY_TRAVEL_DEFAULT))
+        self.key_spring_step = float(cfg.get("key_spring_step", self.KEY_SPRING_STEP_DEFAULT))
         self.dispense_steps = int(cfg.get("dispense_steps", self.DISPENSE_STEPS_DEFAULT))
         self.press_hold_steps = int(cfg.get("press_hold_steps", self.PRESS_HOLD_STEPS_DEFAULT))
         self.post_press_dwell = int(cfg.get("post_press_dwell", self.POST_PRESS_DWELL_DEFAULT))
@@ -447,6 +557,18 @@ class dispense_gummy(Base_Task):
         self.target_color = str(cfg.get("target_color", "yellow")).strip().lower()
         if self.target_color not in self.COLORS:
             raise ValueError("dispense_gummy target_color must be yellow or blue")
+        option = cfg.get("difficulty_option", self.DIFFICULTY_OPTION_DEFAULT)
+        option_aliases = {
+            1: 1,
+            2: 2,
+            "1": 1,
+            "2": 2,
+            "uneven_blue": 1,
+            "gaps": 2,
+        }
+        if option not in option_aliases:
+            raise ValueError("dispense_gummy difficulty_option must be 1/uneven_blue or 2/gaps")
+        self.difficulty_option = option_aliases[option]
         if self.tube_inner_radius <= self.ball_radius:
             raise ValueError("dispense_gummy tube_inner_radius must exceed the gummy radius")
 
@@ -478,14 +600,27 @@ class dispense_gummy(Base_Task):
             for side in self._tube_order
         }
 
-        self._tube_stack_colors = {
-            "left": [str(c).strip().lower() for c in cfg.get("left_stack", ["yellow", "blue", "yellow", "blue"])],
-            "right": [str(c).strip().lower() for c in cfg.get("right_stack", ["blue", "yellow", "blue", "yellow"])],
-        }
+        if "left_stack" in cfg or "right_stack" in cfg:
+            if "left_stack" not in cfg or "right_stack" not in cfg:
+                raise ValueError("dispense_gummy custom layouts require both left_stack and right_stack")
+            self._tube_stack_colors = {
+                "left": [str(c).strip().lower() for c in cfg["left_stack"]],
+                "right": [str(c).strip().lower() for c in cfg["right_stack"]],
+            }
+        else:
+            self._tube_stack_colors = self._generate_stack_pattern()
         self._validate_stack_pattern()
         self.num_presses = len(self._tube_stack_colors["left"])
-        self.total_yellow = self.num_presses
-        self.total_target = self.num_presses
+        self.total_yellow = sum(
+            color == "yellow"
+            for side in self._tube_order
+            for color in self._tube_stack_colors[side]
+        )
+        self.total_target = sum(
+            color == self.target_color
+            for side in self._tube_order
+            for color in self._tube_stack_colors[side]
+        )
 
         stack_span = self.tube_capacity * self.ball_diameter + max(0, self.tube_capacity - 1) * self.ball_slot_gap
         self.tube_half_length = 0.5 * stack_span + 0.02
@@ -588,9 +723,15 @@ class dispense_gummy(Base_Task):
             is_static=True,
             name="dispense_key_base",
         )
+        self.dispense_key_rest_xyz = [
+            self.key_x,
+            self.key_y,
+            self.table_top + self.key_half[2],
+        ]
+        self.dispense_key_top_z = self.table_top + 2.0 * self.key_half[2]
         self.dispense_key = create_box(
             self,
-            pose=sapien.Pose([self.key_x, self.key_y, self.table_top + self.key_half[2]], [1, 0, 0, 0]),
+            pose=sapien.Pose(self.dispense_key_rest_xyz, [1, 0, 0, 0]),
             half_size=self.key_half,
             color=[0.86, 0.22, 0.18],
             is_static=True,
@@ -604,6 +745,7 @@ class dispense_gummy(Base_Task):
             "right": (belt_key_x, float(cfg.get("belt_key_y_right", self.BELT_KEY_Y_RIGHT_DEFAULT))),
         }
         self.belt_key_top_z = self.table_top + 2.0 * self.key_half[2]
+        self.belt_key_rest_xyz = {}
         for side, (key_x, key_y) in self.belt_key_xy.items():
             create_box(
                 self,
@@ -613,19 +755,29 @@ class dispense_gummy(Base_Task):
                 is_static=True,
                 name=f"belt_key_base_{side}",
             )
+            self.belt_key_rest_xyz[side] = [
+                key_x,
+                key_y,
+                self.table_top + self.key_half[2],
+            ]
             self.belt_keys[side] = create_box(
                 self,
-                pose=sapien.Pose([key_x, key_y, self.table_top + self.key_half[2]]),
+                pose=sapien.Pose(self.belt_key_rest_xyz[side]),
                 half_size=self.key_half,
                 color=[0.18, 0.48, 0.82],
                 is_static=True,
                 name=f"belt_key_{side}",
             )
-            self._draw_arrow(side, key_x, key_y, self.belt_key_top_z + 0.0015)
+            self.belt_key_arrows[side] = self._draw_arrow(
+                side, key_x, key_y, self.belt_key_top_z + 0.0015
+            )
             self.add_prohibit_area(self.belt_keys[side], padding=0.04)
 
         for side in self._tube_order:
             for depth, color in enumerate(self._tube_stack_colors[side]):
+                if color == "gap":
+                    self._tube_records[side].append(None)
+                    continue
                 actor = create_sphere(
                     self,
                     pose=self._slot_pose(side, depth),
@@ -652,10 +804,15 @@ class dispense_gummy(Base_Task):
         if self.bowl is None:
             return
         self._detect_belt_key_presses()
+        self._detect_dispense_key_press()
+        self._animate_keys()
         self._advance_bowl_on_belt()
         self._update_caught_balls()
 
         if not self._active_drops:
+            if self._pending_restack:
+                self._reposition_tube_balls()
+                self._pending_restack = False
             return
 
         remaining_drops = []
@@ -682,25 +839,36 @@ class dispense_gummy(Base_Task):
     # ------------------------------------------------------------------ policy
     def play_once(self):
         left = ArmTag("left")
+        right = ArmTag("right")
 
         self.move(self.close_gripper(left))
+        self.move(self.close_gripper(right))
         self.move(self._hover_key())
 
         for _ in range(self.num_presses):
-            target_side = self._current_target_side()
-            if target_side is None:
+            target_sides = self._current_target_sides()
+            if len(target_sides) > 1:
                 self.invalid_pattern = True
                 break
 
-            target_station = 1 if target_side == "left" else 2
-            while self._bowl_station_idx < target_station:
+            if target_sides:
+                target_station = 1 if target_sides[0] == "left" else 2
+            else:
+                # No target gummy at this depth: park beyond the left tube and advance one slot.
+                target_station = 0
+            attempts = 0
+            while self._bowl_station_idx < target_station and attempts < len(self.bowl_stations):
                 self._press_belt_key("right")
-            while self._bowl_station_idx > target_station:
+                attempts += 1
+            while self._bowl_station_idx > target_station and attempts < 2 * len(self.bowl_stations):
                 self._press_belt_key("left")
+                attempts += 1
+            if self._bowl_station_idx != target_station:
+                self.invalid_pattern = True
+                break
 
             self.move(self._hover_key())
             self.move(self.move_by_displacement(left, z=-self.key_press_depth))
-            self._request_dispense()
             self._dwell(self.press_hold_steps)
             self.move(self.move_by_displacement(left, z=self.key_press_depth))
             self._dwell(self.dispense_steps + self.post_press_dwell)
@@ -734,6 +902,10 @@ class dispense_gummy(Base_Task):
             "blue_caught": int(self.blue_caught),
             "blue_dropped": int(self.blue_dropped),
             "target_color": self.target_color,
+            "difficulty_option": int(self.difficulty_option),
+            "left_layout": list(self._tube_stack_colors["left"]),
+            "right_layout": list(self._tube_stack_colors["right"]),
+            "total_target": int(self.total_target),
             "invalid_pattern": bool(self.invalid_pattern),
             "press_count": int(len(self.press_history)),
             "bowl_station": int(self._bowl_station_idx),

@@ -8,10 +8,10 @@ import numpy as np
 class whack_a_mole(Base_Task):
     """Whack-a-mole. A fixed green board with a grid of holes spans both arms' reach.
     Up to N moles (default 4) continuously bob out of / back into their holes. Each
-    arm starts with a cube gripped between its fingers (slightly larger than a hole)
-    so the gripper cannot enter a hole. A hit requires physical mesh contact between
-    a held cube and a mole that is above the board surface; hovering or buried moles
-    do not count. Hit moles turn green and stay down.
+    arm starts with a blue cube gripped between its fingers (slightly larger than a
+    hole) so the gripper cannot enter a hole. A hit requires physical mesh contact
+    between a held cube and a mole that is above the board surface; hovering or
+    buried moles do not count. Hit moles turn green and stay down.
 
     Optional rabbit distractors (num_distractors, up to M) occupy other holes and
     also bob. Touching a rabbit turns it red and fails the episode.
@@ -33,7 +33,7 @@ class whack_a_mole(Base_Task):
     HOLE_COUNT_DEFAULT = 9
     HOLE_SIZE_DEFAULT = 0.055
     HOLE_BAR_THICKNESS_DEFAULT = 0.02
-    CUBE_HOLE_SCALE_DEFAULT = 1.30  # cube side / hole_size (>1 so it can't enter a hole)
+    CUBE_HOLE_SCALE_DEFAULT = 1.08  # cube side / hole_size (>1 so it can't enter a hole)
 
     BOARD_HALF = [0.30, 0.13, 0.048]
     BOARD_COLOR = [0.22, 0.62, 0.28]  # green box
@@ -44,11 +44,11 @@ class whack_a_mole(Base_Task):
     MOLE_Q = [0.70710678, 0.70710678, 0.0, 0.0]
     MOLE_COLOR = [0.45, 0.32, 0.22]
     MOLE_TOUCHED_COLOR = [0.20, 0.85, 0.28]  # green when hit
-    RABBIT_COLOR = [0.82, 0.74, 0.62]         # cream / light brown
+    RABBIT_COLOR = [0.98, 0.82, 0.05]         # yellow (distinct from brown moles)
     RABBIT_TOUCHED_COLOR = [0.92, 0.12, 0.10]  # red on illegal touch
-    CUBE_COLOR = [1.0, 0.95, 0.05]   # bright yellow — held mallet cubes
+    CUBE_COLOR = [0.15, 0.45, 0.95]            # blue — held mallet cubes
     MOLE_HEIGHT = 0.0585          # authored world height after scale
-    RABBIT_HEIGHT = 0.042         # authored world height after scale
+    RABBIT_HEIGHT = 0.0585        # match mole size
     POP_SPEED = 0.08              # m/s while rising / falling
 
     def setup_demo(self, **kwags):
@@ -163,9 +163,13 @@ class whack_a_mole(Base_Task):
         self.table_top = 0.74 + self.table_z_bias
 
         self.create_board()
-        # Hide the yellow wrist camera-mount meshes (look like yellow cubes on the EE).
+        # Hide yellow wrist mounts + gray finger-pad meshes so only the blue
+        # mallet cube reads as the in-hand object (pads otherwise look like a
+        # gray cube covering the painted mallet).
         self._hide_wrist_camera_mounts()
-        # cube slightly larger than a hole so it seats on the board / mole top
+        self._gray_out_arm_yellow_parts()
+        self._hide_finger_pad_visuals()
+        # Mallet cube: slightly larger than a hole so it cannot fall in.
         self.cube_side = float(self.hole_size) * self.cube_hole_scale
         self.cube_half = self.cube_side * 0.5
         if self.num_moles > self.num_holes:
@@ -450,6 +454,27 @@ class whack_a_mole(Base_Task):
         q = mat2quat(T[:3, :3])  # [w,x,y,z]
         return sapien.Pose(T[:3, 3].tolist(), q.tolist())
 
+    def _disable_link_render(self, entity, link_name):
+        """Disable all render bodies on a named robot link (collision kept)."""
+        try:
+            link = entity.find_link_by_name(link_name)
+        except Exception:
+            link = None
+        if link is None:
+            return
+        ent = link.entity if hasattr(link, "entity") else link
+        for comp in ent.get_components():
+            if not isinstance(comp, sapien.render.RenderBodyComponent):
+                continue
+            try:
+                comp.disable()
+            except Exception:
+                pass
+            try:
+                comp.visibility = 0.0
+            except Exception:
+                pass
+
     def _hide_wrist_camera_mounts(self):
         """Disable any remaining camera-mount / camera meshes on each wrist."""
         robot = getattr(self, "robot", None)
@@ -459,6 +484,43 @@ class whack_a_mole(Base_Task):
             if entity is None:
                 continue
             for link_name in ("camera_base", "camera"):
+                self._disable_link_render(entity, link_name)
+
+    def _hide_finger_pad_visuals(self):
+        """Hide gray WSG finger / guide meshes that look like a held gray cube."""
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return
+        for entity in (robot.left_entity, robot.right_entity):
+            if entity is None:
+                continue
+            for link_name in (
+                    "finger_left", "finger_right",
+                    "gripper_left", "gripper_right"):
+                self._disable_link_render(entity, link_name)
+
+    @staticmethod
+    def _is_yellowish(rgba):
+        if rgba is None or len(rgba) < 3:
+            return False
+        r, g, b = float(rgba[0]), float(rgba[1]), float(rgba[2])
+        return r > 0.55 and g > 0.35 and b < 0.45 and (r + g) > (b + 0.55)
+
+    def _gray_out_arm_yellow_parts(self):
+        """Recolor yellow UR wrist/forearm plastic so it no longer looks like a cube."""
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return
+        gray = [0.45, 0.45, 0.47, 1.0]
+        link_names = (
+            "wrist_1_link", "wrist_2_link", "wrist_3_link",
+            "forearm_link", "upper_arm_link", "ee_link",
+            "wsg_50_base_link",
+        )
+        for entity in (robot.left_entity, robot.right_entity):
+            if entity is None:
+                continue
+            for link_name in link_names:
                 try:
                     link = entity.find_link_by_name(link_name)
                 except Exception:
@@ -467,42 +529,120 @@ class whack_a_mole(Base_Task):
                     continue
                 ent = link.entity if hasattr(link, "entity") else link
                 for comp in ent.get_components():
-                    if isinstance(comp, sapien.render.RenderBodyComponent):
+                    if not isinstance(comp, sapien.render.RenderBodyComponent):
+                        continue
+                    for shape in comp.render_shapes:
+                        parts = []
                         try:
-                            comp.disable()
+                            parts = list(shape.get_parts())
                         except Exception:
-                            pass
-                        try:
-                            comp.visibility = 0.0
-                        except Exception:
-                            pass
+                            parts = []
+                        mats = []
+                        if parts:
+                            for part in parts:
+                                try:
+                                    mats.append(part.get_material())
+                                except Exception:
+                                    try:
+                                        mats.append(part.material)
+                                    except Exception:
+                                        pass
+                        else:
+                            try:
+                                mats.append(shape.get_material())
+                            except Exception:
+                                try:
+                                    mats.append(shape.material)
+                                except Exception:
+                                    pass
+                        for mat in mats:
+                            if mat is None:
+                                continue
+                            try:
+                                bc = list(mat.base_color)
+                            except Exception:
+                                try:
+                                    bc = list(mat.get_base_color())
+                                except Exception:
+                                    bc = None
+                            if not self._is_yellowish(bc):
+                                continue
+                            try:
+                                mat.set_base_color(gray)
+                                mat.base_color = gray
+                                mat.set_metallic(0.1)
+                                mat.set_roughness(0.6)
+                                mat.set_emission([0.0, 0.0, 0.0, 1.0])
+                            except Exception:
+                                try:
+                                    mat.set_base_color(gray)
+                                except Exception:
+                                    pass
 
-    def _paint_cube_yellow(self, cube):
-        """Force the held mallet cube to a bright, non-metallic yellow."""
+    def _paint_cube(self, cube):
+        """Force the held mallet cube to the configured blue in RGB renders."""
         rgba = list(self.CUBE_COLOR)[:3] + [1.0]
         for c in cube.actor.get_components():
             if not isinstance(c, sapien.render.RenderBodyComponent):
                 continue
+            try:
+                c.visibility = 1.0
+                if not c.is_enabled:
+                    c.enable()
+            except Exception:
+                pass
             for s in c.render_shapes:
                 try:
+                    mat = s.get_material()
+                except Exception:
                     mat = s.material
+                try:
                     mat.set_base_color(rgba)
+                    mat.base_color = rgba
                     mat.set_metallic(0.0)
                     mat.set_roughness(0.35)
-                    # slight emission so it reads yellow under table lighting
-                    mat.set_emission([0.35, 0.30, 0.02])
+                    mat.set_specular(0.1)
+                    mat.set_emission([0.0, 0.0, 0.0, 1.0])
                 except Exception:
                     try:
-                        s.material.set_base_color(rgba)
+                        mat.set_base_color(rgba)
                     except Exception:
                         pass
 
-    def _grasp_local_T(self):
-        """Cube pose in EE frame: centered in the jaw aperture (between fingers)."""
+    def _finger_midpoint_world(self, arm_tag):
+        """World position in the grasp aperture between the two finger pads."""
+        entity = (self.robot.left_entity if str(arm_tag) == "left"
+                  else self.robot.right_entity)
+        fl = entity.find_link_by_name("finger_left")
+        fr = entity.find_link_by_name("finger_right")
+        base = entity.find_link_by_name("wsg_50_base_link")
+        if fl is None or fr is None:
+            return None
+        p0 = np.array(fl.entity.get_pose().p, dtype=float)
+        p1 = np.array(fr.entity.get_pose().p, dtype=float)
+        mid = 0.5 * (p0 + p1)
+        # Push from the gripper body toward the finger tips (not sideways).
+        if base is not None:
+            base_p = np.array(base.entity.get_pose().p, dtype=float)
+            tip_dir = mid - base_p
+            n = float(np.linalg.norm(tip_dir))
+            if n > 1e-6:
+                mid = mid + (0.035 / n) * tip_dir
+        return mid
+
+    def _grasp_local_T_for_arm(self, arm_tag):
+        """EE-local transform that seats the cube between the finger pads."""
+        ee = np.array(self.get_arm_pose(arm_tag), dtype=float)
+        ee_T = self._pose7_to_mat(ee)
+        mid = self._finger_midpoint_world(arm_tag)
         local = np.eye(4)
-        # push into the finger aperture so the cube sits between the pads,
-        # not up against the wrist / gripper body
-        local[2, 3] = 0.028
+        if mid is None:
+            # fallback: EE +Z points back to the wrist
+            local[2, 3] = -0.045
+            return local
+        # keep EE orientation; only translate to the finger midpoint
+        ee_R_inv = ee_T[:3, :3].T
+        local[:3, 3] = ee_R_inv @ (mid - ee_T[:3, 3])
         return local
 
     def _spawn_and_grip_cubes(self):
@@ -515,7 +655,6 @@ class whack_a_mole(Base_Task):
             return
         left, right = ArmTag("left"), ArmTag("right")
         half = float(self.cube_half)
-        local_T = self._grasp_local_T()
 
         prev_plan = self.plan_success
         self.move(self.open_gripper(left, pos=1.0), self.open_gripper(right, pos=1.0))
@@ -523,6 +662,7 @@ class whack_a_mole(Base_Task):
             self.plan_success = prev_plan
 
         for arm in (left, right):
+            local_T = self._grasp_local_T_for_arm(arm)
             ee = np.array(self.get_arm_pose(arm), dtype=float)
             pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
             cube = create_box(
@@ -534,7 +674,7 @@ class whack_a_mole(Base_Task):
                 name=f"hammer_cube_{arm}",
             )
             cube.set_mass(0.03)
-            self._paint_cube_yellow(cube)
+            self._paint_cube(cube)
             rigid = None
             for c in cube.actor.get_components():
                 if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
@@ -557,6 +697,7 @@ class whack_a_mole(Base_Task):
                         pass
             self.hammer_cubes[str(arm)] = cube
             self._cube_comps[str(arm)] = rigid
+            self._cube_weld[str(arm)] = local_T.copy()
 
         # close jaws around the cube (visual "gripped between fingers")
         prev_plan = self.plan_success
@@ -564,13 +705,13 @@ class whack_a_mole(Base_Task):
         if not self.plan_success:
             self.plan_success = prev_plan
 
-        # lock EE-relative grasp transform after the close
+        # re-seat at the closed-jaw finger midpoint and lock the weld
         for arm in ("left", "right"):
+            local_T = self._grasp_local_T_for_arm(ArmTag(arm))
             ee = np.array(self.get_arm_pose(ArmTag(arm)), dtype=float)
-            ee_T = self._pose7_to_mat(ee)
-            cube_T = ee_T @ local_T
-            pose = self._mat_to_pose(cube_T)
+            pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
             self.hammer_cubes[arm].actor.set_pose(pose)
+            self._paint_cube(self.hammer_cubes[arm])
             rigid = self._cube_comps.get(arm)
             if rigid is not None:
                 try:
@@ -588,6 +729,9 @@ class whack_a_mole(Base_Task):
             ee = np.array(self.get_arm_pose(ArmTag(arm)), dtype=float)
             pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
             self.hammer_cubes[arm].actor.set_pose(pose)
+            # keep blue material applied (some passes reset render state)
+            if self._global_step % 30 == 0:
+                self._paint_cube(self.hammer_cubes[arm])
             rigid = self._cube_comps.get(arm)
             if rigid is not None:
                 try:
@@ -824,14 +968,21 @@ class whack_a_mole(Base_Task):
         if arm in getattr(self, "hammer_cubes", {}):
             cp = np.array(self.hammer_cubes[arm].get_pose().p, dtype=float)
             return float(cp[2] - self.cube_half)
+        local_T = self._cube_weld.get(arm)
+        if local_T is None:
+            local_T = self._grasp_local_T_for_arm(arm_tag)
         ee = np.array(self.get_arm_pose(arm_tag), dtype=float)
-        cube_T = self._pose7_to_mat(ee) @ self._grasp_local_T()
+        cube_T = self._pose7_to_mat(ee) @ local_T
         return float(cube_T[2, 3] - self.cube_half)
 
     def _ee_z_for_cube_bottom(self, arm_tag, cube_bottom_z):
         """EE world Z that places the held cube's underside at cube_bottom_z."""
-        # cube_z = ee_z + local_z; cube_bottom = cube_z - cube_half
-        local_z = float(self._grasp_local_T()[2, 3])
+        arm = str(arm_tag)
+        local_T = self._cube_weld.get(arm)
+        if local_T is None:
+            local_T = self._grasp_local_T_for_arm(arm_tag)
+        # cube_z ≈ ee_z + R_ee @ local_t; for near-vertical EE use local z
+        local_z = float(local_T[2, 3])
         return float(cube_bottom_z + self.cube_half - local_z)
 
     def _hover_ee_z(self, arm_tag):

@@ -91,13 +91,13 @@ task_args:
     grasp_tol: 0.05
   whack_a_mole:
     num_moles: 4
-    num_distractors: 0        # rabbit distractors (0..M, M=4); touching one fails
+    num_distractors: 0        # yellow rabbit distractors (0..M, M=4); touching one fails
     difficulty: easy          # easy = one mole at a time; hard = two simultaneous (both arms)
     pop_steps: 90
     touch_tol: 0.04
     hole_count: 9
     hole_size: 0.055
-    cube_hole_scale: 1.30     # mallet cube side = hole_size * scale (larger than holes)
+    cube_hole_scale: 1.08     # blue mallet cube side = hole_size * scale (>1 so it can't enter)
   collect_falling_bowl:
     num_objects: 4
     emit_interval: 40
@@ -132,6 +132,7 @@ task_args:
     square_gap_max: 0.030
   dispense_gummy:
     tube_capacity: 4
+    difficulty_option: 1  # 1: uneven yellow/blue counts; 2: uneven yellow counts with empty gaps
     target_color: yellow
     ball_diameter: 0.03
     ball_slot_gap: 0.003
@@ -154,8 +155,6 @@ task_args:
     dispense_steps: 24
     press_hold_steps: 6
     post_press_dwell: 10
-    left_stack: [yellow, blue, yellow, blue]
-    right_stack: [blue, yellow, blue, yellow]
   goalkeeper:
     ball_speed_min: 0.07
     ball_speed_max: 0.09
@@ -238,9 +237,9 @@ task_args:
     # n_apple: 3              # optional per-color override (falls back to n_per_color)
     # n_orange: 3
     spawn_mode: parallel      # single | parallel (aliases: opt1 | opt2)
-    # single: one fruit at a time, either color on either belt; next after spawn_delay_s
-    # parallel: apples left / oranges right; both arms pick when both are present
-    spawn_delay_s: 2.0        # single-mode delay after pick before next fruit appears
+    # single: one fruit at a time; next spawns only after drop-in-basket or belt exit
+    # parallel: one apple+orange wave; next wave only after both packed or left the belt
+    spawn_delay_s: 2.0        # unused (compat); spawn is gated on drop / belt-exit
     belt_gap: 0.10            # gap between the two belts, centered at x=0
     belt_speed: 0.0008        # shared default speed (m per belt tick); both belts use this
     # belt_speed_left: 0.0008 # optional per-belt override (falls back to belt_speed)

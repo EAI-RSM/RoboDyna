@@ -12,10 +12,13 @@ class packing(Base_Task):
     Two conveyor slabs sit with a gap centered on the table and run toward the
     robot (-y). Spawn behaviour is controlled by ``spawn_mode``:
 
-    - ``single``: only one fruit on the belts at a time; either color may appear
-      on either belt; the next fruit appears ``spawn_delay_s`` after a pick.
-    - ``parallel``: red apples on the left belt, yellow oranges on the right;
-      both may be present at once and are picked by both arms together.
+    - ``single``: only one fruit at a time; either color may appear on either
+      belt. The next fruit spawns only after the current one is dropped (gripper
+      has been above the basket and released) or has left the belt end — never
+      while a pack cycle is still in progress.
+    - ``parallel``: red apples left / yellow oranges right, one wave at a time.
+      The next pair spawns only after both current fruits are dropped or gone,
+      and the dual-arm pack cycle has finished.
 
     Success requires every fruit to rest in its color-matched basket.
     """
@@ -26,7 +29,7 @@ class packing(Base_Task):
     ADVANCE_EVERY_DEFAULT = 3         # physics steps between belt ticks
     SPAWN_GAP_DEFAULT = 0.16          # y-gap between consecutive spawns on a belt
     SPAWN_MODE_DEFAULT = "parallel"   # "single" | "parallel"
-    SPAWN_DELAY_S_DEFAULT = 2.0       # single-mode delay after pick before next spawn
+    SPAWN_DELAY_S_DEFAULT = 2.0       # unused (kept for config compat); spawn waits on drop/despawn
 
     # same belt slab dimensions as quality_control
     BELT_HALF_LEN = 0.30
@@ -58,6 +61,8 @@ class packing(Base_Task):
     BASKET_CATCH_R = 0.08
     BASKET_Y = -0.16
     BASKET_X = 0.30                   # farther outboard from the belts
+    # release height: fruit center above basket floor (modest, not a high dump)
+    DROP_ABOVE_BASKET = 0.06
 
     N_SLATS = 5
     APPLE_COLOR = [0.85, 0.12, 0.10]
@@ -217,12 +222,16 @@ class packing(Base_Task):
         self._spawned_mask = [False] * self.n_items
         self._spawned = 0
         self._packed = [False] * self.n_items
+        self._missed = [False] * self.n_items  # rode off belt end without packing
+        # gripper has reached the drop pose above this fruit's basket
+        self._over_basket = [False] * self.n_items
         self._place_counts = {"apple": 0, "orange": 0}
         self._welded = [False] * self.n_items
         self._weld_offset = [None] * self.n_items
         self._weld_arm = [None] * self.n_items
         self._grasping_idxs = set()  # fruits mid-intercept; stay on the moving stream
-        self._spawn_cooldown_steps = 0
+        # nestable hold for the pick→above-basket→drop→return cycle; blocks new spawns
+        self._spawn_hold_depth = 0
         self._stage_pose = sapien.Pose([0.0, 1.2, z0 + 0.4], [1, 0, 0, 0])
 
         for i, ftype in enumerate(self.item_types):
@@ -292,6 +301,7 @@ class packing(Base_Task):
         side = self.item_sides[idx]
         self._item_y[idx] = self.BELT_Y_FAR
         self._item_roll[idx] = 0.0
+        self._over_basket[idx] = False
         comp = self._item_comps[idx]
         if comp is not None:
             comp.set_kinematic(True)
@@ -333,31 +343,67 @@ class packing(Base_Task):
                     sapien.Pose([cx, y, self.belt_top_z + 0.001], [1, 0, 0, 0])
                 )
 
-    def _side_has_active_fruit(self, side):
-        """True if this belt still has an unpacked fruit on it (or being manipulated)."""
-        for i in range(self.n_items):
-            if not self._spawned_mask[i] or self.item_sides[i] != side or self._packed[i]:
-                continue
-            if self._item_y[i] is not None or self._welded[i]:
-                return True
-        return False
+    def _fruit_blocks_spawn(self, idx):
+        """True while this fruit must delay the next spawn wave.
 
-    def _any_fruit_on_belt(self):
-        return any(
-            self._item_y[i] is not None
-            for i in range(self.n_items)
-            if self._spawned_mask[i] and not self._packed[i]
-        )
+        Blocks from appearance until it is packed into a basket or has left the
+        belt. Carried / welded fruit always blocks (not packed yet).
+        """
+        if not self._spawned_mask[idx]:
+            return False
+        if self._packed[idx] or self._missed[idx]:
+            return False
+        return True
+
+    def _can_spawn_next(self):
+        """Next wave only when no fruit is outstanding and no pack cycle is running."""
+        if int(getattr(self, "_spawn_hold_depth", 0)) > 0:
+            return False
+        if self._has_active_fruit():
+            return False
+        return True
+
+    def _has_active_fruit(self):
+        return any(self._fruit_blocks_spawn(i) for i in range(self.n_items))
+
+    def _begin_spawn_hold(self):
+        self._spawn_hold_depth = int(getattr(self, "_spawn_hold_depth", 0)) + 1
+
+    def _end_spawn_hold(self):
+        self._spawn_hold_depth = max(0, int(getattr(self, "_spawn_hold_depth", 0)) - 1)
+
+    def _drop_height(self, idx):
+        """World-z for fruit center when releasing above the basket."""
+        ftype = self.item_types[idx]
+        return float(self.basket_base_z[ftype] + self.fruit_r + self.DROP_ABOVE_BASKET)
+
+    def _despawn_off_belt(self, idx):
+        """Fruit reached the near end without a pick — hide it and free the wave."""
+        import os
+        if self._packed[idx] or self._missed[idx]:
+            return
+        self._missed[idx] = True
+        self._over_basket[idx] = False
+        self._item_y[idx] = None
+        self._welded[idx] = False
+        self._grasping_idxs.discard(idx)
+        self._hide(idx)
+        if bool(os.environ.get("PACKING_DEBUG")):
+            print(f"[packing]  {self.item_types[idx]}_{idx} left belt — despawn",
+                  flush=True)
 
     def _maybe_spawn(self):
-        """Spawn fruit according to ``spawn_mode``."""
+        """Spawn the next fruit / pair only after the current wave is fully clear."""
         if self._spawned >= self.n_items:
             return
+        # wait until drop/despawn of the current wave AND the pack cycle finished
+        # (gripper has been above the basket and returned — not mid-pick)
+        if not self._can_spawn_next():
+            return
+
         if self.spawn_mode == "single":
-            if self._any_fruit_on_belt() or self._spawn_cooldown_steps > 0:
-                return
             for i in range(self.n_items):
-                if self._spawned_mask[i] or self._packed[i]:
+                if self._spawned_mask[i] or self._packed[i] or self._missed[i]:
                     continue
                 self._spawn(i)
                 self._spawned_mask[i] = True
@@ -365,21 +411,26 @@ class packing(Base_Task):
                 return
             return
 
-        # parallel: apples left / oranges right; spawn any side that is free
+        # parallel: one apple (left) + one orange (right) per wave, together
+        spawned_sides = set()
         for i in range(self.n_items):
-            if self._spawned_mask[i] or self._packed[i]:
+            if self._spawned_mask[i] or self._packed[i] or self._missed[i]:
                 continue
             side = self.item_sides[i]
-            if not self._side_has_active_fruit(side):
-                self._spawn(i)
-                self._spawned_mask[i] = True
+            if side in spawned_sides:
+                continue
+            self._spawn(i)
+            self._spawned_mask[i] = True
+            spawned_sides.add(side)
+            if len(spawned_sides) >= 2:
+                break
         self._spawned = int(sum(self._spawned_mask))
 
     def _advance_stream(self):
         self._maybe_spawn()
 
         for i in range(self.n_items):
-            if (not self._spawned_mask[i] or self._packed[i]
+            if (not self._spawned_mask[i] or self._packed[i] or self._missed[i]
                     or self._welded[i] or self._item_y[i] is None):
                 continue
             side = self.item_sides[i]
@@ -387,7 +438,9 @@ class packing(Base_Task):
             # continuous motion — never park / pause on the belt
             self._item_y[i] -= speed
             if self._item_y[i] < self.BELT_Y_NEAR and i not in self._grasping_idxs:
-                self._item_y[i] = self.BELT_Y_FAR
+                # leave the belt (do not wrap / reappear)
+                self._despawn_off_belt(i)
+                continue
             self._item_roll[i] += speed / max(self.fruit_r, 1e-4)
             self._set_fruit_pose(
                 i, self.belt_cx[side], self._item_y[i], self._fruit_ride_z,
@@ -423,13 +476,9 @@ class packing(Base_Task):
             except Exception:
                 pass
         # leave the belt stream; fruit now tracks the gripper
+        # (still "active" until dropped in the basket — blocks next spawn)
         self._item_y[idx] = None
         self._welded[idx] = True
-        if self.spawn_mode == "single":
-            dt = float(self.scene.get_timestep())
-            self._spawn_cooldown_steps = max(
-                1, int(round(self.spawn_delay_s / max(dt, 1e-6)))
-            )
 
     def _update_welded_fruits(self):
         if not getattr(self, "_welded", None):
@@ -469,8 +518,6 @@ class packing(Base_Task):
         self._update_welded_fruits()
         if not getattr(self, "_belt_running", False):
             return
-        if self._spawn_cooldown_steps > 0:
-            self._spawn_cooldown_steps -= 1
         self._step_ctr += 1
         if self._step_ctr % max(1, self.advance_every) == 0:
             self._advance_slats()
@@ -501,6 +548,7 @@ class packing(Base_Task):
         if not self._packed[idx]:
             self._place_counts[ftype] = self._place_counts[ftype] + 1
         self._packed[idx] = True
+        self._over_basket[idx] = True
         self._item_y[idx] = None
         self._welded[idx] = False
         rigid = self._item_comps[idx]
@@ -765,10 +813,95 @@ class packing(Base_Task):
             if rigid is not None:
                 rigid.set_kinematic(True)
                 rigid.set_disable_gravity(True)
+            # back on the belt — block the next wave again until over-basket
+            self._over_basket[idx] = False
             self._item_y[idx] = float(self.BELT_Y_FAR)
             self._set_fruit_pose(
                 idx, self.belt_cx[side], self.BELT_Y_FAR, self._fruit_ride_z
             )
+
+    def _move_fruit_above_basket(self, idx, arm, target_xy):
+        """Carry welded fruit to a modest height above its basket (XY then Z)."""
+        fruit = self.items[idx]
+        # clear the belt
+        self.move(self.move_by_displacement(arm, z=0.10, move_axis="world"))
+        self.plan_success = True
+        for _ in range(4):
+            ap = np.array(fruit.get_pose().p, dtype=float)
+            dxy = target_xy - ap[:2]
+            if float(np.linalg.norm(dxy)) < 0.02:
+                break
+            self.move(self.move_by_displacement(
+                arm,
+                x=float(np.clip(dxy[0], -0.16, 0.16)),
+                y=float(np.clip(dxy[1], -0.16, 0.16)),
+                move_axis="world",
+            ))
+            self.plan_success = True
+        drop_z = self._drop_height(idx)
+        for _ in range(4):
+            fz = float(fruit.get_pose().p[2])
+            dz = drop_z - fz
+            if abs(dz) < 0.012:
+                break
+            self.move(self.move_by_displacement(
+                arm, z=float(np.clip(dz, -0.14, 0.08)), move_axis="world",
+            ))
+            self.plan_success = True
+        # gripper is above the basket — next fruit wave may spawn
+        self._over_basket[idx] = True
+
+    def _move_pair_above_baskets(self, idx_l, idx_r, arm_l, arm_r, target_l, target_r):
+        """Carry both welded fruits to modest heights above their baskets."""
+        # clear the belts
+        self.move(
+            self.move_by_displacement(arm_l, z=0.10, move_axis="world"),
+            self.move_by_displacement(arm_r, z=0.10, move_axis="world"),
+        )
+        self.plan_success = True
+        for _ in range(4):
+            pl = np.array(self.items[idx_l].get_pose().p, dtype=float)
+            pr = np.array(self.items[idx_r].get_pose().p, dtype=float)
+            dl = target_l - pl[:2]
+            dr = target_r - pr[:2]
+            if (float(np.linalg.norm(dl)) < 0.02
+                    and float(np.linalg.norm(dr)) < 0.02):
+                break
+            self.move(
+                self.move_by_displacement(
+                    arm_l,
+                    x=float(np.clip(dl[0], -0.16, 0.16)),
+                    y=float(np.clip(dl[1], -0.16, 0.16)),
+                    move_axis="world",
+                ),
+                self.move_by_displacement(
+                    arm_r,
+                    x=float(np.clip(dr[0], -0.16, 0.16)),
+                    y=float(np.clip(dr[1], -0.16, 0.16)),
+                    move_axis="world",
+                ),
+            )
+            self.plan_success = True
+        drop_l = self._drop_height(idx_l)
+        drop_r = self._drop_height(idx_r)
+        for _ in range(4):
+            zl = float(self.items[idx_l].get_pose().p[2])
+            zr = float(self.items[idx_r].get_pose().p[2])
+            dzl = drop_l - zl
+            dzr = drop_r - zr
+            if abs(dzl) < 0.012 and abs(dzr) < 0.012:
+                break
+            self.move(
+                self.move_by_displacement(
+                    arm_l, z=float(np.clip(dzl, -0.14, 0.08)), move_axis="world",
+                ),
+                self.move_by_displacement(
+                    arm_r, z=float(np.clip(dzr, -0.14, 0.08)), move_axis="world",
+                ),
+            )
+            self.plan_success = True
+        self._over_basket[idx_l] = True
+        self._over_basket[idx_r] = True
 
     def _intercept_and_grasp(self, idx, arm, side):
         """Hover above the belt, chase the still-moving fruit, snap when close.
@@ -809,31 +942,21 @@ class packing(Base_Task):
         if not self._wait_fruit_at_station(idx, side):
             return False
 
-        return self._chase_and_snap(idx, arm)
+        # Arm is already hovering at the station; fruit has rolled underneath.
+        # Snap it between the fingers — no pause, no multi-hop chase.
+        if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
+            return False
+        self._snap_fruit_into_gripper(idx, arm)
+        return True
 
     def _carry_and_drop(self, idx, arm, target_xy):
-        """Lift welded fruit, carry to basket, release, settle."""
-        fruit = self.items[idx]
-        self.move(self.move_by_displacement(arm, z=0.14, move_axis="world"))
-        self.plan_success = True
-        for _ in range(3):
-            ap = np.array(fruit.get_pose().p, dtype=float)
-            dxy = target_xy - ap[:2]
-            if float(np.linalg.norm(dxy)) < 0.025:
-                break
-            self.move(self.move_by_displacement(
-                arm,
-                x=float(np.clip(dxy[0], -0.16, 0.16)),
-                y=float(np.clip(dxy[1], -0.16, 0.16)),
-            ))
-            self.plan_success = True
-        self.move(self.move_by_displacement(arm, z=-0.08, move_axis="world"))
-        self.plan_success = True
+        """Carry welded fruit above the basket, release from a modest height, settle."""
+        self._move_fruit_above_basket(idx, arm, target_xy)
         self.move(self.open_gripper(arm))
         self._release_fruit(idx)
         self._belt_dwell(70)
         self._settle_after_drop(idx, target_xy)
-        self.move(self.move_by_displacement(arm, z=0.08, move_axis="arm"))
+        self.move(self.move_by_displacement(arm, z=0.06, move_axis="arm"))
         self.move(self.back_to_origin(arm))
         self.plan_success = True
 
@@ -848,6 +971,7 @@ class packing(Base_Task):
         arm = ArmTag(arm_side)
         target_xy = self._basket_target_xy(idx)
 
+        self._begin_spawn_hold()
         self._grasping_idxs.add(idx)
         try:
             if self._item_y[idx] is None:
@@ -877,6 +1001,7 @@ class packing(Base_Task):
             self._carry_and_drop(idx, arm, target_xy)
         finally:
             self._grasping_idxs.discard(idx)
+            self._end_spawn_hold()
 
     def _pack_pair(self, idx_l, idx_r):
         """Pick left+right fruits simultaneously, then carry to baskets together."""
@@ -886,6 +1011,7 @@ class packing(Base_Task):
         target_l = self._basket_target_xy(idx_l)
         target_r = self._basket_target_xy(idx_r)
 
+        self._begin_spawn_hold()
         self._grasping_idxs.update({idx_l, idx_r})
         try:
             if dbg:
@@ -951,11 +1077,12 @@ class packing(Base_Task):
                     self._pack_item(idx_r)
                 return
 
-            ok_l, ok_r = self._chase_and_snap_pair(idx_l, idx_r, left, right)
-
-            if not ok_l and not ok_r:
+            # Both fruits under the hovering grippers — snap in place (no chase).
+            if (self._item_y[idx_l] is None or self._item_y[idx_r] is None
+                    or self._item_y[idx_l] < self.pick_y_end
+                    or self._item_y[idx_r] < self.pick_y_end):
                 if dbg:
-                    print("[packing]  pair: neither snapped — fallback", flush=True)
+                    print("[packing]  pair: missed at snap — fallback", flush=True)
                 self._grasping_idxs.discard(idx_l)
                 self._grasping_idxs.discard(idx_r)
                 if self._item_y[idx_l] is not None:
@@ -964,56 +1091,14 @@ class packing(Base_Task):
                     self._pack_item(idx_r)
                 return
 
-            if ok_l and not ok_r:
-                if dbg:
-                    print("[packing]  pair: only left snapped", flush=True)
-                self._carry_and_drop(idx_l, left, target_l)
-                self.move(self.back_to_origin(right))
-                self.plan_success = True
-                return
-            if ok_r and not ok_l:
-                if dbg:
-                    print("[packing]  pair: only right snapped", flush=True)
-                self._carry_and_drop(idx_r, right, target_r)
-                self.move(self.back_to_origin(left))
-                self.plan_success = True
-                return
-
+            self._snap_fruit_into_gripper(idx_l, left)
+            self._snap_fruit_into_gripper(idx_r, right)
             if dbg:
                 print("[packing]  pair: both snapped into grippers", flush=True)
 
-            # lift, carry, drop both together
-            self.move(
-                self.move_by_displacement(left, z=0.14, move_axis="world"),
-                self.move_by_displacement(right, z=0.14, move_axis="world"),
+            self._move_pair_above_baskets(
+                idx_l, idx_r, left, right, target_l, target_r,
             )
-            self.plan_success = True
-            for _ in range(3):
-                pl = np.array(self.items[idx_l].get_pose().p, dtype=float)
-                pr = np.array(self.items[idx_r].get_pose().p, dtype=float)
-                dl = target_l - pl[:2]
-                dr = target_r - pr[:2]
-                if (float(np.linalg.norm(dl)) < 0.025
-                        and float(np.linalg.norm(dr)) < 0.025):
-                    break
-                self.move(
-                    self.move_by_displacement(
-                        left,
-                        x=float(np.clip(dl[0], -0.16, 0.16)),
-                        y=float(np.clip(dl[1], -0.16, 0.16)),
-                    ),
-                    self.move_by_displacement(
-                        right,
-                        x=float(np.clip(dr[0], -0.16, 0.16)),
-                        y=float(np.clip(dr[1], -0.16, 0.16)),
-                    ),
-                )
-                self.plan_success = True
-            self.move(
-                self.move_by_displacement(left, z=-0.08, move_axis="world"),
-                self.move_by_displacement(right, z=-0.08, move_axis="world"),
-            )
-            self.plan_success = True
             self.move(self.open_gripper(left), self.open_gripper(right))
             self._release_fruit(idx_l)
             self._release_fruit(idx_r)
@@ -1022,8 +1107,8 @@ class packing(Base_Task):
             self._settle_after_drop(idx_r, target_r)
 
             self.move(
-                self.move_by_displacement(left, z=0.08, move_axis="arm"),
-                self.move_by_displacement(right, z=0.08, move_axis="arm"),
+                self.move_by_displacement(left, z=0.06, move_axis="arm"),
+                self.move_by_displacement(right, z=0.06, move_axis="arm"),
             )
             self.plan_success = True
             self.move(self.back_to_origin(left), self.back_to_origin(right))
@@ -1031,6 +1116,7 @@ class packing(Base_Task):
         finally:
             self._grasping_idxs.discard(idx_l)
             self._grasping_idxs.discard(idx_r)
+            self._end_spawn_hold()
 
     def _ready_by_side(self):
         """Return oldest ready fruit index per belt (or None)."""
@@ -1064,7 +1150,12 @@ class packing(Base_Task):
         ) * self.advance_every + self.n_items * 1200 + 4000
 
         guard = 0
-        while guard < max_steps and not all(self._packed):
+        def _wave_done():
+            return all(
+                self._packed[i] or self._missed[i] for i in range(self.n_items)
+            ) and self._spawned >= self.n_items
+
+        while guard < max_steps and not _wave_done():
             guard += 1
             ready = self._ready_by_side()
             left_i, right_i = ready["left"], ready["right"]
@@ -1103,7 +1194,8 @@ class packing(Base_Task):
             for i in range(self.n_items):
                 p = self.items[i].get_pose().p
                 print(f"[packing]  {self.item_types[i]}_{i} p={np.round(p, 3)} "
-                      f"in={self._fruit_in_basket(i)} packed={self._packed[i]}",
+                      f"in={self._fruit_in_basket(i)} packed={self._packed[i]} "
+                      f"missed={self._missed[i]}",
                       flush=True)
 
         self.info["info"] = {
@@ -1126,6 +1218,7 @@ class packing(Base_Task):
             "n_orange": int(self.n_orange),
             "n_spawned": int(self._spawned),
             "n_packed": int(sum(1 for p in self._packed if p)),
+            "n_missed": int(sum(1 for m in self._missed if m)),
             "n_correct": int(sum(in_ok)),
             "spawn_mode": str(self.spawn_mode),
             "spawn_delay_s": float(self.spawn_delay_s),

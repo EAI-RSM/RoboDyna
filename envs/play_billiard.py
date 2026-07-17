@@ -662,60 +662,32 @@ class play_billiard(Base_Task):
         return pool[0][2], pool[0][3]
 
     # ---------------------------------------------------- weld / kinematics
-    def _finger_midpoint(self, arm_tag):
-        """World-frame midpoint between the two WSG finger links."""
-        ent = (
-            self.robot.left_entity
-            if str(arm_tag) == "left"
-            else self.robot.right_entity
-        )
-        pts = []
-        for link in ent.get_links():
-            if "finger" in link.get_name().lower():
-                pts.append(np.asarray(link.pose.p, dtype=np.float64))
-        if len(pts) >= 2:
-            return np.mean(pts, axis=0)
-        tcp = (
-            self.robot.get_left_tcp_pose()
-            if str(arm_tag) == "left"
-            else self.robot.get_right_tcp_pose()
-        )
-        return np.asarray(tcp[:3], dtype=np.float64)
+    def _disable_cue_robot_collision(self):
+        """Drop cue↔robot collision after weld (strike uses tip geometry + impulse)."""
+        rigid = self._get_rigid(self.cue)
+        if rigid is None:
+            return
+        try:
+            for shape in rigid.get_collision_shapes():
+                shape.set_collision_groups([0, 0, 0, 0])
+        except Exception:
+            pass
 
-    def _cue_grasp_local_T(self, arm_tag):
-        """Cue pose in planning-EE frame with shaft through the jaw aperture.
-
-        Keeps the post-grasp orientation and places the grasp contact (cue local
-        x=-0.015) at the finger-link midpoint so the stick sits between the pads.
-        """
-        ee_T = self._pose_to_mat(
-            np.asarray(self.get_arm_pose(str(arm_tag)), dtype=np.float64)
-        )
-        cue_T = self.cue.get_pose().to_transformation_matrix()
-        R = cue_T[:3, :3]
-        mid = self._finger_midpoint(arm_tag)
-        contact_x = -0.015  # must match _build_cue contact_points_pose
-        cue_ideal = np.eye(4, dtype=np.float64)
-        cue_ideal[:3, :3] = R
-        cue_ideal[:3, 3] = mid - R @ np.array([contact_x, 0.0, 0.0], dtype=np.float64)
-        return np.linalg.inv(ee_T) @ cue_ideal
-
-    def _seat_and_weld_cue(self, arm_tag):
-        """Force-seat the cue between the fingers, then weld that transform."""
-        local_T = self._cue_grasp_local_T(arm_tag)
+    def _weld_cue_to_ee(self, arm_tag):
+        """Lock cue to EE using the post-grasp relative pose (natural pick)."""
         ee = np.asarray(self.get_arm_pose(str(arm_tag)), dtype=np.float64)
-        cue_T = self._pose_to_mat(ee) @ local_T
-        pose = self._mat_to_pose(cue_T)
-        self.cue.actor.set_pose(pose)
+        ee_T = self._pose_to_mat(ee)
+        cue_T = self.cue.get_pose().to_transformation_matrix()
+        self._cue_ee_T = np.linalg.inv(ee_T) @ cue_T
+        self._cue_arm = str(arm_tag)
         rigid = self._get_rigid(self.cue)
         if rigid is not None:
             rigid.set_disable_gravity(True)
             rigid.set_kinematic(True)
             rigid.set_linear_velocity(np.zeros(3))
             rigid.set_angular_velocity(np.zeros(3))
-            rigid.set_kinematic_target(pose)
-        self._cue_ee_T = local_T.copy()
-        self._cue_arm = str(arm_tag)
+            rigid.set_kinematic_target(self.cue.get_pose())
+        self._disable_cue_robot_collision()
         self._cue_welded = True
 
     def _update_welded_cue(self):
@@ -925,15 +897,10 @@ class play_billiard(Base_Task):
         arm = ArmTag(self._arm_side)
         hover_z = float(self.felt_top + self.HOVER_CLEARANCE)
 
-        # 1) Approach the cue with open jaws, seat shaft between fingers, then clamp.
-        self.move(self.open_gripper(arm, pos=1.0))
+        # 1) Natural top-down grasp, then weld the measured EE↔cue transform.
         self.move(
             self.grasp_actor(
-                self.cue,
-                arm_tag=arm,
-                pre_grasp_dis=0.10,
-                contact_point_id=0,
-                gripper_pos=1.0,  # stay open; seating places the shaft in the aperture
+                self.cue, arm_tag=arm, pre_grasp_dis=0.10, contact_point_id=0
             )
         )
         self._dbg("after_grasp")
@@ -945,11 +912,7 @@ class play_billiard(Base_Task):
                 "{C}": self._target_pocket_name.replace("_", " "),
             }
             return self.info
-        self._seat_and_weld_cue(arm)
-        self.move(self.close_gripper(arm, pos=0.0))
-        # Re-seat after close so a small EE settle cannot leave the shaft off-center.
-        self._seat_and_weld_cue(arm)
-        self._dbg("after_seat")
+        self._weld_cue_to_ee(arm)
 
         # Retreat slightly in -Y then lift high BEFORE any approach.
         table_near_y = self.table_cy - self.table_half_wid
