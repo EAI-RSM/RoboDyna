@@ -219,6 +219,76 @@ timeout 300 python -u script/collect_data.py <task> <config> 2>&1 | grep -vE "OI
 - Iterate spawn ranges / place distances / params; then restore `episode_num` and scale up (Slurm:
   `sbatch collect_demos.sbatch <task> <config>` — see the DOMINO-benchmark skill).
 
+### Always record and show a sample demo — this is a required deliverable, not optional polish
+
+**Every time you finish building or meaningfully changing a task, produce a short visual demo and
+embed it in your reply — don't just report a success rate.** The user should be able to see the
+rollout, not just read numbers. Do this even for quick iterations, not only the final handoff.
+
+**Camera: record from a third-person view, not the head camera.** The default `head_camera`/
+wrist views used for training data are close-up and don't show the whole rig, so a demo built from
+them (like `whack_a_mole`'s frames) shows almost nothing useful. Instead, reuse the `observer_camera`
+(SAPIEN scene already has one, see `envs/camera/camera.py`) reframed to look at the scene from the
+table's **upper-right corner**, wide enough to fit the whole fixture + both arms — this is the
+established convention (`dispense_gummy._configure_observer_camera`, mirrored for
+`catch_shelf_marble`). Add it once per task, permanently, not just for the demo:
+```python
+def _init_task_env_(self, **kwags):   # or wherever your task calls super()._init_task_env_
+    ...
+    super()._init_task_env_(**kwags)
+    self._configure_observer_camera()
+
+def _configure_observer_camera(self):
+    camera = getattr(getattr(self, "cameras", None), "observer_camera", None)
+    if camera is None:
+        return
+    camera_pos = np.array([0.38, 0.52, 1.45], dtype=np.float64)   # tune per task's scene extents
+    look_at = np.array([0.0, -0.05, 0.95], dtype=np.float64)
+    forward = look_at - camera_pos; forward /= np.linalg.norm(forward)
+    left = np.cross(np.array([0.0, 0.0, 1.0]), forward); left /= np.linalg.norm(left)
+    up = np.cross(forward, left)
+    m = np.eye(4); m[:3, :3] = np.stack([forward, left, up], axis=1); m[:3, 3] = camera_pos
+    camera.entity.set_pose(sapien.Pose(m))
+```
+Tune `camera_pos`/`look_at` per task (taller fixtures need the camera further back/higher) —
+iterate fast by writing a throwaway script that calls `setup_demo(...)` once and then repeatedly
+calls `task.cameras.observer_camera.entity.set_pose(...)` + `task._update_render();
+task.cameras.update_picture(); task.cameras.get_observer_rgb()` to dump PNGs for several candidate
+poses in one process (re-paying the ~15–30 s planner-import/setup cost only once), rather than
+re-running the full collector per candidate.
+
+**Where the video lands: `./tmp_<task_name>/video/v<N>_episode0.mp4`, flat in the repo root** —
+this matches the convention from earlier tasks (`tmp_dispense_gummy/`, `tmp_whack_a_mole/`,
+`tmp_play_billiard/`). It is *not* `data/<task>/<config>/...` (that path always nests
+`<task_name>/<task_config>` under `save_path`); pass the flat tmp dir as `save_path` directly to a
+one-off driver script instead of going through `collect_data.py`'s `main()` (which does that
+nesting) — call its `run(task_env, args)` directly with `args["save_path"] = "./tmp_<task_name>"`.
+Because the standard video pipeline (`merge_pkl_to_hdf5_video`) prefers `head_camera`, monkeypatch
+that one bound method on the task instance for the recording run to build the video from each
+cached frame's `third_view_rgb` (present once `data_type.third_view: true`) via
+`envs.utils.images_to_video.images_to_video` instead — no need to touch the shared pipeline or
+write an HDF5 for a throwaway demo. Delete the `.cache`/`_traj_data`/`scene_info.json`/`seed.txt`
+scratch that a normal run leaves behind once you've confirmed the video, keep the `video/` folder.
+
+**Tag every demo with an incrementing `vN` prefix so the user can track progress across
+iterations** — `v1_episode0.mp4`, `v2_episode0.mp4`, `v3_episode0.mp4`, ... in that same
+`video/` folder, never overwriting a prior version. Auto-detect the next tag by scanning existing
+`v(\d+)_` filenames in the folder and incrementing the max (start at `v1` if the folder's empty) —
+don't hardcode a version number in the driver script; recompute it each run so re-invoking the same
+script naturally advances the count. This applies to every re-record within the same task, not just
+major rewrites — a small parameter tweak still gets the next `vN`, so the sequence is a complete
+timeline of that task's iterations.
+
+For quickly embedding it in chat (chat can't inline mp4), also convert each to a GIF in `/tmp`:
+```bash
+mkdir -p /tmp/robodyna_demos
+ffmpeg -y -i tmp_<task_name>/video/v<N>_episode0.mp4 \
+  -vf "fps=10,scale=480:-1:flags=lanczos" -loop 0 /tmp/robodyna_demos/<task>_v<N>.gif
+```
+Embed it with `![<task> v<N> demo](/tmp/robodyna_demos/<task>_v<N>.gif)` in your response, and keep
+older `/tmp/robodyna_demos/<task>_v<N>.gif` files around (don't overwrite) so past iterations stay
+inspectable in the same chat if the user asks to compare.
+
 If yield is low, it's almost always the planner failing on reach/placement — revisit the pitfalls
 above before adding complexity.
 
