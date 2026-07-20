@@ -65,8 +65,10 @@ class packing(Base_Task):
     BASKET_CATCH_R = 0.12              # scaled up to match the larger basket opening
     BASKET_Y = 0.0                    # table midline (toward the belts / "higher")
     BASKET_X = 0.34                   # nudged out so the bigger basket clears the belts
-    # simple carry motion: lift well clear of the belt/basket rims, then slide over
-    PICK_LIFT = 0.22
+    # carry target: hover this high above the basket rim, then release —
+    # generous clearance so the gripper/fruit never clips the basket wall
+    # on the way over
+    PICK_LIFT = 0.07
 
     N_SLATS = 5
     APPLE_COLOR = [0.85, 0.12, 0.10]
@@ -184,6 +186,7 @@ class packing(Base_Task):
         }
         self.baskets = {}
         self.basket_base_z = {}
+        self.basket_top_z = {}
         for ftype, center in self.basket_centers.items():
             basket = create_actor(
                 self,
@@ -204,6 +207,20 @@ class packing(Base_Task):
                                    0.55 * tint[2] + 0.20])
             self.baskets[ftype] = basket
             self.basket_base_z[ftype] = float(basket.get_pose().p[2])
+            # the [0.5,0.5,0.5,0.5] pose orientation maps local +y (the
+            # mesh's authored "up"/height axis, origin at the base) onto
+            # world +z, so world rim height above the origin is simply
+            # extents[1] * scale[1] from the (already scale_mult-applied)
+            # model config. Used so the carry/hover target clears the
+            # actual basket wall instead of the old fixed guess, which sat
+            # below the rim and caused the gripper to clip the basket.
+            cfg = getattr(basket, "config", None) or {}
+            extents = cfg.get("extents", [0.0, 0.7, 0.0])
+            scale = cfg.get("scale", [self.basket_scale] * 3)
+            basket_height = float(extents[1]) * float(scale[1])
+            if basket_height <= 0.0:
+                basket_height = 0.07 * self.basket_scale
+            self.basket_top_z[ftype] = self.basket_base_z[ftype] + basket_height
             self.add_prohibit_area(basket, padding=0.04)
 
         # ---- fruit sequence: fixed per-color counts, shuffled order ----
@@ -925,45 +942,61 @@ class packing(Base_Task):
 
         return self._reach_and_attach(idx, arm)
 
-    def _slide_over_basket(self, idx, arm, target_xy, tries=3):
-        """Displacement move(s) toward the basket XY (retries if one plan undershoots)."""
-        for _ in range(tries):
+    def _hover_target_xyz(self, idx, target_xy):
+        """World xyz the *fruit* should reach: over the basket, clearing its rim."""
+        ftype = self.item_types[idx]
+        hover_z = self.basket_top_z[ftype] + self.pick_lift
+        return np.array([target_xy[0], target_xy[1], hover_z], dtype=float)
+
+    def _move_welded_fruit_to(self, idx, arm, xyz, tries=2, tol=0.02):
+        """Drive the welded fruit to a world position via a single clean,
+        collision-planned ``move_to_pose``, computed exactly through the
+        inverse weld transform (``target_ee = target_fruit_pose *
+        weld_offset.inv()``) rather than a blind displacement guess. A
+        second try is only issued as a safety net if the planner couldn't
+        fully reach the pose in one go.
+        """
+        dbg = bool(os.environ.get("PACKING_DEBUG"))
+        for _try in range(tries):
             fp = np.array(self.items[idx].get_pose().p, dtype=float)
-            dxy = target_xy - fp[:2]
-            if float(np.linalg.norm(dxy)) < 0.02:
+            gap = xyz - fp
+            if dbg:
+                print(f"[packing]  move try={_try} fp={fp.round(4)} target={xyz.round(4)} gap={gap.round(4)}", flush=True)
+            if float(np.linalg.norm(gap)) < tol:
                 break
-            self.move(self.move_by_displacement(
-                arm, x=float(dxy[0]), y=float(dxy[1]), move_axis="world",
-            ))
+            fruit_pose = self.items[idx].get_pose()
+            target_fruit_pose = sapien.Pose(xyz.tolist(), list(fruit_pose.q))
+            target_ee_pose = target_fruit_pose * self._weld_offset[idx].inv()
+            self.move(self.move_to_pose(arm, target_ee_pose))
             self.plan_success = True
 
-    def _slide_pair_over_baskets(self, idx_l, idx_r, arm_l, arm_r, target_l, target_r, tries=3):
-        """Displacement move(s) for both arms toward their basket XY, together."""
-        for _ in range(tries):
-            pl = np.array(self.items[idx_l].get_pose().p, dtype=float)
-            pr = np.array(self.items[idx_r].get_pose().p, dtype=float)
-            dl = target_l - pl[:2]
-            dr = target_r - pr[:2]
-            if float(np.linalg.norm(dl)) < 0.02 and float(np.linalg.norm(dr)) < 0.02:
-                break
-            self.move(
-                self.move_by_displacement(arm_l, x=float(dl[0]), y=float(dl[1]), move_axis="world"),
-                self.move_by_displacement(arm_r, x=float(dr[0]), y=float(dr[1]), move_axis="world"),
-            )
-            self.plan_success = True
+    def _slide_over_basket(self, idx, arm, target_xyz, tries=2, tol=0.02):
+        """Lift straight up clear of the basket rim/belt, then slide
+        horizontally over to the target XY — two simple moves instead of
+        one long diagonal, since the collision-aware planner is much more
+        likely to fully complete each simple move than a single combined
+        one (a long diagonal through cluttered space often only gets
+        partially planned around obstacles, leaving a large silent
+        residual). This also reads as a natural lift-then-carry gesture.
+        """
+        dbg = bool(os.environ.get("PACKING_DEBUG"))
+        fp0 = np.array(self.items[idx].get_pose().p, dtype=float)
+        lift_xyz = np.array([fp0[0], fp0[1], target_xyz[2]], dtype=float)
+        self._move_welded_fruit_to(idx, arm, lift_xyz, tries=tries, tol=tol)
+        self._move_welded_fruit_to(idx, arm, target_xyz, tries=tries, tol=tol)
+        if dbg:
+            fp = np.array(self.items[idx].get_pose().p, dtype=float)
+            print(f"[packing]  slide residual={np.linalg.norm(target_xyz - fp):.4f}", flush=True)
 
     def _carry_and_drop(self, idx, arm, target_xy):
-        """Lift well clear of the belt, slide over the basket via displacement, then release."""
-        self.move(self.move_by_displacement(arm, z=self.pick_lift, move_axis="world"))
-        self.plan_success = True
-
-        self._slide_over_basket(idx, arm, target_xy)
+        """Go over the basket (clearing the rim), then release."""
+        self._slide_over_basket(idx, arm, self._hover_target_xyz(idx, target_xy))
         # gripper is above the basket — next fruit wave may spawn
         self._over_basket[idx] = True
 
         self.move(self.open_gripper(arm))
         self._release_fruit(idx)
-        self._belt_dwell(70)
+        self._belt_dwell(60)
         self._settle_after_drop(idx, target_xy)
         self.move(self.back_to_origin(arm))
         self.plan_success = True
@@ -1111,20 +1144,53 @@ class packing(Base_Task):
             if dbg:
                 print("[packing]  pair: both attached", flush=True)
 
-            # lift well clear of the belt, slide over the baskets via displacement, release
-            self.move(
-                self.move_by_displacement(left, z=self.pick_lift, move_axis="world"),
-                self.move_by_displacement(right, z=self.pick_lift, move_axis="world"),
-            )
-            self.plan_success = True
-            self._slide_pair_over_baskets(idx_l, idx_r, left, right, target_l, target_r)
+            # lift straight up (both arms together), then slide horizontally
+            # over to each basket (both arms together) — see
+            # _slide_over_basket for why this is split into two simple moves
+            target_xyz_l = self._hover_target_xyz(idx_l, target_l)
+            target_xyz_r = self._hover_target_xyz(idx_r, target_r)
+
+            def _pair_move_to(xyz_l, xyz_r, tries=2, tol=0.02):
+                for _try in range(tries):
+                    fp_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
+                    fp_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
+                    gl = xyz_l - fp_l
+                    gr = xyz_r - fp_r
+                    if dbg:
+                        print(f"[packing]  pair move try={_try} gap_l={gl.round(4)} gap_r={gr.round(4)}", flush=True)
+                    if float(np.linalg.norm(gl)) < tol and float(np.linalg.norm(gr)) < tol:
+                        break
+                    pose_l = self.items[idx_l].get_pose()
+                    pose_r = self.items[idx_r].get_pose()
+                    target_pose_l = sapien.Pose(xyz_l.tolist(), list(pose_l.q))
+                    target_pose_r = sapien.Pose(xyz_r.tolist(), list(pose_r.q))
+                    target_ee_l = target_pose_l * self._weld_offset[idx_l].inv()
+                    target_ee_r = target_pose_r * self._weld_offset[idx_r].inv()
+                    self.move(
+                        self.move_to_pose(left, target_ee_l),
+                        self.move_to_pose(right, target_ee_r),
+                    )
+                    self.plan_success = True
+
+            fp0_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
+            fp0_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
+            lift_xyz_l = np.array([fp0_l[0], fp0_l[1], target_xyz_l[2]], dtype=float)
+            lift_xyz_r = np.array([fp0_r[0], fp0_r[1], target_xyz_r[2]], dtype=float)
+            _pair_move_to(lift_xyz_l, lift_xyz_r)
+            _pair_move_to(target_xyz_l, target_xyz_r)
+
+            if dbg:
+                fp_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
+                fp_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
+                print(f"[packing]  pair slide residual l={np.linalg.norm(target_xyz_l - fp_l):.4f} "
+                      f"r={np.linalg.norm(target_xyz_r - fp_r):.4f}", flush=True)
             self._over_basket[idx_l] = True
             self._over_basket[idx_r] = True
 
             self.move(self.open_gripper(left), self.open_gripper(right))
             self._release_fruit(idx_l)
             self._release_fruit(idx_r)
-            self._belt_dwell(70)
+            self._belt_dwell(60)
             self._settle_after_drop(idx_l, target_l)
             self._settle_after_drop(idx_r, target_r)
 
