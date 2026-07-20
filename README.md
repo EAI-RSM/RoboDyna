@@ -60,6 +60,8 @@ demo dataset or demo clip yet):
 | `whack_a_mole` | Whack-a-mole: hit popping moles with held blue cubes; optional rabbit distractors fail the episode if touched. | <img src="assets/static/demos/whack_a_mole.gif" width="240"/> |
 | `catch_valley_ball` | Place a small bowl beyond the 10 cm red boundary to catch a ball leaving a curved down-then-up ramp. Episodes use either a straight path or an angled path that rebounds from the side rails. | <img src="assets/static/demos/catch_valley_ball.gif" width="240"/> |
 | `catch_marbles_trapdoors` | Time button presses to drop marbles through trapdoors on four belts as they pass the drop point. | <img src="assets/static/demos/catch_marbles_trapdoors.gif" width="240"/> |
+| `marble_shelf_maze` | Press left/right buttons to tilt each shelf so the marble rolls down the zig-zag stack and lands in the bowl. | <img src="assets/static/demos/marble_shelf_maze.gif" width="240"/> |
+| `catch_shelf_marble` | Hold the left or right action key to slide the bowl along the belt and catch the marble rolling off the tilted shelves. | <img src="assets/static/demos/catch_shelf_marble.gif" width="240"/> |
 | `cup_curtain_slot` | Single-arm: carry a cup through a laterally swaying curtain of strips and into a slot. | <img src="assets/static/demos/cup_curtain_slot.gif" width="240"/> |
 | `dual_hole_punch` | Both arms press buttons to hole-punch files on two independent continuously moving belts (optional missing-tile side). | <img src="assets/static/demos/dual_hole_punch.gif" width="240"/> |
 | `assemble_markers_cylinder` | Dual-arm assembly: attach four markers evenly (90° apart) around a vertical magnetic cylinder. | <img src="assets/static/demos/assemble_markers_cylinder.gif" width="240"/> |
