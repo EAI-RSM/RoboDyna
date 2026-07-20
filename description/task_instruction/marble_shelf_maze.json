@@ -1,0 +1,42 @@
+{
+  "full_description": "press the left or right button to tilt the shelf the marble is on so it rolls down the zig-zag shelves and lands in the bowl",
+  "schema": "{A} is the marble, {B} is the shelves, {C} is the bowl, {D} is the buttons, {a} is the left arm, {b} is the right arm",
+  "preference": "num of words should not exceed 16",
+  "seen": [
+    "Press the buttons to walk {A} down {B} and into {C}",
+    "Tilt each shelf left or right so {A} drops into {C}",
+    "Use {a} and {b} to steer {A} through {B} into {C}",
+    "Guide {A} down the shelf maze so it lands in {C}",
+    "Route {A} through {B} to the bowl by pressing {D}",
+    "Tilt the active shelf toward the bowl side to drop {A} in {C}",
+    "Press left or right so {A} rolls shelf by shelf into {C}",
+    "Send {A} down the zig-zag shelves into {C}",
+    "Steer the marble through {B} into {C} with the two buttons",
+    "Drop {A} into {C} by tilting each shelf it lands on",
+    "Walk {A} down through all of {B} into {C}",
+    "Use {D} to tilt shelves until {A} falls into {C}",
+    "Guide the rolling marble into {C} one shelf at a time",
+    "Press the correct button each time so {A} reaches {C}",
+    "Roll {A} off each shelf toward the bowl until it lands in {C}",
+    "Tilt shelves with {a} and {b} to land {A} in {C}",
+    "Send the marble zig-zagging down {B} into {C}",
+    "Press {D} in sequence so {A} ends up in {C}",
+    "Get {A} to fall into {C} by pressing the shelf buttons",
+    "Direct {A} down the shelf stack into {C}",
+    "Tilt the shelf under {A} toward {C} at every level",
+    "Move {A} through the glass shelves and into {C}",
+    "Use the buttons to drop the marble into the waiting bowl",
+    "Chain button presses so {A} lands in {C}",
+    "Work {A} down each shelf until it drops into {C}"
+  ],
+  "unseen": [
+    "Press left or right to walk {A} down every shelf into {C}",
+    "Tilt each active shelf so {A} finally drops into {C}",
+    "Route the marble through the zig-zag shelves into {C}",
+    "Use {a} and {b} on the buttons to land {A} in {C}",
+    "Send {A} rolling down {B} until it falls into {C}",
+    "Press the buttons in order so {A} reaches {C}",
+    "Guide the marble shelf by shelf into the bowl below",
+    "Tilt the shelf holding {A} toward {C} each time"
+  ]
+}

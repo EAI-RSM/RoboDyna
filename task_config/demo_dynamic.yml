@@ -89,15 +89,19 @@ task_args:
     n_shelves: 4
     shelf_length: 0.15
     glass_gap: 0.05
-    shelf_half_thick: 0.0125
+    shelf_half_depth: 0.0125
+    shelf_half_thick: 0.00625
     level_gap: 0.055
     offset_min: 0.085
     offset_max: 0.11
-    bottom_clearance: 0.05
+    bottom_clearance: 0.15
     ball_radius: 0.012
     roll_off_speed: 0.06
+    natural_ball_stop: false
     tilt_angle_deg: 45.0
     tilt_duration_sec: 0.5
+    smooth_tilt: false
+    tilt_speed_deg_per_sec: 30.0
     fall_settle_steps: 160
     final_fall_settle_steps: 220
     button_press_depth: 0.03
