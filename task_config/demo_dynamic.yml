@@ -304,7 +304,14 @@ task_args:
     basket_y: 0.0             # table midline (toward belts)
     basket_x: 0.34            # nudged out so the bigger basket clears the belts
     basket_scale: 1.15        # bigger opening — easier drop-in target
-    pick_lift: 0.07           # hover clearance above the basket rim before releasing (generous, so the arm clears the wall)
+    pick_lift: 0.10           # raise gripper +Z by this much after grasp, then slide horizontally over the basket and release
+    pair_stagger_enabled: true  # pair waves ("parallel"/"random" modes): give one fruit a small head start so they don't ride in perfect lockstep
+    pair_stagger_y: 0.045      # m; how much of a head start (kept well inside pick-window tolerances)
+    single_wave_any_belt: true  # "random" mode: a single-fruit wave may appear on either belt (not just its color's dedicated one); packing arm/basket stay color-matched
+    distractor_enabled: true  # spawn brown "spoiled-looking" distractor fruits that the robot must ignore (never packed/counted)
+    distractor_prob: 0.4       # chance per real spawn-wave that a distractor also spawns, on a randomly chosen belt
+    distractor_color: [0.45, 0.30, 0.15]  # brown; distinct from APPLE_COLOR (red) / ORANGE_COLOR (orange)
+    distractor_min_gap_mult: 2.0  # min center-to-center Y gap from any same-belt real fruit, as a multiple of fruit diameter (2*FRUIT_R)
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90
