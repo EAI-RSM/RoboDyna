@@ -1,10 +1,10 @@
 render_freq: 0
-episode_num: 8                 # debug: small batch
+episode_num: 2
 use_seed: false
 save_freq: 15
-embodiment: [aloha-agilex] #[ur5-wsg, ur5-wsg, 0.6]
+embodiment: [ur5-wsg, ur5-wsg, 0.6] #[aloha-agilex] #
 language_num: 100
-use_dynamic: false            # static path by default; tasks with a moving element flip this themselves
+use_dynamic: true            # static path by default; tasks with a moving element flip this themselves
 dynamic_level: 1              # dynamic complexity level(1,2,3)
 dynamic_coefficient: 0.1      # dynamic coefficient
 domain_randomization:
@@ -22,7 +22,7 @@ camera:
   collect_wrist_camera: true
 data_type:
   rgb: true
-  third_view: false
+  third_view: true
   depth: false
   pointcloud: false
   observer: false
@@ -33,30 +33,35 @@ data_type:
 pcd_down_sample_num: 1024
 pcd_crop: true
 save_path: ./data
-clear_cache_freq: 5
+clear_cache_freq: 1
 collect_data: true
 eval_video_log: true
-check_render_success: false   # debug: don't filter render-pass successes
+check_render_success: false
+save_failed_cases: true  # only filter on plan-pass success; flip to true for a double-verified production set
 # ---- LeRobot v2.1 export (inline, written alongside the HDF5/mp4 into one combined suite dataset) ----
 export_lerobot: true
 lerobot_root: ./data_lerobot/domino_suite
 lerobot_chunks_size: 1000
 lerobot_task_state_dim: 32
-save_failed_cases: true       # debug: save every attempt (with its success flag) so a not-yet-fixed task's job always TERMINATES instead of looping seeds forever
 # ---------------------------------------------------------------------------
-# DEBUG mirror of demo_dynamic.yml: same per-task params, smaller batch + save-failed
-# so jobs terminate while tuning. Invoke as `collect_data.sh <task> debug_dynamic 0`.
-# Keep this task_args block in sync with demo_dynamic.yml.
+# Per-task params, namespaced by task name. This is the SHARED config for the
+# whole suite: invoke as `collect_data.sh <task> demo_dynamic 0` -- the task arg
+# selects which block below is read (kwags["task_args"][<task>]); all other tasks'
+# blocks are ignored. (debug_dynamic.yml mirrors this block with debug run knobs.)
 # ---------------------------------------------------------------------------
 task_args:
   toast_bread:
-    toast_steps: 300
+    toast_steps: 1000
     target_doneness: 0.45
     plate_scale_mult: 0.65
     steamer_scale_mult: 0.10
   cook_meat:
-    cook_steps: 1000
-    target_doneness: 0.5
+    cook_steps_min: 2000      # KEY random: cook SPEED (steps for doneness 0->1.0)
+    cook_steps_max: 8000      # ~4-16 s to reach medium(~0.5) at 250Hz
+    target_doneness_min: 0.45 # tight band around medium
+    target_doneness_max: 0.55
+    place_dx: 0.010           # center the steak in the bowl (+x)
+    place_dy: -0.015          # center the steak in the bowl (-y)
   assemble_markers_cylinder:
     side_cyl_radius: 0.018
     side_cyl_half_len: 0.10
@@ -69,8 +74,8 @@ task_args:
     dwell_steps: 40
     side_group_x_offset: 0.18
     side_group_y_offset: 0.10
-    side_group_x_jitter: 0.02
-    side_group_y_jitter: 0.008
+    side_group_x_jitter: 0.03
+    side_group_y_jitter: 0.01
     center_table_clearance: 0.005
     rotation_direction: counter_clockwise
   catch_marbles_trapdoors:
@@ -81,6 +86,31 @@ task_args:
     door_open_speed_deg: 220.0
     ball_speed: 0.18
     ball_bounce_height: 0.012
+  marble_shelf_maze:
+    n_shelves: 4
+    shelf_length: 0.15
+    glass_gap: 0.05
+    shelf_half_depth: 0.0125
+    shelf_half_thick: 0.00625
+    level_gap: 0.055
+    level_gap_jitter: 0.35
+    overlap_min: 0.30
+    overlap_max: 0.75
+    bottom_clearance: 0.15
+    ball_radius: 0.012
+    roll_off_speed: 0.06
+    natural_ball_stop: false
+    tilt_angle_deg: 45.0
+    tilt_duration_sec: 0.5
+    smooth_tilt: false
+    tilt_speed_deg_per_sec: 30.0
+    fall_settle_steps: 160
+    final_fall_settle_steps: 220
+    button_press_depth: 0.03
+    press_hold_steps: 20
+    post_press_dwell: 10
+    bowl_scale_mult: 0.65
+    bowl_catch_radius: 0.032
   catch_rat:
     num_appearances: 3
     pop_steps: 90
@@ -88,7 +118,7 @@ task_args:
   whack_a_mole:
     num_moles: 4
     num_distractors: 0        # white rabbit distractors (0..M, M=4); touching one fails
-    difficulty: easy
+    difficulty: easy          # easy = one mole at a time; hard = two simultaneous (both arms)
     pop_steps: 90
     touch_tol: 0.04
     hole_count: 9
@@ -110,23 +140,28 @@ task_args:
     rim_radius: 0.055
     pour_every: 3
   cup_curtain_slot:
-    curtain_freq: 0.8
+    curtain_freq: 0.4
     curtain_amp: 0.05
-    belt_speed: 0.04
+    belt_speed: 0.3
     belt_range: 0.06
     placement_tol: 0.07
     gap_tol: 0.06
     reach_tol: 0.07
+    blue_curtains_enabled: true
+    blue_curtain_dynamic_enabled: false
+    place_cup_in_middle_of_yellow_tools: true
+    lift_off_only_after_place: false
+    post_place_lift_z: 0.10
   dual_hole_punch:
     n_pages: 4
     punch_tol: 0.035
     belt_inward_reach: 0.13
     belt_outward_scale: 2.0
     equal_tile_spacing: true
-    belt_speed: 0.2
+    belt_speed: 0.0002
     belt_continous_motion: true
     missing_tile_mode: true
-    tile_pause_steps: 28
+    tile_pause_steps: 60
     square_gap: 0.015
     square_gap_min: 0.010
     square_gap_max: 0.030
@@ -152,18 +187,21 @@ task_args:
     belt_key_y_right: -0.06
     key_x: -0.26
     key_y: -0.13
-    dispense_steps: 20
-    press_hold_steps: 5
-    post_press_dwell: 8
+    dispense_steps: 24
+    press_hold_steps: 6
+    post_press_dwell: 10
   catch_shelf_marble:
-    n_shelves: 4
+    n_shelves_min: 4          # per-episode randomized shelf count (set n_shelves to pin a fixed count)
+    n_shelves_max: 7
     shelf_length: 0.20
-    level_gap: 0.13
-    tilt_min_deg: 15.0
-    tilt_max_deg: 45.0
+    stack_height: 0.39        # total bottom-to-top-shelf span; level_gap = stack_height/(n_shelves-1)
+    tilt_min_deg: 15.0        # randomized per-shelf tilt magnitude range (degrees); direction is
+    tilt_max_deg: 45.0        # independently randomized per shelf, see load_actors
     bottom_clearance: 0.22
     ball_radius: 0.014
     roll_speed: 0.35
+    reactive_marble: false    # if true: marble drops at play_once start instead of on key-press
+    reactive_roll_speed: 0.09 # slide speed used only when reactive_marble is true (see docstring)
     bowl_radius: 0.05
     bowl_speed: 0.18
     bowl_catch_xy_tol: 0.035
@@ -175,12 +213,12 @@ task_args:
     ball_speed_max: 0.09
     ball_angle_deg_min: -10.0
     ball_angle_deg_max: 10.0
-    goal_center_y: 0.10
+    goal_center_y: 0.05
     goal_center_y_jitter: 0.0
     green_area_x_len: 0.10
     green_area_y_extra: 0.05
-    red_line_x: 0.06
-    goal_x: 0.20
+    red_line_x: 0.2
+    goal_x: 0.30
     keeper_x: 0.16
     keeper_goal_clearance: 0.05
     keeper_pose_tol: 0.03
@@ -199,7 +237,7 @@ task_args:
     theta_max_deg: 30.0
     belt_ride_steps: 600
   rotating_shape_sorter:
-    spin_speed: 0.9
+    spin_speed: 1.9
     r_tol: 0.06
     align_window: 0.18
     max_track_steps: 900
@@ -208,7 +246,7 @@ task_args:
     train_omega_min: 0.10
     train_omega_max: 0.18
     n_wagons: 3
-    ball_side: random
+    ball_side: right
     ball_lateral_min: 0.07
     ball_lateral_max: 0.12
     ball_y_jitter: 0.02
@@ -230,8 +268,10 @@ task_args:
     latch_z_max: 0.015
     latch_settle_steps: 12
   sort_apples_belt:
-    n_apples: 10
-    belt_speed: 0.012
+    n_apples_min: 4          # RANDOM apple count per episode
+    n_apples_max: 10
+    belt_speed_min: 0.0005   # RANDOM steady belt speed per episode (~0.03-0.06 m/s, constant flow)
+    belt_speed_max: 0.0010
     belt_speed_scale: 1.0
     advance_every: 4
     gate_default_left: true
@@ -246,8 +286,8 @@ task_args:
     motion_x_max: 0.24
     target_center_x_min: 0.12
     target_center_x_max: 0.15
-    blocker_enabled: false
-    blocker_dynamic: false
+    blocker_enabled: true
+    blocker_dynamic: true
     blocker_radius: 0.040
     blocker_thickness: 0.002
     blocker_y_gap: 0.050
@@ -267,27 +307,36 @@ task_args:
     n_tiles: 6
     color_mode: alternating   # alternating | random (non-black tiles)
     spacing_mode: random      # equal | random inter-tile gaps
-    tile_spacing: 0.08
-    spacing_min: 0.07
-    spacing_max: 0.14
+    tile_spacing: 0.08        # equal-mode center-to-center gap
+    spacing_min: 0.07         # random-mode min gap
+    spacing_max: 0.14         # random-mode max gap
     black_frac_max: 0.50      # randomly blacken up to this fraction; no key on black
   packing:
-    n_per_color: 3
-    spawn_mode: parallel      # single | parallel; next wave after drop or belt-exit
-    spawn_delay_s: 2.0        # unused (compat)
-    belt_gap: 0.10
-    belt_speed: 0.0008
-    # belt_speed_left: 0.0008
+    n_per_color: 3            # number of each colored fruit (apples + oranges)
+    # n_apple: 3              # optional per-color override (falls back to n_per_color)
+    # n_orange: 3
+    spawn_mode: random        # single | parallel | random (aliases: opt1 | opt2 | opt3)
+    # single: one fruit at a time; next spawns only after drop-in-basket or belt exit
+    # parallel: one apple+orange wave; next wave only after both packed or left the belt
+    # random: each wave randomly picks single (1 fruit) or pair (apple+orange) — count varies run to run
+    spawn_delay_s: 2.0        # unused (compat); spawn is gated on drop / belt-exit
+    belt_gap: 0.10            # gap between the two belts, centered at x=0
+    belt_speed: 0.0008        # shared default speed (m per belt tick); both belts use this
+    # belt_speed_left: 0.0008 # optional per-belt override (falls back to belt_speed)
     # belt_speed_right: 0.0012
-    advance_every: 3
+    advance_every: 3          # physics steps between belt ticks
     spawn_gap: 0.16
-    pick_y: 0.24
-    pick_y_end: -0.16
-    pick_station_y: 0.02
-    fruit_scale: 0.80
-    basket_y: 0.0
-    basket_x: 0.34
-    basket_scale: 1.15
+    pick_y: 0.24              # start arm approach; fruit keeps rolling
+    pick_y_end: -0.16         # past this, too late; fruit loops to far end
+    pick_station_y: 0.02      # hover/grab line; fruit rolls through without pausing
+    fruit_scale: 0.80         # larger fruit -> easier grasp
+    basket_y: 0.0             # table midline (toward belts)
+    basket_x: 0.34            # nudged out so the bigger basket clears the belts
+    basket_scale: 1.15        # bigger opening — easier drop-in target
+    pick_lift: 0.10           # hover clearance above the basket rim before releasing; bumped from 0.07 to compensate for the single-try move's typical undershoot (see PICK_LIFT comment in envs/packing.py) — do not raise further without re-checking for the ~0.11+ planner-overshoot regression
+    pair_stagger_enabled: true  # pair waves ("parallel"/"random" modes): give one fruit a small head start so they don't ride in perfect lockstep
+    pair_stagger_y: 0.045      # m; how much of a head start (kept well inside pick-window tolerances)
+    single_wave_any_belt: true  # "random" mode: a single-fruit wave may appear on either belt (not just its color's dedicated one); packing arm/basket stay color-matched
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90
@@ -320,7 +369,7 @@ task_args:
     ball_radius: 0.018
     drop_height: 0.14
     drop_time: 0.60
-    ball_path_mode: random   # straight, angled, or random
+    ball_path_mode: angled   # straight, angled, or random
     angled_path_min_deg: 15.0
     angled_path_max_deg: 25.0
     drop_forward_angle_min_deg: -8.0
@@ -342,13 +391,17 @@ task_args:
     bowl_outer_radius: 0.037
     bowl_height: 0.040
   play_billiard:
-    pocket_mode: any          # any | top_three
-    blocker_mode: none        # none | path_to_top | unused_tops
-    num_extra_balls: 0        # 0–2
+    # pocket_mode: any = any of 6 holes; top_three = one of top-left/mid/right
+    pocket_mode: any
+    # blocker_mode: none | path_to_top (blockers on way to a top hole)
+    #              | unused_tops (blockers on top holes that are not the goal)
+    blocker_mode: none
+    num_extra_balls: 0      # 0–2 colored blocker balls
     ball_radius: 0.012
+    # pocket diameter = 1.2 × ball diameter (omit to use that default)
     table_cx: 0.0
     table_cy: 0.1
-    table_half_len: 0.22
+    table_half_len: 0.22    # doubled playing surface
     table_half_wid: 0.14
     settle_steps: 500
     strike_impulse: 0.55

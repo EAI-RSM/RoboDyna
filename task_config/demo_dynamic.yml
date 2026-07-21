@@ -238,6 +238,32 @@ task_args:
     r_tol: 0.06
     align_window: 0.18
     max_track_steps: 900
+  load_train:
+    rail_radius: 0.20
+    train_omega_min: 0.10
+    train_omega_max: 0.18
+    n_wagons: 3
+    ball_side: random
+    ball_lateral_min: 0.07
+    ball_lateral_max: 0.12
+    ball_y_jitter: 0.02
+    ball_radius: 0.015
+    car_floor_h: 0.014
+    car_half_len: 0.045
+    car_half_wid: 0.040
+    car_arc_spacing: 0.10
+    car_wall_h: 0.036
+    ball_side_clearance: 0.11
+    release_clearance_z: 0.20
+    transport_clearance_z: 0.22
+    pass_angle_offset: 0.22
+    align_tol: 0.055
+    release_open_steps: 300
+    post_release_steps: 500
+    catch_radius: 0.055
+    drop_reach_tol: 0.030
+    latch_z_max: 0.015
+    latch_settle_steps: 12
   sort_apples_belt:
     n_apples_min: 4          # RANDOM apple count per episode
     n_apples_max: 10
