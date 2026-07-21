@@ -264,6 +264,11 @@ task_args:
     drop_reach_tol: 0.030
     latch_z_max: 0.015
     latch_settle_steps: 12
+    tunnel_enabled: random
+    tunnel_prob: 0.55
+    tunnel_n_wagons_min: 2
+    tunnel_n_wagons_max: 4
+    tunnel_center_jitter: 0.40
   sort_apples_belt:
     n_apples_min: 4          # RANDOM apple count per episode
     n_apples_max: 10

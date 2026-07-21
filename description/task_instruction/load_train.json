@@ -1,5 +1,5 @@
 {
-  "full_description": "Pick up the ball in front of you and drop it into a wagon of the toy train as it circles past on the rail.",
+  "full_description": "Pick up the ball in front of you and drop it into a wagon of the toy train as it circles past on the rail. An optional tunnel may cover part of the far arc.",
   "schema": "{A} notifies the ball, {B} notifies the toy train, {a} notifies the arm used",
   "preference": "num of words should not exceed 16",
   "seen": [

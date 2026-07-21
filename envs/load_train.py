@@ -13,10 +13,12 @@ class load_train(Base_Task):
     A circular rail is centered on the table. A closed locomotive leads three open
     wagons around the loop (wagon count configurable). The locomotive starts at
     12 o'clock (far side, opposite the arms) and the train moves continuously.
-    The near arc passes in front of the robot. A graspable ball spawns on the left
-    or right near side; the matching arm grasps it, carries it to a drop station
-    above the near rail, times the release so an open wagon is underneath, and
-    seats the ball in that wagon — while the train keeps moving the whole time.
+    An optional tunnel may spawn on the back arc (2–4 wagons long, upper half only)
+    so it does not interfere with grasping near the robot. The near arc passes in
+    front of the robot. A graspable ball spawns on the left or right near side; the
+    matching arm grasps it, carries it to a drop station above the near rail, times
+    the release so an open wagon is underneath, and seats the ball in that wagon —
+    while the train keeps moving the whole time.
 
     Train motion is step-driven in `_update_kinematic_tasks` so plan and render
     passes stay identical. Once the ball is seated in a wagon it is latched and
@@ -72,6 +74,17 @@ class load_train(Base_Task):
     # Max allowed miss between commanded drop target and where the ball actually ends up
     DROP_REACH_TOL_DEFAULT = 0.030
 
+    # Optional back-side tunnel (covers 2–4 wagons; stays off the robot's near half)
+    TUNNEL_ENABLED_DEFAULT = "random"   # true | false | random
+    TUNNEL_PROB_DEFAULT = 0.55
+    TUNNEL_N_WAGONS_MIN_DEFAULT = 2
+    TUNNEL_N_WAGONS_MAX_DEFAULT = 4
+    TUNNEL_CENTER_JITTER_DEFAULT = 0.40  # rad L/R of +pi/2 (12 o'clock)
+    TUNNEL_CLEARANCE_Z_DEFAULT = 0.10    # opening height above rail surface
+    TUNNEL_WALL_T_DEFAULT = 0.010
+    TUNNEL_ROOF_T_DEFAULT = 0.012
+    TUNNEL_OVERHANG_DEFAULT = 0.018      # radial overhang past the rail walls
+
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("load_train", {})
         # Clear per-episode state BEFORE _init_task_env_: load_camera calls
@@ -87,6 +100,9 @@ class load_train(Base_Task):
         self._bed_contact_steps = 0
         self.selected_arm = None
         self.ball_in_train = False
+        self.tunnel_present = False
+        self.tunnel_n_wagons = 0
+        self.tunnel_center_angle = None
         self.cars = []
         self._car_rigids = []
         self.ball = None
@@ -205,6 +221,36 @@ class load_train(Base_Task):
         self.drop_reach_tol = float(cfg.get("drop_reach_tol", self.DROP_REACH_TOL_DEFAULT))
         self._bed_contact_steps = 0
 
+        # Optional tunnel on the back arc (never on the robot's near / lower half).
+        tunnel_cfg = str(cfg.get("tunnel_enabled", self.TUNNEL_ENABLED_DEFAULT)).lower()
+        tunnel_prob = float(cfg.get("tunnel_prob", self.TUNNEL_PROB_DEFAULT))
+        if tunnel_cfg in ("true", "1", "yes", "always"):
+            self.tunnel_present = True
+        elif tunnel_cfg in ("false", "0", "no", "never"):
+            self.tunnel_present = False
+        else:
+            self.tunnel_present = bool(np.random.rand() < tunnel_prob)
+        self.tunnel_n_wagons_min = int(cfg.get("tunnel_n_wagons_min", self.TUNNEL_N_WAGONS_MIN_DEFAULT))
+        self.tunnel_n_wagons_max = int(cfg.get("tunnel_n_wagons_max", self.TUNNEL_N_WAGONS_MAX_DEFAULT))
+        if self.tunnel_n_wagons_max < self.tunnel_n_wagons_min:
+            self.tunnel_n_wagons_min, self.tunnel_n_wagons_max = (
+                self.tunnel_n_wagons_max, self.tunnel_n_wagons_min
+            )
+        self.tunnel_n_wagons_min = max(1, self.tunnel_n_wagons_min)
+        self.tunnel_n_wagons_max = max(self.tunnel_n_wagons_min, self.tunnel_n_wagons_max)
+        self.tunnel_center_jitter = float(
+            cfg.get("tunnel_center_jitter", self.TUNNEL_CENTER_JITTER_DEFAULT)
+        )
+        self.tunnel_clearance_z = float(
+            cfg.get("tunnel_clearance_z", self.TUNNEL_CLEARANCE_Z_DEFAULT)
+        )
+        self.tunnel_wall_t = float(cfg.get("tunnel_wall_t", self.TUNNEL_WALL_T_DEFAULT))
+        self.tunnel_roof_t = float(cfg.get("tunnel_roof_t", self.TUNNEL_ROOF_T_DEFAULT))
+        self.tunnel_overhang = float(cfg.get("tunnel_overhang", self.TUNNEL_OVERHANG_DEFAULT))
+        self.tunnel_n_wagons = 0
+        self.tunnel_center_angle = None
+        self.tunnel_half_angle = 0.0
+
         z0 = 0.74 + self.table_z_bias
         self.table_top_z = z0
         self.rail_surface_z = z0 + self.rail_thick
@@ -226,6 +272,8 @@ class load_train(Base_Task):
         self._drop_target_xy = self._xy_on_rail(self.pass_angle)
 
         self._build_rail()
+        if self.tunnel_present:
+            self._build_tunnel()
         self._build_train()
         self._place_train(self._train_angle)
 
@@ -324,6 +372,87 @@ class load_train(Base_Task):
             name="rail_hub",
             is_static=True,
         )
+
+    def _build_tunnel(self):
+        """Static tunnel over the back arc (upper half), spanning 2–4 wagon lengths.
+
+        Centered near 12 o'clock with slight L/R jitter. Clamped so no segment enters
+        the robot's near / lower half (sin(angle) < 0), keeping grasp space clear.
+        """
+        n_w = int(np.random.randint(self.tunnel_n_wagons_min, self.tunnel_n_wagons_max + 1))
+        arc_len = float(n_w) * float(self.car_arc_spacing)
+        half_ang = 0.5 * arc_len / max(self.rail_radius, 1e-6)
+        # Keep a margin inside the upper half [0, pi].
+        margin = 0.10
+        lo = half_ang + margin
+        hi = np.pi - half_ang - margin
+        if hi < lo:
+            # Degenerate (huge tunnel on tiny radius) — shrink half-span.
+            half_ang = max(0.05, 0.5 * (np.pi - 2.0 * margin))
+            lo = half_ang + margin
+            hi = np.pi - half_ang - margin
+        center = 0.5 * np.pi + float(np.random.uniform(
+            -self.tunnel_center_jitter, self.tunnel_center_jitter
+        ))
+        center = float(np.clip(center, lo, hi))
+        self.tunnel_n_wagons = int(n_w)
+        self.tunnel_center_angle = float(center)
+        self.tunnel_half_angle = float(half_ang)
+
+        # Opening tall enough for loco + cab; walls sit outside the rail walls.
+        open_h = max(
+            self.tunnel_clearance_z,
+            self.engine_body_h + self.engine_cab_h + 0.025,
+        )
+        z_base = self.rail_surface_z
+        wall_half_h = 0.5 * open_h
+        roof_z = z_base + open_h + 0.5 * self.tunnel_roof_t
+        # Radial half-width of the tunnel cavity (covers sleepers + guide rails + overhang).
+        cavity_half_w = self.rail_half_w + 0.006 + self.tunnel_overhang
+        pier_color = (0.42, 0.40, 0.36)
+        roof_color = (0.34, 0.32, 0.28)
+
+        n_seg = max(6, int(round(n_w * 5)))
+        angs = np.linspace(center - half_ang, center + half_ang, n_seg)
+        # Chord half-length between consecutive segment centers.
+        dtheta = float(angs[1] - angs[0]) if n_seg > 1 else 0.05
+        seg_half_len = 0.55 * self.rail_radius * dtheta
+
+        for i, ang in enumerate(angs):
+            ang = float(ang)
+            xy = self._xy_on_rail(ang)
+            q = self._yaw_quat(ang)
+            radial = np.array([np.cos(ang), np.sin(ang)], dtype=np.float64)
+            # Outer / inner piers.
+            for s, tag in ((1.0, "out"), (-1.0, "in")):
+                wxy = xy + s * (cavity_half_w + 0.5 * self.tunnel_wall_t) * radial
+                create_box(
+                    scene=self,
+                    pose=sapien.Pose(
+                        [wxy[0], wxy[1], z_base + wall_half_h],
+                        q.tolist(),
+                    ),
+                    half_size=(seg_half_len, 0.5 * self.tunnel_wall_t, wall_half_h),
+                    color=pier_color,
+                    name=f"tunnel_wall_{tag}_{i}",
+                    is_static=True,
+                )
+            # Roof slab spanning outer→inner above the opening.
+            create_box(
+                scene=self,
+                pose=sapien.Pose(
+                    [xy[0], xy[1], roof_z],
+                    q.tolist(),
+                ),
+                half_size=(
+                    seg_half_len,
+                    cavity_half_w + self.tunnel_wall_t,
+                    0.5 * self.tunnel_roof_t,
+                ),
+                color=roof_color,
+                name=f"tunnel_roof_{i}",
+                is_static=True,
+            )
 
     def _add_box_shape(self, builder, pose, half_size, material, visual_material):
         builder.add_box_collision(pose=pose, half_size=list(half_size), material=material)
@@ -874,6 +1003,8 @@ class load_train(Base_Task):
         self.info["latched_car_idx"] = (
             None if self._latched_car_idx is None else int(self._latched_car_idx)
         )
+        self.info["tunnel_present"] = bool(getattr(self, "tunnel_present", False))
+        self.info["tunnel_n_wagons"] = int(getattr(self, "tunnel_n_wagons", 0))
         return bool(self.ball_in_train)
 
     def get_obs(self):
@@ -891,5 +1022,12 @@ class load_train(Base_Task):
             ),
             "ball_in_train": bool(getattr(self, "ball_in_train", False)),
             "ball_latched": bool(getattr(self, "_ball_latched", False)),
+            "tunnel_present": bool(getattr(self, "tunnel_present", False)),
+            "tunnel_n_wagons": int(getattr(self, "tunnel_n_wagons", 0)),
+            "tunnel_center_angle": (
+                None
+                if getattr(self, "tunnel_center_angle", None) is None
+                else float(self.tunnel_center_angle)
+            ),
         }
         return obs
