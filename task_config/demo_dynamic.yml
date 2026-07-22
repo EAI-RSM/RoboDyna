@@ -160,18 +160,21 @@ task_args:
     rim_radius: 0.055
     pour_every: 3
   cup_curtain_slot:
-    curtain_freq: 0.4
-    curtain_amp: 0.05
-    belt_speed: 0.3
-    belt_range: 0.06
-    placement_tol: 0.07
-    gap_tol: 0.06
-    reach_tol: 0.07
-    blue_curtains_enabled: true
-    blue_curtain_dynamic_enabled: false
-    place_cup_in_middle_of_yellow_tools: true
-    lift_off_only_after_place: false
-    post_place_lift_z: 0.10
+    curtain_freq: 0.5           # curtain sway cycles per sim-second-equivalent (opt2)
+    curtain_amp: 0.05           # m; lateral sway amplitude of curtain group
+    belt_speed: 0.08            # m/s nominal; each episode samples ±belt_speed_jitter
+    belt_speed_jitter: 0.20     # fraction; speed ~ U((1-j)*nom, (1+j)*nom)
+    curtain_size_jitter: 0.20   # fraction; curtain strip half-size ~ U((1-j), (1+j)) * nominal
+    belt_range: 0.08            # m; yellow sticks travel ±this on the fixed plate
+    placement_tol: 0.05         # m; placement_score / success tolerance
+    gap_tol: 0.06               # m; curtain-gap vs corridor alignment for “open”
+    reach_tol: 0.05             # m; yellow-gap vs corridor alignment for reach
+    moving_component_spacing: 0.10  # m; yellow-stick center spacing (2cm tighter)
+    blue_curtains_enabled: false # opt1: spawn blue curtain strips
+    blue_curtain_dynamic_enabled: false  # opt2: if true, curtains also sway (implies opt1)
+    random_mirror: true         # randomly mirror across y-axis (x→−x); left arm when mirrored
+    lift_off_only_after_place: false  # if true, only lift after successful place
+    post_place_lift_z: 0.10     # m; +Z lift after place
   dual_hole_punch:
     n_pages: 4
     punch_tol: 0.035

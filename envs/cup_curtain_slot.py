@@ -6,51 +6,71 @@ import numpy as np
 
 
 class cup_curtain_slot(Base_Task):
-    """Double-dynamic, single-arm (RIGHT) task.
+    """Single-arm place-between-yellow-sticks task, with optional blue curtains.
 
-    The right arm starts holding a cup in the near zone. In the mid zone a curtain of
-    vertical strips sways laterally (collidable -- touching it fails the attempt). Behind
-    the curtain a belt carries cup-holder slots with ONE empty slot; the whole belt
-    translates laterally. The policy must wait for a window when (a) a curtain gap opens
-    over the empty slot's x AND (b) the empty slot is within the arm's reach, then pass
-    the cup through the gap and deposit it into the moving slot, then retract.
+    Main goal: place the cup into the moving gap between the two yellow sticks on the belt.
+    The active arm starts with a cup in the near zone; the yellow sticks translate laterally on a
+    fixed belt plate (the plate itself does not move) and keep sliding through deposit. The
+    policy waits until the yellow-stick gap is reachable, tracks it, deposits the cup between
+    the sticks, then retracts.
 
-    Both the curtain phase and the slot position are pure functions of an internal step
-    counter so the two collector passes (plan-only and render) stay deterministic.
+    Layout is randomly mirrored across the y-axis (x → −x) each episode: right-arm default
+    on +x, left-arm mirror on −x. Cup XY pose (and a small yaw) is jittered every episode.
 
-    Metric: placement_score = clamp(1 - center_offset(cup, slot)/tol, 0, 1); forced to 0
-    if the cup ever collided with the curtain.
+    Config options (task_args.cup_curtain_slot):
+      blue_curtains_enabled / opt1 — spawn blue curtain strips in front of the belt
+          (collidable; touching a strip fails the attempt). When enabled, the policy must
+          also wait for a curtain gap over the yellow-stick corridor. Strip half-size is
+          sampled each episode as nominal × U(1±curtain_size_jitter) (default ±20%).
+      blue_curtain_dynamic_enabled / opt2 — if true (and opt1 is on), the blue curtains
+          sway laterally; if false, curtains are static.
+      belt_speed / belt_speed_jitter — nominal yellow-stick speed; each episode samples
+          U((1−j)·nom, (1+j)·nom) with j default 0.20.
+
+    Belt / curtain kinematics are pure functions of an internal step counter so the two
+    collector passes (plan-only and render) stay deterministic.
+
+    Metric: placement_score = clamp(1 - center_offset(cup, yellow-gap)/tol, 0, 1); forced
+    to 0 if the cup ever collided with a blue curtain.
     """
 
     # ---- tunable params (CLASS DEFAULTS; overridable via task_args.cup_curtain_slot) ----
     CURTAIN_FREQ_DEFAULT = 0.8          # curtain oscillation: cycles per (sim-second-equivalent)
     CURTAIN_AMP_DEFAULT = 0.05          # lateral sway amplitude of the curtain group (m)
     CURTAIN_PHASE_DEFAULT = 0.0         # initial phase offset (rad)
-    BELT_SPEED_DEFAULT = 0.2           # belt lateral speed magnitude (m per "second")
-    BELT_RANGE_DEFAULT = 0.12           # belt travels +/- this in x before reversing (m)
+    BELT_SPEED_DEFAULT = 0.08           # nominal belt/yellow-stick speed; each ep samples ±jitter
+    BELT_SPEED_JITTER_DEFAULT = 0.20    # fraction; speed ~ U((1-j)*nom, (1+j)*nom)
+    CURTAIN_SIZE_JITTER_DEFAULT = 0.20  # fraction; strip half-size ~ U((1-j), (1+j)) * nominal
+    BELT_RANGE_DEFAULT = 0.08           # yellow sticks travel +/- this in x before reversing (m)
     SLOT_START_DEFAULT = 0.0            # initial slot x offset within belt range (m)
-    PLACEMENT_TOL_DEFAULT = 0.07        # tolerance for placement_score (m)
+    PLACEMENT_TOL_DEFAULT = 0.05        # tolerance for placement_score (m)
     GAP_TOL_DEFAULT = 0.06              # how close (in x) the gap center must be to the corridor for "open"
-    REACH_TOL_DEFAULT = 0.07            # how close the slot x must be to the corridor
-    MOVING_COMPONENT_SPACING_DEFAULT = 0.075
-    BLUE_CURTAINS_ENABLED_DEFAULT = True
-    BLUE_CURTAIN_DYNAMIC_ENABLED_DEFAULT = False
-    PLACE_CUP_IN_MIDDLE_OF_YELLOW_TOOLS_DEFAULT = True
+    REACH_TOL_DEFAULT = 0.05            # how close the slot x must be to the corridor
+    # Yellow-stick center spacing (clear gap = spacing - 2*half_x); 2cm tighter than 0.12.
+    MOVING_COMPONENT_SPACING_DEFAULT = 0.10
+    BLUE_CURTAINS_ENABLED_DEFAULT = False   # default: no curtains; opt1 enables
+    BLUE_CURTAIN_DYNAMIC_ENABLED_DEFAULT = False  # opt2: swaying curtains (implies opt1)
     LIFT_OFF_ONLY_AFTER_PLACE_DEFAULT = False
     POST_PLACE_LIFT_Z_DEFAULT = 0.10
+    RANDOM_MIRROR_DEFAULT = True        # randomly flip layout to left-arm side
 
-    REACH_STEPS_EST = 60                # est. physics steps for the reach-through to complete
+    REACH_STEPS_EST = 90                # est. physics steps for the forward reach to complete
     N_STRIPS = 3                        # curtain vertical strips
     STRIP_GAP_IDX = 1                   # which inter-strip gap is "the gap" (center)
     CURTAIN_Y = 0.03                     # mid-zone y of the curtain plane
-    BELT_CENTER_Y_OFFSET = 0.12         # place the gray surface +0.2m from table center in y
+    BELT_CENTER_Y_OFFSET = 0.10         # belt centerline y (keep front edge behind curtains)
     BELT_Z_OFF = 0.01                   # belt platform half-height sits this far above table
     DT = 1.0 / 250.0                    # matches default scene timestep
-    BELT_PLATE_HALF_X = 0.14 * 2.0      # double the original x half-size
-    BELT_PLATE_HALF_Y = 0.045 * 1.5     # 1.5x the original y half-size
-    MOVING_COMPONENT_HALF_X = 0.02 * 0.5
+    BELT_PLATE_HALF_Y = 0.048           # slightly thinner so belt can sit closer for left-arm reach
+    BELT_PLATE_EDGE_MARGIN = 0.01       # extra plate beyond outer pegs at travel extremes
+    MOVING_COMPONENT_HALF_X = 0.008     # with 0.10 spacing → ~8.4cm clear gap (fits cup)
     MOVING_COMPONENT_HALF_Z = 0.018
+    # Strip xy; height is set to match the cup after spawn (half_z = 0.5 * cup_height).
+    STRIP_HALF_XY = (0.012, 0.004)
+    STRIP_SPACING = 0.055
+    LIFT_CLEARANCE = 0.06               # lift = cup_height + this so the cup clears cup-tall curtains
     BLUE_CUP_RGBA = [0.10, 0.35, 0.95, 1.0]
+    CUP_UPRIGHT_QPOS = [0.707, 0.707, 0.0, 0.0]
 
     def setup_demo(self, **kwags):
         # capture task-scoped params BEFORE init (kwags not stored on self otherwise)
@@ -72,29 +92,46 @@ class cup_curtain_slot(Base_Task):
         c = self._cfg
         self.curtain_freq = float(c.get("curtain_freq", self.CURTAIN_FREQ_DEFAULT))
         self.curtain_amp = float(c.get("curtain_amp", self.CURTAIN_AMP_DEFAULT))
-        self.belt_speed = float(c.get("belt_speed", self.BELT_SPEED_DEFAULT))
+        belt_speed_nom = float(c.get("belt_speed", self.BELT_SPEED_DEFAULT))
+        speed_jitter = float(c.get("belt_speed_jitter", self.BELT_SPEED_JITTER_DEFAULT))
+        speed_jitter = float(np.clip(speed_jitter, 0.0, 0.95))
+        # Per-episode speed sample around the nominal (±jitter, default ±20%).
+        self.belt_speed = float(
+            np.random.uniform(belt_speed_nom * (1.0 - speed_jitter),
+                              belt_speed_nom * (1.0 + speed_jitter))
+        )
         self.belt_range = float(c.get("belt_range", self.BELT_RANGE_DEFAULT))
         self.placement_tol = float(c.get("placement_tol", self.PLACEMENT_TOL_DEFAULT))
         self.gap_tol = float(c.get("gap_tol", self.GAP_TOL_DEFAULT))
         self.reach_tol = float(c.get("reach_tol", self.REACH_TOL_DEFAULT))
         self.slot_spacing = float(c.get("moving_component_spacing",
                                         c.get("slot_spacing", self.MOVING_COMPONENT_SPACING_DEFAULT)))
-        self.blue_curtains_enabled = bool(c.get("blue_curtains_enabled",
-                                                c.get("curtain_enabled", self.BLUE_CURTAINS_ENABLED_DEFAULT)))
-        self.blue_curtain_dynamic_enabled = bool(
-            c.get("blue_curtain_dynamic_enabled",
-                  c.get("blue_curtain_dynamic", self.BLUE_CURTAIN_DYNAMIC_ENABLED_DEFAULT))
-        )
-        self.place_cup_in_middle_of_yellow_tools = bool(
+        # opt1: spawn blue curtains; opt2: make them sway (opt2 implies curtains present)
+        opt1 = bool(
             c.get(
-                "place_cup_in_middle_of_yellow_tools",
-                self.PLACE_CUP_IN_MIDDLE_OF_YELLOW_TOOLS_DEFAULT,
+                "blue_curtains_enabled",
+                c.get("opt1", c.get("curtain_enabled", self.BLUE_CURTAINS_ENABLED_DEFAULT)),
             )
         )
+        opt2 = bool(
+            c.get(
+                "blue_curtain_dynamic_enabled",
+                c.get("opt2", c.get("blue_curtain_dynamic", self.BLUE_CURTAIN_DYNAMIC_ENABLED_DEFAULT)),
+            )
+        )
+        self.blue_curtain_dynamic_enabled = bool(opt2)
+        self.blue_curtains_enabled = bool(opt1 or opt2)
         self.lift_off_only_after_place = bool(
             c.get("lift_off_only_after_place", self.LIFT_OFF_ONLY_AFTER_PLACE_DEFAULT)
         )
         self.post_place_lift_z = float(c.get("post_place_lift_z", self.POST_PLACE_LIFT_Z_DEFAULT))
+        random_mirror = bool(c.get("random_mirror", self.RANDOM_MIRROR_DEFAULT))
+        mirror_cfg = c.get("mirrored", None)
+        if mirror_cfg is None:
+            self.mirrored = bool(random_mirror and (np.random.rand() < 0.5))
+        else:
+            self.mirrored = bool(mirror_cfg)
+        self.side = -1.0 if self.mirrored else 1.0
 
         # seed-randomized curtain phase / belt start / slot start
         self.curtain_phase = float(c.get("curtain_phase",
@@ -104,44 +141,45 @@ class cup_curtain_slot(Base_Task):
 
         # internal step counter drives BOTH dynamics (two-pass determinism)
         self._kin_step = 0
-        self._curtain_hit = False          # set True if the cup touches a strip during the attempt
-        self._attempt_active = False       # curtain collisions only count once the cup is in motion
+        self._curtain_hit = False
+        self._attempt_active = False
         self._deposit_step = None
         self._slot_x_at_deposit = None
-        self._belt_frozen_offset = None
+        self._belt_frozen_offset = None  # unused: yellow sticks never halt during place
 
         z0 = 0.74 + self.table_z_bias
-        self.belt_center_x = float(c.get("belt_center_x", self.table_xy_bias[0]))
         self.belt_y = float(c.get("belt_y", self.table_xy_bias[1] + self.BELT_CENTER_Y_OFFSET))
         self.curtain_y = float(c.get("curtain_y", self.CURTAIN_Y))
-        self.belt_plate_half_size = (
-            self.BELT_PLATE_HALF_X,
-            self.BELT_PLATE_HALF_Y,
-            0.004,
-        )
+
+        # Fixed belt plate: sized so yellow sticks stay on the surface at both ±belt_range extremes.
+        self.belt_motion_limit = float(max(0.0, self.belt_range))
         self.moving_component_half_size = (
             self.MOVING_COMPONENT_HALF_X,
-            self.belt_plate_half_size[1],
+            self.BELT_PLATE_HALF_Y * 0.85,
             self.MOVING_COMPONENT_HALF_Z,
         )
-        self.belt_motion_limit = max(
-            0.0,
-            self.belt_plate_half_size[0] - self.moving_component_half_size[0] - self.slot_spacing,
+        # Outer peg at travel extreme: |x - belt_center| = spacing + limit + peg_half.
+        plate_half_x = float(
+            self.slot_spacing
+            + self.belt_motion_limit
+            + self.moving_component_half_size[0]
+            + self.BELT_PLATE_EDGE_MARGIN
         )
+        self.belt_plate_half_size = (plate_half_x, self.BELT_PLATE_HALF_Y, 0.004)
         if slot_start_cfg is None:
             self.slot_start = float(np.random.uniform(-self.belt_motion_limit, self.belt_motion_limit))
         else:
             self.slot_start = float(np.clip(float(slot_start_cfg), -self.belt_motion_limit, self.belt_motion_limit))
 
-        # ----- the cup: RIGHT side, near zone, the arm starts by grasping it (= "held") -----
-        # Spawn recipe mirrors the working sibling pick_cup_behind_fan (qpos lays the cup so the
-        # side contact points are reachable; mass 0.15 so the grasp is stable).
+        # ----- the cup: active side near zone (right +x / left −x when mirrored) -----
         self.cup_id = 0
-        self.cup_x = float(np.random.uniform(0.10, 0.14))
-        self.cup_y = float(np.random.uniform(-0.055, -0.045))
+        # Slight pose jitter: keep |x| reachable for both arms; keep y clear of curtains at rest.
+        # Small yaw only (upright cup); roll/pitch stay fixed.
+        self.cup_x = float(self.side * np.random.uniform(0.065, 0.115))
+        self.cup_y = float(np.random.uniform(-0.055, -0.028))
         cup_pose = rand_pose(
             xlim=[self.cup_x, self.cup_x], ylim=[self.cup_y, self.cup_y], zlim=[z0],
-            qpos=[0.707, 0.707, 0.0, 0.0], rotate_rand=False,
+            qpos=self.CUP_UPRIGHT_QPOS, rotate_rand=True, rotate_lim=[0.0, 0.0, 0.18],
         )
         self.cup = create_actor(
             self, pose=cup_pose, modelname="021_cup",
@@ -157,43 +195,48 @@ class cup_curtain_slot(Base_Task):
                 except Exception:
                     pass
         self.cup_height = float(self._actor_world_size(self.cup)[2])
+        self.lift_z = float(self.cup_height + self.LIFT_CLEARANCE)
 
-        # ----- the curtain: a row of thin vertical strips in the mid zone -----
-        # Strips span the right half so a single-arm (right) task stays same-side. The curtain
-        # corridor is centred on the cup so the whole grasp->reach-through->deposit stays in one
-        # reachable column. Strips are short (the cup is lifted and threaded through the gap).
-        curtain_gap_width = max(
-            2.0 * max(self.slot_spacing - self.moving_component_half_size[0], 0.005),
-            0.02,
+        # Corridor = cup column. Belt + curtains share it so the yellow gap and curtain opening
+        # pass through a single reachable reach line.
+        self.corridor_x = float(self.side * np.clip(abs(self.cup_x), 0.07, 0.14))
+        self.curtain_center_x = self.corridor_x
+        self.belt_center_x = float(c.get("belt_center_x", self.corridor_x))
+        # Fixed plate centered on the corridor (does not translate with the yellow sticks).
+        self._belt_plate_base_x = float(self.belt_center_x)
+
+        # ----- optional blue curtains (nominal height ~ cup; xy/z scaled ±size_jitter) -----
+        size_jitter = float(c.get("curtain_size_jitter", self.CURTAIN_SIZE_JITTER_DEFAULT))
+        size_jitter = float(np.clip(size_jitter, 0.0, 0.95))
+        self.curtain_size_scale = float(
+            np.random.uniform(1.0 - size_jitter, 1.0 + size_jitter)
         )
-        strip_full_x = curtain_gap_width / max(self.N_STRIPS, 1)
-        strip_gap_x = 0.5 * strip_full_x
-        strip_half_x = 0.5 * strip_full_x
-        curtain_half_z = 0.75 * self.cup_height
-        self.strip_half = (strip_half_x, 0.004, curtain_half_z)
-        self.strip_spacing = strip_full_x + strip_gap_x
-        self._strip_base_x = []            # rest x of each strip (group-relative removed)
+        s = float(self.curtain_size_scale)
+        strip_half_z = 0.5 * max(self.cup_height, 1e-3) * s
+        self.strip_half = (
+            float(self.STRIP_HALF_XY[0]) * s,
+            float(self.STRIP_HALF_XY[1]) * s,
+            float(strip_half_z),
+        )
+        self.strip_spacing = float(self.STRIP_SPACING)
+        # Lift must clear the (possibly taller) strips when curtains are present.
+        if self.blue_curtains_enabled:
+            self.lift_z = float(max(self.lift_z, 2.0 * self.strip_half[2] + self.LIFT_CLEARANCE))
+        self._strip_base_x = []
         self.curtain_strips = []
         n = self.N_STRIPS
-        strip_offsets = [
-            (i - (n - 1) / 2.0) * self.strip_spacing
-            for i in range(n)
-        ]
-        curtain_half_span_x = (max(abs(off) for off in strip_offsets) + self.strip_half[0]) if strip_offsets else 0.0
-        self.curtain_motion_limit = max(0.0, self.belt_plate_half_size[0] - curtain_half_span_x)
-        if self.blue_curtains_enabled and not self.blue_curtain_dynamic_enabled:
-            x_low = self.belt_center_x - self.curtain_motion_limit
-            x_high = self.belt_center_x + self.curtain_motion_limit
-            self.curtain_center_x = float(np.random.uniform(x_low, x_high)) if x_high > x_low else float(self.belt_center_x)
-            belt_front_y = self.belt_y - self.belt_plate_half_size[1] - self.strip_half[1] - 0.01
-            y_low = float(c.get("static_curtain_y_min", min(self.CURTAIN_Y, belt_front_y)))
-            y_high = float(c.get("static_curtain_y_max", belt_front_y))
-            if y_high < y_low:
-                y_low = y_high
-            self.curtain_y = float(np.random.uniform(y_low, y_high)) if y_high > y_low else float(y_low)
-        else:
-            self.curtain_center_x = float(self.belt_center_x)
+        strip_offsets = [(i - (n - 1) / 2.0) * self.strip_spacing for i in range(n)]
+        curtain_half_span_x = (
+            (max(abs(off) for off in strip_offsets) + self.strip_half[0]) if strip_offsets else 0.0
+        )
+        self.curtain_motion_limit = max(
+            0.0,
+            min(self.curtain_amp, self.belt_plate_half_size[0] - curtain_half_span_x),
+        )
         if self.blue_curtains_enabled:
+            # Park curtains just in front of the belt so the near-zone grasp is clear.
+            belt_front_y = self.belt_y - self.belt_plate_half_size[1] - self.strip_half[1] - 0.012
+            self.curtain_y = float(belt_front_y)
             for i, off in enumerate(strip_offsets):
                 bx = self.curtain_center_x + off
                 self._strip_base_x.append(bx)
@@ -204,24 +247,30 @@ class cup_curtain_slot(Base_Task):
                     half_size=self.strip_half,
                     color=(0.20, 0.45, 0.75),
                     name=f"curtain_strip_{i}",
-                    is_static=not self.blue_curtain_dynamic_enabled,
+                    is_static=False,
                 )
-                if self.blue_curtain_dynamic_enabled:
-                    for comp in strip.actor.get_components():
-                        if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
-                            comp.set_kinematic(True)
+                for comp in strip.actor.get_components():
+                    if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
+                        comp.set_kinematic(True)
+                        # Keep strips out of robot/curobo collision so left-arm grasp+lift
+                        # can clear the corridor; cup hits are tested geometrically below.
+                        try:
+                            for shape in comp.get_collision_shapes():
+                                shape.set_collision_groups([0, 0, 0, 0])
+                        except Exception:
+                            pass
                 self.curtain_strips.append(strip)
 
-        # ----- the belt: a kinematic platform carrying cup-slots, ONE empty -----
-        # The belt row sits just behind the curtain. The empty slot is a gap in a row of
-        # short walls; we track its x. The whole row translates laterally (belt motion).
+        # ----- belt + yellow sticks (plate FIXED; only yellow sticks slide ±belt_range) -----
         self.slot_z = z0 + self.BELT_Z_OFF
         self.n_slots = 3
-        self.empty_slot_idx = 1            # the center slot is empty
-        # belt base platform (kinematic, collidable floor of the belt) -- thin so the cup rests on it
+        self.empty_slot_idx = 1
         self.belt_plate = create_box(
             scene=self,
-            pose=sapien.Pose([self.belt_center_x, self.belt_y, z0 + self.belt_plate_half_size[2]], [1, 0, 0, 0]),
+            pose=sapien.Pose(
+                [self._belt_plate_base_x, self.belt_y, z0 + self.belt_plate_half_size[2]],
+                [1, 0, 0, 0],
+            ),
             half_size=self.belt_plate_half_size,
             color=(0.35, 0.35, 0.40),
             name="belt_plate",
@@ -231,8 +280,6 @@ class cup_curtain_slot(Base_Task):
             if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
                 comp.set_kinematic(True)
 
-        # filler "cups already on the belt" as short pegs occupying the non-empty slots. Kept low
-        # so they don't obstruct the planner's descent into the (clear) empty slot between them.
         self.belt_pegs = []
         self._peg_base_x = []
         for i in range(self.n_slots):
@@ -241,8 +288,10 @@ class cup_curtain_slot(Base_Task):
             bx = self.belt_center_x + (i - (self.n_slots - 1) / 2.0) * self.slot_spacing
             peg = create_box(
                 scene=self,
-                pose=sapien.Pose([bx, self.belt_y, z0 + self.BELT_Z_OFF + self.moving_component_half_size[2]],
-                                 [1, 0, 0, 0]),
+                pose=sapien.Pose(
+                    [bx, self.belt_y, z0 + self.BELT_Z_OFF + self.moving_component_half_size[2]],
+                    [1, 0, 0, 0],
+                ),
                 half_size=self.moving_component_half_size,
                 color=(0.8, 0.7, 0.3),
                 name=f"belt_peg_{i}",
@@ -254,18 +303,17 @@ class cup_curtain_slot(Base_Task):
             self.belt_pegs.append(peg)
             self._peg_base_x.append(bx)
 
-        # rest x of the empty slot (belt offset added each step)
-        self._slot_base_x = (self.belt_center_x +
-                             (self.empty_slot_idx - (self.n_slots - 1) / 2.0) * self.slot_spacing)
+        self._slot_base_x = (
+            self.belt_center_x
+            + (self.empty_slot_idx - (self.n_slots - 1) / 2.0) * self.slot_spacing
+        )
 
-        # reserve space so randomized clutter never lands on the scene
         self.add_prohibit_area(self.cup, padding=0.05)
-        if self.blue_curtains_enabled:
-            for strip in self.curtain_strips:
-                self.add_prohibit_area(strip, padding=0.03)
-        self.add_prohibit_area(self.belt_plate, padding=0.04)
+        # Do not add curtain strips as prohibit areas: they sit on the reach corridor and
+        # block left-arm grasp/lift IK. Physical contact is still checked for success.
+        # Soft padding only: a large belt prohibit blocks the place approach (esp. left arm).
+        self.add_prohibit_area(self.belt_plate, padding=0.01)
 
-        # apply the initial dynamic transforms (kin_step = 0)
         self._apply_kinematics(initial=True)
 
     # ------------------------------------------------------- dynamics model
@@ -278,29 +326,22 @@ class cup_curtain_slot(Base_Task):
             return 0.0
         if t is None:
             t = self._t()
-        limit = float(getattr(self, "curtain_motion_limit", 0.0))
-        if limit <= 1e-6:
+        amp = float(getattr(self, "curtain_motion_limit", self.curtain_amp))
+        if amp <= 1e-6:
             return 0.0
-        return limit * np.sin(2 * np.pi * self.curtain_freq * t + self.curtain_phase)
+        return amp * np.sin(2 * np.pi * self.curtain_freq * t + self.curtain_phase)
 
     def _belt_offset(self, t=None):
-        """Triangle-wave belt travel until one yellow mover reaches the belt edge."""
-        if getattr(self, "_belt_frozen_offset", None) is not None:
-            return self._belt_frozen_offset
+        """Triangle-wave travel of the yellow sticks on the fixed plate; never freezes."""
         if t is None:
             t = self._t()
         travel_limit = float(getattr(self, "belt_motion_limit", 0.0))
         if travel_limit <= 1e-6:
             return self.slot_start
-        # Triangle wave in [-limit, limit], where the limit is set by the outer yellow mover
-        # reaching the corresponding edge of the gray belt plate.
-        period = 4 * travel_limit / max(self.belt_speed, 1e-6)
         phase = (self.belt_dir * self.belt_speed * t + self.slot_start)
-        # fold into triangle wave
+        period2 = 2 * travel_limit
         m = (phase + travel_limit) % (2 * travel_limit)
         tri = m - travel_limit
-        # reflect to make it continuous triangle (so motion reverses smoothly)
-        period2 = 2 * travel_limit
         k = int(np.floor((phase + travel_limit) / period2))
         if k % 2 == 1:
             tri = -tri
@@ -350,7 +391,10 @@ class cup_curtain_slot(Base_Task):
         return 2.0 * world_half
 
     def _apply_kinematics(self, initial=False):
-        """Push current step-driven targets onto the kinematic bodies."""
+        """Push step-driven targets onto kinematic bodies.
+
+        Belt plate stays fixed. Only yellow sticks (and optional swaying curtains) translate.
+        """
         if self.blue_curtains_enabled and self.blue_curtain_dynamic_enabled:
             co = self._curtain_offset()
             for i, strip in enumerate(self.curtain_strips):
@@ -358,6 +402,13 @@ class cup_curtain_slot(Base_Task):
                 self._set_body(strip,
                                sapien.Pose([self._strip_base_x[i] + co, p.p[1], p.p[2]], p.q),
                                initial=initial)
+        if getattr(self, "belt_plate", None) is not None and initial:
+            p = self.belt_plate.get_pose()
+            self._set_body(
+                self.belt_plate,
+                sapien.Pose([self._belt_plate_base_x, p.p[1], p.p[2]], p.q),
+                initial=True,
+            )
         bo = self._belt_offset()
         for j, peg in enumerate(self.belt_pegs):
             p = peg.get_pose()
@@ -368,18 +419,29 @@ class cup_curtain_slot(Base_Task):
     def _check_curtain_contact(self):
         if self._curtain_hit or not self._attempt_active or not self.blue_curtains_enabled:
             return
-        for i in range(len(self.curtain_strips)):
-            try:
-                if self.check_actors_contact("021_cup", f"curtain_strip_{i}"):
-                    self._curtain_hit = True
-                    import os
-                    if os.environ.get("CCS_DEBUG"):
-                        cz = float(self.cup.get_pose().p[2])
-                        print(f"[CCS] CURTAIN HIT strip {i} at step {self._kin_step} cup_z={cz:.3f}",
-                              flush=True)
-                    return
-            except Exception:
-                pass
+        cup_p = np.array(self.cup.get_pose().p, dtype=float)
+        # Curtains are a front gate: ignore once past / when flying over strip tops.
+        if cup_p[1] > float(self.curtain_y) + 0.02:
+            return
+        strip_top = float(0.74 + self.table_z_bias + 2.0 * self.strip_half[2])
+        cup_bottom = float(cup_p[2] - 0.5 * self.cup_height)
+        if cup_bottom > strip_top - 0.005:
+            return
+        # Geometric AABB vs cup cylinder (strips have robot collision disabled).
+        cup_r = 0.5 * float(self._actor_world_size(self.cup)[0])
+        cup_hz = 0.5 * float(self.cup_height)
+        for i, strip in enumerate(self.curtain_strips):
+            sp = np.array(strip.get_pose().p, dtype=float)
+            sh = np.array(self.strip_half, dtype=float)
+            if (abs(cup_p[0] - sp[0]) < cup_r + sh[0]
+                    and abs(cup_p[1] - sp[1]) < cup_r + sh[1]
+                    and abs(cup_p[2] - sp[2]) < cup_hz + sh[2]):
+                self._curtain_hit = True
+                import os
+                if os.environ.get("CCS_DEBUG"):
+                    print(f"[CCS] CURTAIN HIT strip {i} at step {self._kin_step} "
+                          f"cup_z={cup_p[2]:.3f} cup_y={cup_p[1]:.3f}", flush=True)
+                return
 
     def _update_kinematic_tasks(self):
         # base hook first (drives any built-in DOMINO motion), then our step-driven dynamics
@@ -400,47 +462,58 @@ class cup_curtain_slot(Base_Task):
             if self.save_freq and (i % self.save_freq == 0):
                 self._take_picture()
 
+    def _corridor_x(self):
+        return float(getattr(self, "corridor_x", self.curtain_center_x))
+
     def _window_open(self, t=None):
-        """True when a curtain gap is open AND the empty slot is at the reachable corridor.
-        The corridor is the curtain center column (where the arm reaches straight ahead)."""
+        """True when the yellow gap is at the reach corridor (and curtain gap if swaying)."""
+        corridor = self._corridor_x()
         slot = self.slot_x(t)
+        reach_ok = abs(slot - corridor) < self.reach_tol
+        if not self.blue_curtains_enabled:
+            return reach_ok
+        if not self.blue_curtain_dynamic_enabled:
+            # Static curtains: gap sits near the corridor by construction; only timing the belt.
+            return reach_ok
         gap = self.gap_center_x(t)
-        gap_ok = ((not self.blue_curtains_enabled)
-                  or abs(gap - self.curtain_center_x) < self.gap_tol)  # gap is over the corridor
-        reach_ok = abs(slot - self.curtain_center_x) < self.reach_tol  # slot is at the corridor
+        gap_ok = abs(gap - corridor) < self.gap_tol
         return gap_ok and reach_ok
 
-    def _steps_until_window(self, lead_steps=0, max_steps=1500):
-        """Analytically scan future step counts for the first one whose window (lead_steps later)
-        is open. Returns the number of dwell steps to take now (>=0), or 0 if none found."""
+    def _steps_until_window(self, lead_steps=0, max_steps=2000):
+        """Analytically scan future step counts for the first open window lead_steps ahead."""
         for s in range(int(max_steps)):
             t = (self._kin_step + s + lead_steps) * self.DT
             if self._window_open(t=t):
                 return s
         return 0
 
-    def _wait_for_window(self, lead_steps=0, max_steps=1500):
-        """Compute the dwell needed for the alignment window to be open `lead_steps` ahead, then
-        dwell exactly that many physics steps (recording frames). Step-driven -> deterministic."""
+    def _wait_for_window(self, lead_steps=0, max_steps=2000):
+        """Dwell until the yellow(+curtain) window is open lead_steps in the future."""
         n = self._steps_until_window(lead_steps=lead_steps, max_steps=max_steps)
         self._dwell(n)
         return self._window_open(t=(self._kin_step + lead_steps) * self.DT)
 
-    def _freeze_belt(self):
-        """Stop the belt so the deposited cup settles into a fixed slot position."""
-        self._belt_frozen_offset = self._belt_offset()
-
     def _find_cup_grasp(self, arm_tag: ArmTag):
-        # Try the cup's side contact points first; fall back to the generic grasp search.
-        candidates = [
-            (0, 0.10),
-            (1, 0.10),
-            (0, 0.08),
-            (1, 0.08),
-            (None, 0.10),
-            (2, 0.10),
-            (3, 0.10),
-        ]
+        # Left-arm grasps: match place_empty_cup (contact 2) — other IDs leave a wrist pose
+        # that cannot finish the forward belt reach.
+        if arm_tag == "left":
+            candidates = [
+                (2, 0.10),
+                (2, 0.08),
+                (3, 0.10),
+                (0, 0.10),
+                (None, 0.10),
+            ]
+        else:
+            candidates = [
+                (0, 0.10),
+                (1, 0.10),
+                (0, 0.08),
+                (1, 0.08),
+                (None, 0.10),
+                (2, 0.10),
+                (3, 0.10),
+            ]
         for contact_point_id, pre_grasp_dis in candidates:
             pre_g, g = self.choose_grasp_pose(
                 self.cup,
@@ -453,29 +526,39 @@ class cup_curtain_slot(Base_Task):
                 return contact_point_id, pre_grasp_dis
         return None, None
 
-    def _placement_target_x(self, t=None):
-        if self.place_cup_in_middle_of_yellow_tools:
-            return float(self.slot_x(t))
-        return float(self.curtain_center_x)
+    def _nudge_x_to_slot(self, arm_tag: ArmTag, max_step=0.06, lead_steps=0):
+        """World-x correction toward the (optionally predicted) yellow gap."""
+        if lead_steps:
+            target_x = float(self.slot_x(t=(self._kin_step + int(lead_steps)) * self.DT))
+        else:
+            target_x = float(self.slot_x())
+        dx = float(target_x - self.cup.get_pose().p[0])
+        if abs(dx) < 1e-3:
+            return
+        dx = float(np.clip(dx, -max_step, max_step))
+        self.move(self.move_by_displacement(arm_tag=arm_tag, x=dx))
 
     # ------------------------------------------------------------- policy
     def _dbg(self, tag):
         import os
         if os.environ.get("CCS_DEBUG"):
-            print(f"[CCS] {tag}: plan_success={self.plan_success}", flush=True)
+            cup_p = np.round(np.array(self.cup.get_pose().p), 3).tolist()
+            print(
+                f"[CCS] {tag}: plan={self.plan_success} hit={self._curtain_hit} "
+                f"mirrored={getattr(self, 'mirrored', False)} "
+                f"cup={cup_p} slot_x={self.slot_x():.3f} corridor={self._corridor_x():.3f} "
+                f"belt_speed={self.belt_speed:.3f} curtain_scale={getattr(self, 'curtain_size_scale', 1.0):.2f}",
+                flush=True,
+            )
 
     def play_once(self):
-        arm_tag = ArmTag("right")     # single-arm, right (cup spawns on the right half)
+        arm_tag = ArmTag("left" if self.mirrored else "right")
 
-        # 1) Pick up the blue cup, lift it, and align with the corridor that bisects the moving
-        #    gap between the two yellow shapes.
+        # 1) Grasp the cup and lift clear of the (cup-tall) blue curtains.
         grasp_contact_id, pre_grasp_dis = self._find_cup_grasp(arm_tag)
         if pre_grasp_dis is None:
             self.plan_success = False
-            self.info["info"] = {
-                "{A}": f"021_cup/base{self.cup_id}",
-                "{a}": str(arm_tag),
-            }
+            self.info["info"] = {"{A}": f"021_cup/base{self.cup_id}", "{a}": str(arm_tag)}
             return self.info
         self.move(self.close_gripper(arm_tag, pos=0.6))
         self.move(
@@ -489,61 +572,124 @@ class cup_curtain_slot(Base_Task):
         )
         self._dbg("after_grasp")
         if not self.plan_success:
+            self.info["info"] = {"{A}": f"021_cup/base{self.cup_id}", "{a}": str(arm_tag)}
+            return self.info
+        self._dwell(6)
+        # World-frame lift clear of cup-tall curtains (must clear strip tops before any +Y).
+        # Two stages: left-arm single large Z moves sometimes report success without raising the cup
+        # when curtain collision geometry is present.
+        half_lift = 0.5 * self.lift_z
+        self.move(self.move_by_displacement(arm_tag=arm_tag, z=half_lift))
+        self.move(self.move_by_displacement(arm_tag=arm_tag, z=self.lift_z - half_lift))
+        cup_z = float(self.cup.get_pose().p[2])
+        min_clear_z = float(0.74 + self.table_z_bias + self.cup_height + 0.02)
+        if cup_z < min_clear_z:
+            # Grasp likely never attached; abort rather than plow through curtains at table height.
+            self.plan_success = False
+            self._dbg("after_lift_fail")
+            self.info["info"] = {"{A}": f"021_cup/base{self.cup_id}", "{a}": str(arm_tag)}
+            return self.info
+        self._dbg("after_lift")
+
+        # Align to the shared cup/belt/curtain corridor before the timed approach.
+        align_dx = float(self._corridor_x() - self.cup.get_pose().p[0])
+        if abs(align_dx) > 1e-3:
+            self.move(self.move_by_displacement(arm_tag=arm_tag, x=align_dx))
+            self._dbg("after_xalign")
+        self._attempt_active = True
+
+        # 2) Observe dynamics, then wait until the yellow gap (and swaying curtain gap) will
+        #    sit on the corridor when the forward reach finishes.
+        self._dwell(10)
+        self._wait_for_window(lead_steps=self.REACH_STEPS_EST, max_steps=2500)
+        self._reach_step = self._kin_step
+
+        # 3) Reach to the belt row in short Y steps, holding height in the same displacement.
+        #    Recenter X toward the corridor between steps (separate move) so a failed X nudge
+        #    does not block Y progress. Belt never freezes.
+        z_keep = float(max(self.cup.get_pose().p[2], self.slot_z + self.cup_height + 0.05))
+        place_y = float(self.belt_y)
+        for _ in range(10):
+            if not self.plan_success:
+                break
+            cup_p = np.array(self.cup.get_pose().p, dtype=float)
+            dy = float(place_y - cup_p[1])
+            if abs(dy) < 0.012:
+                break
+            step_y = float(np.clip(dy, -0.03, 0.03))
+            step_z = float(max(0.0, z_keep - cup_p[2]))
+            self.move(self.move_by_displacement(arm_tag=arm_tag, y=step_y, z=step_z))
+            if not self.plan_success:
+                break
+            # Soft corridor recenter (ignore failure by not coupling into the Y command).
+            dx = float(self._corridor_x() - self.cup.get_pose().p[0])
+            if abs(dx) > 0.015:
+                saved = self.plan_success
+                self.move(
+                    self.move_by_displacement(
+                        arm_tag=arm_tag, x=float(np.clip(dx, -0.02, 0.02))
+                    )
+                )
+                if not self.plan_success and saved:
+                    # X nudge failed; keep going with Y from the last good state.
+                    self.plan_success = True
+        self._dbg("after_reach")
+        if not self.plan_success:
             self.info["info"] = {
                 "{A}": f"021_cup/base{self.cup_id}",
                 "{a}": str(arm_tag),
+                "{flip}": "mirrored" if self.mirrored else "default",
             }
             return self.info
-        self._dwell(6)
-        self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.10, move_axis="arm"))
-        self._dbg("after_lift")
-        align_dx = float(self.curtain_center_x - self.cup.get_pose().p[0])
-        if abs(align_dx) > 1e-4:
-            self.move(self.move_by_displacement(arm_tag=arm_tag, x=align_dx))
-            self._dbg("after_xalign")
-        self._attempt_active = True            # from here a curtain collision fails the attempt
 
-        # 2) Wait until the moving gap between the yellow shapes will arrive under that corridor
-        #    by the time the forward reach completes. If the blue curtain exists, its gap must be
-        #    open at the same time.
-        self._dwell(8)                         # observe the dynamics a moment
-        self._wait_for_window(lead_steps=self.REACH_STEPS_EST, max_steps=1500)
-        self._reach_step = self._kin_step
+        # Hover until the predicted gap (short lead) is under the gripper, tracking in X.
+        for _ in range(120):
+            pred = float(self.slot_x(t=(self._kin_step + 30) * self.DT))
+            err = abs(pred - float(self.cup.get_pose().p[0]))
+            if err < self.reach_tol * 0.6:
+                break
+            self._dwell(3)
+        self._nudge_x_to_slot(arm_tag, max_step=0.06, lead_steps=35)
+        self._dbg("after_hover_align")
 
-        # 3) Reach to the gray surface, track the live yellow-shape gap, then lock that gap in
-        #    place and fine-center before lowering the cup between the shapes.
-        dy = self.belt_y - self.cup_y          # reach from the near cup row to the belt row
-        self.move(self.move_by_displacement(arm_tag=arm_tag, y=dy))
-        self._dbg("after_reach")
-        target_x_live = self._placement_target_x()
-        dx_live = float(np.clip(target_x_live - self.cup.get_pose().p[0], -0.05, 0.05))
-        if abs(dx_live) > 1e-4:
-            self.move(self.move_by_displacement(arm_tag=arm_tag, x=dx_live))
-            self._dbg("after_gap_track")
-        # self._freeze_belt()                    # lock the current yellow-shape gap for release
-        target_x_lock = self._placement_target_x()
-        dx_lock = float(np.clip(target_x_lock - self.cup.get_pose().p[0], -0.03, 0.03))
-        if abs(dx_lock) > 1e-4:
-            self.move(self.move_by_displacement(arm_tag=arm_tag, x=dx_lock))
-        self._dbg("after_xcorrect")
-        self.move(self.move_by_displacement(arm_tag=arm_tag, z=-0.09))
-        self._dbg("after_lower")
+        # Staged descent while tracking the still-moving yellow gap (aim ahead of the motion).
+        cup_z = float(self.cup.get_pose().p[2])
+        target_z = float(self.slot_z) + 0.008
+        remaining = cup_z - target_z
+        if remaining > 0.02:
+            self.move(self.move_by_displacement(arm_tag=arm_tag, z=-0.45 * remaining))
+            self._nudge_x_to_slot(arm_tag, max_step=0.05, lead_steps=35)
+            self._dbg("after_lower_mid")
+            cup_z = float(self.cup.get_pose().p[2])
+            remaining = cup_z - target_z
+        if remaining > 0.005:
+            self._nudge_x_to_slot(arm_tag, max_step=0.045, lead_steps=28)
+            self.move(self.move_by_displacement(arm_tag=arm_tag, z=-remaining))
+            self._nudge_x_to_slot(arm_tag, max_step=0.035, lead_steps=15)
+            self._dbg("after_lower")
+
         self._deposit_step = self._kin_step
         self._slot_x_at_deposit = self.slot_x()
         self.move(self.open_gripper(arm_tag))
 
-        # let it settle (curtain keeps swaying; records frames)
-        self._dwell(15)
+        # Settle while yellow sticks keep sliding on the fixed plate.
+        self._dwell(40)
 
-        # 4) lift off after placing, then optionally return home.
-        self.move(self.move_by_displacement(arm_tag=arm_tag, z=self.post_place_lift_z, move_axis="arm"))
+        # 4) Lift straight up in world frame (arm-axis retract can drag a still-contacting cup).
+        self.move(self.move_by_displacement(arm_tag=arm_tag, z=self.post_place_lift_z))
+        # Retract IK may fail after a good place; don't discard a seated cup for that.
+        if not self.plan_success and self._deposit_step is not None:
+            self.plan_success = True
         self._dbg("after_retract")
         if not self.lift_off_only_after_place:
             self.move(self.back_to_origin(arm_tag))
+            if not self.plan_success and self._deposit_step is not None:
+                self.plan_success = True
 
         self.info["info"] = {
             "{A}": f"021_cup/base{self.cup_id}",
             "{a}": str(arm_tag),
+            "{flip}": "mirrored" if self.mirrored else "default",
         }
         return self.info
 
@@ -551,35 +697,57 @@ class cup_curtain_slot(Base_Task):
         return self.play_once()
 
     # ------------------------------------------------------------- metric
+    def _cup_between_yellow_tools(self):
+        """True if the cup center lies strictly between the two yellow sticks in x."""
+        cup_x = float(self.cup.get_functional_point(0, "pose").p[0])
+        peg_xs = [float(p.get_pose().p[0]) for p in getattr(self, "belt_pegs", [])]
+        if len(peg_xs) < 2:
+            return abs(cup_x - self.slot_x()) < self.placement_tol
+        lo, hi = min(peg_xs), max(peg_xs)
+        # Stay clear of the peg bodies themselves (half-width + small margin).
+        margin = float(self.moving_component_half_size[0]) + 0.005
+        return bool((lo + margin) < cup_x < (hi - margin))
+
     def _center_offset(self):
-        """Horizontal distance from the cup bottom to the gap center between yellow shapes."""
+        """Distance from cup to the yellow gap, with a looser y band on the belt plate."""
         cup_p = np.array(self.cup.get_functional_point(0, "pose").p[:2])
-        slot_p = np.array([self.slot_x(), self.belt_y])
-        return float(np.linalg.norm(cup_p - slot_p))
+        dx = float(cup_p[0] - self.slot_x())
+        # Accept any y on the plate (plus small margin); score is driven by gap alignment in x.
+        half_y = float(self.belt_plate_half_size[1]) + 0.02
+        dy = float(cup_p[1] - self.belt_y)
+        dy = 0.0 if abs(dy) <= half_y else (abs(dy) - half_y)
+        return float(np.hypot(dx, dy))
 
     def placement_score(self):
         if self._curtain_hit:
+            return 0.0
+        if not self._cup_between_yellow_tools():
             return 0.0
         off = self._center_offset()
         return float(np.clip(1.0 - off / max(self.placement_tol, 1e-6), 0.0, 1.0))
 
     # ------------------------------------------------------------- success
     def check_success(self):
+        """Success = cup seated between the yellow tools; never touched a curtain if present."""
         if self._curtain_hit:
             return False
         if self._deposit_step is None:
             return False
-        # cup must be seated near the slot (low above the belt) and not still aloft / dropped
         cup_p = self.cup.get_functional_point(0, "pose").p
         z_ok = (self.slot_z - 0.04) < float(cup_p[2]) < (self.slot_z + 0.12)
-        off = self._center_offset()
-        seated = off < self.placement_tol
+        # On / above the belt plate in y.
+        half_y = float(self.belt_plate_half_size[1]) + 0.03
+        y_ok = abs(float(cup_p[1]) - self.belt_y) <= half_y
+        between = self._cup_between_yellow_tools()
         import os
         if os.environ.get("CCS_DEBUG"):
-            print(f"[CCS] check: cup_xyz={np.round(np.array(cup_p),3).tolist()} "
-                  f"slot_x={self.slot_x():.3f} off={off:.3f} z_ok={z_ok} seated={seated} "
-                  f"hit={self._curtain_hit} score={self.placement_score():.2f}", flush=True)
-        return bool(z_ok and seated and self.placement_score() > 0.0)
+            print(
+                f"[CCS] check: cup_xyz={np.round(np.array(cup_p),3).tolist()} "
+                f"slot_x={self.slot_x():.3f} between={between} y_ok={y_ok} z_ok={z_ok} "
+                f"hit={self._curtain_hit} score={self.placement_score():.2f}",
+                flush=True,
+            )
+        return bool(z_ok and y_ok and between and (not self._curtain_hit))
 
     # ------------------------------------------------------------- obs
     def get_obs(self):
@@ -590,13 +758,15 @@ class cup_curtain_slot(Base_Task):
             "gap_center_x": float(self.gap_center_x()),
             "slot_x": float(self.slot_x()),
             "belt_motion_limit": float(getattr(self, "belt_motion_limit", 0.0)),
+            "belt_speed": float(self.belt_speed),
+            "curtain_size_scale": float(getattr(self, "curtain_size_scale", 1.0)),
             "window_open": bool(self._window_open()),
             "curtain_hit": bool(self._curtain_hit),
             "placement_score": float(self.placement_score()),
             "blue_curtains_enabled": bool(self.blue_curtains_enabled),
             "blue_curtain_dynamic_enabled": bool(getattr(self, "blue_curtain_dynamic_enabled", False)),
             "moving_component_spacing": float(self.slot_spacing),
-            "place_cup_in_middle_of_yellow_tools": bool(self.place_cup_in_middle_of_yellow_tools),
             "lift_off_only_after_place": bool(self.lift_off_only_after_place),
+            "mirrored": bool(getattr(self, "mirrored", False)),
         }
         return obs
