@@ -112,6 +112,13 @@ task_args:
     bowl_scale_mult: 0.65
     bowl_catch_radius: 0.032
   catch_rat:
+    # Option 1: two mice from opposite holes; success requires both held.
+    catch_two_mice: false
+    # Option 2: opaque colored top lattice (false = glass / see-through).
+    opaque_surface: false
+    # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
+    rat_move_speed_min: 0.04
+    rat_move_speed_max: 0.10
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05

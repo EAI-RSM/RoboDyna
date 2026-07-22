@@ -211,6 +211,7 @@ def create_hollow_box_with_holes(
     wall_thickness=0.02,
     top_thickness=0.02,
     bar_thickness=0.02,
+    top_transparent=False,
 ) -> Actor:
     scene, pose = preprocess(scene, pose)
     x_half, y_half, z_half = half_size
@@ -340,30 +341,59 @@ def create_hollow_box_with_holes(
         material=board_color,
     )
 
-    # Visual top plate filler: match the collision lattice around the holes.
+    # Opaque top lattice via ActorBuilder; glass top is attached after build
+    # (same RenderBodyComponent + transmission path as dispense_gummy tubes).
+    top_strip_specs = []  # (local_pose, half_size)
     y = -y_half + gap_y / 2
     for _ in range(hole_rows + 1):
-        builder.add_box_visual(
-            pose=sapien.Pose([0, y, z_half - top_thickness / 2]),
-            half_size=[x_half, gap_y / 2, top_thickness / 2],
-            material=board_color,
-        )
+        top_strip_specs.append((
+            sapien.Pose([0, y, z_half - top_thickness / 2]),
+            [x_half, gap_y / 2, top_thickness / 2],
+        ))
         y += hole_size + gap_y
 
     y = -y_half + gap_y + hole_size / 2
     for _ in range(hole_rows):
         x = -x_half + gap_x / 2
         for _ in range(hole_cols + 1):
-            builder.add_box_visual(
-                pose=sapien.Pose([x, y, z_half - top_thickness / 2]),
-                half_size=[gap_x / 2, hole_size / 2, top_thickness / 2],
-                material=board_color,
-            )
+            top_strip_specs.append((
+                sapien.Pose([x, y, z_half - top_thickness / 2]),
+                [gap_x / 2, hole_size / 2, top_thickness / 2],
+            ))
             x += hole_size + gap_x
         y += hole_size + gap_y
 
+    if not top_transparent:
+        for strip_pose, strip_half in top_strip_specs:
+            builder.add_box_visual(
+                pose=strip_pose, half_size=strip_half, material=board_color)
+
     builder.set_initial_pose(pose)
     entity = builder.build(name=name)
+
+    if top_transparent and top_strip_specs:
+        # Window glass (RT): nearly-white light-blue tint + full transmission.
+        # (v11 demo look — preferred glass appearance)
+        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 1.0])
+        glass.set_transmission(1.0)
+        glass.set_transmission_roughness(0.0)
+        glass.set_roughness(0.02)
+        glass.set_metallic(0.0)
+        try:
+            glass.set_ior(1.45)
+        except Exception:
+            glass.ior = 1.45
+        glass_entity = sapien.Entity()
+        glass_entity.set_name(f"{name}_glass_top" if name else "glass_top")
+        glass_entity.set_pose(pose)
+        render_body = sapien.render.RenderBodyComponent()
+        for strip_pose, strip_half in top_strip_specs:
+            shape = sapien.render.RenderShapeBox(strip_half, glass)
+            shape.set_local_pose(strip_pose)
+            render_body.attach(shape)
+        glass_entity.add_component(render_body)
+        scene.add_entity(glass_entity)
+
     model_data = {
         "center": [0, 0, 0],
         "extents": half_size,

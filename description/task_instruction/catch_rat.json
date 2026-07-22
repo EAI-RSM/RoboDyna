@@ -1,6 +1,6 @@
 {
-  "full_description": "watch the hole board and, when the rat pops up, use the arm on that side to close the gripper around it before it retracts",
-  "schema": "{A} notifies the rat body, {B} notifies the hole board, {a} notifies the arm that catches the rat",
+  "full_description": "watch the hole board and, when the rat pops up, use the arm on that side to close the gripper around it before it retracts; with catch_two_mice two rats rise together and both arms must grab them at once",
+  "schema": "{A} notifies the (left/primary) rat body, {C} notifies the right rat body when catch_two_mice, {B} notifies the hole board, {a} notifies the arm(s) that catch the rat, {o} notifies catch_two_mice/opaque_surface flags",
   "preference": "num of words should not exceed 14. Degree of detail avg is 6",
   "seen": [
     "Catch {A} with the {a} arm when it pops out of {B}",
@@ -14,11 +14,14 @@
     "Pin {A} with the {a} arm while it is raised above {B}",
     "Trap {A} as it surfaces from {B} using the {a} arm",
     "React and grab {A} on its appearance from {B}",
-    "Catch the popping {A} from {B} with the correct-side arm"
+    "Catch the popping {A} from {B} with the correct-side arm",
+    "Grab {A} and {C} from {B} with both arms at once",
+    "Catch both rats rising from {B} simultaneously with {a}"
   ],
   "unseen": [
     "Snatch {A} the instant it rises out of {B}",
     "Use the {a} arm to catch {A} popping from {B}",
-    "Grab {A} while it is up out of {B} with the {a} arm"
+    "Grab {A} while it is up out of {B} with the {a} arm",
+    "Pick up {A} and {C} together as they pop from {B}"
   ]
 }
