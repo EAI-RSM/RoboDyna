@@ -414,41 +414,54 @@ task_args:
     idle_time_max: 4.0
     settle_steps: 70
   catch_valley_ball:
-    ramp_half_width: 0.125
-    ramp_thickness: 0.012
-    ramp_center_y: 0.08
-    ramp_valley_x: -0.02
-    ramp_valley_height: 0.025
-    down_run: 0.27
-    down_rise: 0.13
-    up_run: 0.20
-    up_rise: 0.055
-    curve_segments: 16
-    rail_height: 0.055
-    ball_radius: 0.018
-    drop_height: 0.14
-    drop_time: 0.60
-    ball_path_mode: angled   # straight, angled, or random
-    angled_path_min_deg: 15.0
-    angled_path_max_deg: 25.0
-    drop_forward_angle_min_deg: -8.0
-    drop_forward_angle_max_deg: 12.0
-    initial_forward_speed_min: 0.90
-    initial_forward_speed_max: 1.10
-    physics_max_steps: 1200
-    red_line_gap: 0.10
-    roll_time_min: 4.0
-    roll_time_max: 7.0
-    roll_acceleration: 0.35
-    launch_speed: 0.72
-    idle_time_min: 1.0
-    idle_time_max: 2.0
-    settle_steps: 150
-    bowl_id: 1
-    bowl_scale_mult: 0.65
-    bowl_inner_radius: 0.028
-    bowl_outer_radius: 0.037
-    bowl_height: 0.040
+    # Options (independent toggles):
+    #   Default — red ball goes straight to the exit edge
+    #   Opt 1 — wall_bounce_enabled: red ball rebounds off a side rail mid-run
+    #   Opt 2 — enable_distractor: black distractor on a separate straight lane
+    #            (exit points ≥ one ball diameter apart; catching black fails)
+    # Platform length (down_run+up_run) samples ±20% via platform_length_scale_* .
+    # Mirror — random_mirror / mirrored: x→−x; left arm places bowl when mirrored.
+    ramp_half_width: 0.125      # m; valley track half-width (y extent of plates)
+    ramp_thickness: 0.012       # m; plate thickness
+    ramp_center_y: 0.08         # m; valley fixture y
+    ramp_valley_x: -0.02        # m; valley low-point x
+    ramp_valley_height: 0.025   # m; valley floor height above table
+    down_run: 0.27              # m; downhill segment horizontal run (nominal)
+    down_rise: 0.13             # m; downhill vertical rise (nominal)
+    up_run: 0.20                # m; uphill run (nominal)
+    up_rise: 0.055              # m; uphill rise (nominal)
+    platform_length_scale_min: 0.8   # × nominal platform length (default −20%)
+    platform_length_scale_max: 1.2   # × nominal platform length (default +20%)
+    curve_segments: 16          # segments approximating curved plates
+    rail_height: 0.055          # m; side-rail height
+    ball_radius: 0.018          # m; ball radius
+    drop_height: 0.14           # m; release height above valley entry
+    drop_time: 0.60             # s; kinematic drop onto track
+    wall_bounce_enabled: false  # Opt 1
+    enable_distractor: false    # Opt 2
+    mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
+    random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
+    ball_path_mode: straight    # compat; overridden by wall_bounce_enabled
+    angled_path_min_deg: 15.0   # deg; |wall rebound angle| low (Opt 1)
+    angled_path_max_deg: 25.0   # deg; high
+    drop_forward_angle_min_deg: -8.0  # deg; forward aim jitter low
+    drop_forward_angle_max_deg: 12.0  # high
+    initial_forward_speed_min: 0.90   # m/s; entry speed low
+    initial_forward_speed_max: 1.10   # high
+    physics_max_steps: 1200     # cap on physics-driven track phase
+    red_line_gap: 0.10          # m; deadline line offset for place timing
+    roll_time_min: 4.0          # s; scripted roll duration low
+    roll_time_max: 7.0          # s; high
+    roll_acceleration: 0.35     # along-track accel factor [0, 0.8]
+    launch_speed: 0.72          # m/s; exit/launch speed off track
+    idle_time_min: 1.0          # s; idle before grasp low
+    idle_time_max: 2.0          # s; high
+    settle_steps: 150           # post-catch settle steps
+    bowl_id: 1                  # 002_bowl model_id
+    bowl_scale_mult: 0.65       # bowl asset scale
+    bowl_inner_radius: 0.028    # m; catch success inner radius
+    bowl_outer_radius: 0.037    # m; outer rim reference
+    bowl_height: 0.040          # m; bowl height used in checks
   play_billiard:
     # pocket_mode: any = any of 6 holes; top_three = one of top-left/mid/right
     pocket_mode: any

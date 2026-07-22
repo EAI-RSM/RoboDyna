@@ -378,7 +378,9 @@ def main():
         "--option",
         default=None,
         help="Legacy shorthand for task_args.<task>.option "
-             "(catch_rat: 1/catch_two_mice, 2/opaque_surface). Prefer --task-arg.",
+             "(catch_rat: 1/catch_two_mice, 2/opaque_surface; "
+             "catch_valley_ball: 1/wall_bounce_enabled, 2/enable_distractor). "
+             "Prefer --task-arg.",
     )
     parser.add_argument(
         "--task-arg",

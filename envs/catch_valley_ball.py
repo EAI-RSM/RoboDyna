@@ -7,12 +7,31 @@ import transforms3d as t3d
 
 
 class catch_valley_ball(Base_Task):
-    """Place a bowl to catch a ball leaving a down-then-up valley ramp.
+    """Place a bowl to catch a red ball leaving a down-then-up valley ramp.
 
     The ramp, ball, and robot use the standard Base_Task table/arm setup.  The
     ball follows a deterministic, step-driven drop and roll while the robot
     moves the bowl.  At the upward ramp's edge it becomes a real dynamic body,
     so the final flight and catch are resolved by PhysX.
+
+    Options (independent toggles; CLI via ``--task-arg`` or legacy ``--option``):
+      - Default — red ball travels straight toward the exit edge.
+      - Option 1 — ``wall_bounce_enabled``: red ball rebounds from a side rail
+        so its heading changes mid-run.
+        CLI: ``--task-arg wall_bounce_enabled=true`` or ``--option 1``.
+      - Option 2 — ``enable_distractor``: black distractor ball on a randomized
+        lateral lane (above or below the red ball). Exit points are separated by at
+        least one ball diameter. Red/black contact uses an equal-mass bounce (no
+        pass-through). Catching the black ball fails the episode.
+        CLI: ``--task-arg enable_distractor=true`` or ``--option 2``.
+      Options 1 and 2 may be combined; exit separation still applies.
+      Both balls sample a random lane y each episode.
+
+      Layout mirror (x → −x) — ``random_mirror`` / ``mirrored``:
+        Default layout exits toward +x (right arm places the bowl). Mirrored layout
+        exits toward −x (left arm places the bowl). With ``random_mirror: true``
+        (default) the side is chosen per episode when ``mirrored`` is unset.
+        CLI: ``--task-arg mirrored=true`` or ``--task-arg random_mirror=true``.
     """
 
     SIM_HZ = 250.0
@@ -27,16 +46,24 @@ class catch_valley_ball(Base_Task):
     DOWN_RISE_DEFAULT = 0.13
     UP_RUN_DEFAULT = 0.20
     UP_RISE_DEFAULT = 0.055
+    # Platform length (down_run + up_run) is scaled per episode within this range.
+    PLATFORM_LENGTH_SCALE_MIN_DEFAULT = 0.8
+    PLATFORM_LENGTH_SCALE_MAX_DEFAULT = 1.2
     CURVE_SEGMENTS_DEFAULT = 16
     RAIL_HEIGHT_DEFAULT = 0.055
     RAIL_THICKNESS_DEFAULT = 0.006
+    RANDOM_MIRROR_DEFAULT = True
+    MIRRORED_DEFAULT = None  # None → sample when random_mirror, else use explicit bool
 
     BALL_RADIUS_DEFAULT = 0.018
     DROP_HEIGHT_DEFAULT = 0.14
     DROP_TIME_DEFAULT = 0.60
     DROP_WALL_ANGLE_MIN_DEFAULT = 15.0
     DROP_WALL_ANGLE_MAX_DEFAULT = 25.0
-    BALL_PATH_MODE_DEFAULT = "random"
+    WALL_BOUNCE_ENABLED_DEFAULT = False
+    ENABLE_DISTRACTOR_DEFAULT = False
+    DISTRACTOR_COLOR_DEFAULT = [0.05, 0.05, 0.05]
+    BALL_PATH_MODE_DEFAULT = "straight"
     DROP_FORWARD_ANGLE_MIN_DEFAULT = -8.0
     DROP_FORWARD_ANGLE_MAX_DEFAULT = 12.0
     INITIAL_FORWARD_SPEED_MIN_DEFAULT = 0.90
@@ -64,30 +91,147 @@ class catch_valley_ball(Base_Task):
         # invoke the per-step hook before the new actors have been constructed.
         self._loaded = False
         self._ball_phase = None
+        self._distractor_phase = None
         self._expert_demo = False
         self._bowl_ready = False
         self._bowl_welded = False
         self._arm_ball_contact = False
+        self.distractor = None
+        self._distractor_rigid = None
+        self.enable_distractor = False
+        self.wall_bounce_enabled = False
+        self.mirrored = False
+        self.side = 1.0
         super()._init_task_env_(**kwags)
 
         # Evaluation does not call play_once, so start the self-contained ball
         # motion after initialization. Expert collection resets the same state.
         self._start_ball_motion(expert_demo=False)
 
+    # ---------------------------------------------------------------- helpers
+    @staticmethod
+    def _as_bool(value, default: bool) -> bool:
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        s = str(value).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"catch_valley_ball expected a boolean, got {value!r}")
+
+    def _parse_wall_bounce_enabled(self, c) -> bool:
+        """Option 1: wall rebound path (preferred) or legacy ``option: 1``."""
+        wall = c.get("wall_bounce_enabled", c.get("opt1", None))
+        legacy = c.get("option", None)
+        if legacy is not None and wall is None:
+            if legacy in (1, "1", "wall_bounce", "wall_bounce_enabled", "angled"):
+                wall = True
+            elif legacy in (2, "2", "enable_distractor", "distractor"):
+                wall = False
+            else:
+                raise ValueError(
+                    "catch_valley_ball option must be 1/wall_bounce_enabled or "
+                    "2/enable_distractor (or set the booleans directly)"
+                )
+        if wall is not None:
+            return self._as_bool(wall, self.WALL_BOUNCE_ENABLED_DEFAULT)
+
+        # Backward-compatible path-mode override when the toggle is unset.
+        mode = str(c.get("ball_path_mode", self.BALL_PATH_MODE_DEFAULT)).strip().lower()
+        if mode == "angled":
+            return True
+        if mode == "random":
+            return bool(np.random.choice([False, True]))
+        return bool(self.WALL_BOUNCE_ENABLED_DEFAULT)
+
+    def _parse_enable_distractor(self, c) -> bool:
+        """Option 2: black distractor ball (preferred) or legacy ``option: 2``."""
+        distractor = c.get("enable_distractor", c.get("opt2", None))
+        legacy = c.get("option", None)
+        if legacy is not None and distractor is None:
+            if legacy in (2, "2", "enable_distractor", "distractor"):
+                distractor = True
+            elif legacy in (1, "1", "wall_bounce", "wall_bounce_enabled", "angled"):
+                distractor = False
+            else:
+                raise ValueError(
+                    "catch_valley_ball option must be 1/wall_bounce_enabled or "
+                    "2/enable_distractor (or set the booleans directly)"
+                )
+        return self._as_bool(distractor, self.ENABLE_DISTRACTOR_DEFAULT)
+
+    def _parse_mirrored(self, c) -> bool:
+        """Layout mirror (x → −x): explicit ``mirrored``, else random when ``random_mirror``."""
+        random_mirror = self._as_bool(
+            c.get("random_mirror", self.RANDOM_MIRROR_DEFAULT),
+            self.RANDOM_MIRROR_DEFAULT,
+        )
+        mirror_cfg = c.get("mirrored", self.MIRRORED_DEFAULT)
+        if mirror_cfg is None:
+            return bool(random_mirror and (np.random.rand() < 0.5))
+        return self._as_bool(mirror_cfg, False)
+
+    def _option_label(self) -> str:
+        parts = []
+        if getattr(self, "wall_bounce_enabled", False):
+            parts.append("option 1")
+        if getattr(self, "enable_distractor", False):
+            parts.append("option 2")
+        if getattr(self, "mirrored", False):
+            parts.append("mirrored")
+        return ", ".join(parts) if parts else "baseline"
+
+    def _past_red_line_x(self, x, margin=0.0):
+        """True if world-x is on the catch side of the red line (travel direction)."""
+        return bool(self.side * float(x) - float(margin) >= self.side * self.red_line_x)
+
+    def _catch_target_x(self, landing_x):
+        """Bowl place-x: past the red line in the travel direction, at/beyond landing."""
+        # Extra margin so the rim clears the line even with placement slip.
+        required = self.red_line_x + self.side * (self.bowl_outer_radius + 0.025)
+        return float(self.side * max(self.side * float(landing_x), self.side * required))
+
     # ---------------------------------------------------------------- actors
     def load_actors(self):
         c = self._cfg
         self.table_top = 0.74 + self.table_z_bias
+
+        # Mirror flips the whole fixture across the table midline (x → −x).
+        # mirrored → exit on −x → left arm; else exit on +x → right arm.
+        self.mirrored = self._parse_mirrored(c)
+        self.side = -1.0 if self.mirrored else 1.0
 
         self.ramp_half_width = float(c.get("ramp_half_width", self.RAMP_HALF_WIDTH_DEFAULT))
         self.ramp_thickness = float(c.get("ramp_thickness", self.RAMP_THICKNESS_DEFAULT))
         self.ramp_center_y = float(c.get("ramp_center_y", self.RAMP_CENTER_Y_DEFAULT))
         self.valley_x = float(c.get("ramp_valley_x", self.RAMP_VALLEY_X_DEFAULT))
         self.valley_height = float(c.get("ramp_valley_height", self.RAMP_VALLEY_HEIGHT_DEFAULT))
-        self.down_run = float(c.get("down_run", self.DOWN_RUN_DEFAULT))
-        self.down_rise = float(c.get("down_rise", self.DOWN_RISE_DEFAULT))
-        self.up_run = float(c.get("up_run", self.UP_RUN_DEFAULT))
-        self.up_rise = float(c.get("up_rise", self.UP_RISE_DEFAULT))
+        down_run_nom = float(c.get("down_run", self.DOWN_RUN_DEFAULT))
+        down_rise_nom = float(c.get("down_rise", self.DOWN_RISE_DEFAULT))
+        up_run_nom = float(c.get("up_run", self.UP_RUN_DEFAULT))
+        up_rise_nom = float(c.get("up_rise", self.UP_RISE_DEFAULT))
+        length_scale_min = float(c.get(
+            "platform_length_scale_min",
+            self.PLATFORM_LENGTH_SCALE_MIN_DEFAULT,
+        ))
+        length_scale_max = float(c.get(
+            "platform_length_scale_max",
+            self.PLATFORM_LENGTH_SCALE_MAX_DEFAULT,
+        ))
+        self.platform_length_scale = float(np.random.uniform(
+            min(length_scale_min, length_scale_max),
+            max(length_scale_min, length_scale_max),
+        ))
+        self.down_run = down_run_nom * self.platform_length_scale
+        self.up_run = up_run_nom * self.platform_length_scale
+        # Keep the valley profile proportional when the platform stretches.
+        self.down_rise = down_rise_nom * self.platform_length_scale
+        self.up_rise = up_rise_nom * self.platform_length_scale
         self.curve_segments = int(c.get("curve_segments", self.CURVE_SEGMENTS_DEFAULT))
         self.rail_height = float(c.get("rail_height", self.RAIL_HEIGHT_DEFAULT))
         self.rail_thickness = float(c.get("rail_thickness", self.RAIL_THICKNESS_DEFAULT))
@@ -95,16 +239,10 @@ class catch_valley_ball(Base_Task):
         self.ball_radius = float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT))
         self.drop_height = float(c.get("drop_height", self.DROP_HEIGHT_DEFAULT))
         self.drop_time = float(c.get("drop_time", self.DROP_TIME_DEFAULT))
-        requested_path_mode = str(
-            c.get("ball_path_mode", self.BALL_PATH_MODE_DEFAULT)
-        ).strip().lower()
-        if requested_path_mode not in {"straight", "angled", "random"}:
-            requested_path_mode = self.BALL_PATH_MODE_DEFAULT
-        self.ball_path_mode = (
-            str(np.random.choice(["straight", "angled"]))
-            if requested_path_mode == "random"
-            else requested_path_mode
-        )
+        self.wall_bounce_enabled = self._parse_wall_bounce_enabled(c)
+        self.enable_distractor = self._parse_enable_distractor(c)
+        self.distractor_color = list(c.get("distractor_color", self.DISTRACTOR_COLOR_DEFAULT))
+        self.ball_path_mode = "angled" if self.wall_bounce_enabled else "straight"
         wall_angle_min = float(c.get(
             "angled_path_min_deg",
             c.get("drop_wall_angle_min_deg", self.DROP_WALL_ANGLE_MIN_DEFAULT),
@@ -164,9 +302,9 @@ class catch_valley_ball(Base_Task):
         self.red_line_gap = max(self.red_line_gap, 0.0)
         self.bowl_scale_mult = max(self.bowl_scale_mult, 0.25)
 
-        # Straight episodes stay on the centerline. Angled episodes follow a
-        # reflected lateral path and visibly rebound from one or both rails.
-        if self.ball_path_mode == "straight":
+        # Default: straight to the edge. Opt 1: reflected lateral path that
+        # rebounds from one or both rails mid-run.
+        if not self.wall_bounce_enabled:
             self.drop_wall_angle_deg = 0.0
         else:
             wall_angle_abs = float(np.random.uniform(
@@ -213,9 +351,12 @@ class catch_valley_ball(Base_Task):
         self._drop_forward_travel = float(
             self.drop_height * np.tan(np.deg2rad(self.drop_forward_angle_deg))
         )
-        self.ball_y = self.ramp_center_y
+        self.min_exit_separation = 2.0 * self.ball_radius  # one diameter
 
         surface_points = self._make_curved_surface()
+        if self.mirrored:
+            surface_points = surface_points.copy()
+            surface_points[:, 0] *= -1.0
         tangents = np.gradient(surface_points, axis=0)
         normals = np.column_stack([
             -tangents[:, 2],
@@ -223,37 +364,32 @@ class catch_valley_ball(Base_Task):
             tangents[:, 0],
         ])
         normals /= np.linalg.norm(normals, axis=1, keepdims=True)
-        self.ball_path = surface_points + self.ball_radius * normals
-        lateral_slope = np.tan(np.deg2rad(self.drop_wall_angle_deg))
-        raw_lateral = (
-            self.ramp_center_y
-            + (self.ball_path[:, 0] - self.ball_path[0, 0]) * lateral_slope
-        )
-        self.ball_path[:, 1] = [
-            self._reflect_lane(y) for y in raw_lateral
-        ]
-        total_lateral_travel = float(raw_lateral[-1] - raw_lateral[0])
-        lane_width = self._lane_max - self._lane_min
-        self.drop_wall_bounces = max(
-            0,
-            int(np.floor(
-                (abs(total_lateral_travel) + 0.5 * lane_width)
-                / lane_width
-            )),
-        )
+        # Centerline surface offset by radius; lateral Y is baked below so
+        # wall / ball-ball bounces are deterministic across plan+render passes.
+        self._surface_ball_path = surface_points + self.ball_radius * normals
+        self.ball_path = self._surface_ball_path.copy()
+        self.distractor_path = None
+        self.ball_ball_bounces = 0
+        self.drop_wall_bounces = 0
+        self.exit_separation = 0.0
+        self._bake_ball_lanes()
+
         path_steps = np.linalg.norm(np.diff(self.ball_path, axis=0), axis=1)
         self.ball_path_cumulative = np.concatenate([[0.0], np.cumsum(path_steps)])
         self.ball_path_length = float(self.ball_path_cumulative[-1])
         self.ball_start = self.ball_path[0].copy()
         self.ball_valley = self.ball_path[self.curve_segments].copy()
         self.ball_exit = self.ball_path[-1].copy()
+        self.ball_y = float(self.ball_start[1])
+        # Drop is upstream of the entry (opposite the travel direction).
         self.ball_drop = self.ball_start + np.array([
-            -self._drop_forward_travel,
+            -self.side * self._drop_forward_travel,
             0.0,
             self.drop_height,
         ])
         exit_tangent = self.ball_path[-1] - self.ball_path[-2]
-        self.up_angle = float(np.arctan2(exit_tangent[2], exit_tangent[0]))
+        # Elevation only (use |dx| so mirrored −x exits keep a positive climb angle).
+        self.up_angle = float(np.arctan2(exit_tangent[2], abs(exit_tangent[0])))
         exit_horizontal = exit_tangent[:2]
         self.release_direction_xy = (
             exit_horizontal / max(np.linalg.norm(exit_horizontal), 1e-6)
@@ -272,7 +408,7 @@ class catch_valley_ball(Base_Task):
         self._build_support("valley_support", surface_points[self.curve_segments])
         self._build_support("exit_support", surface_points[-1])
         self.ramp_exit_x = float(surface_points[-1, 0])
-        self.red_line_x = self.ramp_exit_x + self.red_line_gap
+        self.red_line_x = self.ramp_exit_x + self.side * self.red_line_gap
         self.red_line = create_box(
             self.scene,
             sapien.Pose([
@@ -303,12 +439,23 @@ class catch_valley_ball(Base_Task):
             material = sapien.physx.PhysxMaterial(
                 static_friction=0.12,
                 dynamic_friction=0.08,
-                restitution=0.18,
+                restitution=0.22,
             )
             for shape in self._ball_rigid.get_collision_shapes():
                 shape.set_physical_material(material)
 
-        bowl_x = float(np.random.uniform(0.24, 0.28))
+        self.distractor = None
+        self._distractor_rigid = None
+        self._distractor_phase = None
+        self.distractor_landing = None
+        self.distractor_release_velocity = None
+        # Lane bake already filled distractor_path / exit / cumulative / start.
+        if self.enable_distractor:
+            self._spawn_distractor()
+
+        # Spawn bowl on the catch side, already past the red-line x so the
+        # subsequent place mainly adjusts y toward the predicted landing.
+        bowl_x = float(self.side * np.random.uniform(0.30, 0.34))
         bowl_pose = rand_pose(
             xlim=[bowl_x, bowl_x],
             ylim=[-0.20, -0.16],
@@ -338,11 +485,17 @@ class catch_valley_ball(Base_Task):
 
         self._update_release_velocity()
         self._compute_landing()
-        required_landing_x = self.red_line_x + self.bowl_outer_radius + 0.005
-        while self.landing[0] < required_landing_x:
+        if self.enable_distractor:
+            self._update_distractor_release_velocity()
+            self._compute_distractor_landing()
+        required_landing_x = self.red_line_x + self.side * (self.bowl_outer_radius + 0.025)
+        while self.side * self.landing[0] < self.side * required_landing_x:
             self.launch_speed *= 1.05
             self._update_release_velocity()
             self._compute_landing()
+            if self.enable_distractor:
+                self._update_distractor_release_velocity()
+                self._compute_distractor_landing()
         self.physics_run_steps = self.physics_max_steps
 
         for part in self.ramp_parts:
@@ -359,6 +512,210 @@ class catch_valley_ball(Base_Task):
         self._bowl_ee_offset = None
         self._loaded = True
         self._ball_phase = "frozen"
+        if self.enable_distractor:
+            self._distractor_phase = "frozen"
+
+    def _sample_lane_y(self):
+        """Uniform random y inside the playable lane."""
+        return float(np.random.uniform(self._lane_min, self._lane_max))
+
+    def _sample_distractor_start_y(self, red_y):
+        """Sample black-ball y above or below the red ball with ≥1-diameter gap."""
+        min_sep = self.min_exit_separation
+        candidates = []
+        if red_y + min_sep <= self._lane_max + 1e-9:
+            candidates.append((red_y + min_sep, self._lane_max))
+        if red_y - min_sep >= self._lane_min - 1e-9:
+            candidates.append((self._lane_min, red_y - min_sep))
+        if not candidates:
+            # Degenerate narrow lane: push to the farther rail.
+            if abs(self._lane_max - red_y) >= abs(red_y - self._lane_min):
+                return float(self._lane_max)
+            return float(self._lane_min)
+        low, high = candidates[int(np.random.randint(len(candidates)))]
+        if high < low:
+            low, high = high, low
+        if high - low < 1e-6:
+            return float(low)
+        return float(np.random.uniform(low, high))
+
+    def _step_lateral_y(self, y, slope, dx):
+        """Integrate lateral y; reflect slope at the rails."""
+        y = float(y + slope * dx)
+        hit = False
+        for _ in range(6):
+            if y < self._lane_min:
+                y = self._lane_min + (self._lane_min - y)
+                slope = -slope
+                hit = True
+            elif y > self._lane_max:
+                y = self._lane_max - (y - self._lane_max)
+                slope = -slope
+                hit = True
+            else:
+                break
+        y = float(np.clip(y, self._lane_min, self._lane_max))
+        return y, float(slope), hit
+
+    def _resolve_ball_ball_y(self, y_r, y_d, slope_r, slope_d, y_r_prev, y_d_prev):
+        """Equal-mass 1D elastic bounce on Y when centers would overlap."""
+        min_sep = self.min_exit_separation
+        if abs(y_r - y_d) >= min_sep - 1e-9:
+            return y_r, y_d, slope_r, slope_d, False
+
+        # Approaching if relative y motion closes the gap.
+        closing = (y_r - y_d) * ((y_r - y_r_prev) - (y_d - y_d_prev)) < 0.0
+        overlapping = abs(y_r - y_d) < min_sep
+        if not (closing or overlapping):
+            return y_r, y_d, slope_r, slope_d, False
+
+        # Swap lateral slopes (equal mass) and separate centers by one diameter.
+        slope_r, slope_d = float(slope_d), float(slope_r)
+        mid = 0.5 * (y_r + y_d)
+        half = 0.5 * min_sep
+        if y_r <= y_d:
+            y_r = mid - half
+            y_d = mid + half
+        else:
+            y_r = mid + half
+            y_d = mid - half
+        y_r = float(np.clip(y_r, self._lane_min, self._lane_max))
+        y_d = float(np.clip(y_d, self._lane_min, self._lane_max))
+        # If clamping collapsed the gap, push toward opposite rails.
+        if abs(y_r - y_d) < min_sep - 1e-9:
+            if y_r <= y_d:
+                y_r = float(self._lane_min)
+                y_d = float(min(self._lane_max, y_r + min_sep))
+            else:
+                y_r = float(self._lane_max)
+                y_d = float(max(self._lane_min, y_r - min_sep))
+        return y_r, y_d, slope_r, slope_d, True
+
+    def _bake_ball_lanes(self):
+        """Randomize start Ys and bake lateral paths with rail + ball-ball bounce."""
+        path = self._surface_ball_path
+        n = len(path)
+        min_sep = self.min_exit_separation
+        lateral_slope0 = float(np.tan(np.deg2rad(self.drop_wall_angle_deg)))
+
+        best = None
+        for _ in range(32):
+            y_r0 = self._sample_lane_y()
+            y_d0 = (
+                self._sample_distractor_start_y(y_r0)
+                if self.enable_distractor
+                else None
+            )
+            y_r = np.zeros(n, dtype=np.float64)
+            y_d = np.zeros(n, dtype=np.float64) if self.enable_distractor else None
+            y_r[0] = y_r0
+            slope_r = lateral_slope0
+            slope_d = 0.0
+            rail_hits = 0
+            ball_hits = 0
+            if self.enable_distractor:
+                y_d[0] = y_d0
+
+            for i in range(n - 1):
+                dx = float(path[i + 1, 0] - path[i, 0])
+                y_r_prev = float(y_r[i])
+                y_r[i + 1], slope_r, hit_r = self._step_lateral_y(y_r[i], slope_r, dx)
+                if hit_r:
+                    rail_hits += 1
+                if self.enable_distractor:
+                    y_d_prev = float(y_d[i])
+                    y_d[i + 1], slope_d, hit_d = self._step_lateral_y(
+                        y_d[i], slope_d, dx
+                    )
+                    if hit_d:
+                        rail_hits += 1
+                    y_r[i + 1], y_d[i + 1], slope_r, slope_d, bounced = (
+                        self._resolve_ball_ball_y(
+                            float(y_r[i + 1]),
+                            float(y_d[i + 1]),
+                            slope_r,
+                            slope_d,
+                            y_r_prev,
+                            y_d_prev,
+                        )
+                    )
+                    if bounced:
+                        ball_hits += 1
+
+            exit_sep = (
+                float(abs(y_r[-1] - y_d[-1]))
+                if self.enable_distractor
+                else min_sep
+            )
+            candidate = (y_r, y_d, rail_hits, ball_hits, exit_sep, y_r0, y_d0)
+            if best is None or exit_sep > best[4]:
+                best = candidate
+            if (not self.enable_distractor) or exit_sep >= min_sep - 1e-6:
+                break
+
+        y_r, y_d, rail_hits, ball_hits, exit_sep, y_r0, y_d0 = best
+        self.ball_start_y = float(y_r0)
+        self.ball_path = path.copy()
+        self.ball_path[:, 1] = y_r
+        self.drop_wall_bounces = int(rail_hits)
+        self.ball_ball_bounces = int(ball_hits)
+        self.exit_separation = float(exit_sep)
+
+        if self.enable_distractor:
+            self.distractor_start_y = float(y_d0)
+            self.distractor_path = path.copy()
+            self.distractor_path[:, 1] = y_d
+            d_steps = np.linalg.norm(np.diff(self.distractor_path, axis=0), axis=1)
+            self.distractor_path_cumulative = np.concatenate(
+                [[0.0], np.cumsum(d_steps)]
+            )
+            self.distractor_path_length = float(self.distractor_path_cumulative[-1])
+            self.distractor_start = self.distractor_path[0].copy()
+            self.distractor_exit = self.distractor_path[-1].copy()
+            d_exit_tangent = self.distractor_path[-1] - self.distractor_path[-2]
+            d_horizontal = d_exit_tangent[:2]
+            self.distractor_release_direction_xy = (
+                d_horizontal / max(np.linalg.norm(d_horizontal), 1e-6)
+            )
+            self.exit_separation = float(abs(y_r[-1] - y_d[-1]))
+        else:
+            self.distractor_start_y = None
+            self.distractor_path = None
+            self.distractor_path_cumulative = None
+            self.distractor_path_length = 0.0
+            self.distractor_start = None
+            self.distractor_exit = None
+            self.distractor_release_direction_xy = None
+
+    def _spawn_distractor(self):
+        """Create the black distractor at its baked drop pose."""
+        self.distractor_drop = self.distractor_start + np.array([
+            -self.side * self._drop_forward_travel,
+            0.0,
+            self.drop_height,
+        ])
+        self.distractor = create_sphere(
+            self.scene,
+            sapien.Pose(self.distractor_drop.tolist()),
+            radius=self.ball_radius,
+            color=self.distractor_color,
+            is_static=False,
+            name="valley_distractor_ball",
+        )
+        self._distractor_rigid = self._get_rigid(self.distractor)
+        if self._distractor_rigid is not None:
+            self._distractor_rigid.set_disable_gravity(True)
+            self._distractor_rigid.set_kinematic(True)
+            self._distractor_rigid.set_kinematic_target(
+                sapien.Pose(self.distractor_drop.tolist())
+            )
+            material = sapien.physx.PhysxMaterial(
+                static_friction=0.12,
+                dynamic_friction=0.08,
+                restitution=0.22,
+            )
+            for shape in self._distractor_rigid.get_collision_shapes():
+                shape.set_physical_material(material)
 
     def _reflect_lane(self, raw_y):
         """Reflect an unbounded lateral coordinate between the two rails."""
@@ -528,6 +885,16 @@ class catch_valley_ball(Base_Task):
             self.launch_speed * np.sin(self.up_angle),
         ])
 
+    def _update_distractor_release_velocity(self):
+        if not self.enable_distractor:
+            return
+        horizontal_speed = self.launch_speed * np.cos(self.up_angle)
+        self.distractor_release_velocity = np.array([
+            horizontal_speed * self.distractor_release_direction_xy[0],
+            horizontal_speed * self.distractor_release_direction_xy[1],
+            self.launch_speed * np.sin(self.up_angle),
+        ])
+
     def _compute_landing(self):
         # Solve z(t) = bowl-rest height for the positive projectile root.
         rest_z = self.table_top + self.ball_radius + 0.012
@@ -536,6 +903,19 @@ class catch_valley_ball(Base_Task):
         discriminant = max(0.0, vz * vz + 2.0 * self.GRAVITY * (z0 - rest_z))
         self.flight_time = (vz + np.sqrt(discriminant)) / self.GRAVITY
         self.landing = self.ball_exit[:2] + self.release_velocity[:2] * self.flight_time
+
+    def _compute_distractor_landing(self):
+        if not self.enable_distractor or self.distractor_exit is None:
+            return
+        rest_z = self.table_top + self.ball_radius + 0.012
+        z0 = float(self.distractor_exit[2])
+        vz = float(self.distractor_release_velocity[2])
+        discriminant = max(0.0, vz * vz + 2.0 * self.GRAVITY * (z0 - rest_z))
+        flight_time = (vz + np.sqrt(discriminant)) / self.GRAVITY
+        self.distractor_landing = (
+            self.distractor_exit[:2]
+            + self.distractor_release_velocity[:2] * flight_time
+        )
 
     # ---------------------------------------------------------- ball motion
     def _freeze_ball(self):
@@ -547,6 +927,17 @@ class catch_valley_ball(Base_Task):
             self._ball_rigid.set_kinematic(True)
             self._ball_rigid.set_kinematic_target(sapien.Pose(self.ball_drop.tolist()))
         self._ball_phase = "frozen"
+        if self.enable_distractor and self.distractor is not None:
+            self.distractor.set_pose(sapien.Pose(self.distractor_drop.tolist()))
+            if self._distractor_rigid is not None:
+                self._distractor_rigid.set_linear_velocity(np.zeros(3))
+                self._distractor_rigid.set_angular_velocity(np.zeros(3))
+                self._distractor_rigid.set_disable_gravity(True)
+                self._distractor_rigid.set_kinematic(True)
+                self._distractor_rigid.set_kinematic_target(
+                    sapien.Pose(self.distractor_drop.tolist())
+                )
+            self._distractor_phase = "frozen"
 
     def _start_ball_motion(self, expert_demo):
         if not getattr(self, "_loaded", False):
@@ -558,6 +949,7 @@ class catch_valley_ball(Base_Task):
         self._drop_i = 0
         self._roll_i = 0
         self._roll_distance = 0.0
+        self._distractor_roll_distance = 0.0
         self._physics_step_count = 0
         self.ball.set_pose(sapien.Pose(self.ball_drop.tolist()))
         if self._ball_rigid is not None:
@@ -566,6 +958,17 @@ class catch_valley_ball(Base_Task):
             self._ball_rigid.set_linear_velocity(np.zeros(3))
             self._ball_rigid.set_angular_velocity(np.zeros(3))
             self._ball_rigid.set_kinematic_target(sapien.Pose(self.ball_drop.tolist()))
+        if self.enable_distractor and self.distractor is not None:
+            self._distractor_phase = "dropping"
+            self.distractor.set_pose(sapien.Pose(self.distractor_drop.tolist()))
+            if self._distractor_rigid is not None:
+                self._distractor_rigid.set_disable_gravity(True)
+                self._distractor_rigid.set_kinematic(True)
+                self._distractor_rigid.set_linear_velocity(np.zeros(3))
+                self._distractor_rigid.set_angular_velocity(np.zeros(3))
+                self._distractor_rigid.set_kinematic_target(
+                    sapien.Pose(self.distractor_drop.tolist())
+                )
 
     def _ball_touching_rail(self):
         ball_name = self.ball.get_name()
@@ -581,7 +984,7 @@ class catch_valley_ball(Base_Task):
 
     def _simulate_ball_landing(self):
         """Run and reset a physical rollout to predict the table impact point."""
-        required_x = self.red_line_x + self.bowl_outer_radius + 0.005
+        required_x = self.red_line_x + self.side * (self.bowl_outer_radius + 0.005)
         best_landing = self.landing.copy()
         best_steps = self.physics_max_steps
         best_bounces = 0
@@ -599,7 +1002,10 @@ class catch_valley_ball(Base_Task):
                     bounce_count += 1
                 touching_rail = rail_contact
                 position = np.asarray(self.ball.get_pose().p)
-                left_ramp = position[0] > self.ramp_exit_x + self.ball_radius
+                left_ramp = (
+                    self.side * position[0]
+                    > self.side * self.ramp_exit_x + self.ball_radius
+                )
                 reached_table = position[2] <= self.table_top + self.ball_radius + 0.006
                 if left_ramp and reached_table:
                     landing = position[:2].copy()
@@ -616,12 +1022,12 @@ class catch_valley_ball(Base_Task):
                     abs(landing[1] - self.ramp_center_y)
                     <= self.ramp_half_width - self.bowl_outer_radius
                 )
-                if landing[0] >= required_x and landing_in_lane:
+                if self.side * landing[0] >= self.side * required_x and landing_in_lane:
                     break
 
             # Preserve the sampled angles but add speed if the physical ball
             # does not clear the mandatory catch boundary.
-            if landing is None or landing[0] < required_x:
+            if landing is None or self.side * landing[0] < self.side * required_x:
                 self.initial_forward_speed *= 1.15
             if (
                 landing is None
@@ -651,30 +1057,46 @@ class catch_valley_ball(Base_Task):
         self.scene.step()
         self._arm_ball_contact = False
 
-    def _set_kinematic_ball_pose(self, position, roll_distance=0.0):
+    def _set_kinematic_ball_pose(self, position, roll_distance=0.0, actor=None, rigid=None):
         # A sphere moving toward +x rolls around the negative y axis.
         roll_angle = -float(roll_distance) / max(self.ball_radius, 1e-6)
         quat = t3d.quaternions.axangle2quat([0.0, 1.0, 0.0], roll_angle)
         pose = sapien.Pose(np.asarray(position).tolist(), quat.tolist())
-        if self._ball_rigid is not None:
-            self._ball_rigid.set_kinematic_target(pose)
+        target_rigid = rigid if rigid is not None else self._ball_rigid
+        target_actor = actor if actor is not None else self.ball
+        if target_rigid is not None:
+            target_rigid.set_kinematic_target(pose)
         else:
-            self.ball.set_pose(pose)
+            target_actor.set_pose(pose)
 
     def _advance_ball(self):
         if self._ball_phase == "dropping":
             self._drop_i += 1
             fraction = min(1.0, self._drop_i / float(self.drop_steps))
             vertical_fraction = fraction * fraction
-            raw_y = self.ramp_center_y + self._drop_lateral_travel * fraction
             position = np.array([
                 self.ball_drop[0] + (self.ball_start[0] - self.ball_drop[0]) * fraction,
-                self._reflect_lane(raw_y),
+                self.ball_start[1],
                 self.ball_drop[2] + (self.ball_start[2] - self.ball_drop[2]) * vertical_fraction,
             ])
             self._set_kinematic_ball_pose(position)
+            if self.enable_distractor and self._distractor_phase == "dropping":
+                distractor_position = np.array([
+                    self.distractor_drop[0]
+                    + (self.distractor_start[0] - self.distractor_drop[0]) * fraction,
+                    self.distractor_start[1],
+                    self.distractor_drop[2]
+                    + (self.distractor_start[2] - self.distractor_drop[2]) * vertical_fraction,
+                ])
+                self._set_kinematic_ball_pose(
+                    distractor_position,
+                    actor=self.distractor,
+                    rigid=self._distractor_rigid,
+                )
             if fraction >= 1.0:
                 self._ball_phase = "rolling"
+                if self.enable_distractor:
+                    self._distractor_phase = "rolling"
 
         elif self._ball_phase == "rolling":
             self._roll_i += 1
@@ -697,6 +1119,29 @@ class catch_valley_ball(Base_Task):
             )
             self._roll_distance = distance
             self._set_kinematic_ball_pose(position, distance)
+
+            if self.enable_distractor and self._distractor_phase == "rolling":
+                d_distance = accelerated_fraction * self.distractor_path_length
+                d_segment = int(
+                    np.searchsorted(self.distractor_path_cumulative, d_distance, side="right") - 1
+                )
+                d_segment = int(np.clip(d_segment, 0, len(self.distractor_path) - 2))
+                d_start = self.distractor_path_cumulative[d_segment]
+                d_len = self.distractor_path_cumulative[d_segment + 1] - d_start
+                d_local = (d_distance - d_start) / max(d_len, 1e-6)
+                d_position = (
+                    self.distractor_path[d_segment]
+                    + (self.distractor_path[d_segment + 1] - self.distractor_path[d_segment])
+                    * d_local
+                )
+                self._distractor_roll_distance = d_distance
+                self._set_kinematic_ball_pose(
+                    d_position,
+                    d_distance,
+                    actor=self.distractor,
+                    rigid=self._distractor_rigid,
+                )
+
             if fraction >= 1.0 and (self._bowl_ready or not self._expert_demo):
                 self._release_ball()
 
@@ -711,11 +1156,26 @@ class catch_valley_ball(Base_Task):
             self._ball_rigid.set_linear_velocity(self.release_velocity)
             self._ball_rigid.set_angular_velocity([
                 0.0,
-                -self.launch_speed / max(self.ball_radius, 1e-6),
+                -self.side * self.launch_speed / max(self.ball_radius, 1e-6),
                 0.0,
             ])
             self._ball_rigid.set_linear_damping(0.08)
             self._ball_rigid.set_angular_damping(0.5)
+
+        if self.enable_distractor and self.distractor is not None:
+            self._distractor_phase = "released"
+            self.distractor.set_pose(sapien.Pose(self.distractor_exit.tolist()))
+            if self._distractor_rigid is not None:
+                self._distractor_rigid.set_kinematic(False)
+                self._distractor_rigid.set_disable_gravity(False)
+                self._distractor_rigid.set_linear_velocity(self.distractor_release_velocity)
+                self._distractor_rigid.set_angular_velocity([
+                    0.0,
+                    -self.side * self.launch_speed / max(self.ball_radius, 1e-6),
+                    0.0,
+                ])
+                self._distractor_rigid.set_linear_damping(0.08)
+                self._distractor_rigid.set_angular_damping(0.5)
 
     def _check_arm_ball_contact(self):
         if self._arm_ball_contact or not getattr(self, "_loaded", False):
@@ -750,7 +1210,7 @@ class catch_valley_ball(Base_Task):
 
     # --------------------------------------------------------------- policy
     def play_once(self):
-        arm_tag = ArmTag("right")
+        arm_tag = ArmTag("left" if self.mirrored else "right")
 
         # Start the ball before the first robot command. Its drop and
         # accelerated roll advance concurrently with all arm actions.
@@ -761,10 +1221,7 @@ class catch_valley_ball(Base_Task):
 
         bowl_now = np.asarray(self.bowl.get_pose().p)
         target = np.array([
-            max(
-                self.landing[0],
-                self.red_line_x + self.bowl_outer_radius + 0.005,
-            ),
+            self._catch_target_x(self.landing[0]),
             self.landing[1],
             self.table_top - 0.040,
         ])
@@ -799,10 +1256,25 @@ class catch_valley_ball(Base_Task):
             "{A}": "valley ball",
             "{B}": f"002_bowl/base{self.bowl_id}",
             "{a}": str(arm_tag),
+            "{opt}": self._option_label(),
+            "{flip}": "mirrored" if self.mirrored else "default",
         }
         return self.info
 
     # -------------------------------------------------------------- success
+    def _ball_in_bowl(self, ball_actor):
+        if ball_actor is None:
+            return False
+        ball_position = np.asarray(ball_actor.get_pose().p)
+        bowl_position = np.asarray(self.bowl.get_pose().p)
+        horizontal_offset = float(np.linalg.norm(ball_position[:2] - bowl_position[:2]))
+        in_height = (
+            bowl_position[2] - 0.01
+            <= ball_position[2]
+            <= bowl_position[2] + self.bowl_height + 2.0 * self.ball_radius
+        )
+        return bool(horizontal_offset < self.bowl_inner_radius and in_height)
+
     def _catch_state(self):
         ball_position = np.asarray(self.ball.get_pose().p)
         bowl_position = np.asarray(self.bowl.get_pose().p)
@@ -813,25 +1285,50 @@ class catch_valley_ball(Base_Task):
             <= bowl_position[2] + self.bowl_height + 2.0 * self.ball_radius
         )
         in_bowl = bool(horizontal_offset < self.bowl_inner_radius and in_height)
+        # Allow the full ramp y-span (randomized lanes can exit near a rail).
         behind_line = bool(
-            bowl_position[0] - self.bowl_outer_radius
-            >= self.red_line_x
+            self._past_red_line_x(bowl_position[0], margin=self.bowl_outer_radius)
             and abs(bowl_position[1] - self.ramp_center_y)
-            <= self.ramp_half_width - self.bowl_outer_radius
+            <= self.ramp_half_width
         )
-        return horizontal_offset, in_bowl, behind_line, ball_position, bowl_position
+        distractor_in_bowl = bool(
+            self.enable_distractor and self._ball_in_bowl(self.distractor)
+        )
+        return (
+            horizontal_offset,
+            in_bowl,
+            behind_line,
+            ball_position,
+            bowl_position,
+            distractor_in_bowl,
+        )
 
     def check_success(self):
         if not getattr(self, "_loaded", False) or self._ball_phase != "released":
             return False
         self._check_arm_ball_contact()
-        _, in_bowl, behind_line, _, _ = self._catch_state()
+        _, in_bowl, behind_line, _, _, distractor_in_bowl = self._catch_state()
+        # Catching the black distractor is an explicit failure.
+        if distractor_in_bowl:
+            return False
         return bool(in_bowl and behind_line and not self._arm_ball_contact)
 
     def get_obs(self):
         obs = super().get_obs()
         try:
-            offset, in_bowl, behind_line, ball_position, bowl_position = self._catch_state()
+            (
+                offset,
+                in_bowl,
+                behind_line,
+                ball_position,
+                bowl_position,
+                distractor_in_bowl,
+            ) = self._catch_state()
+            distractor_position = (
+                list(map(float, self.distractor.get_pose().p))
+                if self.enable_distractor and self.distractor is not None
+                else [0.0, 0.0, 0.0]
+            )
             obs["valley_catch"] = {
                 "ball_position": list(map(float, ball_position)),
                 "bowl_position": list(map(float, bowl_position)),
@@ -846,15 +1343,29 @@ class catch_valley_ball(Base_Task):
                 "down_rise": float(self.down_rise),
                 "up_run": float(self.up_run),
                 "up_rise": float(self.up_rise),
+                "platform_length_scale": float(self.platform_length_scale),
                 "drop_time": float(self.drop_time),
                 "ball_path_mode": str(self.ball_path_mode),
+                "wall_bounce_enabled": float(self.wall_bounce_enabled),
+                "enable_distractor": float(self.enable_distractor),
                 "drop_wall_angle_deg": float(self.drop_wall_angle_deg),
                 "drop_forward_angle_deg": float(self.drop_forward_angle_deg),
                 "drop_wall_bounces": int(self.drop_wall_bounces),
+                "ball_ball_bounces": int(getattr(self, "ball_ball_bounces", 0)),
+                "ball_start_y": float(getattr(self, "ball_start_y", self.ramp_center_y)),
+                "distractor_start_y": float(
+                    getattr(self, "distractor_start_y", 0.0) or 0.0
+                ),
                 "roll_time": float(self.roll_time),
                 "launch_speed": float(self.launch_speed),
                 "curve_segments": int(self.curve_segments),
                 "bowl_scale_mult": float(self.bowl_scale_mult),
+                "distractor_position": distractor_position,
+                "distractor_in_bowl": float(distractor_in_bowl),
+                "exit_separation": float(getattr(self, "exit_separation", 0.0)),
+                "mirrored": float(getattr(self, "mirrored", False)),
+                "side": float(getattr(self, "side", 1.0)),
+                "option_label": self._option_label(),
             }
         except Exception:
             pass

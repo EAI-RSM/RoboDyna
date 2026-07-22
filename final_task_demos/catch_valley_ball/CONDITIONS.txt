@@ -1,0 +1,28 @@
+catch_valley_ball — expert controller demos
+
+default  : wall_bounce_enabled=false, enable_distractor=false
+           red ball rolls straight to the exit edge (no wall rebound)
+opt1     : wall_bounce_enabled=true,  enable_distractor=false
+           red ball rebounds off a side rail mid-run
+opt2     : wall_bounce_enabled=false, enable_distractor=true
+           black distractor on a separate randomized lane (exit sep ≥ 1 diameter)
+opt1+2   : wall_bounce_enabled=true,  enable_distractor=true
+           wall rebound + black distractor (ball–ball bounce on contact)
+
+Success:
+  - red ball ends in the bowl beyond the red line (PhysX flight from ramp exit;
+    no teleport into the bowl), AND
+  - arm never touches the red ball, AND
+  - black distractor (if present) is NOT in the bowl.
+
+Failure if distractor is in the bowl or red ball is outside the bowl.
+
+Platform length samples ±20% each episode. Layout mirror disabled for these demos
+(right-arm / +x exit). Full controller test: see test_report.json.
+
+Files (side-by-side is the primary deliverable):
+  default_sidebyside.mp4
+  opt1_sidebyside.mp4
+  opt2_sidebyside.mp4
+  opt1+2_sidebyside.mp4
+Also: <tag>_head.mp4, <tag>_topdown.mp4

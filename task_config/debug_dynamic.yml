@@ -340,6 +340,8 @@ task_args:
     idle_time_max: 4.0
     settle_steps: 70
   catch_valley_ball:
+    # Default: straight exit. Opt1 wall_bounce_enabled. Opt2 enable_distractor.
+    # Platform length samples ±20% via platform_length_scale_min/max.
     ramp_half_width: 0.125
     ramp_thickness: 0.012
     ramp_center_y: 0.08
@@ -349,12 +351,18 @@ task_args:
     down_rise: 0.13
     up_run: 0.20
     up_rise: 0.055
+    platform_length_scale_min: 0.8
+    platform_length_scale_max: 1.2
     curve_segments: 16
     rail_height: 0.055
     ball_radius: 0.018
     drop_height: 0.14
     drop_time: 0.60
-    ball_path_mode: random   # straight, angled, or random
+    wall_bounce_enabled: false
+    enable_distractor: false
+    mirrored: null
+    random_mirror: true
+    ball_path_mode: straight
     angled_path_min_deg: 15.0
     angled_path_max_deg: 25.0
     drop_forward_angle_min_deg: -8.0
