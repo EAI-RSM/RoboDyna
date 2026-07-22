@@ -13,33 +13,33 @@ class packing(Base_Task):
     Two conveyor slabs sit with a gap centered on the table and run toward the
     robot (-y). Spawn behaviour is controlled by ``spawn_mode``:
 
-    - ``single``: only one fruit at a time; either color may appear on either
-      belt. The next fruit spawns only after the current one is dropped (gripper
-      has been above the basket and released) or has left the belt end — never
-      while a pack cycle is still in progress.
-    - ``parallel``: red apples left / yellow oranges right, one wave at a time.
-      The next pair spawns only after both current fruits are dropped or gone,
-      and the dual-arm pack cycle has finished.
-    - ``random``: each wave independently rolls a coin and spawns either a
-      single fruit (apple xor orange) or an apple+orange pair — same
-      "wait until fully clear" gating as the other modes, just with the
-      count randomized per wave.
+    - ``random`` (Opt 1 / default): each wave independently rolls a coin and
+      spawns either a single fruit (apple xor orange; either belt when
+      ``single_wave_any_belt``) or an apple+orange pair (Y-gap ~ U(0,
+      fruit_diameter) when ``pair_stagger_enabled``).
+    - ``parallel``: always apple+orange pair waves (same Y-gap sampling).
+    - ``single``: only one fruit at a time; either color on either belt.
+
+    Opt 2 (independent; can combine with Opt 1): ``distractor_enabled`` adds
+    black distractor fruit on the belts (never packed / counted).
 
     Success requires every fruit to rest in its color-matched basket.
+
+    Belt speed is sampled each episode as nominal × U(1 ± belt_speed_jitter)
+    (default ±20%), independently per belt.
     """
 
     N_PER_COLOR_DEFAULT = 3
     BELT_GAP_DEFAULT = 0.10
     BELT_SPEED_DEFAULT = 0.0008       # m advanced per belt tick (slow enough to pick)
+    BELT_SPEED_JITTER_DEFAULT = 0.20  # fraction; speed ~ U((1-j)*nom, (1+j)*nom)
     ADVANCE_EVERY_DEFAULT = 3         # physics steps between belt ticks
     SPAWN_GAP_DEFAULT = 0.16          # y-gap between consecutive spawns on a belt
-    SPAWN_MODE_DEFAULT = "parallel"   # "single" | "parallel" | "random"
+    SPAWN_MODE_DEFAULT = "random"     # "single" | "parallel" | "random"
     SPAWN_DELAY_S_DEFAULT = 2.0       # unused (kept for config compat); spawn waits on drop/despawn
-    # pair wave: Y offset so the two fruits don't ride the belts in perfect
-    # lockstep (see _spawn_wave_pair); off by default so existing configs
-    # are unaffected unless they opt in
+    # pair wave: per-wave Y gap ~ U(0, max); max defaults to fruit diameter
     PAIR_STAGGER_ENABLED_DEFAULT = False
-    PAIR_STAGGER_Y_DEFAULT = 0.045
+    PAIR_STAGGER_Y_DEFAULT = None     # None → fruit diameter (2 * fruit_r)
     # "random" mode single-fruit wave: let it appear on either belt instead
     # of always its color-dedicated one (arm/basket stay color-matched)
     SINGLE_WAVE_ANY_BELT_DEFAULT = False
@@ -84,12 +84,10 @@ class packing(Base_Task):
     BELT_COLOR = [0.18, 0.18, 0.20]
     SLAT_COLOR = [0.10, 0.10, 0.12]
 
-    # ---- distractor fruit (spawn-side only; never touched by pack/grasp/
-    # success logic — see load_actors' distractor block + _spawn_distractor /
-    # _advance_distractors / _maybe_spawn_distractor) ----
+    # ---- distractor fruit (Opt 2; spawn-side only; never packed/counted) ----
     DISTRACTOR_ENABLED_DEFAULT = False
     DISTRACTOR_PROB_DEFAULT = 0.35        # per real spawn-wave chance of also spawning a distractor
-    DISTRACTOR_COLOR_DEFAULT = [0.45, 0.30, 0.15]  # brown; distinct from APPLE_COLOR/ORANGE_COLOR
+    DISTRACTOR_COLOR_DEFAULT = [0.05, 0.05, 0.05]  # black; distinct from apple/orange
     # min center-to-center Y gap from any active same-belt real fruit, as a
     # multiple of fruit diameter (2*FRUIT_R) — "at least twice the fruit's size"
     DISTRACTOR_MIN_GAP_MULT_DEFAULT = 2.0
@@ -121,21 +119,26 @@ class packing(Base_Task):
         self.n_items = int(self.n_apple + self.n_orange)
 
         mode = str(cfg.get("spawn_mode", self.SPAWN_MODE_DEFAULT)).lower().strip()
-        if mode in ("opt1", "one", "sequential"):
-            mode = "single"
-        elif mode in ("opt2", "simultaneous", "dual", "both"):
-            mode = "parallel"
-        elif mode in ("opt3", "mixed", "randomized", "rand"):
+        if mode in ("opt1", "mixed", "randomized", "rand"):
             mode = "random"
+        elif mode in ("simultaneous", "dual", "both"):
+            mode = "parallel"
+        elif mode in ("one", "sequential"):
+            mode = "single"
         if mode not in ("single", "parallel", "random"):
             mode = self.SPAWN_MODE_DEFAULT
         self.spawn_mode = mode
         self.pick_lift = float(cfg.get("pick_lift", self.PICK_LIFT))
         self.spawn_delay_s = float(cfg.get("spawn_delay_s", self.SPAWN_DELAY_S_DEFAULT))
         self.pair_stagger_enabled = bool(cfg.get("pair_stagger_enabled", self.PAIR_STAGGER_ENABLED_DEFAULT))
-        self.pair_stagger_y = float(cfg.get("pair_stagger_y", self.PAIR_STAGGER_Y_DEFAULT))
+        # optional max Y gap (m); None / omitted → fruit diameter at spawn time
+        _stagger_raw = cfg.get("pair_stagger_y", self.PAIR_STAGGER_Y_DEFAULT)
+        self.pair_stagger_y_max = None if _stagger_raw is None else float(_stagger_raw)
+        self._pair_stagger_y = 0.0  # last sampled per-wave gap (see _spawn_wave_pair)
         self.single_wave_any_belt = bool(cfg.get("single_wave_any_belt", self.SINGLE_WAVE_ANY_BELT_DEFAULT))
-        self.distractor_enabled = bool(cfg.get("distractor_enabled", self.DISTRACTOR_ENABLED_DEFAULT))
+        # Opt 2: black distractor fruit (never packed)
+        _dist = cfg.get("distractor_enabled", cfg.get("opt2", self.DISTRACTOR_ENABLED_DEFAULT))
+        self.distractor_enabled = bool(_dist)
         self.distractor_prob = float(cfg.get("distractor_prob", self.DISTRACTOR_PROB_DEFAULT))
         self.distractor_color = list(cfg.get("distractor_color", self.DISTRACTOR_COLOR_DEFAULT))[:3]
         self.distractor_min_gap_mult = float(cfg.get("distractor_min_gap_mult", self.DISTRACTOR_MIN_GAP_MULT_DEFAULT))
@@ -143,9 +146,13 @@ class packing(Base_Task):
         self.belt_gap = float(cfg.get("belt_gap", self.BELT_GAP_DEFAULT))
         # shared default speed; optional per-side overrides (belt_speed_left / belt_speed_right)
         default_speed = float(cfg.get("belt_speed", self.BELT_SPEED_DEFAULT))
+        speed_jitter = float(cfg.get("belt_speed_jitter", self.BELT_SPEED_JITTER_DEFAULT))
+        speed_jitter = float(np.clip(speed_jitter, 0.0, 0.95))
+        lo, hi = 1.0 - speed_jitter, 1.0 + speed_jitter
+        # Per-episode sample around each belt's nominal (±jitter, default ±20%).
         self.belt_speed = {
-            "left": float(cfg.get("belt_speed_left", default_speed)),
-            "right": float(cfg.get("belt_speed_right", default_speed)),
+            "left": float(cfg.get("belt_speed_left", default_speed)) * float(np.random.uniform(lo, hi)),
+            "right": float(cfg.get("belt_speed_right", default_speed)) * float(np.random.uniform(lo, hi)),
         }
         self.advance_every = int(cfg.get("advance_every", self.ADVANCE_EVERY_DEFAULT))
         self.spawn_gap = float(cfg.get("spawn_gap", self.SPAWN_GAP_DEFAULT))
@@ -402,7 +409,7 @@ class packing(Base_Task):
         ``y_offset`` (<=0) gives a pair-wave partner a small head start —
         it spawns that much closer to the pick station (instead of both
         fruits starting at exactly ``BELT_Y_FAR``) so the pair doesn't ride
-        in perfect lockstep (see ``_spawn_wave_pair`` / ``pair_stagger_y``).
+        in perfect lockstep (see ``_spawn_wave_pair`` / ``_pair_stagger_y``).
         Only ever negative so spawns stay within the belt's physical
         length (never past ``BELT_Y_FAR``).
         """
@@ -423,11 +430,11 @@ class packing(Base_Task):
         """Spawn one fruit per belt side together as a pair wave.
 
         When ``pair_stagger_enabled`` is set, one of the two fruits (picked
-        at random) gets a ``pair_stagger_y`` head start toward the pick
-        station so the pair arrives slightly offset instead of perfectly
-        side-by-side, rather than perfectly in lockstep. Kept small enough
-        that ``_wait_pair_at_station`` still treats them as "arrived
-        together" (it widens its own tolerance by the same stagger amount).
+        at random) gets a head start toward the pick station. The gap is
+        sampled per wave from U(0, max), where max defaults to one fruit
+        diameter (``2 * fruit_r``) so the pair may start aligned or offset
+        by up to one fruit. ``_wait_pair_at_station`` widens its arrival
+        window by the same sampled amount.
         """
         picked = []
         for i in range(self.n_items):
@@ -439,7 +446,16 @@ class packing(Base_Task):
             picked.append(i)
             if len(picked) >= 2:
                 break
-        stagger = self.pair_stagger_y if self.pair_stagger_enabled else 0.0
+        if self.pair_stagger_enabled:
+            stagger_max = (
+                self.pair_stagger_y_max
+                if self.pair_stagger_y_max is not None
+                else (2.0 * float(self.fruit_r))
+            )
+            stagger = float(np.random.uniform(0.0, max(0.0, stagger_max)))
+        else:
+            stagger = 0.0
+        self._pair_stagger_y = stagger
         leading_k = 1 if bool(np.random.rand() < 0.5) else 0
         for k, i in enumerate(picked):
             y_offset = -stagger if k == leading_k else 0.0
@@ -945,14 +961,14 @@ class packing(Base_Task):
     def _wait_pair_at_station(self, idx_l, idx_r):
         """Dwell until both fruits near the pick station together.
 
-        Widens its arrival window by ``pair_stagger_y`` when the pair-gap
-        option is on, so a staggered pair (one fruit deliberately trailing
-        the other on the belt — see ``_spawn_wave_pair``) is still treated
-        as "arrived together" instead of forcing extra dwell time that
+        Widens its arrival window by the last sampled ``_pair_stagger_y`` when
+        the pair-gap option is on, so a staggered pair (one fruit deliberately
+        trailing the other on the belt — see ``_spawn_wave_pair``) is still
+        treated as "arrived together" instead of forcing extra dwell time that
         could carry the lead fruit past ``pick_y_end``.
         """
         speed = max(min(self.belt_speed.values()), 1e-6)
-        stagger = self.pair_stagger_y if self.pair_stagger_enabled else 0.0
+        stagger = self._pair_stagger_y if self.pair_stagger_enabled else 0.0
         arrive_lead = 60.0 * speed + stagger
         max_wait = int((self.BELT_Y_FAR - self.BELT_Y_NEAR) / speed) + 100
         for _ in range(max_wait):

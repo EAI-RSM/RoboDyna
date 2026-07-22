@@ -310,7 +310,8 @@ task_args:
     spawn_mode: parallel      # single | parallel; next wave after drop or belt-exit
     spawn_delay_s: 2.0        # unused (compat)
     belt_gap: 0.10
-    belt_speed: 0.0008
+    belt_speed: 0.0008          # nominal; per-ep ×U(1±belt_speed_jitter)
+    belt_speed_jitter: 0.20
     # belt_speed_left: 0.0008
     # belt_speed_right: 0.0012
     advance_every: 3

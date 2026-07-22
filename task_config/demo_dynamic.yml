@@ -367,35 +367,37 @@ task_args:
     spacing_max: 0.14         # random-mode max gap
     black_frac_max: 0.50      # randomly blacken up to this fraction; no key on black
   packing:
-    n_per_color: 3            # number of each colored fruit (apples + oranges)
-    # n_apple: 3              # optional per-color override (falls back to n_per_color)
+    # Options (independent toggles; Opt 1+2 can both be on):
+    #   Opt 1 — random single-or-pair waves  →  spawn_mode: random
+    #           (+ pair_stagger_enabled, single_wave_any_belt)
+    #   Opt 2 — black distractor fruit       →  distractor_enabled
+    n_per_color: 3              # number of each colored fruit (apples + oranges)
+    # n_apple: 3                # optional per-color override (falls back to n_per_color)
     # n_orange: 3
-    spawn_mode: random        # single | parallel | random (aliases: opt1 | opt2 | opt3)
-    # single: one fruit at a time; next spawns only after drop-in-basket or belt exit
-    # parallel: one apple+orange wave; next wave only after both packed or left the belt
-    # random: each wave randomly picks single (1 fruit) or pair (apple+orange) — count varies run to run
-    spawn_delay_s: 2.0        # unused (compat); spawn is gated on drop / belt-exit
-    belt_gap: 0.10            # gap between the two belts, centered at x=0
-    belt_speed: 0.0008        # shared default speed (m per belt tick); both belts use this
-    # belt_speed_left: 0.0008 # optional per-belt override (falls back to belt_speed)
+    spawn_mode: random          # Opt 1: random (single|pair per wave) | parallel | single
+    spawn_delay_s: 2.0          # unused (compat); spawn is gated on drop / belt-exit
+    belt_gap: 0.10              # m; gap between the two belts, centered at x=0
+    belt_speed: 0.0008          # m per belt tick nominal; both belts use this
+    belt_speed_jitter: 0.20     # fraction; each ep/side ~ U((1-j)*nom, (1+j)*nom)
+    # belt_speed_left: 0.0008   # optional per-belt override (falls back to belt_speed)
     # belt_speed_right: 0.0012
-    advance_every: 3          # physics steps between belt ticks
-    spawn_gap: 0.16
-    pick_y: 0.24              # start arm approach; fruit keeps rolling
-    pick_y_end: -0.16         # past this, too late; fruit loops to far end
-    pick_station_y: 0.02      # hover/grab line; fruit rolls through without pausing
-    fruit_scale: 0.80         # larger fruit -> easier grasp
-    basket_y: 0.0             # table midline (toward belts)
-    basket_x: 0.34            # nudged out so the bigger basket clears the belts
-    basket_scale: 1.15        # bigger opening — easier drop-in target
-    pick_lift: 0.10           # raise gripper +Z by this much after grasp, then slide horizontally over the basket and release
-    pair_stagger_enabled: true  # pair waves ("parallel"/"random" modes): give one fruit a small head start so they don't ride in perfect lockstep
-    pair_stagger_y: 0.045      # m; how much of a head start (kept well inside pick-window tolerances)
-    single_wave_any_belt: true  # "random" mode: a single-fruit wave may appear on either belt (not just its color's dedicated one); packing arm/basket stay color-matched
-    distractor_enabled: true  # spawn brown "spoiled-looking" distractor fruits that the robot must ignore (never packed/counted)
-    distractor_prob: 0.4       # chance per real spawn-wave that a distractor also spawns, on a randomly chosen belt
-    distractor_color: [0.45, 0.30, 0.15]  # brown; distinct from APPLE_COLOR (red) / ORANGE_COLOR (orange)
-    distractor_min_gap_mult: 2.0  # min center-to-center Y gap from any same-belt real fruit, as a multiple of fruit diameter (2*FRUIT_R)
+    advance_every: 3            # physics steps between belt ticks
+    spawn_gap: 0.16             # m; min spacing between successive spawns
+    pick_y: 0.24                # m; start arm approach; fruit keeps rolling
+    pick_y_end: -0.16           # m; past this, too late; fruit loops to far end
+    pick_station_y: 0.02        # m; hover/grab line; fruit rolls through without pausing
+    fruit_scale: 0.80           # larger fruit → easier grasp
+    basket_y: 0.0               # m; table midline (toward belts)
+    basket_x: 0.34              # m; nudged out so the bigger basket clears the belts
+    basket_scale: 1.15          # bigger opening — easier drop-in target
+    pick_lift: 0.10             # m; raise gripper +Z after grasp, then slide over basket and release
+    pair_stagger_enabled: true  # Opt 1: pair Y gap ~ U(0, fruit_diameter) each wave
+    # pair_stagger_y: null      # optional max gap (m); default = fruit diameter
+    single_wave_any_belt: true  # Opt 1: single fruit may appear on either belt
+    distractor_enabled: false   # Opt 2: black distractor fruit on the belts
+    distractor_prob: 0.4        # Opt 2: chance per real spawn-wave that a distractor also spawns
+    distractor_color: [0.05, 0.05, 0.05]  # Opt 2: black
+    distractor_min_gap_mult: 2.0  # Opt 2: min Y gap vs same-belt real fruit, × fruit diameter
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90
