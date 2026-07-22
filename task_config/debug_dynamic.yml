@@ -125,16 +125,19 @@ task_args:
     gap_tol: 0.06
     reach_tol: 0.07
   dual_hole_punch:
+    # Options (independent toggles):
+    #   Opt 1 — missing tile (alternate 1-arm vs 2-arm punches) → missing_tile_mode
+    #   Opt 2 — continuous belt vs discrete stop-per-tile → belt_continous_motion
+    #     DEFAULT false = discrete stop under stamps; tile_pause_s caps the hold (2.0 s).
+    # Tile spacing is always variable (not an option).
     n_pages: 4
     punch_tol: 0.035
     belt_inward_reach: 0.13
     belt_outward_scale: 2.0
-    equal_tile_spacing: true
+    missing_tile_mode: false    # Opt 1
+    belt_continous_motion: false # Opt 2: discrete (default)
+    tile_pause_s: 2.0           # Opt 2 discrete: hold under stamp (seconds)
     belt_speed: 0.2
-    belt_continous_motion: true
-    missing_tile_mode: true
-    tile_pause_steps: 28
-    square_gap: 0.015
     square_gap_min: 0.010
     square_gap_max: 0.030
   dispense_gummy:

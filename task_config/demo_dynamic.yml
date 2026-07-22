@@ -176,18 +176,26 @@ task_args:
     lift_off_only_after_place: false  # if true, only lift after successful place
     post_place_lift_z: 0.10     # m; +Z lift after place
   dual_hole_punch:
-    n_pages: 4
-    punch_tol: 0.035
-    belt_inward_reach: 0.13
-    belt_outward_scale: 2.0
-    equal_tile_spacing: true
-    belt_speed: 0.0002
-    belt_continous_motion: true
-    missing_tile_mode: true
-    tile_pause_steps: 60
-    square_gap: 0.015
-    square_gap_min: 0.010
-    square_gap_max: 0.030
+    # Options (independent toggles):
+    #   Opt 1 — missing tile (alternate 1-arm vs 2-arm punches) → missing_tile_mode
+    #     CLI: --task-arg missing_tile_mode=true   or   --option 1
+    #   Opt 2 — continuous belt vs discrete stop-per-tile → belt_continous_motion
+    #     DEFAULT false = discrete: tiles STOP under stamps so both arms press together.
+    #     Pause under stamp capped by tile_pause_s (2.0 s). true = never stop.
+    #     Continuous uses belt_speed × belt_continuous_speed_scale (default 2×).
+    #     CLI: --task-arg belt_continous_motion=true   or   --option 2
+    # Tile spacing is always variable (not an option); gaps ~ U(square_gap_min, square_gap_max).
+    n_pages: 4                  # tiles/pages per side
+    punch_tol: 0.035            # m; punch alignment tolerance
+    belt_inward_reach: 0.13     # m; belt travel toward table center
+    belt_outward_scale: 2.0     # outward_reach = inward_reach × scale
+    missing_tile_mode: false    # Opt 1: true = one random missing tile (1- vs 2-arm stops)
+    belt_continous_motion: false # Opt 2: false = discrete stop-per-tile (default); true = continuous
+    tile_pause_s: 2.0           # Opt 2 discrete: seconds the tile holds under the stamp
+    belt_speed: 0.0002          # m per physics step (discrete); continuous uses × scale below
+    belt_continuous_speed_scale: 2.0  # Opt 2: multiply belt_speed when continuous
+    square_gap_min: 0.010       # m; variable-spacing min gap
+    square_gap_max: 0.030       # m; variable-spacing max gap
   dispense_gummy:
     tube_capacity: 4
     difficulty_option: 1  # 1: uneven yellow/blue counts; 2: uneven yellow counts with empty gaps
