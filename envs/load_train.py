@@ -113,7 +113,11 @@ class load_train(Base_Task):
         self._train_running = True
 
     def _configure_observer_camera(self):
-        """Third-person view zoomed 2× on the circular rail (true FOV zoom + high-res)."""
+        """Third-person view on the circular rail (FOV zoom + high-res).
+
+        Starts from a 2× optical zoom, then zooms out 1.5× for wider context
+        (effective ~1.33× vs the default observer FOV).
+        """
         cams = getattr(self, "cameras", None)
         if cams is None or getattr(cams, "observer_camera", None) is None:
             return
@@ -121,8 +125,9 @@ class load_train(Base_Task):
         near = float(old.near) if hasattr(old, "near") else 0.1
         far = float(old.far) if hasattr(old, "far") else 100.0
         old_fovy = float(old.fovy) if hasattr(old, "fovy") else np.deg2rad(93.0)
-        # 2× optical zoom: new_fovy = 2 * atan(tan(old_fovy/2) / 2)
-        zoom_fovy = 2.0 * float(np.arctan(np.tan(old_fovy / 2.0) / 2.0))
+        # 2× zoom-in, then 1.5× zoom-out → divide tan by (2/1.5).
+        zoom_factor = 2.0 / 1.5
+        zoom_fovy = 2.0 * float(np.arctan(np.tan(old_fovy / 2.0) / zoom_factor))
         try:
             self.scene.remove_camera(old)
         except Exception:
@@ -138,8 +143,8 @@ class load_train(Base_Task):
         )
         camera = cams.observer_camera
         # Frame the near-rail drop from the table's upper-right corner.
-        camera_pos = np.array([0.28, 0.30, 1.22], dtype=np.float64)
-        look_at = np.array([0.0, -0.10, 0.86], dtype=np.float64)
+        camera_pos = np.array([0.32, 0.34, 1.28], dtype=np.float64)
+        look_at = np.array([0.0, -0.06, 0.86], dtype=np.float64)
         forward = look_at - camera_pos
         forward /= np.linalg.norm(forward)
         left = np.cross(np.array([0.0, 0.0, 1.0]), forward)
@@ -374,10 +379,11 @@ class load_train(Base_Task):
         )
 
     def _build_tunnel(self):
-        """Static tunnel over the back arc (upper half), spanning 2–4 wagon lengths.
+        """Static horseshoe tunnel on the back arc (upper half), 2–4 wagon lengths.
 
-        Centered near 12 o'clock with slight L/R jitter. Clamped so no segment enters
-        the robot's near / lower half (sin(angle) < 0), keeping grasp space clear.
+        Classic railway silhouette: vertical piers + semicircular arch. Centered near
+        12 o'clock with slight L/R jitter; clamped so no segment enters the robot's
+        near / lower half (sin(angle) < 0).
         """
         n_w = int(np.random.randint(self.tunnel_n_wagons_min, self.tunnel_n_wagons_max + 1))
         arc_len = float(n_w) * float(self.car_arc_spacing)
@@ -399,60 +405,127 @@ class load_train(Base_Task):
         self.tunnel_center_angle = float(center)
         self.tunnel_half_angle = float(half_ang)
 
-        # Opening tall enough for loco + cab; walls sit outside the rail walls.
+        # Clear opening tall enough for loco + cab; cavity covers sleepers + overhang.
         open_h = max(
             self.tunnel_clearance_z,
             self.engine_body_h + self.engine_cab_h + 0.025,
         )
         z_base = self.rail_surface_z
-        wall_half_h = 0.5 * open_h
-        roof_z = z_base + open_h + 0.5 * self.tunnel_roof_t
-        # Radial half-width of the tunnel cavity (covers sleepers + guide rails + overhang).
         cavity_half_w = self.rail_half_w + 0.006 + self.tunnel_overhang
-        pier_color = (0.42, 0.40, 0.36)
-        roof_color = (0.34, 0.32, 0.28)
+        # Horseshoe: semicircle of clear radius R on vertical piers of height open_h - R.
+        R_clear = float(cavity_half_w)
+        pier_h = max(0.012, float(open_h) - R_clear)
+        spring_z = z_base + pier_h
+        shell_t = max(self.tunnel_wall_t, self.tunnel_roof_t)
+        R_mid = R_clear + 0.5 * shell_t
+        pier_color = (0.45, 0.43, 0.39)
+        arch_color = (0.36, 0.34, 0.30)
+        portal_color = (0.40, 0.38, 0.34)
 
-        n_seg = max(6, int(round(n_w * 5)))
+        n_seg = max(8, int(round(n_w * 6)))
         angs = np.linspace(center - half_ang, center + half_ang, n_seg)
-        # Chord half-length between consecutive segment centers.
         dtheta = float(angs[1] - angs[0]) if n_seg > 1 else 0.05
-        seg_half_len = 0.55 * self.rail_radius * dtheta
+        seg_half_len = 0.58 * self.rail_radius * dtheta
+        # Voussoirs around the semicircle (enough for a smooth arch silhouette).
+        n_voussoir = 14
+        phis = np.linspace(0.0, np.pi, n_voussoir)
+        dphi = float(phis[1] - phis[0]) if n_voussoir > 1 else 0.2
+        voussoir_half_arc = 0.55 * R_mid * dphi
 
         for i, ang in enumerate(angs):
             ang = float(ang)
             xy = self._xy_on_rail(ang)
-            q = self._yaw_quat(ang)
-            radial = np.array([np.cos(ang), np.sin(ang)], dtype=np.float64)
-            # Outer / inner piers.
+            q_yaw = self._yaw_quat(ang)
+            radial = np.array([np.cos(ang), np.sin(ang), 0.0], dtype=np.float64)
+            tangent = np.array([-np.sin(ang), np.cos(ang), 0.0], dtype=np.float64)
+            # Vertical piers under the arch springing line.
             for s, tag in ((1.0, "out"), (-1.0, "in")):
-                wxy = xy + s * (cavity_half_w + 0.5 * self.tunnel_wall_t) * radial
+                wxy = xy + s * (R_clear + 0.5 * shell_t) * radial[:2]
                 create_box(
                     scene=self,
                     pose=sapien.Pose(
-                        [wxy[0], wxy[1], z_base + wall_half_h],
-                        q.tolist(),
+                        [wxy[0], wxy[1], z_base + 0.5 * pier_h],
+                        q_yaw.tolist(),
                     ),
-                    half_size=(seg_half_len, 0.5 * self.tunnel_wall_t, wall_half_h),
+                    half_size=(seg_half_len, 0.5 * shell_t, 0.5 * pier_h),
                     color=pier_color,
-                    name=f"tunnel_wall_{tag}_{i}",
+                    name=f"tunnel_pier_{tag}_{i}",
                     is_static=True,
                 )
-            # Roof slab spanning outer→inner above the opening.
-            create_box(
-                scene=self,
-                pose=sapien.Pose(
-                    [xy[0], xy[1], roof_z],
-                    q.tolist(),
-                ),
-                half_size=(
-                    seg_half_len,
-                    cavity_half_w + self.tunnel_wall_t,
-                    0.5 * self.tunnel_roof_t,
-                ),
-                color=roof_color,
-                name=f"tunnel_roof_{i}",
-                is_static=True,
-            )
+            # Semicircular arch shell (voussoir boxes in the cross-section).
+            for j, phi in enumerate(phis):
+                phi = float(phi)
+                arch_out = np.array(
+                    [np.cos(phi) * radial[0], np.cos(phi) * radial[1], np.sin(phi)],
+                    dtype=np.float64,
+                )
+                pos = np.array([xy[0], xy[1], spring_z], dtype=np.float64) + R_mid * arch_out
+                # Local frame: X along track, Z outward from arch center, Y along arch.
+                z_axis = arch_out / max(np.linalg.norm(arch_out), 1e-9)
+                x_axis = tangent
+                y_axis = np.cross(z_axis, x_axis)
+                y_n = np.linalg.norm(y_axis)
+                if y_n < 1e-8:
+                    continue
+                y_axis /= y_n
+                x_axis = np.cross(y_axis, z_axis)
+                rot = np.column_stack([x_axis, y_axis, z_axis])
+                q = t3d.quaternions.mat2quat(rot)
+                create_box(
+                    scene=self,
+                    pose=sapien.Pose(pos.tolist(), q.tolist()),
+                    half_size=(seg_half_len, voussoir_half_arc, 0.5 * shell_t),
+                    color=arch_color,
+                    name=f"tunnel_arch_{i}_{j}",
+                    is_static=True,
+                )
+
+        # Thicker portal rings at both mouths for a typical tunnel entrance look.
+        portal_half_len = max(0.012, 1.6 * seg_half_len)
+        for k, ang in enumerate((center - half_ang, center + half_ang)):
+            ang = float(ang)
+            xy = self._xy_on_rail(ang)
+            q_yaw = self._yaw_quat(ang)
+            radial = np.array([np.cos(ang), np.sin(ang), 0.0], dtype=np.float64)
+            tangent = np.array([-np.sin(ang), np.cos(ang), 0.0], dtype=np.float64)
+            for s, tag in ((1.0, "out"), (-1.0, "in")):
+                wxy = xy + s * (R_clear + 0.5 * shell_t) * radial[:2]
+                create_box(
+                    scene=self,
+                    pose=sapien.Pose(
+                        [wxy[0], wxy[1], z_base + 0.5 * pier_h],
+                        q_yaw.tolist(),
+                    ),
+                    half_size=(portal_half_len, 0.5 * shell_t, 0.5 * pier_h),
+                    color=portal_color,
+                    name=f"tunnel_portal_pier_{tag}_{k}",
+                    is_static=True,
+                )
+            for j, phi in enumerate(phis):
+                phi = float(phi)
+                arch_out = np.array(
+                    [np.cos(phi) * radial[0], np.cos(phi) * radial[1], np.sin(phi)],
+                    dtype=np.float64,
+                )
+                pos = np.array([xy[0], xy[1], spring_z], dtype=np.float64) + R_mid * arch_out
+                z_axis = arch_out / max(np.linalg.norm(arch_out), 1e-9)
+                x_axis = tangent
+                y_axis = np.cross(z_axis, x_axis)
+                y_n = np.linalg.norm(y_axis)
+                if y_n < 1e-8:
+                    continue
+                y_axis /= y_n
+                x_axis = np.cross(y_axis, z_axis)
+                rot = np.column_stack([x_axis, y_axis, z_axis])
+                q = t3d.quaternions.mat2quat(rot)
+                create_box(
+                    scene=self,
+                    pose=sapien.Pose(pos.tolist(), q.tolist()),
+                    half_size=(portal_half_len, voussoir_half_arc, 0.5 * shell_t),
+                    color=portal_color,
+                    name=f"tunnel_portal_arch_{k}_{j}",
+                    is_static=True,
+                )
 
     def _add_box_shape(self, builder, pose, half_size, material, visual_material):
         builder.add_box_collision(pose=pose, half_size=list(half_size), material=material)
