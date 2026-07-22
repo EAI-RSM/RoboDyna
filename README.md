@@ -65,7 +65,7 @@ demo dataset or demo clip yet):
 | `catch_shelf_marble` | Hold the left or right action key to slide the bowl along the belt and catch the marble rolling off the tilted shelves. | <img src="assets/static/demos/catch_shelf_marble.gif" width="240"/> |
 | `cup_curtain_slot` | Single-arm: carry a cup through a laterally swaying curtain of strips and into a slot. | <img src="assets/static/demos/cup_curtain_slot.gif" width="240"/> |
 | `dual_hole_punch` | Both arms press buttons to hole-punch files on two independent continuously moving belts (optional missing-tile side). | <img src="assets/static/demos/dual_hole_punch.gif" width="240"/> |
-| `quality_control` | Press the matching red or green key to stamp colored tiles as they pass under a gantry on a centered conveyor. | <img src="assets/static/demos/quality_control.gif" width="240"/> |
+| `quality_control` | Press the matching red or green key to stamp tiles that stop under a gantry (max 2s). Default: alternating colors; Opt1 `color_mode=random`; Opt2 `black_frac_max` distractors. Missed red/green → fail. | <img src="assets/static/demos/quality_control.gif" width="240"/> |
 | `goalkeeper` | Place a square blocker fully inside the green zone before the red deadline line to keep a moving ball out of the goal. | <img src="assets/static/demos/goalkeeper.gif" width="240"/> |
 | `dispense_gummy` | Press the dispense key and belt arrow keys so only the target-colored gummies land in the bowl. | <img src="assets/static/demos/dispense_gummy.gif" width="240"/> |
 | `play_billiard` | Grasp a cue and strike the red primary ball into a pocket without robot-link contact with the ball. | <img src="assets/static/demos/play_billiard.gif" width="240"/> |

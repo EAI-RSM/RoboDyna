@@ -1,6 +1,6 @@
 {
-  "full_description": "press the matching red or green key for each colored tile, but press neither key when the empty slot pauses under the stamp",
-  "schema": "{A} notifies the colored tiles on the belt, {a} notifies the arms that press the keys",
+  "full_description": "press the matching red or green key for each colored tile while it stops under the stamp, but press neither key for black distractor tiles",
+  "schema": "{A} notifies the colored tiles on the belt, {a} notifies the arms that press the keys, {o} notifies option 1 (random color pattern) and/or option 2 (black distractors) when enabled",
   "preference": "num of words should not exceed 14",
   "seen": [
     "Press the matching key with {a} for each {A}",
@@ -21,16 +21,20 @@
     "Press the right key with {a} for every passing {A}",
     "Mark the {A} on the belt with the matching key color",
     "Use {a} to press the correct key for each {A}",
-    "Press the matching color key with {a} as {A} pass",
+    "Press the matching color key with {a} as {A} stop",
     "Have {a} stamp each {A} with the matching key",
-    "Skip both keys when the empty slot reaches the stamp"
+    "Skip both keys when a black distractor reaches the stamp",
+    "Option 1: stamp the randomized {A} pattern with {a} ({o})",
+    "Option 2: stamp only red/green {A}; skip black ({o})"
   ],
   "unseen": [
     "With {a}, press the matching key to stamp every {A}",
     "Press the color-matched key so each {A} is stamped right",
     "Use {a} to stamp all the {A} with the correct key",
-    "Tap the matching key with {a} to mark each moving {A}",
+    "Tap the matching key with {a} to mark each stopped {A}",
     "Press red or green with {a} and stamp every {A} correctly",
-    "Do not press a key while the missing tile slot is under the stamp"
+    "Do not press a key while a black distractor is under the stamp",
+    "Option 1: match keys to the random {A} colors ({o})",
+    "Option 2: ignore black tiles and stamp only valid {A} ({o})"
   ]
 }

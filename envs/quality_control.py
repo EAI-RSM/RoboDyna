@@ -11,15 +11,26 @@ class quality_control(Base_Task):
     symmetrically beside the belt — red on the left, green on the right. The arms press the
     key that matches each tile's color so the descending stamp marks it.
 
-    Tiles are light red, light green, or black. Up to 50% of tiles are randomly black.
-    For red/green: press the matching key (correct → darker; wrong → black).
-    For black: do not press any key (pressing a black tile is a failure). Success requires
-    every red/green tile stamped correctly and every black tile passed without a press.
+    Task options (set in ``task_args.quality_control``; independent toggles):
+      - Default — alternating red/green, no black distractors
+          ``color_mode: alternating``
+          ``black_frac_max: 0.0``
+      - Option 1 — randomized red/green pattern: ``color_mode: random``
+          Non-black tiles are independently red or green (not alternating).
+          CLI: ``--task-arg color_mode=random`` or legacy ``--option 1``.
+      - Option 2 — black distractor tiles: ``black_frac_max`` > 0
+          Randomly blacken up to this fraction of tiles (default 0.50 when enabled via
+          ``--option 2``). Do not press any key on black; pressing black fails.
+          CLI: ``--task-arg black_frac_max=0.5`` or legacy ``--option 2``.
 
-    Inter-tile gaps are either equal (`spacing_mode=equal`) or randomly sampled
-    (`spacing_mode=random`).
+    Each tile stops under the stamp for up to ``tile_pause_s`` (default 2.0 s). Failing to
+    correctly stamp a red/green tile within that window marks it missed → episode failure.
+    Wrong-key stamps and key presses on black also fail.
 
-    Belt motion and stamp-head descent are step-driven via `_update_kinematic_tasks` so the
+    Inter-tile gaps are either equal (``spacing_mode=equal``) or randomly sampled
+    (``spacing_mode=random``).
+
+    Belt motion and stamp-head descent are step-driven via ``_update_kinematic_tasks`` so the
     plan / render collection passes stay identical."""
 
     # ----------------------------------------------------------- class defaults
@@ -29,8 +40,11 @@ class quality_control(Base_Task):
     SPACING_MODE_DEFAULT = "equal"    # "equal" | "random"
     SPACING_MIN_DEFAULT = 0.07        # random-mode min center-to-center gap
     SPACING_MAX_DEFAULT = 0.14        # random-mode max center-to-center gap
-    BLACK_FRAC_MAX_DEFAULT = 0.50     # randomly blacken up to this fraction of tiles
-    COLOR_MODE_DEFAULT = "alternating"  # "alternating" | "random" (for non-black tiles)
+    # Default = no distractors; Opt 2 enables black tiles via black_frac_max > 0
+    BLACK_FRAC_MAX_DEFAULT = 0.0
+    BLACK_FRAC_WHEN_OPT2 = 0.50       # used when legacy --option 2 enables distractors
+    COLOR_MODE_DEFAULT = "alternating"  # Default; Opt 1 = "random"
+    TILE_PAUSE_S_DEFAULT = 2.0        # max hold under stamp (seconds)
 
     # geometry of the fixed installation (table-local; z added to table top)
     BELT_X = 0.0
@@ -52,7 +66,10 @@ class quality_control(Base_Task):
 
     KEY_X = 0.20
     KEY_Y = -0.18
-    KEY_HALF = [0.025, 0.025, 0.016]
+    KEY_HALF = [0.025, 0.025, 0.016]          # colored keycap
+    # Larger, thinner black base under each key (matches catch_marbles_trapdoors look).
+    KEY_BASE_HALF = [0.032, 0.032, 0.005]
+    KEY_BASE_COLOR = [0.08, 0.08, 0.08]
     KEY_HOVER_DIS = 0.06
     KEY_PRESS_DEPTH = 0.065
     EE_TO_TCP = 0.12
@@ -77,10 +94,73 @@ class quality_control(Base_Task):
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("quality_control", {})
+        self._apply_legacy_option()
         self._stamp_ready = False
         self._belt_running = False
         self._stamp_active = False
         super()._init_task_env_(**kwags)
+
+    def _apply_legacy_option(self):
+        """Map record_demo ``--option`` / config ``option`` onto named toggles.
+
+        1 / random / color_mode → Opt 1 color_mode=random
+        2 / black / distractor / black_frac_max → Opt 2 black_frac_max=0.50
+        """
+        legacy = self._cfg.get("option", None)
+        if legacy is None:
+            return
+        key = {
+            1: "color_mode_random",
+            2: "black_distractor",
+            "1": "color_mode_random",
+            "2": "black_distractor",
+            "random": "color_mode_random",
+            "color_mode": "color_mode_random",
+            "color_mode_random": "color_mode_random",
+            "black": "black_distractor",
+            "distractor": "black_distractor",
+            "black_frac_max": "black_distractor",
+            "black_distractor": "black_distractor",
+        }.get(legacy if not isinstance(legacy, str) else legacy.strip().lower())
+        if key == "color_mode_random":
+            if "color_mode" not in self._cfg:
+                self._cfg["color_mode"] = "random"
+        elif key == "black_distractor":
+            if "black_frac_max" not in self._cfg:
+                self._cfg["black_frac_max"] = self.BLACK_FRAC_WHEN_OPT2
+        else:
+            raise ValueError(
+                "quality_control option must be 1/color_mode=random or "
+                "2/black_frac_max (or set color_mode / black_frac_max directly)"
+            )
+
+    def _option_label(self) -> str:
+        parts = []
+        if getattr(self, "color_mode", self.COLOR_MODE_DEFAULT) == "random":
+            parts.append("option 1")
+        if float(getattr(self, "black_frac_max", 0.0)) > 0.0:
+            parts.append("option 2")
+        return ", ".join(parts) if parts else "baseline"
+
+    def _get_tile_pause_steps(self):
+        """Max hold under the stamp, in physics steps.
+
+        Prefer tile_pause_s (seconds, default 2.0). Explicit tile_pause_steps still
+        wins when provided without tile_pause_s, for older configs.
+        """
+        has_steps = "tile_pause_steps" in self._cfg
+        has_secs = "tile_pause_s" in self._cfg or "tile_pause_sec" in self._cfg
+        if has_steps and not has_secs:
+            return max(1, int(self._cfg.get("tile_pause_steps")))
+        pause_s = float(
+            self._cfg.get(
+                "tile_pause_s",
+                self._cfg.get("tile_pause_sec", self.TILE_PAUSE_S_DEFAULT),
+            )
+        )
+        pause_s = max(0.0, pause_s)
+        dt = float(self.scene.get_timestep()) if hasattr(self, "scene") else (1.0 / 250.0)
+        return max(1, int(round(pause_s / max(dt, 1e-8))))
 
     # --------------------------------------------------------------- actors
     def load_actors(self):
@@ -101,6 +181,9 @@ class quality_control(Base_Task):
             self.spacing_min, self.spacing_max = self.spacing_max, self.spacing_min
         self.black_frac_max = float(cfg.get("black_frac_max", self.BLACK_FRAC_MAX_DEFAULT))
         self.black_frac_max = float(np.clip(self.black_frac_max, 0.0, 1.0))
+
+        self.tile_pause_steps = self._get_tile_pause_steps()
+        self.tile_pause_s = float(self.tile_pause_steps) * float(self.scene.get_timestep())
 
         self.belt_speed = float(cfg.get("belt_speed",
                                         self.BELT_SPEED_DEFAULT * np.random.uniform(0.8, 1.25)))
@@ -158,19 +241,32 @@ class quality_control(Base_Task):
                 self.stamp_shapes = list(c.render_shapes)
 
         self.keys = {}
+        self.key_bases = {}
+        base_hz = float(self.KEY_BASE_HALF[2])
+        cap_hz = float(self.KEY_HALF[2])
         for color, sign in (("red", -1.0), ("green", 1.0)):
+            kx = sign * self.KEY_X
+            base_z = z0 + base_hz
+            cap_z = z0 + 2.0 * base_hz + cap_hz
+            base = create_box(
+                scene=self,
+                pose=sapien.Pose([kx, self.KEY_Y, base_z], [1, 0, 0, 0]),
+                half_size=list(self.KEY_BASE_HALF),
+                color=list(self.KEY_BASE_COLOR),
+                name=f"key_base_{color}",
+                is_static=True,
+            )
             key = create_box(
                 scene=self,
-                pose=sapien.Pose(
-                    [sign * self.KEY_X, self.KEY_Y, z0 + self.KEY_HALF[2]],
-                    [1, 0, 0, 0],
-                ),
-                half_size=self.KEY_HALF,
+                pose=sapien.Pose([kx, self.KEY_Y, cap_z], [1, 0, 0, 0]),
+                half_size=list(self.KEY_HALF),
                 color=self.KEY_COLORS[color],
                 name=f"key_{color}",
                 is_static=True,
             )
+            self.key_bases[color] = base
             self.keys[color] = key
+            self.add_prohibit_area(base, padding=0.05)
             self.add_prohibit_area(key, padding=0.05)
 
         # ---- tiles (red / green / black) ----
@@ -180,6 +276,7 @@ class quality_control(Base_Task):
         self.tile_marked = []       # stamped (red/green) or incorrectly pressed
         self.tile_correct = []      # correct stamp for red/green
         self.tile_skipped = []      # black tile correctly passed without a press
+        self.tile_missed = []       # red/green not stamped in time (or wrong)
         self.tile_hidden = []
         self.tile_shapes = []
         self._tile_ride_z = self.belt_top_z + self.TILE_HALF[2]
@@ -201,6 +298,7 @@ class quality_control(Base_Task):
             self.tile_marked.append(False)
             self.tile_correct.append(False)
             self.tile_skipped.append(False)
+            self.tile_missed.append(False)
             self.tile_hidden.append(False)
             shapes = []
             for c in t.actor.get_components():
@@ -292,6 +390,7 @@ class quality_control(Base_Task):
         self.tile_marked = [False] * self.n_tiles
         self.tile_correct = [False] * self.n_tiles
         self.tile_skipped = [False] * self.n_tiles
+        self.tile_missed = [False] * self.n_tiles
         self.tile_hidden = [False] * self.n_tiles
         self.n_correct = 0
         self.black_press = False
@@ -346,7 +445,7 @@ class quality_control(Base_Task):
                 continue
             p = t.actor.get_pose()
             ny = p.p[1] - self.belt_speed
-            done = self.tile_marked[i] or self.tile_skipped[i]
+            done = self.tile_marked[i] or self.tile_skipped[i] or self.tile_missed[i]
             if self._tile_has_exited_belt(ny, done=done):
                 self._hide_tile(i)
                 continue
@@ -358,7 +457,9 @@ class quality_control(Base_Task):
         for i, t in enumerate(self.tiles):
             if self.tile_hidden[i]:
                 continue
-            if require_unhandled and (self.tile_marked[i] or self.tile_skipped[i]):
+            if require_unhandled and (
+                self.tile_marked[i] or self.tile_skipped[i] or self.tile_missed[i]
+            ):
                 continue
             tp = t.get_pose().p
             if abs(tp[0] - sx) < (self.TILE_HALF[0] + self.stamp_half[0]) and \
@@ -367,6 +468,32 @@ class quality_control(Base_Task):
                 if d < best_d:
                     best_d, best_i = d, i
         return best_i
+
+    def _mark_missed_tile(self, i):
+        if self.tile_missed[i] or self.tile_marked[i] or self.tile_skipped[i]:
+            return
+        self.tile_missed[i] = True
+        # keep light color so a miss is visually distinct from a wrong-key black stamp
+
+    def _run_belt_until_under_stamp(self, i):
+        """Advance the belt continuously until tile i is centered under the stamp.
+
+        No pose snapping — tiles ride the belt at ``belt_speed`` until their y
+        reaches ``stamp_y``, then the belt freezes for the stop window.
+        """
+        tol = 0.5 * max(float(self.belt_speed), 1e-6)
+        while True:
+            if self.tile_hidden[i]:
+                return False
+            tile_y = float(self.tiles[i].get_pose().p[1])
+            d = tile_y - self.stamp_y
+            if d <= tol:
+                return True
+            # Chunk when far; single steps near the stamp so we don't overshoot hard.
+            if d > 8.0 * self.belt_speed:
+                self._belt_dwell(8)
+            else:
+                self._belt_dwell(1)
 
     def _record_mark(self):
         """At stamp contact: mark red/green, or fail if the tile is black / missing."""
@@ -394,6 +521,7 @@ class quality_control(Base_Task):
             self._paint_tile(best_i, self.DARK_COLORS[tile_color])
         else:
             self._paint_tile(best_i, self.BLACK_COLOR)
+            self.tile_missed[best_i] = True
         self.n_correct = int(sum(
             1 for i, c in enumerate(self.tile_correct)
             if c and self.tile_colors[i] != "black"
@@ -456,7 +584,7 @@ class quality_control(Base_Task):
         self._belt_running = prev
 
     def _stationary_dwell(self, steps):
-        """Pause the belt under a black tile while still allowing a bad stamp press."""
+        """Freeze the belt while still allowing a stamp press / cycle."""
         prev_belt = self._belt_running
         prev_stamp = getattr(self, "_stamp_active", False)
         self._belt_running = False
@@ -469,11 +597,87 @@ class quality_control(Base_Task):
         self._belt_running = prev_belt
         self._stamp_active = prev_stamp
 
+    def _stamp_cycle_steps(self):
+        return int(2 * self.STAMP_TRAVEL_STEPS + self.STAMP_HOLD_STEPS) + 4
+
+    def _wait_stamp_idle(self, max_steps=None):
+        """Advance physics (belt frozen) until the stamp returns to rest."""
+        budget = int(max_steps if max_steps is not None else (self._stamp_cycle_steps() + 8))
+        prev_belt = self._belt_running
+        prev_stamp = getattr(self, "_stamp_active", False)
+        self._belt_running = False
+        self._stamp_active = True
+        for i in range(max(1, budget)):
+            if (self.stamp_phase == "up"
+                    and not self.stamp_requested
+                    and self.stamp_key_color is None):
+                break
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (i % self.save_freq == 0):
+                self._take_picture()
+        self._belt_running = prev_belt
+        self._stamp_active = prev_stamp
+
+    def _handle_tile_stop(self, i, dbg=False):
+        """Freeze the belt with tile i under the stamp for up to tile_pause_s.
+
+        Caller must already have driven the belt continuously so the tile sits under
+        the punch (no teleport). The stamp descends when the matching key is pressed
+        (gantry is driven concurrently with the press motion). ``tile_pause_s`` is a
+        maximum deadline: failing to correctly stamp a red/green tile fails the
+        episode; black tiles must be skipped with no key press.
+        """
+        pause_budget = max(1, int(self.tile_pause_steps))
+        color = self.tile_colors[i]
+        cycle_steps = self._stamp_cycle_steps()
+
+        if color == "black":
+            # Brief pause under the stamp — do NOT press either key.
+            self._stationary_dwell(min(pause_budget, cycle_steps))
+            if self.tile_marked[i]:
+                self.tile_missed[i] = True
+            else:
+                self.tile_skipped[i] = True
+            if dbg:
+                print(f"[qc] skipped black tile {i} "
+                      f"black_press={self.black_press} "
+                      f"y={float(self.tiles[i].get_pose().p[1]):.4f}", flush=True)
+            return
+
+        arm = ArmTag("left" if color == "red" else "right")
+        press = self.KEY_PRESS_DEPTH
+        # Keep belt frozen; keep stamp active so the head descends while the key is pressed.
+        prev_belt = self._belt_running
+        prev_stamp = getattr(self, "_stamp_active", False)
+        self._belt_running = False
+        self._stamp_active = True
+        self.move(self._hover_key(color))
+        # Trigger the gantry as the press begins — stamp fires with the button press.
+        self._press_key(color)
+        self.move(self.move_by_displacement(arm, z=-press))
+        self.move(self.move_by_displacement(arm, z=press))
+        self._belt_running = prev_belt
+        self._stamp_active = prev_stamp
+
+        # Finish any remaining stamp travel while still frozen under the deadline.
+        self._wait_stamp_idle(min(pause_budget, cycle_steps + 8))
+
+        if not (self.tile_marked[i] and self.tile_correct[i]):
+            # Failed to stamp a valid red/green tile within the stop window.
+            self._mark_missed_tile(i)
+
+        if dbg:
+            print(f"[qc] stop tile {i} color={color}: "
+                  f"marked={self.tile_marked[i]} correct={self.tile_correct[i]} "
+                  f"missed={self.tile_missed[i]} plan={self.plan_success} "
+                  f"y={float(self.tiles[i].get_pose().p[1]):.4f}", flush=True)
     # ------------------------------------------------------------- policy
     def _key_tip_pose(self, color, tip_z_above_top):
         sign = -1.0 if color == "red" else 1.0
         z0 = 0.74 + self.table_z_bias
-        key_top_z = z0 + 2.0 * self.KEY_HALF[2]
+        # Cap sits on the thin black base.
+        key_top_z = z0 + 2.0 * float(self.KEY_BASE_HALF[2]) + 2.0 * float(self.KEY_HALF[2])
         tcp_z = key_top_z + tip_z_above_top
         ee_z = tcp_z + self.EE_TO_TCP
         quat = GRASP_DIRECTION_DIC["top_down"]
@@ -497,49 +701,35 @@ class quality_control(Base_Task):
 
         if dbg:
             print(f"[qc] tile_colors={self.tile_colors} "
-                  f"n_black={sum(1 for c in self.tile_colors if c == 'black')}",
+                  f"n_black={sum(1 for c in self.tile_colors if c == 'black')} "
+                  f"color_mode={self.color_mode} black_frac_max={self.black_frac_max} "
+                  f"tile_pause_s={self.tile_pause_s:.3f}",
                   flush=True)
 
-        lead = self.belt_speed * self.STAMP_TRAVEL_STEPS
-        cycle_steps = (2 * self.STAMP_TRAVEL_STEPS + self.STAMP_HOLD_STEPS) + 4
-        press = self.KEY_PRESS_DEPTH
-
-        max_wait = 8000
-        waited = 0
-        idx = 0
-        while idx < self.n_tiles and waited < max_wait:
-            i = idx
-            if self.tile_marked[i] or self.tile_skipped[i] or self.tile_hidden[i]:
-                idx += 1
+        # Drive the belt continuously: each tile rides in, stops under the punch,
+        # gets stamped (or skipped if black), then the belt resumes.
+        for i in range(self.n_tiles):
+            if (self.tile_marked[i] or self.tile_skipped[i]
+                    or self.tile_missed[i] or self.tile_hidden[i]):
                 continue
-            tile_y = float(self.tiles[i].get_pose().p[1])
-            d = tile_y - self.stamp_y
-            if d <= lead + 1e-6 and d > -0.04:
-                color = self.tile_colors[i]
-                if color == "black":
-                    # pause under the stamp — do NOT press either key
-                    self._stationary_dwell(cycle_steps)
-                    self.tile_skipped[i] = True
-                    if dbg:
-                        print(f"[qc] skipped black tile {i} "
-                              f"black_press={self.black_press}", flush=True)
-                else:
-                    arm = left if color == "red" else right
-                    self.move(self._hover_key(color))
-                    self.move(self.move_by_displacement(arm, z=-press))
-                    self._press_key(color)
-                    self.move(self.move_by_displacement(arm, z=press))
-                    self._belt_dwell(cycle_steps)
-                    if dbg:
-                        print(f"[qc] fired tile {i} color={color}: "
-                              f"marked={self.tile_marked[i]} "
-                              f"correct={self.tile_correct[i]} "
-                              f"plan={self.plan_success}", flush=True)
-                idx += 1
-            else:
-                step = max(1, int(min(8, (d - lead) / max(self.belt_speed, 1e-6))))
-                self._belt_dwell(step)
-                waited += step
+            color = self.tile_colors[i]
+            # Pre-hover the matching key so the press coincides with the stop.
+            if color != "black":
+                self.move(self._hover_key(color))
+            arrived = self._run_belt_until_under_stamp(i)
+            if not arrived:
+                if color != "black":
+                    self._mark_missed_tile(i)
+                continue
+            self._handle_tile_stop(i, dbg=dbg)
+
+        # Any red/green that never got a correct stamp counts as missed.
+        for i, color in enumerate(self.tile_colors):
+            if color == "black":
+                continue
+            if not (self.tile_marked[i] and self.tile_correct[i]):
+                if not self.tile_missed[i]:
+                    self._mark_missed_tile(i)
 
         exit_y = -self.BELT_HALF_LEN - self.TILE_EXIT_MARGIN
         furthest = min(
@@ -558,19 +748,22 @@ class quality_control(Base_Task):
         if dbg:
             print(f"[qc] done colors={self.tile_colors} "
                   f"marked={self.tile_marked} correct={self.tile_correct} "
-                  f"skipped={self.tile_skipped} black_press={self.black_press} "
-                  f"plan={self.plan_success}", flush=True)
+                  f"skipped={self.tile_skipped} missed={self.tile_missed} "
+                  f"black_press={self.black_press} plan={self.plan_success}", flush=True)
 
         n_black = sum(1 for c in self.tile_colors if c == "black")
         self.info["info"] = {
             "{A}": f"colored tiles ({n_black} black)",
             "{a}": "both arms",
+            "{o}": self._option_label(),
         }
         return self.info
 
     # ------------------------------------------------------------- success
     def check_success(self):
         if self.black_press:
+            return False
+        if any(self.tile_missed):
             return False
         for i, color in enumerate(self.tile_colors):
             if color == "black":
@@ -593,15 +786,23 @@ class quality_control(Base_Task):
                 if c and self.tile_colors[i] != "black"
             )),
             "n_skipped": int(sum(1 for s in self.tile_skipped if s)),
+            "n_missed": int(sum(1 for m in self.tile_missed if m)),
             "belt_speed": float(self.belt_speed),
             "color_mode": str(self.color_mode),
             "spacing_mode": str(self.spacing_mode),
             "black_frac_max": float(self.black_frac_max),
+            "tile_pause_steps": int(self.tile_pause_steps),
+            "tile_pause_s": float(getattr(
+                self, "tile_pause_s",
+                self.tile_pause_steps * self.scene.get_timestep(),
+            )),
+            "option_label": self._option_label(),
             "tile_gaps": [float(g) for g in self.tile_gaps],
             "tile_colors": list(self.tile_colors),
             "tile_marked": [bool(m) for m in self.tile_marked],
             "tile_correct": [bool(c) for c in self.tile_correct],
             "tile_skipped": [bool(s) for s in self.tile_skipped],
+            "tile_missed": [bool(m) for m in self.tile_missed],
             "tile_hidden": [bool(h) for h in self.tile_hidden],
             "tile_positions": [float(t.get_pose().p[1]) for t in self.tiles],
             "black_press": bool(self.black_press),
