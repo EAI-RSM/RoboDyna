@@ -39,7 +39,7 @@ under `data_lerobot/`. (`data/`, `data_lerobot/`, `logs/` and most assets are gi
 
 | Task | Description | Status | Demo |
 |------|-------------|:------:|------|
-| **cook_meat** | Grasp a raw steak, cook it on the pan until it reaches a randomized target doneness, then remove it. Time-evolving rendered object state. | ✅ **done** | <img src="assets/static/demos/cook_meat.gif" width="320"/> |
+| **cook_meat** | Grasp a raw steak from the cutting board, cook it on the pan until target doneness (contact-gated), then place it on the serving plate. | ✅ **done** | <img src="assets/static/demos/cook_meat.gif" width="320"/> |
 | **catch_ramp_ball** | A ball rolls down a ramp and off the front edge; the arm predicts the landing point and pre-positions a cup to catch it. | ✅ **done** | <img src="assets/static/demos/catch_ramp_ball.gif" width="320"/> |
 | **sort_apples_belt** | 4–10 red/green apples stream down a conveyor (2–3 in flight); press the matching side button to aim a pivoting-blade diverter that routes each into its color-matched basket. Button physically drives the diverter (policy-evaluable). | ✅ **done** | <img src="assets/static/demos/sort_apples_belt.gif" width="320"/> |
 | **pick_ripe_apple** | Two apples ripen green→red→black **independently** on left/right boards; each arm observes its side and grasps at red (observe-then-act), dropping it into a bowl. Ripeness freezes once an apple leaves its board. | ✅ **done** | <img src="assets/static/demos/pick_ripe_apple.gif" width="320"/> |
