@@ -1013,6 +1013,12 @@ class Base_Task(gym.Env):
                 self.robot.release_scene_resources()
             except Exception:
                 pass
+            # Drop planner handles so CuRobo/CUDA tensors can be collected.
+            try:
+                self.robot.left_planner = None
+                self.robot.right_planner = None
+            except Exception:
+                pass
         if hasattr(self, "cameras"):
             self.cameras = None
         if hasattr(self, "scene"):
@@ -1024,6 +1030,18 @@ class Base_Task(gym.Env):
         self.active_kinematic_tasks = []
         self._saved_dynamic_motion_info = None
         import gc
+        gc.collect()
+        try:
+            sapien_clear_cache()
+        except Exception:
+            pass
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except Exception:
+            pass
         gc.collect()
 
     def _del_eval_video_ffmpeg(self):

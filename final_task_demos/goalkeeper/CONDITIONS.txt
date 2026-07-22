@@ -1,0 +1,23 @@
+goalkeeper — expert controller demos
+
+default  : players_enabled=false, cover_enabled=false
+           (direct shot toward a point in the goal mouth)
+opt1     : players_enabled=true,  cover_enabled=false
+           (field players; ball bounces then still aims through the goal frame)
+opt2     : players_enabled=false, cover_enabled=true
+           (mid-field cover; ball briefly occluded under the tunnel)
+opt1+2   : players_enabled=true,  cover_enabled=true
+           (bounce + cover; cover ends before the players)
+
+Success: keeper fully in green zone before the red deadline, ball blocked on the
+keeper front face, ball does NOT enter the goal, grippers open.
+Path validity: every episode's ball target lies inside the goal mouth (on-frame);
+Opt 1 / Opt 1+2 keep an on-frame target after the bounce.
+
+Full test (5 eps × 4 conditions): see test_report.json — 20/20 success.
+
+Files (side-by-side is the primary deliverable):
+  default_sidebyside.mp4   opt1_sidebyside.mp4
+  opt2_sidebyside.mp4      opt1+2_sidebyside.mp4
+Also: <tag>_head.mp4, <tag>_topdown.mp4
+Tags: default | opt1 | opt2 | opt1+2

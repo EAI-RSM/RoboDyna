@@ -239,19 +239,54 @@ task_args:
     key_x_right: 0.26
     key_y: -0.13
   goalkeeper:
-    ball_speed_min: 0.07
-    ball_speed_max: 0.09
-    ball_angle_deg_min: -10.0
-    ball_angle_deg_max: 10.0
-    goal_center_y: 0.05
-    goal_center_y_jitter: 0.0
-    green_area_x_len: 0.10
-    green_area_y_extra: 0.05
-    red_line_x: 0.2
-    goal_x: 0.30
-    keeper_x: 0.16
-    keeper_goal_clearance: 0.05
-    keeper_pose_tol: 0.03
+    # Options (independent toggles):
+    #   Option 1 — field players (bounce) → players_enabled
+    #     CLI: --task-arg players_enabled=true   or   --option 1
+    #   Option 2 — field cover (tunnel) → cover_enabled
+    #     CLI: --task-arg cover_enabled=true     or   --option 2
+    #     ≥10 cm open on ball-drop side; ≥10% of field length open before red line
+    #   Mirror — flip whole field to −x (left gripper)
+    #     CLI: --task-arg mirrored=true
+    #     mirrored: null + random_mirror → 50/50; mirrored true/false forces side
+    players_enabled: false      # Option 1: spawn field players; ball bounces off one toward goal
+    players_max: 2              # Option 1: number of static field players
+    player_model: 223_soccer_player  # Option 1: CC0 soccer player mesh (width = keeper)
+    player_half_xy: 0.018       # Option 1: m; footprint half-extent (= ball_radius / keeper half)
+    player_half_z: 0.0435       # Option 1: m; player half-height from mesh
+    player_corridor_margin: 0.04 # Option 1: m; keep players clear of ball start
+    player_y_spread: 0.20       # Option 1: m; ±y band about goal_center_y for player spawn
+    player_separation: 0.15     # Option 1: m; min clear gap (edge-to-edge) between players
+    player_max_goal_dist_mult: 2.0 # Option 1: max |goal−player| x = this × green_area_x_len
+    player_goal_face_bias: 0.22 # Option 1: blend face-partner (0) vs face-goal (1)
+    cover_enabled: false        # Option 2: mid-field tunnel/cover; ball enters then exits before red line
+    cover_entry_gap: 0.10       # Option 2: m; min open gap on the ball-drop side
+    cover_exit_gap_frac: 0.10   # Option 2: fraction of (start→red_line) left open before red line
+    cover_half_y: 0.12          # Option 2: m; half-width of cover cavity
+    cover_clearance_z: 0.12     # Option 2: m; clear height under roof
+    cover_wall_t: 0.008         # Option 2: m; side wall thickness
+    cover_roof_t: 0.006         # Option 2: m; roof thickness
+    cover_len_min: 0.10         # Option 2: m; min cover length (x); max = full spannable mid region
+    cover_player_clearance: 0.02 # Option 1+2: m; cover ends this far before nearest player
+    net_enabled: true           # Soccer-style visual net bag behind the goal mouth
+    net_depth: 0.09             # m; net depth behind the posts
+    net_cell: 0.028             # m; approximate mesh cell size
+    net_strand_t: 0.0022        # m; strand thickness
+    mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
+    random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
+    ball_speed: 0.0375          # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
+    ball_speed_scale_min: 0.8   # low scale vs ball_speed
+    ball_speed_scale_max: 1.2   # high scale vs ball_speed
+    ball_angle_deg_min: -10.0   # deg; path angle vs goal-axis min (straight-shot mode)
+    ball_angle_deg_max: 10.0    # deg; max
+    goal_center_y: 0.05         # m; goal mouth center y (along table)
+    goal_center_y_jitter: 0.0   # m; ± uniform jitter on goal_center_y
+    green_area_x_len: 0.10      # m; keeper placement zone depth (toward field)
+    green_area_y_extra: 0.05    # m; extra half-width beyond goal posts
+    red_line_x: 0.10            # m; deadline offset from goal (last legal place)
+    goal_x: 0.30                # m; |goal x|; side randomized ±
+    keeper_x: 0.16              # m; |target keeper x| in green zone
+    keeper_goal_clearance: 0.05 # m; keep keeper clear of goal frame
+    keeper_pose_tol: 0.03       # m; place accuracy tol for expert/check
   pick_cup_behind_fan:
     fan_omega_deg: 2.0
     gap_frac: 0.40
