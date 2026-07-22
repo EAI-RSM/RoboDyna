@@ -14,17 +14,29 @@ class rotating_shape_sorter(Base_Task):
     A colored sphere spawns on either the left or right side of the central box. The corresponding
     arm grasps the ball, moves it to a same-side release station over the rotating platform, waits
     for the circular corner hole to pass underneath, and releases so the ball falls into the box.
+
+    Independent platform features (both may be enabled together):
+      stick_to_surface (Opt1):
+        Missed drop with no XY overlap vs the real hole latches the ball onto the spinning
+        platform (fail). Hole overlap keeps the ball dynamic until it settles.
+      add_dummy_hole (Opt2):
+        Cuts an opposite-corner decoy hole *very slightly* smaller than the ball so the ball
+        cannot fall through and may get stuck seated in the opening.
     """
 
     # ----- tunable params (CLASS DEFAULTS; overridable via task_args.rotating_shape_sorter) -----
-    SPIN_SPEED_DEFAULT = 0.9          # cap angular speed (rad / sim-step-unit baseline scaling)
+    SPIN_SPEED_DEFAULT = 0.9          # cap angular speed baseline (rad / sim-step-unit)
+    SPIN_SPEED_JITTER_DEFAULT = 0.20  # sample speed in [1±jitter] * spin_speed
     CAP_HOLE_RADIUS_DEFAULT = 0.03    # radius of the circular opening at the cap center
     CAP_HOLE_DIAMETER_DEFAULT = 2.0 * CAP_HOLE_RADIUS_DEFAULT
     CAP_HOLE_CORNER_MARGIN_DEFAULT = 0.012  # clearance between the hole and the square edges
     CAP_HOLE_BANDS_DEFAULT = 40       # more bands => smoother approximation of the circular cutout
     BALL_RADIUS_DEFAULT = 0.025
     BALL_SIDE_CLEARANCE_DEFAULT = 0.14
+    BALL_SIDE_DEFAULT = "random"          # random | left | right — which arm operates
     BALL_Y_JITTER_DEFAULT = 0.045
+    BALL_X_JITTER_DEFAULT = 0.02          # small ±x randomness on spawn (along side axis)
+    BALL_COLOR_DEFAULT = [0.90, 0.10, 0.10]  # red
     TRANSPORT_CLEARANCE_Z_DEFAULT = 0.08
     RELEASE_CLEARANCE_Z_DEFAULT = 0.004
     HOLE_ALIGN_TOL_DEFAULT = 0.015
@@ -32,6 +44,21 @@ class rotating_shape_sorter(Base_Task):
     POST_RELEASE_STEPS_DEFAULT = 220
     RELEASE_OPEN_STEPS_DEFAULT = 200
     HOLE_DROP_INSET_DEFAULT = 0.006
+    HOLE_XY_JITTER_DEFAULT = 0.012        # m; ±x/±y randomization for target & dummy hole centers
+    FORCE_PLATFORM_MISS_DEFAULT = False   # demo/eval: drop onto solid / dummy (failure demo)
+    # ----- feature toggles (independent; both may be true) -----
+    STICK_TO_SURFACE_DEFAULT = False      # Opt1: latch misses onto the platform
+    ADD_DUMMY_HOLE_DEFAULT = False        # Opt2: cut near-ball-sized decoy hole
+    # ----- Opt1 (stick_to_surface) -----
+    STICK_CONTACT_STEPS_DEFAULT = 4       # on-platform frames before latch when no hole overlap
+    STICK_SETTLE_STEPS_DEFAULT = 12       # near-rest frames before latch when overlapping hole rim
+    STICK_VEL_TOL_DEFAULT = 0.05          # m/s; settle speed threshold
+    STICK_Z_TOL_DEFAULT = 0.012           # m; max height above platform rest pose for contact
+    # ----- Opt2 (add_dummy_hole) -----
+    # Hole diameter ≈ frac * ball diameter; keep frac just under 1 so the ball can wedge in.
+    DUMMY_HOLE_RADIUS_FRAC_DEFAULT = 0.92
+    DUMMY_HOLE_RADIUS_DEFAULT = None       # absolute m; when set, overrides radius_frac
+    DUMMY_HOLE_NEST_DEPTH_DEFAULT = 0.35   # fraction of ball_radius to sink when stuck in dummy hole
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("rotating_shape_sorter", {})
@@ -40,17 +67,91 @@ class rotating_shape_sorter(Base_Task):
         self._cap_tracking = False
         self.ball_in_box = False
         self.ball_released = False
+        self.ball_stuck_on_platform = False
         self.selected_arm = None
         self.bucket_floor_z = 0.0
         self.hole_orbit_radius = 0.0
         self._drop_target_xy = np.zeros(2, dtype=np.float64)
         self._release_open_steps = self.RELEASE_OPEN_STEPS_DEFAULT
+        self._ball_rigid = None
+        self._ball_stuck_local = None
+        self._platform_contact_steps = 0
+        self._platform_settle_steps = 0
+        self._dummy_hole_local_xy = None
+        self.dummy_hole_radius = 0.0
+        # Must exist before _init_task_env_ (it calls _update_kinematic_tasks pre-load_actors).
+        self.stick_to_surface = self.STICK_TO_SURFACE_DEFAULT
+        self.add_dummy_hole = self.ADD_DUMMY_HOLE_DEFAULT
+        self.stick_contact_steps = self.STICK_CONTACT_STEPS_DEFAULT
+        self.stick_settle_steps = self.STICK_SETTLE_STEPS_DEFAULT
+        self.stick_vel_tol = self.STICK_VEL_TOL_DEFAULT
+        self.stick_z_tol = self.STICK_Z_TOL_DEFAULT
+        self.dummy_hole_radius_frac = self.DUMMY_HOLE_RADIUS_FRAC_DEFAULT
+        self.dummy_hole_radius_cfg = self.DUMMY_HOLE_RADIUS_DEFAULT
+        self.dummy_hole_nest_depth = self.DUMMY_HOLE_NEST_DEPTH_DEFAULT
+        self.hole_xy_jitter = self.HOLE_XY_JITTER_DEFAULT
+        self.spin_speed = self.SPIN_SPEED_DEFAULT
+        self.spin_speed_jitter = self.SPIN_SPEED_JITTER_DEFAULT
+        self.spin_speed_sampled = self.SPIN_SPEED_DEFAULT
+        self.spin_omega = 0.0
+        self.force_platform_miss = False
+        self.ball_color = list(self.BALL_COLOR_DEFAULT)
+        self.ball = None
         super()._init_task_env_(**kwags)
+
+    @staticmethod
+    def _as_bool(value, default=False):
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        s = str(value).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off"):
+            return False
+        return bool(default)
+
+    def _parse_surface_features(self):
+        """Load independent Opt1/Opt2 toggles and their params."""
+        cfg = self._cfg if isinstance(getattr(self, "_cfg", None), dict) else {}
+
+        # Feature toggles (independent — both may be enabled).
+        self.stick_to_surface = self._as_bool(
+            cfg.get("stick_to_surface", self.STICK_TO_SURFACE_DEFAULT),
+            self.STICK_TO_SURFACE_DEFAULT,
+        )  # Opt1
+        self.add_dummy_hole = self._as_bool(
+            cfg.get("add_dummy_hole", self.ADD_DUMMY_HOLE_DEFAULT),
+            self.ADD_DUMMY_HOLE_DEFAULT,
+        )  # Opt2
+
+        # Opt1 (stick_to_surface) params
+        self.stick_contact_steps = int(cfg.get("stick_contact_steps", self.STICK_CONTACT_STEPS_DEFAULT))
+        self.stick_settle_steps = int(cfg.get("stick_settle_steps", self.STICK_SETTLE_STEPS_DEFAULT))
+        self.stick_vel_tol = float(cfg.get("stick_vel_tol", self.STICK_VEL_TOL_DEFAULT))
+        self.stick_z_tol = float(cfg.get("stick_z_tol", self.STICK_Z_TOL_DEFAULT))
+
+        # Opt2 (add_dummy_hole) params
+        self.dummy_hole_radius_frac = float(
+            cfg.get("dummy_hole_radius_frac", self.DUMMY_HOLE_RADIUS_FRAC_DEFAULT)
+        )
+        abs_r = cfg.get("dummy_hole_radius", self.DUMMY_HOLE_RADIUS_DEFAULT)
+        self.dummy_hole_radius_cfg = None if abs_r is None else float(abs_r)
+        self.dummy_hole_nest_depth = float(
+            cfg.get("dummy_hole_nest_depth", self.DUMMY_HOLE_NEST_DEPTH_DEFAULT)
+        )
 
     # ----------------------------------------------------------------- actors
     def load_actors(self):
         cfg = self._cfg
         self.spin_speed = float(cfg.get("spin_speed", self.SPIN_SPEED_DEFAULT))
+        # Relative range around spin_speed, or absolute [spin_speed_min, spin_speed_max] if both set.
+        self.spin_speed_jitter = float(cfg.get("spin_speed_jitter", self.SPIN_SPEED_JITTER_DEFAULT))
+        self.spin_speed_min_cfg = cfg.get("spin_speed_min", None)
+        self.spin_speed_max_cfg = cfg.get("spin_speed_max", None)
         hole_diameter = cfg.get("cap_hole_diameter", None)
         if hole_diameter is None:
             self.cap_hole_radius = float(cfg.get("cap_hole_radius", self.CAP_HOLE_RADIUS_DEFAULT))
@@ -62,7 +163,14 @@ class rotating_shape_sorter(Base_Task):
         self.cap_hole_bands = int(cfg.get("cap_hole_bands", self.CAP_HOLE_BANDS_DEFAULT))
         self.ball_radius = float(cfg.get("ball_radius", self.BALL_RADIUS_DEFAULT))
         self.ball_side_clearance = float(cfg.get("ball_side_clearance", self.BALL_SIDE_CLEARANCE_DEFAULT))
+        self.ball_side_cfg = str(cfg.get("ball_side", self.BALL_SIDE_DEFAULT)).strip().lower()
         self.ball_y_jitter = float(cfg.get("ball_y_jitter", self.BALL_Y_JITTER_DEFAULT))
+        self.ball_x_jitter = float(cfg.get("ball_x_jitter", self.BALL_X_JITTER_DEFAULT))
+        ball_color_cfg = cfg.get("ball_color", self.BALL_COLOR_DEFAULT)
+        self.ball_color = [float(c) for c in list(ball_color_cfg)[:3]]
+        self.force_platform_miss = bool(cfg.get(
+            "force_platform_miss", self.FORCE_PLATFORM_MISS_DEFAULT
+        ))
         self.transport_clearance_z = float(
             cfg.get("transport_clearance_z", self.TRANSPORT_CLEARANCE_Z_DEFAULT)
         )
@@ -76,11 +184,20 @@ class rotating_shape_sorter(Base_Task):
         )
         self.release_open_steps = int(cfg.get("release_open_steps", self.RELEASE_OPEN_STEPS_DEFAULT))
         self.hole_drop_inset = float(cfg.get("hole_drop_inset", self.HOLE_DROP_INSET_DEFAULT))
+        self.hole_xy_jitter = float(cfg.get("hole_xy_jitter", self.HOLE_XY_JITTER_DEFAULT))
+        self._parse_surface_features()
 
-        # randomized spin direction
+        # Randomized spin direction and speed sampled from a range each episode.
         self.spin_dir = float(np.random.choice([-1.0, 1.0]))
-        # randomized speed jitter
-        self.spin_omega = self.spin_dir * self.spin_speed * float(np.random.uniform(0.7, 1.3))
+        if self.spin_speed_min_cfg is not None and self.spin_speed_max_cfg is not None:
+            spd_lo = float(min(self.spin_speed_min_cfg, self.spin_speed_max_cfg))
+            spd_hi = float(max(self.spin_speed_min_cfg, self.spin_speed_max_cfg))
+        else:
+            jitter = float(np.clip(self.spin_speed_jitter, 0.0, 0.95))
+            spd_lo = self.spin_speed * (1.0 - jitter)
+            spd_hi = self.spin_speed * (1.0 + jitter)
+        self.spin_speed_sampled = float(np.random.uniform(spd_lo, spd_hi))
+        self.spin_omega = self.spin_dir * self.spin_speed_sampled
 
         z0 = 0.74 + self.table_z_bias
         self.table_top_z = z0
@@ -120,21 +237,27 @@ class rotating_shape_sorter(Base_Task):
         self.ball_radius = float(np.clip(self.ball_radius, 0.01, 0.04))
         self.ball_side_clearance = float(max(self.ball_side_clearance, 0.01))
         self.ball_y_jitter = float(np.clip(self.ball_y_jitter, 0.0, self.bucket_half * 0.85))
-        self.ball_side = "left" if int(np.random.randint(0, 2)) == 0 else "right"
+        self.ball_x_jitter = float(np.clip(self.ball_x_jitter, 0.0, 0.05))
+        if self.ball_side_cfg in ("left", "right"):
+            self.ball_side = self.ball_side_cfg
+        else:
+            # random: either arm operates depending on which side the ball spawns
+            self.ball_side = "left" if int(np.random.randint(0, 2)) == 0 else "right"
         side_sign = -1.0 if self.ball_side == "left" else 1.0
         # Spawn the ball outside the rotating cap footprint, not just outside the box wall,
-        # so the grasp approach stays clear of the platform edge.
+        # so the grasp approach stays clear of the platform edge. Small ±x/±y jitter.
         platform_outer_half = self.bucket_half + 0.012
         ball_x = float(
             bc[0]
             + side_sign * (platform_outer_half + self.ball_radius + self.ball_side_clearance)
+            + np.random.uniform(-self.ball_x_jitter, self.ball_x_jitter)
         )
         ball_y = float(bc[1] + np.random.uniform(-self.ball_y_jitter, self.ball_y_jitter))
-        self.ball_color = np.random.uniform(0.15, 0.95, size=3).tolist()
         self.ball = self._build_ball(
             pose=sapien.Pose([ball_x, ball_y, floor_z + self.ball_radius], [1, 0, 0, 0]),
             color=self.ball_color,
         )
+        self._ball_rigid = self._get_rigid(self.ball.actor)
 
         # height of the cap plane (just above the bucket rim)
         self.cap_z = floor_z + 0.012 + self.bucket_h + 0.015
@@ -155,27 +278,91 @@ class rotating_shape_sorter(Base_Task):
         ))
         self.cap_thickness = 0.006
         self._cap_base_q = np.array([1.0, 0.0, 0.0, 0.0])
-        self._cap_hole_local_xy = np.array([
-            self.cap_half_extent - self.cap_hole_radius - self.cap_hole_corner_margin,
-            self.cap_half_extent - self.cap_hole_radius - self.cap_hole_corner_margin,
-        ], dtype=np.float64)
+        self.hole_xy_jitter = float(np.clip(self.hole_xy_jitter, 0.0, 0.04))
+        # Target (real) hole: corner (+,+) with small independent ±x/±y jitter.
+        self._cap_hole_local_xy = self._randomized_hole_local_xy(
+            radius=self.cap_hole_radius,
+            corner_sign=(1.0, 1.0),
+        )
         self.hole_orbit_radius = float(np.linalg.norm(self._cap_hole_local_xy))
+
+        # Opt2 (add_dummy_hole): decoy hole just under ball diameter — may wedge, cannot fall through.
+        self._dummy_hole_local_xy = None
+        self.dummy_hole_radius = 0.0
+        if self.add_dummy_hole:
+            max_fit = self.cap_half_extent - self.cap_hole_corner_margin - 0.002
+            # Keep hole radius < ball radius (diameter < ball diameter) but nearly as large.
+            max_r = min(self.ball_radius * 0.98, max_fit)
+            if self.dummy_hole_radius_cfg is not None:
+                self.dummy_hole_radius = float(np.clip(
+                    float(self.dummy_hole_radius_cfg),
+                    0.008,
+                    max_r,
+                ))
+            else:
+                frac = float(np.clip(self.dummy_hole_radius_frac, 0.80, 0.98))
+                self.dummy_hole_radius = float(max(
+                    0.008,
+                    min(self.ball_radius * frac, max_r),
+                ))
+            # Opposite corner (-,-) with its own ±x/±y jitter.
+            self._dummy_hole_local_xy = self._randomized_hole_local_xy(
+                radius=self.dummy_hole_radius,
+                corner_sign=(-1.0, -1.0),
+            )
+
         self.cap_entity = self._build_cap()
         self._cap_rigid = self._get_rigid(self.cap_entity)
         if self._cap_rigid is not None:
             self._cap_rigid.set_kinematic(True)
         self._place_cap(0.0)
         radial_dir = np.array([side_sign, 0.0], dtype=np.float64)
-        self._drop_target_xy = np.array(
-            self.cap_center[:2] + radial_dir * max(self.hole_orbit_radius - self.hole_drop_inset, 0.0),
-            dtype=np.float64,
-        )
+        self._force_miss_align_dummy = False
+        if self.force_platform_miss:
+            if self.add_dummy_hole and self._dummy_hole_local_xy is not None:
+                # Failure demo targeting Opt2 decoy hole.
+                miss_r = float(np.linalg.norm(self._dummy_hole_local_xy))
+                self._drop_target_xy = np.array(
+                    self.cap_center[:2] + radial_dir * miss_r,
+                    dtype=np.float64,
+                )
+                self._force_miss_align_dummy = True
+            else:
+                # Failure demo targeting solid platform (Opt1 stick).
+                miss_r = max(0.04, min(self.hole_orbit_radius * 0.40, self.cap_half_extent * 0.45))
+                self._drop_target_xy = np.array(
+                    self.cap_center[:2] + radial_dir * miss_r,
+                    dtype=np.float64,
+                )
+        else:
+            self._drop_target_xy = np.array(
+                self.cap_center[:2]
+                + radial_dir * max(self.hole_orbit_radius - self.hole_drop_inset, 0.0),
+                dtype=np.float64,
+            )
 
         # keep clutter / spawn collisions away
         self.add_prohibit_area(self.bucket_floor, padding=0.05)
         self.add_prohibit_area(self.ball, padding=0.03)
 
     # ----------------------------------------------------- rotating-cap state
+    def _randomized_hole_local_xy(self, radius, corner_sign):
+        """Corner-biased hole center with slight ±x/±y jitter, clamped on-platform."""
+        sx = 1.0 if float(corner_sign[0]) >= 0.0 else -1.0
+        sy = 1.0 if float(corner_sign[1]) >= 0.0 else -1.0
+        # Nominal corner placement (same as the previous fixed layout).
+        base = float(self.cap_half_extent - radius - self.cap_hole_corner_margin)
+        j = float(self.hole_xy_jitter)
+        x = base + float(np.random.uniform(-j, j))
+        y = base + float(np.random.uniform(-j, j))
+        # Keep the full hole disk inside the square; stay away from the center a bit.
+        max_abs = float(self.cap_half_extent - radius - 0.002)
+        min_abs = float(max(radius + 0.012, base - j))
+        min_abs = float(min(min_abs, max_abs))
+        x = float(np.clip(x, min_abs, max_abs))
+        y = float(np.clip(y, min_abs, max_abs))
+        return np.array([sx * x, sy * y], dtype=np.float64)
+
     def _get_rigid(self, entity):
         for component in entity.get_components():
             if isinstance(component, sapien.physx.PhysxRigidDynamicComponent):
@@ -240,6 +427,68 @@ class rotating_shape_sorter(Base_Task):
                 pass
         return ball_actor
 
+    def _cap_holes(self):
+        """Return list of (cx, cy, radius) cutouts in cap-local XY."""
+        holes = [(
+            float(self._cap_hole_local_xy[0]),
+            float(self._cap_hole_local_xy[1]),
+            float(self.cap_hole_radius),
+        )]
+        if (
+            self.add_dummy_hole
+            and self._dummy_hole_local_xy is not None
+            and self.dummy_hole_radius > 1e-6
+        ):
+            holes.append((
+                float(self._dummy_hole_local_xy[0]),
+                float(self._dummy_hole_local_xy[1]),
+                float(self.dummy_hole_radius),
+            ))
+        return holes
+
+    @staticmethod
+    def _subtract_intervals(span, gaps):
+        """Subtract merged gaps from [span_lo, span_hi]; return solid segments."""
+        lo, hi = span
+        if hi - lo <= 1e-6:
+            return []
+        cleaned = []
+        for g0, g1 in gaps:
+            a = max(lo, float(g0))
+            b = min(hi, float(g1))
+            if b - a > 1e-6:
+                cleaned.append((a, b))
+        if not cleaned:
+            return [(lo, hi)]
+        cleaned.sort()
+        merged = [cleaned[0]]
+        for a, b in cleaned[1:]:
+            m0, m1 = merged[-1]
+            if a <= m1 + 1e-8:
+                merged[-1] = (m0, max(m1, b))
+            else:
+                merged.append((a, b))
+        solids = []
+        cursor = lo
+        for a, b in merged:
+            if a - cursor > 1e-4:
+                solids.append((cursor, a))
+            cursor = max(cursor, b)
+        if hi - cursor > 1e-4:
+            solids.append((cursor, hi))
+        return solids
+
+    def _band_solid_segments(self, y0, y1, holes):
+        band_cy = 0.5 * (y0 + y1)
+        gaps = []
+        for cx, cy, radius in holes:
+            dy = band_cy - cy
+            if abs(dy) >= radius:
+                continue
+            dx = float(np.sqrt(max(radius ** 2 - dy ** 2, 0.0)))
+            gaps.append((cx - dx, cx + dx))
+        return self._subtract_intervals((-self.cap_half_extent, self.cap_half_extent), gaps)
+
     def _build_cap(self):
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("dynamic")
@@ -247,48 +496,23 @@ class rotating_shape_sorter(Base_Task):
         hole_bands = max(12, int(self.cap_hole_bands))
         cap_span = 2.0 * self.cap_half_extent
         band_h = cap_span / hole_bands
-        hole_cx = float(self._cap_hole_local_xy[0])
-        hole_cy = float(self._cap_hole_local_xy[1])
+        holes = self._cap_holes()
         physical_material = self.scene.default_physical_material
         visual_material = sapien.render.RenderMaterial(base_color=[0.30, 0.30, 0.34, 1.0])
 
         for band_idx in range(hole_bands):
             y0 = -self.cap_half_extent + band_idx * band_h
             y1 = min(self.cap_half_extent, y0 + band_h)
-            band_cy = 0.5 * (y0 + y1)
-            dy = band_cy - hole_cy
-
-            if abs(dy) >= self.cap_hole_radius:
+            for x0, x1 in self._band_solid_segments(y0, y1, holes):
                 self._add_cap_box(
                     builder,
-                    -self.cap_half_extent,
-                    self.cap_half_extent,
+                    x0,
+                    x1,
                     y0,
                     y1,
                     physical_material,
                     visual_material,
                 )
-                continue
-
-            hole_dx = float(np.sqrt(max(self.cap_hole_radius ** 2 - dy ** 2, 0.0)))
-            self._add_cap_box(
-                builder,
-                -self.cap_half_extent,
-                hole_cx - hole_dx,
-                y0,
-                y1,
-                physical_material,
-                visual_material,
-            )
-            self._add_cap_box(
-                builder,
-                hole_cx + hole_dx,
-                self.cap_half_extent,
-                y0,
-                y1,
-                physical_material,
-                visual_material,
-            )
 
         builder.set_initial_pose(sapien.Pose(self.cap_center.tolist(), [1, 0, 0, 0]))
         return builder.build(name="sorter_cap")
@@ -304,15 +528,178 @@ class rotating_shape_sorter(Base_Task):
         else:
             self.cap_entity.set_pose(pose)
 
-    def _hole_world_xy_at_step(self, step):
+    def _hole_world_xy_at_step(self, step, local_xy=None):
         angle = self._cap_angle_at_step(step)
         rot = np.array([
             [np.cos(angle), -np.sin(angle)],
             [np.sin(angle), np.cos(angle)],
         ], dtype=np.float64)
-        return self.cap_center[:2] + rot @ self._cap_hole_local_xy
+        local = self._cap_hole_local_xy if local_xy is None else np.asarray(local_xy, dtype=np.float64)
+        return self.cap_center[:2] + rot @ local
 
-    def _steps_until_hole_alignment(self, target_xy, max_steps=None, tol=None, lead_steps=0):
+    def _cap_rot2(self, angle=None):
+        angle = float(self._cap_angle if angle is None else angle)
+        return np.array([
+            [np.cos(angle), -np.sin(angle)],
+            [np.sin(angle), np.cos(angle)],
+        ], dtype=np.float64)
+
+    def _world_to_cap_local_xy(self, world_xy):
+        d = np.asarray(world_xy, dtype=np.float64) - self.cap_center[:2]
+        return self._cap_rot2().T @ d
+
+    def _cap_local_to_world_xy(self, local_xy):
+        return self.cap_center[:2] + self._cap_rot2() @ np.asarray(local_xy, dtype=np.float64)
+
+    def _ball_overlaps_real_hole(self, ball_xy=None):
+        if ball_xy is None:
+            ball_xy = np.asarray(self.ball.get_pose().p[:2], dtype=np.float64)
+        hole_xy = self.cap_center[:2] + self._cap_rot2() @ self._cap_hole_local_xy
+        dist = float(np.linalg.norm(np.asarray(ball_xy, dtype=np.float64) - hole_xy))
+        # No overlap <=> ball disk and hole disk are disjoint in XY.
+        return bool(dist < (self.cap_hole_radius + self.ball_radius))
+
+    def _ball_in_dummy_hole(self, ball_xy=None):
+        """True when the ball center is over the decoy hole enough to wedge in it."""
+        if (
+            not self.add_dummy_hole
+            or self._dummy_hole_local_xy is None
+            or self.dummy_hole_radius <= 1e-6
+            or getattr(self, "ball", None) is None
+        ):
+            return False
+        if ball_xy is None:
+            ball_xy = np.asarray(self.ball.get_pose().p[:2], dtype=np.float64)
+        hole_xy = self.cap_center[:2] + self._cap_rot2() @ self._dummy_hole_local_xy
+        dist = float(np.linalg.norm(np.asarray(ball_xy, dtype=np.float64) - hole_xy))
+        # Center must be inside the dummy opening (ball cannot pass; it seats in the rim).
+        return bool(dist <= self.dummy_hole_radius)
+
+    def _ball_on_platform_contact(self):
+        """True when the ball is resting on the cap surface (not yet through the hole)."""
+        if getattr(self, "ball", None) is None:
+            return False
+        p = np.asarray(self.ball.get_pose().p, dtype=np.float64)
+        rest_z = float(self.cap_z + self.cap_thickness + self.ball_radius)
+        # Allow a slightly lower z when the ball is nesting into the dummy hole.
+        z_lo = rest_z - 0.55 * self.ball_radius
+        if p[2] < z_lo:
+            return False
+        if p[2] > rest_z + float(self.stick_z_tol):
+            return False
+        local_xy = self._world_to_cap_local_xy(p[:2])
+        margin = self.ball_radius * 0.35
+        return bool(
+            abs(local_xy[0]) <= (self.cap_half_extent + margin)
+            and abs(local_xy[1]) <= (self.cap_half_extent + margin)
+        )
+
+    def _ball_linear_speed(self):
+        rigid = getattr(self, "_ball_rigid", None)
+        if rigid is None:
+            return 0.0
+        try:
+            v = np.asarray(rigid.get_linear_velocity(), dtype=np.float64)
+            return float(np.linalg.norm(v))
+        except Exception:
+            return 0.0
+
+    def _stick_ball_to_cap(self, nest_in_dummy=False):
+        """Latch the ball onto the rotating platform (missed / wedged => fail)."""
+        if getattr(self, "ball", None) is None or self.ball_stuck_on_platform:
+            return
+        p = np.asarray(self.ball.get_pose().p, dtype=np.float64)
+        local_xy = self._world_to_cap_local_xy(p[:2])
+        if nest_in_dummy and self._dummy_hole_local_xy is not None:
+            # Seat into the decoy opening so it reads as jammed, not floating on the rim.
+            local_xy = np.asarray(self._dummy_hole_local_xy, dtype=np.float64).copy()
+            nest = float(np.clip(self.dummy_hole_nest_depth, 0.0, 0.6)) * self.ball_radius
+            rest_z = float(self.cap_z + self.cap_thickness + self.ball_radius - nest)
+        else:
+            rest_z = float(self.cap_z + self.cap_thickness + self.ball_radius)
+        self._ball_stuck_local = np.array(
+            [float(local_xy[0]), float(local_xy[1]), rest_z - float(self.cap_center[2])],
+            dtype=np.float64,
+        )
+        self.ball_stuck_on_platform = True
+        if self._ball_rigid is not None:
+            try:
+                self._ball_rigid.set_linear_velocity([0, 0, 0])
+                self._ball_rigid.set_angular_velocity([0, 0, 0])
+                self._ball_rigid.set_disable_gravity(True)
+                self._ball_rigid.set_kinematic(True)
+            except Exception:
+                pass
+        self._update_stuck_ball()
+
+    def _update_stuck_ball(self):
+        if not self.ball_stuck_on_platform or self._ball_stuck_local is None or self.ball is None:
+            return
+        world_xy = self._cap_local_to_world_xy(self._ball_stuck_local[:2])
+        world_z = float(self.cap_center[2] + self._ball_stuck_local[2])
+        pose = sapien.Pose([float(world_xy[0]), float(world_xy[1]), world_z], [1, 0, 0, 0])
+        if self._ball_rigid is not None:
+            try:
+                self._ball_rigid.set_kinematic_target(pose)
+                return
+            except Exception:
+                pass
+        self.ball.actor.set_pose(pose)
+
+    def _try_stick_ball_on_platform(self):
+        """Latch platform misses (Opt1 stick_to_surface) and/or dummy-hole wedges (Opt2)."""
+        if self.ball_stuck_on_platform or not self.ball_released or self.ball_in_box:
+            return
+        if getattr(self, "ball", None) is None:
+            return
+        if not (self.stick_to_surface or self.add_dummy_hole):
+            return
+        if not self._ball_on_platform_contact():
+            self._platform_contact_steps = 0
+            self._platform_settle_steps = 0
+            return
+
+        # Opt2 (add_dummy_hole): wedge into the decoy hole if the ball settles over it.
+        if self.add_dummy_hole and self._ball_in_dummy_hole():
+            self._platform_contact_steps = 0
+            if self._ball_linear_speed() > float(self.stick_vel_tol):
+                self._platform_settle_steps = 0
+                return
+            self._platform_settle_steps = int(getattr(self, "_platform_settle_steps", 0)) + 1
+            if self._platform_settle_steps >= max(1, int(self.stick_settle_steps)):
+                if not self._ball_in_box():
+                    self._stick_ball_to_cap(nest_in_dummy=True)
+            return
+
+        if not self.stick_to_surface:
+            # Opt2 only: ignore solid-platform contact; stay dynamic.
+            self._platform_contact_steps = 0
+            self._platform_settle_steps = 0
+            return
+
+        # Opt1 (stick_to_surface)
+        overlaps = self._ball_overlaps_real_hole()
+        if not overlaps:
+            # Solid-platform miss: latch quickly.
+            self._platform_settle_steps = 0
+            self._platform_contact_steps = int(getattr(self, "_platform_contact_steps", 0)) + 1
+            if self._platform_contact_steps >= max(1, int(self.stick_contact_steps)):
+                self._stick_ball_to_cap()
+            return
+
+        # Overlaps the real hole: stay dynamic until settled (or falls through).
+        self._platform_contact_steps = 0
+        if self._ball_linear_speed() > float(self.stick_vel_tol):
+            self._platform_settle_steps = 0
+            return
+        self._platform_settle_steps = int(getattr(self, "_platform_settle_steps", 0)) + 1
+        if self._platform_settle_steps >= max(1, int(self.stick_settle_steps)):
+            if not self._ball_in_box():
+                self._stick_ball_to_cap()
+
+    def _steps_until_hole_alignment(
+        self, target_xy, max_steps=None, tol=None, lead_steps=0, local_xy=None
+    ):
         target_xy = np.array(target_xy, dtype=np.float64)
         max_steps = int(self.align_search_steps if max_steps is None else max_steps)
         tol = float(self.hole_align_tol if tol is None else tol)
@@ -320,7 +707,9 @@ class rotating_shape_sorter(Base_Task):
         best_steps = 0
         best_err = float("inf")
         for wait_steps in range(max_steps + 1):
-            hole_xy = self._hole_world_xy_at_step(self._cap_step + wait_steps + lead_steps)
+            hole_xy = self._hole_world_xy_at_step(
+                self._cap_step + wait_steps + lead_steps, local_xy=local_xy
+            )
             err = float(np.linalg.norm(hole_xy - target_xy))
             if err < best_err:
                 best_err = err
@@ -345,7 +734,15 @@ class rotating_shape_sorter(Base_Task):
                 self._take_picture()
 
     def _ball_in_box(self):
+        """True iff the ball is resting inside the bucket cavity (below the cap).
+
+        The only open path into the box is through a cap hole. The target hole is
+        large enough for the ball; the Opt2 dummy hole is not. Stuck-on-platform
+        balls are rejected separately in ``check_success``.
+        """
         if getattr(self, "ball", None) is None:
+            return False
+        if getattr(self, "ball_stuck_on_platform", False):
             return False
         p = np.array(self.ball.get_pose().p, dtype=np.float64)
         in_x = abs(p[0] - self.bucket_center[0]) <= (self.bucket_half - 0.15 * self.ball_radius)
@@ -357,12 +754,23 @@ class rotating_shape_sorter(Base_Task):
     def _update_kinematic_tasks(self):
         # base hook drives DOMINO's dynamic object motion; runs every physics step
         super()._update_kinematic_tasks()
+        # Guard: _init_task_env_ calls this before load_actors.
+        if getattr(self, "ball", None) is None or not hasattr(self, "cap_z"):
+            return
         if getattr(self, "_cap_tracking", False):
             self._cap_step += 1
             # step-driven angle => identical in plan & render passes
             angle = self.spin_omega * (self._cap_step * 0.01)
             self._place_cap(angle)
-        self.ball_in_box = self._ball_in_box()
+        if getattr(self, "ball_stuck_on_platform", False):
+            self._update_stuck_ball()
+            self.ball_in_box = False
+            return
+        self._try_stick_ball_on_platform()
+        if getattr(self, "ball_stuck_on_platform", False):
+            self.ball_in_box = False
+        else:
+            self.ball_in_box = self._ball_in_box()
 
     def _cap_angle_at_step(self, step):
         return self.spin_omega * (step * 0.01)
@@ -394,19 +802,35 @@ class rotating_shape_sorter(Base_Task):
 
         self._move_ball_to_height(arm_tag=arm_tag, target_z=release_z)
         release_target_xy = np.array(self.ball.get_pose().p[:2], dtype=np.float64)
-        wait_steps = self._steps_until_hole_alignment(
-            release_target_xy,
-            lead_steps=self.release_open_steps,
-        )
-        self._dwell(wait_steps)
-        self.ball_released = True
+        if self.force_platform_miss and getattr(self, "_force_miss_align_dummy", False):
+            # Opt2 error: wait until the decoy hole is under the release point.
+            wait_steps = self._steps_until_hole_alignment(
+                release_target_xy,
+                lead_steps=self.release_open_steps,
+                local_xy=self._dummy_hole_local_xy,
+            )
+            self._dwell(wait_steps)
+        elif not self.force_platform_miss:
+            wait_steps = self._steps_until_hole_alignment(
+                release_target_xy,
+                lead_steps=self.release_open_steps,
+            )
+            self._dwell(wait_steps)
+        else:
+            # Opt1 solid-platform miss: brief dwell, no hole wait.
+            self._dwell(30)
         self.move(self.open_gripper(arm_tag))
+        # Only enable miss-stick after the gripper has opened, or the held ball can latch early.
+        self.ball_released = True
         self._dwell(20)
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.08, move_axis="arm"))
         self.move(self.back_to_origin(arm_tag))
         self._dwell(self.post_release_steps)
         self._cap_tracking = False
-        self.ball_in_box = self._ball_in_box()
+        if getattr(self, "ball_stuck_on_platform", False):
+            self.ball_in_box = False
+        else:
+            self.ball_in_box = self._ball_in_box()
 
         self.info["info"] = {
             "{A}": "rotating sorter platform",
@@ -418,10 +842,15 @@ class rotating_shape_sorter(Base_Task):
         return self.info
 
     def check_success(self):
-        self.ball_in_box = self._ball_in_box()
+        """Success: ball fell through the target hole and rests inside the box."""
+        stuck = bool(getattr(self, "ball_stuck_on_platform", False))
+        self.ball_in_box = (not stuck) and self._ball_in_box()
         self.info["ball_side"] = str(getattr(self, "ball_side", "left"))
         self.info["selected_arm"] = str(getattr(self, "selected_arm", "left"))
         self.info["ball_in_box"] = bool(self.ball_in_box)
+        self.info["ball_stuck_on_platform"] = stuck
+        self.info["stick_to_surface"] = bool(getattr(self, "stick_to_surface", self.STICK_TO_SURFACE_DEFAULT))
+        self.info["add_dummy_hole"] = bool(getattr(self, "add_dummy_hole", self.ADD_DUMMY_HOLE_DEFAULT))
         return bool(self.ball_in_box)
 
     # ----------------------------------------------------------------- obs
@@ -430,6 +859,9 @@ class rotating_shape_sorter(Base_Task):
         obs["sorter"] = {
             "cap_angle": float(getattr(self, "_cap_angle", 0.0)),
             "spin_omega": float(getattr(self, "spin_omega", 0.0)),
+            "spin_speed": float(getattr(self, "spin_speed", self.SPIN_SPEED_DEFAULT)),
+            "spin_speed_sampled": float(getattr(self, "spin_speed_sampled", 0.0)),
+            "spin_speed_jitter": float(getattr(self, "spin_speed_jitter", self.SPIN_SPEED_JITTER_DEFAULT)),
             "cap_hole_radius": float(getattr(self, "cap_hole_radius", self.CAP_HOLE_RADIUS_DEFAULT)),
             "cap_hole_diameter": float(getattr(self, "cap_hole_diameter", self.CAP_HOLE_DIAMETER_DEFAULT)),
             "ball_radius": float(getattr(self, "ball_radius", self.BALL_RADIUS_DEFAULT)),
@@ -438,5 +870,12 @@ class rotating_shape_sorter(Base_Task):
             "ball_center": self.ball.get_pose().p.tolist() if getattr(self, "ball", None) is not None else [0.0, 0.0, 0.0],
             "drop_target_xy": self._drop_target_xy.tolist() if hasattr(self, "_drop_target_xy") else [0.0, 0.0],
             "ball_in_box": bool(getattr(self, "ball_in_box", False)),
+            "ball_stuck_on_platform": bool(getattr(self, "ball_stuck_on_platform", False)),
+            "stick_to_surface": bool(getattr(self, "stick_to_surface", self.STICK_TO_SURFACE_DEFAULT)),
+            "add_dummy_hole": bool(getattr(self, "add_dummy_hole", self.ADD_DUMMY_HOLE_DEFAULT)),
+            "dummy_hole_radius": float(getattr(self, "dummy_hole_radius", 0.0)),
+            "dummy_hole_radius_frac": float(getattr(self, "dummy_hole_radius_frac", self.DUMMY_HOLE_RADIUS_FRAC_DEFAULT)),
+            "stick_contact_steps": int(getattr(self, "stick_contact_steps", self.STICK_CONTACT_STEPS_DEFAULT)),
+            "stick_settle_steps": int(getattr(self, "stick_settle_steps", self.STICK_SETTLE_STEPS_DEFAULT)),
         }
         return obs

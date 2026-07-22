@@ -207,9 +207,28 @@ task_args:
     belt_ride_steps: 600
   rotating_shape_sorter:
     spin_speed: 0.9
+    spin_speed_jitter: 0.20     # sample ~ U(0.8, 1.2) × spin_speed
     r_tol: 0.06
     align_window: 0.18
     max_track_steps: 900
+    ball_color: [0.90, 0.10, 0.10]
+    ball_side: random
+    ball_x_jitter: 0.02
+    ball_y_jitter: 0.045
+    force_platform_miss: false
+    hole_xy_jitter: 0.012       # m; ±x/±y randomization for target & dummy hole
+    # Independent feature toggles (both may be true):
+    stick_to_surface: false     # Opt1: latch ball on platform if dropped off the real hole
+    add_dummy_hole: false       # Opt2: cut opposite-corner decoy hole slightly smaller than ball
+    # ---- Opt1 (stick_to_surface) params ----
+    stick_contact_steps: 4
+    stick_settle_steps: 12
+    stick_vel_tol: 0.05
+    stick_z_tol: 0.012
+    # ---- Opt2 (add_dummy_hole) params ----
+    dummy_hole_radius_frac: 0.92
+    dummy_hole_nest_depth: 0.35
+    # dummy_hole_radius: 0.023
   load_train:
     rail_radius: 0.20
     train_omega_min: 0.10

@@ -1,0 +1,8 @@
+rotating_shape_sorter — expert controller demos (success = ball through target hole into box)
+
+default  : stick_to_surface=false, add_dummy_hole=false  (single target hole, regular surface)
+opt1     : stick_to_surface=true,  add_dummy_hole=false  (sticky surface, target hole only)
+opt2     : stick_to_surface=false, add_dummy_hole=true   (dummy hole, regular surface)
+opt1+2   : stick_to_surface=true,  add_dummy_hole=true   (sticky surface + dummy hole)
+
+Files per condition: <tag>_sidebyside.mp4 (head | top-down), <tag>_head.mp4, <tag>_topdown.mp4
