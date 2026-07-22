@@ -78,13 +78,28 @@ task_args:
     center_table_clearance: 0.005
     rotation_direction: counter_clockwise
   catch_marbles_trapdoors:
-    press_hold_steps: 24
-    final_dwell_steps: 100
-    button_press_depth: 0.03
-    door_open_angle_deg: 95.0
-    door_open_speed_deg: 220.0
-    ball_speed: 0.18
-    ball_bounce_height: 0.012
+    press_hold_steps: 24        # steps to hold button depressed
+    final_dwell_steps: 100      # post-success settle / observe steps
+    button_press_depth: 0.03    # m; EE press depth into button
+    door_open_angle_deg: 95.0   # deg; trapdoor open angle
+    door_open_speed_deg: 220.0  # deg/s; trapdoor swing rate
+    door_open_duration_sec: 0.5 # s; how long a door stays commanded open
+    door_open_once: false       # opt1: true = each door opens only once then locks closed (default: unlimited)
+    enable_distractor: false    # opt2: true = spawn black distractor marble (opposite direction)
+    distractor_collide: false   # false = pass through, true = bounce on contact
+    distractor_height_offset: 0.0  # m; keep 0 so distractor matches target marble height (Z)
+    distractor_y_offset: 0.030  # m; parallel Y-lane separation so marbles do not collide
+    distractor_speed: null      # m/s; null = sample ±20% around ball_speed (same as target)
+    distractor_speed_scale_min: 0.8
+    distractor_speed_scale_max: 1.2
+    target_color: null          # null/random = pick 1 of 4 colors; or red|yellow|blue|green | 0..3
+                                # matching left-side trapdoor → left arm; right-side → right arm
+    shuffle_colors: true        # randomize left→right color order of doors + matching keys
+    key_base_half: [0.032, 0.032, 0.005]  # larger/thinner black base under each colored keycap
+    ball_speed: 0.18            # m/s; nominal marble speed; episode speeds sample ±20%
+    ball_speed_scale_min: 0.8   # target marble speed low scale vs ball_speed
+    ball_speed_scale_max: 1.2   # target marble speed high scale vs ball_speed
+    ball_bounce_height: 0.012   # m; vertical bounce amplitude
   marble_shelf_maze:
     n_shelves: 4
     shelf_length: 0.15

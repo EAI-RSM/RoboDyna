@@ -42,5 +42,20 @@ task_args:
     button_press_depth: 0.03
     door_open_angle_deg: 95.0
     door_open_speed_deg: 220.0
-    ball_speed: 0.18
+    door_open_duration_sec: 0.5
+    door_open_once: false       # opt1: true = open each door only once
+    enable_distractor: false    # opt2: true = black distractor marble
+    distractor_collide: false   # false=pass through, true=bounce
+    distractor_height_offset: 0.0  # keep 0 = same Z as target
+    distractor_y_offset: 0.030  # parallel Y lane so marbles do not collide
+    distractor_speed: null
+    distractor_speed_scale_min: 0.8
+    distractor_speed_scale_max: 1.2
+    target_color: null          # null/random = 1 of 4; or red|yellow|blue|green | 0..3
+                                # left-side trapdoor → left arm; right-side → right arm
+    shuffle_colors: true
+    key_base_half: [0.032, 0.032, 0.005]
+    ball_speed: 0.18            # nominal; episode speeds sample ±20%
+    ball_speed_scale_min: 0.8
+    ball_speed_scale_max: 1.2
     ball_bounce_height: 0.012
