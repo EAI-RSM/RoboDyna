@@ -141,8 +141,13 @@ task_args:
     square_gap_min: 0.010
     square_gap_max: 0.030
   dispense_gummy:
+    # Options (independent toggles) — keep in sync with demo_dynamic.yml:
+    #   Default — layout_mode: alternating; discrete belt hops
+    #   Opt 1 — layout_mode: random  (--option 1)
+    #   Opt 2 — belt_continuous_motion: true; speed × U(1±belt_speed_jitter) (--option 2)
     tube_capacity: 4
-    difficulty_option: 1  # 1: uneven yellow/blue counts; 2: uneven yellow counts with empty gaps
+    layout_mode: alternating
+    belt_continuous_motion: false
     target_color: yellow
     ball_diameter: 0.03
     ball_slot_gap: 0.003
@@ -157,6 +162,8 @@ task_args:
     bowl_catch_z_tol: 0.025
     belt_thickness: 0.015
     belt_move_steps: 30
+    bowl_speed: 0.15
+    belt_speed_jitter: 0.20
     belt_key_x: 0.26
     belt_key_y_left: -0.14
     belt_key_y_right: -0.06
@@ -267,10 +274,23 @@ task_args:
     dummy_hole_nest_depth: 0.35
     # dummy_hole_radius: 0.023
   load_train:
+    # Options (independent toggles; keep in sync with demo_dynamic.yml):
+    #   Default — 3 red wagons; drop into ANY wagon; no tunnel.
+    #   Opt 1 — target_wagon_mode: one random red target; other wagons gray.
+    #     CLI: --task-arg target_wagon_mode=true   or   --option 1
+    #   Opt 2 — tunnel_enabled: far-arc arched tunnel (2–4 wagon spans).
+    #     CLI: --task-arg tunnel_enabled=true     or   --option 2
+    #   Opt 1+2 — both flags together.
+    n_wagons: 3
+    target_wagon_mode: false
+    tunnel_enabled: false
+    tunnel_prob: 0.55
+    tunnel_n_wagons_min: 2
+    tunnel_n_wagons_max: 4
+    tunnel_center_jitter: 0.40
     rail_radius: 0.20
     train_omega_min: 0.10
     train_omega_max: 0.18
-    n_wagons: 3
     ball_side: random
     ball_lateral_min: 0.07
     ball_lateral_max: 0.12
@@ -292,11 +312,6 @@ task_args:
     drop_reach_tol: 0.030
     latch_z_max: 0.015
     latch_settle_steps: 12
-    tunnel_enabled: random
-    tunnel_prob: 0.55
-    tunnel_n_wagons_min: 2
-    tunnel_n_wagons_max: 4
-    tunnel_center_jitter: 0.40
   sort_apples_belt:
     n_apples: 10
     belt_speed: 0.012

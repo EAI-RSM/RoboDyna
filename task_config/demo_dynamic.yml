@@ -197,30 +197,43 @@ task_args:
     square_gap_min: 0.010       # m; variable-spacing min gap
     square_gap_max: 0.030       # m; variable-spacing max gap
   dispense_gummy:
-    tube_capacity: 4
-    difficulty_option: 1  # 1: uneven yellow/blue counts; 2: uneven yellow counts with empty gaps
-    target_color: yellow
-    ball_diameter: 0.03
-    ball_slot_gap: 0.003
-    tube_inner_radius: 0.017
-    tube_wall_thickness: 0.003
-    tube_bottom_z_offset: 0.075
-    tube_center_y: 0.03
-    tube_x_left: -0.06
-    tube_x_right: 0.06
-    bowl_radius: 0.06
-    bowl_align_tol: 0.035
-    bowl_catch_z_tol: 0.025
-    belt_thickness: 0.015
-    belt_move_steps: 30
-    belt_key_x: 0.26
-    belt_key_y_left: -0.14
-    belt_key_y_right: -0.06
-    key_x: -0.26
-    key_y: -0.13
-    dispense_steps: 24
-    press_hold_steps: 6
-    post_press_dwell: 10
+    # Options (independent toggles):
+    #   Default — alternating target/distractor patterns; discrete belt station hops
+    #     layout_mode: alternating
+    #     belt_continuous_motion: false
+    #   Opt 1 — randomized gummy layout → layout_mode: random
+    #     At most one target at each depth; both tubes may hold distractors.
+    #     CLI: --task-arg layout_mode=random   or   --option 1
+    #   Opt 2 — continuous bowl motion → belt_continuous_motion: true
+    #     Hold arrow key to slide the bowl; episode speed ~ U((1±jitter)*bowl_speed).
+    #     CLI: --task-arg belt_continuous_motion=true   or   --option 2
+    tube_capacity: 4            # slots / gummies per tube
+    layout_mode: alternating    # Default: alternating; Opt 1: random
+    belt_continuous_motion: false  # Opt 2: false = discrete hops; true = hold-to-slide
+    target_color: yellow        # yellow|blue — color to catch
+    ball_diameter: 0.03         # m; gummy diameter
+    ball_slot_gap: 0.003        # m; vertical gap between stacked gummies in tube
+    tube_inner_radius: 0.017    # m; must exceed ball radius
+    tube_wall_thickness: 0.003  # m; tube wall thickness
+    tube_bottom_z_offset: 0.075 # m; tube bottom above table
+    tube_center_y: 0.03         # m; shared tube y
+    tube_x_left: -0.06          # m; left tube x
+    tube_x_right: 0.06          # m; right tube x
+    bowl_radius: 0.06           # m; catch bowl radius
+    bowl_align_tol: 0.035       # m; bowl XY under dispenser for catch
+    bowl_catch_z_tol: 0.025     # m; Z band for counting a catch
+    belt_thickness: 0.015       # m; bowl belt slab thickness
+    belt_move_steps: 30         # Default discrete: steps for one station hop
+    bowl_speed: 0.15            # Opt 2 continuous: nominal bowl speed (m/s)
+    belt_speed_jitter: 0.20     # Opt 2: per-episode speed × U(1±jitter)
+    belt_key_x: 0.26            # m; belt-control keys x
+    belt_key_y_left: -0.14      # m; left belt-key y
+    belt_key_y_right: -0.06     # m; right belt-key y
+    key_x: -0.26                # m; dispense-button x
+    key_y: -0.13                # m; dispense-button y
+    dispense_steps: 24          # steps for one dispense animation / drop
+    press_hold_steps: 6         # steps holding dispense key
+    post_press_dwell: 10        # steps after press before next action
   catch_shelf_marble:
     n_shelves: 4
     shelf_length: 0.20

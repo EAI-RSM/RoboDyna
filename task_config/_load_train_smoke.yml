@@ -174,7 +174,10 @@ task_args:
     square_gap_max: 0.030
   dispense_gummy:
     tube_capacity: 4
-    difficulty_option: 1  # 1: uneven yellow/blue counts; 2: uneven yellow counts with empty gaps
+    layout_mode: alternating
+    belt_continuous_motion: false
+    bowl_speed: 0.15
+    belt_speed_jitter: 0.20
     target_color: yellow
     ball_diameter: 0.03
     ball_slot_gap: 0.003

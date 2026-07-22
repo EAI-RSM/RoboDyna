@@ -11,13 +11,25 @@ class dispense_gummy(Base_Task):
     """Use a button-controlled belt to catch target-colored gummies.
 
     The bowl starts at the belt's left endpoint. The right arm presses arrow keys to
-    move it between bounded belt stations, while the left arm presses the dispense key.
-    Each dispense releases one ball from both tubes; only the configured target color
-    should land in the bowl.
+    move it, while the left arm presses the dispense key. Each dispense releases one
+    ball from both tubes; only the configured target color should land in the bowl.
+
+    Task options (set in ``task_args.dispense_gummy``; independent toggles):
+      - Default — alternating target/distractor patterns; discrete belt station hops
+          ``layout_mode: alternating``
+          ``belt_continuous_motion: false``
+      - Option 1 — randomized layout: ``layout_mode: random``
+          At most one target gummy at each depth; both tubes may hold distractors.
+          CLI: ``--task-arg layout_mode=random`` or legacy ``--option 1``.
+      - Option 2 — continuous bowl motion: ``belt_continuous_motion: true``
+          Hold an arrow key to slide the bowl continuously. Episode speed is sampled
+          as ``bowl_speed × U(1 ± belt_speed_jitter)`` (default ±20%).
+          CLI: ``--task-arg belt_continuous_motion=true`` or legacy ``--option 2``.
     """
 
     TUBE_CAPACITY_DEFAULT = 4
-    DIFFICULTY_OPTION_DEFAULT = 1
+    LAYOUT_MODE_DEFAULT = "alternating"  # Default; Opt 1 = "random"
+    BELT_CONTINUOUS_DEFAULT = False      # Opt 2
     BALL_DIAMETER_DEFAULT = 0.03
     BALL_SLOT_GAP_DEFAULT = 0.003
     TUBE_INNER_RADIUS_DEFAULT = 0.017
@@ -30,6 +42,8 @@ class dispense_gummy(Base_Task):
     BOWL_RADIUS_DEFAULT = 0.06
     BOWL_ALIGN_TOL_DEFAULT = 0.035
     BOWL_CATCH_Z_TOL_DEFAULT = 0.025
+    BOWL_SPEED_DEFAULT = 0.15            # m/s nominal (Opt 2 continuous)
+    BELT_SPEED_JITTER_DEFAULT = 0.20     # ± fraction when continuous
 
     KEY_X_DEFAULT = -0.26
     KEY_Y_DEFAULT = -0.13
@@ -50,6 +64,8 @@ class dispense_gummy(Base_Task):
     DISPENSE_STEPS_DEFAULT = 24
     PRESS_HOLD_STEPS_DEFAULT = 6
     POST_PRESS_DWELL_DEFAULT = 10
+    PRESS_LOOP_TOL_DEFAULT = 0.008
+    PRESS_LOOP_MAX_STEPS_DEFAULT = 2500
 
     COLORS = {
         "yellow": [0.96, 0.82, 0.18],
@@ -62,7 +78,8 @@ class dispense_gummy(Base_Task):
     def setup_demo(self, **kwags):
         kwags = dict(kwags)
         kwags["use_dynamic"] = False
-        self._cfg = kwags.get("task_args", {}).get("dispense_gummy", {})
+        self._cfg = dict(kwags.get("task_args", {}).get("dispense_gummy", {}))
+        self._apply_legacy_option()
         self._tube_order = ("left", "right")
         self._tube_records = {side: [] for side in self._tube_order}
         self._tube_stack_colors = {side: [] for side in self._tube_order}
@@ -84,14 +101,59 @@ class dispense_gummy(Base_Task):
         self._bowl_target_x = 0.0
         self._bowl_station_idx = 0
         self._belt_key_latched = {"left": False, "right": False}
+        self._belt_key_pressed = {"left": False, "right": False}
         self._dispense_key_latched = False
         self._belt_key_depression = {"left": 0.0, "right": 0.0}
         self._dispense_key_depression = 0.0
+        self._bowl_force_stop = False
+        self._bowl_drive_clamp = None
         self.belt_keys = {}
         self.belt_key_xy = {}
         self.belt_key_arrows = {}
         super()._init_task_env_(**kwags)
         self._configure_observer_camera()
+
+    def _apply_legacy_option(self):
+        """Map record_demo ``--option`` / config ``option`` onto named toggles.
+
+        1 / random / layout_mode → Opt 1 layout_mode=random
+        2 / continuous / belt_continuous_motion → Opt 2 belt_continuous_motion=true
+        """
+        legacy = self._cfg.get("option", None)
+        if legacy is None:
+            return
+        key = {
+            1: "layout_random",
+            2: "belt_continuous",
+            "1": "layout_random",
+            "2": "belt_continuous",
+            "random": "layout_random",
+            "layout_mode": "layout_random",
+            "layout_random": "layout_random",
+            "continuous": "belt_continuous",
+            "belt_continuous": "belt_continuous",
+            "belt_continuous_motion": "belt_continuous",
+            "belt_continous_motion": "belt_continuous",
+        }.get(legacy if not isinstance(legacy, str) else legacy.strip().lower())
+        # Force-enable the named toggle so CLI ``--option N`` wins over yaml defaults.
+        if key == "layout_random":
+            self._cfg["layout_mode"] = "random"
+        elif key == "belt_continuous":
+            self._cfg["belt_continuous_motion"] = True
+            self._cfg.pop("belt_continous_motion", None)
+        else:
+            raise ValueError(
+                "dispense_gummy option must be 1/layout_mode=random or "
+                "2/belt_continuous_motion (or set those keys directly)"
+            )
+
+    def _option_label(self) -> str:
+        parts = []
+        if getattr(self, "layout_mode", self.LAYOUT_MODE_DEFAULT) == "random":
+            parts.append("option 1")
+        if bool(getattr(self, "belt_continuous_motion", False)):
+            parts.append("option 2")
+        return ", ".join(parts) if parts else "baseline"
 
     # ------------------------------------------------------------------ helpers
     def _get_rigid(self, entity):
@@ -166,17 +228,46 @@ class dispense_gummy(Base_Task):
             return np.zeros(3, dtype=np.float64)
         return np.asarray(self.bowl.get_pose().p, dtype=np.float64)
 
+    def _target_bowl_x(self, station_or_side):
+        """Resolve a discrete station index or tube side name to a bowl x target."""
+        if isinstance(station_or_side, str):
+            if station_or_side in self.tube_centers:
+                return float(self.tube_centers[station_or_side][0])
+            if station_or_side == "park":
+                return float(self.bowl_x_min)
+        return float(self.bowl_stations[int(station_or_side)])
+
     def _advance_bowl_on_belt(self):
-        if self.bowl is None or not hasattr(self, "belt_move_steps"):
+        if self.bowl is None:
             return
         pose = self.bowl.get_pose()
-        dx = float(self._bowl_target_x - pose.p[0])
-        if abs(dx) < 1e-5:
-            return
-        step = np.sign(dx) * min(abs(dx), self.belt_step_per_sim)
-        next_x = float(np.clip(pose.p[0] + step, self.bowl_x_min, self.bowl_x_max))
-        if (dx > 0 and next_x > self._bowl_target_x) or (dx < 0 and next_x < self._bowl_target_x):
-            next_x = self._bowl_target_x
+        if self.belt_continuous_motion:
+            if self._bowl_force_stop:
+                return
+            dt = float(self.scene.get_timestep())
+            left_p = self._belt_key_pressed.get("left", False)
+            right_p = self._belt_key_pressed.get("right", False)
+            dx = 0.0
+            if left_p and not right_p:
+                dx = -self.bowl_speed * dt
+            elif right_p and not left_p:
+                dx = self.bowl_speed * dt
+            if dx == 0.0:
+                return
+            next_x = float(pose.p[0]) + dx
+            clamp = self._bowl_drive_clamp
+            if clamp is not None:
+                clamp_sign, clamp_x = clamp
+                next_x = min(next_x, clamp_x) if clamp_sign > 0 else max(next_x, clamp_x)
+            next_x = float(np.clip(next_x, self.bowl_x_min, self.bowl_x_max))
+        else:
+            dx = float(self._bowl_target_x - pose.p[0])
+            if abs(dx) < 1e-5:
+                return
+            step = np.sign(dx) * min(abs(dx), self.belt_step_per_sim)
+            next_x = float(np.clip(pose.p[0] + step, self.bowl_x_min, self.bowl_x_max))
+            if (dx > 0 and next_x > self._bowl_target_x) or (dx < 0 and next_x < self._bowl_target_x):
+                next_x = self._bowl_target_x
         self._set_entity_pose(
             self.bowl,
             sapien.Pose([next_x, self.tube_center_y, self.belt_surface_z], pose.q),
@@ -200,9 +291,14 @@ class dispense_gummy(Base_Task):
                 and abs(ee[1] - key_y) <= self.belt_key_press_xy
                 and ee[2] <= self.belt_key_top_z + self.belt_key_press_dz
             )
-            if pressed and not self._belt_key_latched[side]:
-                self._request_bowl_station(-1 if side == "left" else 1)
-            self._belt_key_latched[side] = pressed
+            self._belt_key_pressed[side] = pressed
+            if self.belt_continuous_motion:
+                # Continuous: pressed state drives velocity every step (no edge latch).
+                self._belt_key_latched[side] = pressed
+            else:
+                if pressed and not self._belt_key_latched[side]:
+                    self._request_bowl_station(-1 if side == "left" else 1)
+                self._belt_key_latched[side] = pressed
 
     def _detect_dispense_key_press(self):
         if getattr(self, "dispense_key", None) is None or not hasattr(self, "robot"):
@@ -240,10 +336,15 @@ class dispense_gummy(Base_Task):
                 self.dispense_key_rest_xyz,
             )
         for side, key in self.belt_keys.items():
+            pressed = (
+                self._belt_key_pressed[side]
+                if self.belt_continuous_motion
+                else self._belt_key_latched[side]
+            )
             self._belt_key_depression[side] = self._spring_key(
                 key,
                 self._belt_key_depression[side],
-                self._belt_key_latched[side],
+                pressed,
                 self.belt_key_rest_xyz[side],
             )
             for arrow, rest_xyz in self.belt_key_arrows.get(side, []):
@@ -340,12 +441,68 @@ class dispense_gummy(Base_Task):
         return [key_x, key_y, tcp_z + self.EE_TO_TCP, *GRASP_DIRECTION_DIC["top_down"]]
 
     def _press_belt_key(self, side):
+        """Discrete mode: tap an arrow key once to hop one station."""
         right = ArmTag("right")
         self.move(self.move_to_pose(right, self._belt_key_tip_pose(side, self.key_hover_dis)))
         self.move(self.move_by_displacement(right, z=-self.key_press_depth))
         self._dwell(2)
         self.move(self.move_by_displacement(right, z=self.key_press_depth))
         self._dwell(self.belt_move_steps + 4)
+
+    def _hold_belt_key_to_x(self, target_x, max_steps=None):
+        """Continuous mode: press and hold an arrow key until the bowl reaches target_x."""
+        if max_steps is None:
+            max_steps = self.press_loop_max_steps
+        cur_x = float(self._bowl_center_world()[0])
+        if abs(target_x - cur_x) <= self.press_loop_tol:
+            return
+        side = "right" if target_x > cur_x else "left"
+        right = ArmTag("right")
+        self._bowl_force_stop = False
+        sign = 1.0 if side == "right" else -1.0
+        self._bowl_drive_clamp = (sign, float(target_x))
+        self.move(self.move_to_pose(right, self._belt_key_tip_pose(side, self.key_hover_dis)))
+        if not self.plan_success:
+            self._bowl_drive_clamp = None
+            return
+        self.move(self.move_by_displacement(right, z=-self.key_press_depth))
+        if not self.plan_success:
+            self._bowl_drive_clamp = None
+            return
+
+        steps = 0
+        while steps < max_steps:
+            cur_x = float(self._bowl_center_world()[0])
+            if sign * (target_x - cur_x) <= self.press_loop_tol:
+                break
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (steps % self.save_freq == 0):
+                self._take_picture()
+            steps += 1
+        self._bowl_drive_clamp = None
+        self._bowl_force_stop = True
+        self.move(self.move_by_displacement(right, z=self.key_press_depth))
+        self._dwell(6)
+        self._bowl_force_stop = False
+
+    def _move_bowl_to_target(self, target_x):
+        if self.belt_continuous_motion:
+            self._hold_belt_key_to_x(target_x)
+            return abs(float(self._bowl_center_world()[0]) - float(target_x)) <= (
+                self.press_loop_tol + self.bowl_align_tol * 0.25
+            )
+
+        # Discrete: hop station-by-station toward the nearest station to target_x.
+        target_station = int(np.argmin(np.abs(np.asarray(self.bowl_stations) - float(target_x))))
+        attempts = 0
+        while self._bowl_station_idx < target_station and attempts < len(self.bowl_stations):
+            self._press_belt_key("right")
+            attempts += 1
+        while self._bowl_station_idx > target_station and attempts < 2 * len(self.bowl_stations):
+            self._press_belt_key("left")
+            attempts += 1
+        return self._bowl_station_idx == target_station
 
     def _draw_arrow(self, side, key_x, key_y, z):
         # Author one left arrow, then rigidly rotate it 180 degrees for the right key.
@@ -394,9 +551,12 @@ class dispense_gummy(Base_Task):
         self.scene.add_entity(entity)
         return entity
 
+    def _distractor_color(self):
+        return "blue" if self.target_color == "yellow" else "yellow"
+
     def _validate_stack_pattern(self):
-        alternate_color = "blue" if self.target_color == "yellow" else "yellow"
-        allowed = {self.target_color, alternate_color} if self.difficulty_option == 1 else {self.target_color, "gap"}
+        distractor = self._distractor_color()
+        allowed = {self.target_color, distractor}
         lengths = [len(self._tube_stack_colors[side]) for side in self._tube_order]
         if lengths[0] != lengths[1]:
             raise ValueError("dispense_gummy requires left_stack and right_stack to have the same length")
@@ -407,25 +567,40 @@ class dispense_gummy(Base_Task):
             right_color = self._tube_stack_colors["right"][depth]
             if left_color not in allowed or right_color not in allowed:
                 raise ValueError(
-                    f"dispense_gummy option {self.difficulty_option} supports only {sorted(allowed)}"
+                    f"dispense_gummy layout_mode={self.layout_mode} supports only {sorted(allowed)}"
                 )
             target_count = int(left_color == self.target_color) + int(right_color == self.target_color)
             if target_count > 1:
                 raise ValueError(
-                    "dispense_gummy cannot place target gummies at the same depth in both tubes"
+                    "dispense_gummy cannot place more than one target gummy at the same depth"
                 )
         target_counts = [
             sum(color == self.target_color for color in self._tube_stack_colors[side])
             for side in self._tube_order
         ]
-        if min(target_counts) < 1 or target_counts[0] == target_counts[1]:
+        if min(target_counts) < 1:
+            raise ValueError("dispense_gummy requires at least one target gummy per tube")
+        if self.layout_mode == "random" and target_counts[0] == target_counts[1]:
             raise ValueError(
-                "dispense_gummy requires different target-gummy counts, with at least one per tube"
+                "dispense_gummy random layout requires different target-gummy counts per tube"
             )
 
-    def _generate_stack_pattern(self):
+    def _generate_alternating_pattern(self):
+        """Default: alternating target/distractor, offset across tubes so one target per depth."""
+        distractor = self._distractor_color()
+        start_left_target = bool(np.random.randint(2))
+        left, right = [], []
+        for depth in range(self.tube_capacity):
+            left_is_target = (depth % 2 == 0) == start_left_target
+            left.append(self.target_color if left_is_target else distractor)
+            right.append(distractor if left_is_target else self.target_color)
+        return {"left": left, "right": right}
+
+    def _generate_random_pattern(self):
+        """Opt 1: random placement; ≤1 target per depth; distractors may both be present."""
         if self.tube_capacity < 3:
             raise ValueError("dispense_gummy randomized difficulty requires tube_capacity >= 3")
+        distractor = self._distractor_color()
         possible_counts = [
             (left_count, right_count)
             for left_count in range(1, self.tube_capacity)
@@ -436,21 +611,21 @@ class dispense_gummy(Base_Task):
         depths = np.random.permutation(self.tube_capacity)
         left_depths = set(int(i) for i in depths[:left_count])
         right_depths = set(int(i) for i in depths[left_count:left_count + right_count])
-        filler = (
-            ("blue" if self.target_color == "yellow" else "yellow")
-            if self.difficulty_option == 1
-            else "gap"
-        )
         return {
             "left": [
-                self.target_color if depth in left_depths else filler
+                self.target_color if depth in left_depths else distractor
                 for depth in range(self.tube_capacity)
             ],
             "right": [
-                self.target_color if depth in right_depths else filler
+                self.target_color if depth in right_depths else distractor
                 for depth in range(self.tube_capacity)
             ],
         }
+
+    def _generate_stack_pattern(self):
+        if self.layout_mode == "random":
+            return self._generate_random_pattern()
+        return self._generate_alternating_pattern()
 
     def _request_dispense(self):
         if self._active_drops:
@@ -554,21 +729,53 @@ class dispense_gummy(Base_Task):
         self.belt_move_steps = int(cfg.get("belt_move_steps", self.BELT_MOVE_STEPS_DEFAULT))
         self.belt_key_press_xy = float(cfg.get("belt_key_press_xy", self.BELT_KEY_PRESS_XY_DEFAULT))
         self.belt_key_press_dz = float(cfg.get("belt_key_press_dz", self.BELT_KEY_PRESS_DZ_DEFAULT))
+        self.press_loop_tol = float(cfg.get("press_loop_tol", self.PRESS_LOOP_TOL_DEFAULT))
+        self.press_loop_max_steps = int(cfg.get("press_loop_max_steps", self.PRESS_LOOP_MAX_STEPS_DEFAULT))
         self.target_color = str(cfg.get("target_color", "yellow")).strip().lower()
         if self.target_color not in self.COLORS:
             raise ValueError("dispense_gummy target_color must be yellow or blue")
-        option = cfg.get("difficulty_option", self.DIFFICULTY_OPTION_DEFAULT)
-        option_aliases = {
-            1: 1,
-            2: 2,
-            "1": 1,
-            "2": 2,
-            "uneven_blue": 1,
-            "gaps": 2,
+
+        # Layout mode (default alternating; Opt 1 = random). Accept legacy difficulty_option.
+        layout = cfg.get("layout_mode", None)
+        if layout is None and "difficulty_option" in cfg:
+            # Legacy: difficulty_option 1/2 both mapped to random (gaps mode removed).
+            layout = "random"
+        if layout is None:
+            layout = self.LAYOUT_MODE_DEFAULT
+        layout = str(layout).strip().lower()
+        layout_aliases = {
+            "alternating": "alternating",
+            "alternate": "alternating",
+            "default": "alternating",
+            "random": "random",
+            "uneven_blue": "random",
+            "1": "random",
         }
-        if option not in option_aliases:
-            raise ValueError("dispense_gummy difficulty_option must be 1/uneven_blue or 2/gaps")
-        self.difficulty_option = option_aliases[option]
+        if layout not in layout_aliases:
+            raise ValueError("dispense_gummy layout_mode must be alternating or random")
+        self.layout_mode = layout_aliases[layout]
+
+        continuous = cfg.get(
+            "belt_continuous_motion",
+            cfg.get("belt_continous_motion", self.BELT_CONTINUOUS_DEFAULT),
+        )
+        if isinstance(continuous, str):
+            continuous = continuous.strip().lower() in ("1", "true", "yes", "on", "continuous")
+        self.belt_continuous_motion = bool(continuous)
+
+        bowl_speed_nom = float(cfg.get("bowl_speed", self.BOWL_SPEED_DEFAULT))
+        speed_jitter = float(cfg.get("belt_speed_jitter", self.BELT_SPEED_JITTER_DEFAULT))
+        speed_jitter = float(np.clip(speed_jitter, 0.0, 0.95))
+        if self.belt_continuous_motion:
+            self.bowl_speed = float(
+                np.random.uniform(
+                    bowl_speed_nom * (1.0 - speed_jitter),
+                    bowl_speed_nom * (1.0 + speed_jitter),
+                )
+            )
+        else:
+            self.bowl_speed = bowl_speed_nom
+
         if self.tube_inner_radius <= self.ball_radius:
             raise ValueError("dispense_gummy tube_inner_radius must exceed the gummy radius")
 
@@ -738,7 +945,7 @@ class dispense_gummy(Base_Task):
             name="dispense_key",
         )
 
-        # Two arrow-labeled keys on the right move the bowl by one bounded belt station.
+        # Two arrow-labeled keys on the right move the bowl (discrete hop or continuous hold).
         belt_key_x = float(cfg.get("belt_key_x", self.BELT_KEY_X_DEFAULT))
         self.belt_key_xy = {
             "left": (belt_key_x, float(cfg.get("belt_key_y_left", self.BELT_KEY_Y_LEFT_DEFAULT))),
@@ -775,9 +982,6 @@ class dispense_gummy(Base_Task):
 
         for side in self._tube_order:
             for depth, color in enumerate(self._tube_stack_colors[side]):
-                if color == "gap":
-                    self._tube_records[side].append(None)
-                    continue
                 actor = create_sphere(
                     self,
                     pose=self._slot_pose(side, depth),
@@ -852,18 +1056,12 @@ class dispense_gummy(Base_Task):
                 break
 
             if target_sides:
-                target_station = 1 if target_sides[0] == "left" else 2
+                target_x = float(self.tube_centers[target_sides[0]][0])
             else:
                 # No target gummy at this depth: park beyond the left tube and advance one slot.
-                target_station = 0
-            attempts = 0
-            while self._bowl_station_idx < target_station and attempts < len(self.bowl_stations):
-                self._press_belt_key("right")
-                attempts += 1
-            while self._bowl_station_idx > target_station and attempts < 2 * len(self.bowl_stations):
-                self._press_belt_key("left")
-                attempts += 1
-            if self._bowl_station_idx != target_station:
+                target_x = float(self.bowl_x_min)
+
+            if not self._move_bowl_to_target(target_x):
                 self.invalid_pattern = True
                 break
 
@@ -879,6 +1077,7 @@ class dispense_gummy(Base_Task):
             "{B}": f"002_bowl/base{self.bowl_id}",
             "{C}": "dual transparent gummy tubes",
             "{a}": "both arms",
+            "{o}": self._option_label(),
         }
         return self.info
 
@@ -902,7 +1101,10 @@ class dispense_gummy(Base_Task):
             "blue_caught": int(self.blue_caught),
             "blue_dropped": int(self.blue_dropped),
             "target_color": self.target_color,
-            "difficulty_option": int(self.difficulty_option),
+            "layout_mode": str(self.layout_mode),
+            "belt_continuous_motion": bool(self.belt_continuous_motion),
+            "bowl_speed": float(self.bowl_speed),
+            "option_label": self._option_label(),
             "left_layout": list(self._tube_stack_colors["left"]),
             "right_layout": list(self._tube_stack_colors["right"]),
             "total_target": int(self.total_target),

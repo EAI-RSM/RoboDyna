@@ -1,0 +1,20 @@
+{
+  "full_description": "use the arrow keys to move the bowl along the belt and collect only the target-colored gummies from the two tubes",
+  "schema": "{A} identifies the target gummies, {B} identifies the bowl, {C} identifies the tubes, and {a} identifies the arms used",
+  "preference": "num of words should not exceed 16. Degree of detail avg is 6",
+  "seen": [
+    "Use the arrow keys to collect only {A} in {B}",
+    "Move {B} under {C} and catch every {A}",
+    "With {a}, guide {B} along the belt to collect {A}",
+    "Press the belt keys so {B} catches only {A}",
+    "Position {B} beneath the correct tube for each {A}",
+    "Collect all {A} from {C} using the moving {B}",
+    "Move {B} left and right to catch only {A}",
+    "Operate the belt and dispenser to collect every {A}"
+  ],
+  "unseen": [
+    "Guide the bowl under the tubes to catch the target gummies",
+    "Use both arms and the arrow keys to collect only {A}",
+    "Catch each {A} by moving {B} along the belt"
+  ]
+}
