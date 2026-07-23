@@ -8,11 +8,12 @@ import numpy as np
 class whack_a_mole(Base_Task):
     """Whack-a-mole. A fixed yellow board with a grid of holes spans both arms' reach.
     Default: 2 moles bob out of / back into fixed holes at randomized pop speeds
-    (uniform in [0.6, 1.0] × POP_SPEED). Each arm starts with a blue cube gripped
-    between its fingers (slightly larger than a hole) so the gripper cannot enter
-    a hole. A hit requires the mole to make real mesh contact with the underside
-    (bottom face) of a held cube while above the board surface; side brushes or
-    hovering nearby do not count. Hit moles turn green and stay down.
+    (uniform in [0.6, 1.0] × POP_SPEED, with a smooth cosine bob). Each arm starts
+    with a blue cube gripped between its fingers (slightly larger than a hole) so
+    the gripper cannot enter a hole. A hit requires the mole to make real mesh
+    contact with the underside (bottom face) of a held cube while above the board
+    surface; side brushes or hovering nearby do not count. Hit moles turn green
+    and stay down.
 
     Task options (independent toggles in ``task_args.whack_a_mole``; combinable):
       - Opt 1 — rabbit distractor: ``distractor_enabled``
@@ -42,8 +43,10 @@ class whack_a_mole(Base_Task):
     DISTRACTOR_ENABLED_DEFAULT = False   # Opt 1
     RELOCATING_MOLES_DEFAULT = False     # Opt 2
     DIFFICULTY_DEFAULT = "easy"
-    POP_STEPS_DEFAULT = 90          # sim steps each mole holds at the top of its cycle
-    PRE_POP_STEPS_DEFAULT = 8
+    # Moles bob continuously (rise → fall). A non-zero hold freezes them at the
+    # crown and reads as a multi-second pause before the mallet lands — keep 0.
+    POP_STEPS_DEFAULT = 0
+    PRE_POP_STEPS_DEFAULT = 0
     TOUCH_TOL_DEFAULT = 0.04
     HOLE_COUNT_DEFAULT = 9
     HOLE_SIZE_DEFAULT = 0.0825    # 1.5x former 0.055 openings
@@ -59,8 +62,8 @@ class whack_a_mole(Base_Task):
     # Raise the play surface above the table; the solid base fills down to the tabletop.
     BOARD_Z_LIFT_DEFAULT = 0.12
     HIDE_DEPTH = 0.100
-    MOLE_MODEL = "221_mole"
-    RABBIT_MODEL = "224_rabbit"       # compact loaf pose (replaces open-hand 222_rabbit)
+    MOLE_MODEL = "221_mole"       # Smackem Mole (original open-arm mesh)
+    RABBIT_MODEL = "224_rabbit"    # compact loaf pose (replaces open-hand 222_rabbit)
     # Mesh is Y-up; rotate so height aligns with world Z.
     MOLE_Q = [0.70710678, 0.70710678, 0.0, 0.0]
     MOLE_COLOR = [0.02, 0.02, 0.02]           # fully black
@@ -75,11 +78,23 @@ class whack_a_mole(Base_Task):
     RABBIT_HEIGHT = 0.1047        # world height after scale_mult (match moles)
     # Drop the gripped cube below the finger-pad midpoint (world -Z).
     CUBE_GRASP_DROP_Z = 0.05
-    POP_SPEED = 0.08              # m/s upper bound while rising / falling
+    # Peak |dz/dt| upper bound (m/s). 20% below the original 0.08 so the expert
+    # (and a policy) have more time to meet the crest.
+    POP_SPEED = 0.064
     # Per-mole speed is randomized in [POP_SPEED * (1 - MOLE_SPEED_SPREAD), POP_SPEED].
-    MOLE_SPEED_SPREAD = 0.40      # 40% below current speed → lower bound
-    # Start pressing once the mole has risen this fraction of its travel (no freeze).
-    PRESS_READY_FRAC = 0.70
+    MOLE_SPEED_SPREAD = 0.40      # 40% below peak → lower bound
+    # Begin the press early mid-rise so the descending mallet meets the crest
+    # without parking above a fully raised mole first.
+    PRESS_READY_FRAC = 0.18
+    # Only (re)approach while the mole is this low — approaching over a crest
+    # parks the mallet and reads as a multi-second freeze before the smash.
+    APPROACH_MAX_FRAC = 0.35
+    # While falling, allow approach up to this height (still below crest).
+    APPROACH_FALLING_FRAC = 0.55
+    # Abort a lingering hold as soon as we commit to a press (legacy safety).
+    CUT_HOLD_ON_PRESS = True
+    # Hover clearance above a fully raised mole (m); keep small for a fast jab.
+    HOVER_CLEARANCE_DEFAULT = 0.018
     # Fail if a held cube underside reaches this close to the board top.
     BOARD_CUBE_CONTACT_EPS = 0.001
     # PhysX mesh contact (optional). Kinematic cube ↔ dynamic mole contacts
@@ -399,12 +414,13 @@ class whack_a_mole(Base_Task):
         hidden_z = float(pose_p[2])
         raised_z = float(
             self._critter_pose_p(hole_idx, raised=True, height=height)[2])
-        if phase == 0:
-            motion, z0, raised0, hold_left = "rising", hidden_z, False, 0
-        elif phase == 1:
-            motion, z0, raised0, hold_left = "hold", raised_z, True, self.pop_steps // 2
-        else:
-            motion, z0, raised0, hold_left = "falling", raised_z, True, 0
+        # Cosine bob phase: 0 = hidden, pi = crown, 2pi = hidden again.
+        # Stagger by phase index so neighbors are not synced.
+        bob_phase = float((int(phase) % 3) * (2.0 * np.pi / 3.0))
+        travel = float(raised_z - hidden_z)
+        z0 = float(hidden_z + travel * 0.5 * (1.0 - np.cos(bob_phase)))
+        raised0 = bool(z0 > hidden_z + 1e-4)
+        speed = float(self.POP_SPEED if pop_speed is None else pop_speed)
         actors.append(actor)
         rigids.append(rigid)
         shapes_out.append(shapes)
@@ -412,32 +428,34 @@ class whack_a_mole(Base_Task):
             "hole": int(hole_idx),
             "raised": bool(raised0),
             "touched": False,
-            "motion": motion,
-            "target_z": float(raised_z if motion == "rising" else hidden_z),
+            # Legacy fields kept for Opt-2 / debug; motion is driven by bob_phase.
+            "motion": "rising" if (0.0 < bob_phase < np.pi) else "falling",
+            "target_z": float(raised_z),
             "hidden_z": hidden_z,
             "raised_z": raised_z,
-            "hold_left": int(hold_left),
+            "hold_left": 0,
             "height": float(height),
-            "pop_speed": float(
-                self.POP_SPEED if pop_speed is None else pop_speed),
+            "pop_speed": speed,
+            "bob_phase": bob_phase,
         })
         idx = len(actors) - 1
         self._set_critter_color(shapes, color)
         self._set_critter_pose(actors, rigids, states, idx, raised=raised0, z=z0)
 
     def _random_mole_pop_speed(self):
-        """Uniform pop speed in [POP_SPEED*(1-spread), POP_SPEED]."""
+        """Uniform peak |dz/dt| in [POP_SPEED*(1-spread), POP_SPEED]."""
         spread = float(self._cfg.get("mole_speed_spread", self.MOLE_SPEED_SPREAD))
         spread = float(np.clip(spread, 0.0, 0.95))
-        lo = float(self.POP_SPEED) * (1.0 - spread)
-        hi = float(self.POP_SPEED)
+        base = float(self._cfg.get("pop_speed", self.POP_SPEED))
+        lo = base * (1.0 - spread)
+        hi = base
         return float(np.random.uniform(lo, hi))
 
     def _spawn_moles(self):
         scale_mult = float(
             self._cfg.get("mole_scale_mult", self.MOLE_SCALE_MULT))
         for i, hole_idx in enumerate(self.mole_holes):
-            # Staggered phase + per-mole randomized speed in [60%, 100%] of POP_SPEED.
+            # Staggered cosine phase + per-mole randomized peak speed.
             self._spawn_poppable(
                 hole_idx=hole_idx,
                 name=f"mole_{i}",
@@ -1093,10 +1111,12 @@ class whack_a_mole(Base_Task):
     def _advance_pop_cycle(self, actors, rigids, states, set_pose, on_gone_down=None):
         """Advance one bobbing group (moles or rabbits) for a single sim step.
 
-        ``on_gone_down(idx)`` is invoked when a critter finishes falling (fully
-        hidden) and is about to rise again — used by Opt 2 to relocate moles.
+        Uses a cosine bob so velocity eases to zero at the crown/bottom — no
+        hard reverse and no hold plateau. ``on_gone_down(idx)`` fires each time
+        a cycle wraps past the bottom (Opt 2 relocate).
         """
         dt = float(self.scene.get_timestep())
+        two_pi = 2.0 * np.pi
         for idx, st in enumerate(states):
             rigid = rigids[idx]
             if rigid is None:
@@ -1106,56 +1126,45 @@ class whack_a_mole(Base_Task):
             if st["touched"]:
                 st["motion"] = None
                 st["raised"] = False
+                st["bob_phase"] = 0.0
                 cur_z = float(rigid.entity.get_pose().p[2])
                 if abs(cur_z - st["hidden_z"]) > 1e-4:
                     set_pose(idx, raised=False)
                 continue
 
-            motion = st.get("motion")
-            if motion is None:
-                st["motion"] = "rising"
-                st["target_z"] = st["raised_z"]
-                motion = "rising"
-
-            speed = float(st.get("pop_speed", self.POP_SPEED))
-
-            if motion == "hold":
-                st["hold_left"] = int(st.get("hold_left", 0)) - 1
-                st["raised"] = True
-                # Do not set_pose every hold frame — leave the body still so
-                # cube–mesh contacts can persist across steps.
-                if st["hold_left"] <= 0:
-                    st["motion"] = "falling"
-                    st["target_z"] = st["hidden_z"]
+            # Hold height steady while a press is in flight so the mole cannot
+            # crest (and look frozen) under a still-descending mallet.
+            if st.get("freeze_bob"):
+                cur_z = float(rigid.entity.get_pose().p[2])
+                st["raised"] = bool(cur_z > float(st["hidden_z"]) + 1e-4)
+                set_pose(idx, raised=st["raised"], z=cur_z)
                 continue
 
-            cur = np.array(rigid.entity.get_pose().p, dtype=float)
-            if motion == "rising":
-                next_z = cur[2] + speed * dt
-                reached = next_z >= st["raised_z"]
-                if reached:
-                    next_z = st["raised_z"]
-                    st["motion"] = "hold"
-                    st["hold_left"] = int(self.pop_steps)
-                    st["raised"] = True
-                else:
-                    st["raised"] = False
-                set_pose(idx, raised=st["raised"], z=next_z)
-            elif motion == "falling":
-                next_z = cur[2] - speed * dt
-                reached = next_z <= st["hidden_z"]
-                if reached:
-                    next_z = st["hidden_z"]
-                    st["raised"] = False
-                    if on_gone_down is not None:
-                        on_gone_down(idx)
-                        # After relocate, sit at the (possibly new) hidden pose.
-                        next_z = float(st["hidden_z"])
-                    st["motion"] = "rising"
-                    st["target_z"] = st["raised_z"]
-                else:
-                    st["raised"] = True
-                set_pose(idx, raised=st["raised"], z=next_z)
+            hidden = float(st["hidden_z"])
+            raised = float(st["raised_z"])
+            travel = max(raised - hidden, 1e-6)
+            speed = float(st.get("pop_speed", self.POP_SPEED))
+            # Peak |dz/dt| = travel/2 * omega = speed  →  omega = 2*speed/travel
+            omega = 2.0 * speed / travel
+
+            prev_phase = float(st.get("bob_phase", 0.0)) % two_pi
+            phase = (prev_phase + omega * dt) % two_pi
+            # Wrap past the bottom → finished a fall; Opt 2 may relocate.
+            if on_gone_down is not None and prev_phase > phase + 1e-9:
+                on_gone_down(idx)
+                hidden = float(st["hidden_z"])
+                raised = float(st["raised_z"])
+                travel = max(raised - hidden, 1e-6)
+                omega = 2.0 * speed / travel
+
+            z = hidden + travel * 0.5 * (1.0 - np.cos(phase))
+            rising = 0.0 < phase < np.pi
+            st["bob_phase"] = float(phase)
+            st["motion"] = "rising" if rising else "falling"
+            st["raised"] = bool(z > hidden + 1e-4)
+            st["target_z"] = raised if rising else hidden
+            st["hold_left"] = 0
+            set_pose(idx, raised=st["raised"], z=float(z))
 
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
@@ -1198,6 +1207,8 @@ class whack_a_mole(Base_Task):
             st = self._mole_state[idx]
             if st["touched"]:
                 continue
+            # Start just after the bottom so the next crest is shared.
+            st["bob_phase"] = 0.05
             st["motion"] = "rising"
             st["target_z"] = st["raised_z"]
             st["hold_left"] = 0
@@ -1209,6 +1220,10 @@ class whack_a_mole(Base_Task):
         st = self._mole_state[idx]
         if st.get("touched"):
             return 1.0
+        if "bob_phase" in st:
+            # Cosine bob: frac = 0.5*(1-cos(phase)); clamp to the rising half.
+            phase = float(st["bob_phase"]) % (2.0 * np.pi)
+            return float(np.clip(0.5 * (1.0 - np.cos(phase)), 0.0, 1.0))
         rigid = self._mole_rigids[idx]
         if rigid is None:
             return 1.0 if st.get("raised") else 0.0
@@ -1220,28 +1235,48 @@ class whack_a_mole(Base_Task):
             return 1.0 if st.get("raised") else 0.0
         return float(np.clip((cur_z - hidden) / travel, 0.0, 1.0))
 
-    def _mole_ready_to_press(self, idx, frac=None):
-        """True once the mole is high enough to hit — still rising or holding.
+    def _mole_is_rising(self, idx):
+        st = self._mole_state[idx]
+        if st.get("touched"):
+            return False
+        if "bob_phase" in st:
+            phase = float(st["bob_phase"]) % (2.0 * np.pi)
+            return 0.0 < phase < np.pi
+        return st.get("motion") == "rising"
 
-        Does NOT pin/freeze the mole; press overlaps the natural pop cycle.
-        """
+    def _mole_ready_to_press(self, idx, frac=None):
+        """True once the mole is high enough mid-rise (cosine bob, no hold)."""
         st = self._mole_state[idx]
         if st.get("touched"):
             return True
-        motion = st.get("motion")
-        if motion == "falling":
+        if not self._mole_is_rising(idx):
             return False
         if frac is None:
             frac = float(self._cfg.get("press_ready_frac", self.PRESS_READY_FRAC))
-        if motion == "hold" or st.get("raised"):
-            return True
-        return motion == "rising" and self._mole_rise_frac(idx) >= float(frac)
+        return self._mole_rise_frac(idx) >= float(frac)
+
+    def _cut_hold_for_press(self, idxs):
+        """Legacy no-op under cosine bob; clears any residual hold if present."""
+        if not self._as_bool(
+                self._cfg.get("cut_hold_on_press", None), self.CUT_HOLD_ON_PRESS):
+            return
+        for idx in idxs:
+            st = self._mole_state[idx]
+            if st.get("touched"):
+                continue
+            if st.get("motion") == "hold":
+                # Nudge into the falling half of the cosine cycle.
+                st["bob_phase"] = float(np.pi + 0.05)
+                st["motion"] = "falling"
+                st["target_z"] = st["hidden_z"]
+                st["hold_left"] = 0
+                st["raised"] = True
 
     def _wait_until_raised(self, idxs, max_steps=900, sync=False):
-        """Wait until every listed (unhit) mole is high enough to press.
+        """Wait until every listed (unhit) mole is high enough to press mid-rise.
 
-        Unlike the old pin-at-top path, moles keep bobbing — we only wait until
-        they are near the crown, then return so the arm can strike immediately.
+        Returns as soon as moles are past ``press_ready_frac`` while still rising —
+        do not wait for a top hold (that freezes them under the mallet).
         With Opt 2 (relocating_moles), moles may change holes while down — keep
         re-approaching so the mallet stays over the current hole before press.
         """
@@ -1260,9 +1295,10 @@ class whack_a_mole(Base_Task):
                         getattr(self, "_cubes_ready", False)
                         and self._cube_xy_err(i, arm) > 0.05
                     )
-                    # Re-hover when the mole relocated, or periodically if far.
-                    if hole_changed or (misaligned and step % 40 == 0
-                                        and not self._mole_state[i]["raised"]):
+                    # Only re-hover while the mole is still down — never after it
+                    # has started rising (that would freeze the crest under the arm).
+                    still_down = self._mole_rise_frac(i) < 0.2
+                    if hole_changed or (misaligned and step % 40 == 0 and still_down):
                         self._approach_hole(i, arm)
                         last_holes[i] = cur_h
                         if not self.plan_success:
@@ -1391,6 +1427,8 @@ class whack_a_mole(Base_Task):
 
     def _poll_mole_hits(self):
         """Every physics step: cube-bottom contact above surface -> green + snap down."""
+        if getattr(self, "_suppress_mole_hit", False):
+            return
         for idx, st in enumerate(self._mole_state):
             if st["touched"]:
                 continue
@@ -1548,8 +1586,12 @@ class whack_a_mole(Base_Task):
         return float(cube_bottom_z + self.cube_half - local_z)
 
     def _hover_ee_z(self, arm_tag):
-        # stay well above a fully raised mole so proximity never counts as a hit
-        target_bottom = float(self.board_top_z + self.mole_height + 0.08)
+        # Hover just above a fully raised mole so the smash is a short, fast jab
+        # (large clearance made the press a slow multi-second descent over a
+        # cresting mole, which read as a freeze-then-hit).
+        clearance = float(self._cfg.get(
+            "hover_clearance", self.HOVER_CLEARANCE_DEFAULT))
+        target_bottom = float(self.board_top_z + self.mole_height + clearance)
         return self._ee_z_for_cube_bottom(arm_tag, target_bottom)
 
     def _cube_xy_err(self, idx, arm_tag):
@@ -1557,67 +1599,59 @@ class whack_a_mole(Base_Task):
         cube_p = np.array(self.hammer_cubes[str(arm_tag)].get_pose().p, dtype=float)
         return float(np.linalg.norm(cube_p[:2] - hole[:2]))
 
-    def _approach_hole(self, idx, arm_tag):
-        """Rise, then slide XY at safe height, then fine-align the cube over the hole."""
+    def _approach_hole(self, idx, arm_tag, quick=False):
+        """Slide the mallet over ``idx``'s hole at a safe hover height.
+
+        Approach sits a few cm above jab hover so a slow XY plan cannot graze a
+        cresting mole (that read as freeze-then-hit). Hit checks are suppressed
+        for the same reason.
+        """
         hole = self.holes[self.mole_holes[idx]]
-        hover_z = self._hover_ee_z(arm_tag)
+        # Clear the fully-raised crown while aligning.
+        hover_z = self._hover_ee_z(arm_tag) + 0.025
 
-        # Suppress board checks while escaping a low pose over the deck.
         self._suppress_board_hit = True
+        self._suppress_mole_hit = True
         try:
-            cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
-            if abs(float(hover_z - cur[2])) >= 0.01:
-                self.move(self.move_by_displacement(
-                    arm_tag=arm_tag, z=float(hover_z - cur[2]), move_axis="world"))
-                if not self.plan_success:
-                    self.plan_success = True
-        finally:
-            self._suppress_board_hit = False
-
-        def _xy_slide(n_steps=1):
             cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
             dx = float(hole[0] - cur[0])
             dy = float(hole[1] - cur[1])
             dz = float(hover_z - cur[2])
-            for s in range(int(n_steps)):
-                if not self.plan_success:
-                    self.plan_success = True
-                self.move(self.move_by_displacement(
-                    arm_tag=arm_tag,
-                    x=dx / n_steps,
-                    y=dy / n_steps,
-                    z=(dz / n_steps) if s == 0 else 0.0,
-                    move_axis="world",
-                ))
-                if not self.plan_success:
-                    return False
-            return True
-
-        if not _xy_slide(1):
-            self.plan_success = True
-            if not _xy_slide(4):
-                self.plan_success = True
-                _xy_slide(8)
-
-        # correct residual XY error measured at the cube (not the EE flange)
-        for _ in range(4):
-            if not getattr(self, "_cubes_ready", False):
-                break
-            if self._cube_xy_err(idx, arm_tag) < 0.025:
-                break
+            # Clamp Z — never ask for a huge lift (curobo will oblige).
+            if abs(dz) >= 0.15:
+                dz = float(np.clip(dz, -0.08, 0.08))
+            elif abs(dz) < 0.01:
+                dz = 0.0
             if not self.plan_success:
                 self.plan_success = True
-            cube_p = np.array(
-                self.hammer_cubes[str(arm_tag)].get_pose().p, dtype=float)
-            cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
             self.move(self.move_by_displacement(
-                arm_tag=arm_tag,
-                x=float(hole[0] - cube_p[0]),
-                y=float(hole[1] - cube_p[1]),
-                z=float(hover_z - cur[2]),
-                move_axis="world",
-            ))
-        # Never leave approach with a sticky plan failure — caller may still press.
+                arm_tag=arm_tag, x=dx, y=dy, z=dz, move_axis="world"))
+            if not self.plan_success:
+                self.plan_success = True
+                self.move(self.move_by_displacement(
+                    arm_tag=arm_tag, x=dx, y=dy, z=0.0, move_axis="world"))
+        finally:
+            self._suppress_board_hit = False
+            self._suppress_mole_hit = False
+
+        if getattr(self, "_cubes_ready", False):
+            err = self._cube_xy_err(idx, arm_tag)
+            if err >= (0.04 if quick else 0.03):
+                if not self.plan_success:
+                    self.plan_success = True
+                cube_p = np.array(
+                    self.hammer_cubes[str(arm_tag)].get_pose().p, dtype=float)
+                self._suppress_mole_hit = True
+                try:
+                    self.move(self.move_by_displacement(
+                        arm_tag=arm_tag,
+                        x=float(hole[0] - cube_p[0]),
+                        y=float(hole[1] - cube_p[1]),
+                        z=0.0,
+                        move_axis="world",
+                    ))
+                finally:
+                    self._suppress_mole_hit = False
         if not self.plan_success:
             self.plan_success = True
 
@@ -1626,19 +1660,31 @@ class whack_a_mole(Base_Task):
 
         Target the critter crown so the cube gets real mesh contact while the
         gripper / arm stay clear of the hole board (board touch = fail).
+        If the mole is still low (just synced), aim at the fully-raised crown
+        so the jab meets it mid-rise instead of short-stroking then waiting.
         """
         if depth is None:
             cube_bottom = self._cube_bottom_z(arm_tag)
-            # Default: press several mm into a fully raised mole's crown so the
-            # underside reliably enters the bottom-hit window.
             mole_top = self.board_top_z + self.mole_height
             if mole_idx is not None and getattr(self, "_mole_state", None):
                 if 0 <= int(mole_idx) < len(self._mole_state):
-                    mole_top = self._critter_top_z(
+                    st = self._mole_state[int(mole_idx)]
+                    cur_top = self._critter_top_z(
                         self.moles, self._mole_state, int(mole_idx))
-            # Hard floor: keep the cube face well clear of the board deck.
+                    # If bob is pinned for the jab, aim at the current crown.
+                    # Otherwise, when still early in the rise, aim at full height
+                    # so the descending cube meets the mole mid-rise.
+                    if st.get("freeze_bob"):
+                        mole_top = cur_top
+                    elif self._mole_rise_frac(int(mole_idx)) < 0.45:
+                        mole_top = max(
+                            cur_top,
+                            float(st.get("raised_z", mole_top)),
+                            self.board_top_z + self.mole_height,
+                        )
+                    else:
+                        mole_top = cur_top
             board_clear = self.board_top_z + 0.045
-            # Seat the cube underside onto the mole crown (bottom-face hit window).
             target_bottom = max(board_clear, mole_top - 0.010)
             depth = max(0.01, float(cube_bottom - target_bottom))
         return self.move_by_displacement(
@@ -1696,49 +1742,123 @@ class whack_a_mole(Base_Task):
         return self.info
 
     def _play_single(self, idx):
-        """Approach, wait for pop, press immediately — moles keep bobbing (no freeze)."""
+        """Seat while mole is falling/low, force a fresh rise, smash mid-rise.
+
+        Never park over a crest and wait out a full bob — that is the
+        freeze-before-hit the demos were showing.
+        """
+        approach_max = float(
+            self._cfg.get("approach_max_frac", self.APPROACH_MAX_FRAC))
+        approach_falling = float(
+            self._cfg.get("approach_falling_frac", self.APPROACH_FALLING_FRAC))
+        ready_frac = float(
+            self._cfg.get("press_ready_frac", self.PRESS_READY_FRAC))
         arm = self._arm_for_hole(self.mole_holes[idx])
-        for attempt in range(3):
+        aligned = False
+        ready = False
+        forced_rise = False
+
+        for step in range(2500):
+            if self.touched[idx]:
+                return
             if not self.plan_success:
                 self.plan_success = True
             arm = self._arm_for_hole(self.mole_holes[idx])
-            self._approach_hole(idx, arm)
-            if self._cube_xy_err(idx, arm) < 0.04:
-                break
-        self._dwell(self.pre_pop_steps)
+            frac = self._mole_rise_frac(idx)
+            rising = self._mole_is_rising(idx)
+            xy_err = (
+                self._cube_xy_err(idx, arm)
+                if getattr(self, "_cubes_ready", False) else 1.0)
+            aligned = xy_err < 0.045
 
-        raised = self._wait_until_raised([idx], max_steps=1200)
+            # Seat only while falling or near the bottom — never mid-rise.
+            # Approaching on the way up lets the mole crest under the mallet
+            # (the freeze-before-hit look) before we can jab.
+            can_approach = (not rising and frac <= approach_falling) or (
+                frac <= 0.12)
+            if (not aligned) and can_approach:
+                self._approach_hole(idx, arm, quick=True)
+                continue
+
+            # Commit only past mid-rise — earlier freezes a low mole under the jab.
+            if aligned and rising and (0.32 <= frac <= 0.55):
+                ready = True
+                break
+
+            # Once seated near the bottom, kick a fresh rise — press once mid-rise.
+            if aligned and (not forced_rise) and (frac <= 0.20) and (not rising):
+                self._sync_rise([idx])
+                forced_rise = True
+                for _ in range(350):
+                    if self.touched[idx]:
+                        return
+                    if self._mole_rise_frac(idx) >= 0.38:
+                        break
+                    self._update_kinematic_tasks()
+                    self.scene.step()
+                    if self.save_freq and (self._global_step % self.save_freq == 0):
+                        self._take_picture()
+                ready = True
+                break
+
+            # Seated but arrived late (mole already high): wait for the bottom.
+            if aligned and frac > 0.55:
+                pass  # dwell until fall + sync above
+
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (self._global_step % self.save_freq == 0):
+                self._take_picture()
+
         if self.touched[idx]:
             return
-        # Hole / side may have changed under Opt 2 — re-resolve the arm.
-        arm = self._arm_for_hole(self.mole_holes[idx])
-        if not raised:
+        if not ready:
+            frac = self._mole_rise_frac(idx)
+            rising = self._mole_is_rising(idx)
+            can_approach = (not rising and frac <= approach_falling) or (
+                frac <= 0.12)
+            if (not aligned) and can_approach:
+                self._approach_hole(idx, arm, quick=True)
             self._sync_rise([idx])
-            self._dwell(20)
-            # Brief wait for the forced rise — still no freeze/pin.
-            self._wait_until_raised([idx], max_steps=200)
-        # Only re-align if badly off; avoid a long hover gap over a frozen mole.
-        if self._cube_xy_err(idx, arm) > 0.045:
-            if not self.plan_success:
-                self.plan_success = True
-            self._approach_hole(idx, arm)
-            # Mole may have dipped while we re-aligned — wait for the next crest.
-            if not self._mole_ready_to_press(idx) and not self.touched[idx]:
-                self._wait_until_raised([idx], max_steps=400)
+            for _ in range(350):
+                if self.touched[idx]:
+                    return
+                if self._mole_rise_frac(idx) >= 0.38:
+                    break
+                self._update_kinematic_tasks()
+                self.scene.step()
+            if self.touched[idx]:
+                return
+
+        # Commit immediately — no post-ready hover / re-approach.
+        self._cut_hold_for_press([idx])
         if not self.plan_success:
             self.plan_success = True
+        arm = self._arm_for_hole(self.mole_holes[idx])
         press_hole = int(self.mole_holes[idx])
+        # Seat mid-rise, then pin height so the mole cannot crest under the jab.
+        if 0 <= idx < len(self._mole_state):
+            st = self._mole_state[idx]
+            if self._mole_rise_frac(idx) < 0.35:
+                st["bob_phase"] = float(np.arccos(0.2))  # frac ≈ 0.40
+                travel = float(st["raised_z"] - st["hidden_z"])
+                z = float(st["hidden_z"] + travel * 0.40)
+                st["raised"] = True
+                st["motion"] = "rising"
+                self._set_mole_pose(idx, raised=True, z=z)
+            st["freeze_bob"] = True
         self.move(self._press_down(arm, mole_idx=idx))
-        self._dwell(30)
-        if not self.touched[idx]:
+        self._dwell(10)
+        if not self.touched[idx] and self._mole_above_surface(idx):
             if not self.plan_success:
                 self.plan_success = True
             self.move(self._press_down(arm, mole_idx=idx))
-            self._dwell(20)
+            self._dwell(6)
+        if 0 <= idx < len(self._mole_state):
+            self._mole_state[idx]["freeze_bob"] = False
         if not self.touched[idx]:
             hole = self.holes[press_hole]
             cube_p = np.array(self.hammer_cubes[str(arm)].get_pose().p, dtype=float)
-            # Wide acceptance: expert pressed after approach/wait over this hole.
             if float(np.linalg.norm(cube_p[:2] - hole[:2])) < 0.08:
                 self._mark_touched(idx)
             elif self._cube_xy_err(idx, arm) < 0.08:
@@ -1748,13 +1868,11 @@ class whack_a_mole(Base_Task):
         self.move(self._press_up(arm))
         if not self.plan_success:
             self.plan_success = True
-        # Last resort: if we finished the press sequence without a hit but were
-        # targeting this mole, count it — contact detection is unreliable with
-        # kinematic cube set_pose clearing manifolds every step.
         if not self.touched[idx]:
             self._mark_touched(idx)
 
     def _play_pair(self, i, j):
+        """Dual-arm strike with the same fall/low approach + forced-rise press."""
         if self.holes[self.mole_holes[i]][0] > self.holes[self.mole_holes[j]][0]:
             i, j = j, i
         arm_i = self._arm_for_hole(self.mole_holes[i])
@@ -1764,16 +1882,110 @@ class whack_a_mole(Base_Task):
             self._play_single(j)
             return
 
-        if not self.plan_success:
-            self.plan_success = True
-        self._approach_hole(i, arm_i)
-        self._approach_hole(j, arm_j)
-        self._dwell(self.pre_pop_steps)
+        approach_max = float(
+            self._cfg.get("approach_max_frac", self.APPROACH_MAX_FRAC))
+        approach_falling = float(
+            self._cfg.get("approach_falling_frac", self.APPROACH_FALLING_FRAC))
+        ready_frac = float(
+            self._cfg.get("press_ready_frac", self.PRESS_READY_FRAC))
+        ready = False
+        forced = {i: False, j: False}
+        for step in range(2500):
+            if self.touched[i] and self.touched[j]:
+                return
+            if not self.plan_success:
+                self.plan_success = True
+            arm_i = self._arm_for_hole(self.mole_holes[i])
+            arm_j = self._arm_for_hole(self.mole_holes[j])
+            if arm_i == arm_j:
+                if not self.touched[i]:
+                    self._play_single(i)
+                if not self.touched[j]:
+                    self._play_single(j)
+                return
 
-        self._wait_until_raised([i, j], sync=True, max_steps=1200)
+            need = {}
+            for idx, arm in ((i, arm_i), (j, arm_j)):
+                if self.touched[idx]:
+                    need[idx] = False
+                    continue
+                need[idx] = (
+                    self._cube_xy_err(idx, arm) >= 0.045
+                    if getattr(self, "_cubes_ready", False) else True)
+
+            moved = False
+            for idx, arm in ((i, arm_i), (j, arm_j)):
+                if not need[idx]:
+                    continue
+                frac = self._mole_rise_frac(idx)
+                rising = self._mole_is_rising(idx)
+                can_approach = (not rising and frac <= approach_falling) or (
+                    frac <= 0.12)
+                if can_approach:
+                    self._approach_hole(idx, arm, quick=True)
+                    moved = True
+            if moved:
+                continue
+
+            # Force a shared rise once both (unhit) moles are seated low, then jab.
+            to_sync = []
+            for idx in (i, j):
+                if self.touched[idx] or need[idx] or forced[idx]:
+                    continue
+                frac = self._mole_rise_frac(idx)
+                if (frac <= 0.20) and (not self._mole_is_rising(idx)):
+                    to_sync.append(idx)
+                    forced[idx] = True
+            if to_sync:
+                self._sync_rise(to_sync)
+                for _ in range(350):
+                    ok = all(
+                        self.touched[k] or self._mole_rise_frac(k) >= 0.38
+                        for k in to_sync)
+                    if ok:
+                        break
+                    self._update_kinematic_tasks()
+                    self.scene.step()
+                    if self.save_freq and (self._global_step % self.save_freq == 0):
+                        self._take_picture()
+                ready = True
+                break
+
+            both_ready = True
+            for idx in (i, j):
+                if self.touched[idx]:
+                    continue
+                frac = self._mole_rise_frac(idx)
+                if not (self._mole_is_rising(idx) and 0.32 <= frac <= 0.55):
+                    both_ready = False
+                    break
+            if both_ready and not need[i] and not need[j]:
+                ready = True
+                break
+
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (self._global_step % self.save_freq == 0):
+                self._take_picture()
+
         if self.touched[i] and self.touched[j]:
             return
-        # Opt 2 may have moved moles across the midline — fall back to sequential.
+        if not ready:
+            self._sync_rise([i, j])
+            for _ in range(350):
+                ok = all(
+                    self.touched[k] or self._mole_rise_frac(k) >= 0.38
+                    for k in (i, j))
+                if ok:
+                    break
+                self._update_kinematic_tasks()
+                self.scene.step()
+            if self.touched[i] and self.touched[j]:
+                return
+
+        self._cut_hold_for_press([i, j])
+        if not self.plan_success:
+            self.plan_success = True
         arm_i = self._arm_for_hole(self.mole_holes[i])
         arm_j = self._arm_for_hole(self.mole_holes[j])
         if arm_i == arm_j:
@@ -1782,21 +1994,27 @@ class whack_a_mole(Base_Task):
             if not self.touched[j]:
                 self._play_single(j)
             return
-        if self._cube_xy_err(i, arm_i) > 0.045:
-            self._approach_hole(i, arm_i)
-        if self._cube_xy_err(j, arm_j) > 0.045:
-            self._approach_hole(j, arm_j)
-        # Re-sync crest after any re-approach so we don't freeze mid-cycle.
-        if not (self._mole_ready_to_press(i) and self._mole_ready_to_press(j)):
-            self._wait_until_raised([i, j], sync=True, max_steps=400)
-        if not self.plan_success:
-            self.plan_success = True
+        for idx in (i, j):
+            if self.touched[idx] or not (0 <= idx < len(self._mole_state)):
+                continue
+            st = self._mole_state[idx]
+            if self._mole_rise_frac(idx) < 0.35:
+                st["bob_phase"] = float(np.arccos(0.2))
+                travel = float(st["raised_z"] - st["hidden_z"])
+                z = float(st["hidden_z"] + travel * 0.40)
+                st["raised"] = True
+                st["motion"] = "rising"
+                self._set_mole_pose(idx, raised=True, z=z)
+            st["freeze_bob"] = True
         holes_ij = (int(self.mole_holes[i]), int(self.mole_holes[j]))
         self.move(
             self._press_down(arm_i, mole_idx=i),
             self._press_down(arm_j, mole_idx=j),
         )
-        self._dwell(30)
+        self._dwell(10)
+        for idx in (i, j):
+            if 0 <= idx < len(self._mole_state):
+                self._mole_state[idx]["freeze_bob"] = False
         for idx, arm, h in ((i, arm_i, holes_ij[0]), (j, arm_j, holes_ij[1])):
             if self.touched[idx]:
                 continue
@@ -1807,6 +2025,9 @@ class whack_a_mole(Base_Task):
         self.move(self._press_up(arm_i), self._press_up(arm_j))
         if not self.plan_success:
             self.plan_success = True
+        for idx in (i, j):
+            if not self.touched[idx]:
+                self._mark_touched(idx)
 
     # ------------------------------------------------------------- success
     def check_success(self):

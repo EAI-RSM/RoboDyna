@@ -151,7 +151,7 @@ task_args:
     pop_steps: 90
     grasp_tol: 0.05
   whack_a_mole:
-    num_moles: 2                # default: 2 moles; pop speed randomized in [60%, 100%] of POP_SPEED
+    num_moles: 2                # default: 2 moles; cosine bob, speed in [60%, 100%] of pop_speed
     # Opt 1 — rabbit distractor (avoid; touching fails). Combinable with Opt 2.
     #   CLI: --task-arg distractor_enabled=true   or   --option 1
     distractor_enabled: false
@@ -160,16 +160,20 @@ task_args:
     #   CLI: --task-arg relocating_moles=true     or   --option 2
     relocating_moles: false
     difficulty: easy            # easy = one mole at a time; hard = two simultaneous (both arms)
-    pop_steps: 90               # sim steps a mole/rabbit stays up
-    mole_speed_spread: 0.40     # lower bound = POP_SPEED * (1 - spread)
-    press_ready_frac: 0.70      # start press once mole has risen this far (no freeze)
+    pop_steps: 0                 # 0 = continuous bob (no crown freeze)
+    pop_speed: 0.064            # m/s peak |dz/dt|; 20% below prior 0.08
+    mole_speed_spread: 0.40     # lower = pop_speed * (1 - spread)
+    press_ready_frac: 0.18      # jab early mid-rise; mallet meets crest
+    approach_max_frac: 0.35     # re-hover while mole is this low
+    approach_falling_frac: 0.55 # or mid-fall (never crest)
+    hover_clearance: 0.018       # m; short jab above raised mole
     touch_tol: 0.04             # m; cube–mole XY touch tolerance
     hole_count: 9               # openings on board
     hole_size: 0.0825           # m; hole opening side length
     hole_bar_thickness: 0.014   # m; bar thickness between holes
     cube_hole_scale: 1.20       # mallet cube side = hole_size * scale (>1 so it can't enter)
     cube_grasp_drop_z: 0.05     # m; lower cube below finger midpoint after grasp
-    mole_scale_mult: 1.80       # mole mesh scale multiplier
+    mole_scale_mult: 1.80       # 1.5x prior mole size
     mole_height: 0.1053         # m; world height after mole_scale_mult (pop travel)
     rabbit_scale_mult: 1.00     # 224_rabbit authored near mole height
     rabbit_height: 0.1047       # m; rabbit world height
