@@ -1,6 +1,6 @@
 {
-  "full_description": "a ball rolls down the ramp and falls off the front edge; predict where it lands and hold the cup there to catch it",
-  "schema": "{A} notifies the ball, {B} notifies the cup, {a} notifies the arm that holds the cup",
+  "full_description": "a red ball rolls down the ramp and falls off the front edge; predict where it lands and hold the cup there to catch the red ball; ignore any blue distractor ball",
+  "schema": "{A} notifies the red ball, {B} notifies the cup, {a} notifies the arm that holds the cup",
   "preference": "num of words should not exceed 14. Degree of detail avg is 6",
   "seen": [
     "Catch {A} in {B} as it rolls off the ramp",
@@ -9,16 +9,17 @@
     "Move {B} under the falling {A} and catch it",
     "With {a}, position {B} to catch {A} off the ramp",
     "Hold {B} at {A}'s landing spot and catch it",
-    "Catch the ball in the cup as it leaves the ramp",
+    "Catch the red ball in the cup as it leaves the ramp",
     "Place {B} where {A} drops and catch it",
     "Use {a} to intercept {A} with {B}",
-    "Position the cup to catch the rolling ball",
+    "Position the cup to catch the rolling red ball",
     "Catch {A} with {B} at the bottom of the ramp",
-    "Hold {B} under {A}'s predicted landing"
+    "Hold {B} under {A}'s predicted landing",
+    "Catch only the red ball, not the blue distractor"
   ],
   "unseen": [
     "Anticipate where {A} falls and catch it in {B}",
-    "Get {B} under the ball before it lands",
-    "Catch the ball off the ramp using the cup"
+    "Get {B} under the red ball before it lands",
+    "Catch the red ball off the ramp using the cup"
   ]
 }

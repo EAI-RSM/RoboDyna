@@ -490,16 +490,40 @@ task_args:
     center_rate: 0.25
     catch_tol: 0.07
   catch_ramp_ball:
-    ramp_angle: 0.24
-    ball_radius: 0.018
-    rim_radius: 0.04
-    x_span: 0.15
-    roll_time_min: 5.0      # s; kinematic roll(t1)+fall lasts ~10-20s
-    roll_time_max: 20.0
-    fall_time: 0.5          # s; short accelerating drop off the edge
-    idle_time_min: 2.0      # s; robot stays still before grasping
-    idle_time_max: 4.0
-    settle_steps: 70
+    # Options (independent toggles; Opt 1+2 can both be on):
+    #   Default — red ball drops at ramp top and rolls straight down
+    #   Opt 1 — wall_bounce_enabled: lateral kick → side-rail rebound
+    #     CLI: --task-arg wall_bounce_enabled=true   or   --option 1
+    #   Opt 2 — enable_distractor: blue distractor on a separate lane
+    #     (catching blue fails)
+    #     CLI: --task-arg enable_distractor=true   or   --option 2
+    # Ramp high end meets the white back wall (ramp_back_y ≈ 0.395).
+    # Balls drop onto the top, then roll with a = g(sinθ − μ cosθ) scaled ~5× slower;
+    # free-flight after the front lip uses PhysX (no lip freeze). Speeds sample
+    # roll_speed × U(scale_min, scale_max) × BALL_SPEED_SCALE(0.2).
+    ramp_angle: 0.12            # rad; gentle incline (moderate roll)
+    ramp_back_y: 0.395          # m; high end world-y (meets back wall)
+    ramp_front_y: 0.02          # m; low end world-y (catch side)
+    ball_radius: 0.018          # m; ball radius
+    rim_radius: 0.04            # m; cup catch XY tolerance
+    x_span: 0.15                # m; ± playable lateral lane half-width
+    drop_height: 0.08           # m; drop above ramp top surface
+    drop_time: 0.45             # s; kinematic drop onto ramp top
+    wall_bounce_enabled: false  # Opt 1
+    enable_distractor: false    # Opt 2
+    ball_path_mode: straight    # compat; overridden by wall_bounce_enabled
+    angled_path_min_deg: 20.0   # deg; |wall rebound angle| low (Opt 1)
+    angled_path_max_deg: 40.0   # deg; high
+    roll_speed: 0.10            # m/s; pre-scale initial speed (effective ≈ 0.02)
+    roll_speed_scale_min: 0.8   # per-ball speed low scale (±20%)
+    roll_speed_scale_max: 1.2   # per-ball speed high scale
+    fall_time: 0.55             # s; dwell budget after leaving the edge
+    idle_time_min: 0.3          # s; short pause after drop before grasp
+    idle_time_max: 0.6          # s; high
+    settle_steps: 90            # physics steps after catch settle
+    cup_fwd_clearance: 0.0      # m; unused (landing from ballistic exit)
+    release_clearance: 0.055    # m; PhysX spawn past the front lip
+    ramp_friction: 0.06         # kinetic μ on the incline
   catch_valley_ball:
     # Options (independent toggles):
     #   Default — red ball goes straight to the exit edge
