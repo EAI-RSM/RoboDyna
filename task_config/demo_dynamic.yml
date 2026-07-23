@@ -340,36 +340,48 @@ task_args:
     dummy_hole_nest_depth: 0.35   # sink depth as fraction of ball_radius when stuck in dummy hole
     # dummy_hole_radius: 0.023    # optional absolute m; if set, overrides radius_frac
   load_train:
-    rail_radius: 0.20
-    train_omega_min: 0.10
-    train_omega_max: 0.18
-    n_wagons: 3
-    ball_side: random
-    ball_lateral_min: 0.07
-    ball_lateral_max: 0.12
-    ball_y_jitter: 0.02
-    ball_radius: 0.015
-    car_floor_h: 0.014
-    car_half_len: 0.045
-    car_half_wid: 0.040
-    car_arc_spacing: 0.10
-    car_wall_h: 0.036
-    ball_side_clearance: 0.11
-    release_clearance_z: 0.20
-    transport_clearance_z: 0.22
-    pass_angle_offset: 0.22
-    align_tol: 0.055
-    release_open_steps: 300
-    post_release_steps: 500
-    catch_radius: 0.055
-    drop_reach_tol: 0.030
-    latch_z_max: 0.015
-    latch_settle_steps: 12
-    tunnel_enabled: random
-    tunnel_prob: 0.55
-    tunnel_n_wagons_min: 2
-    tunnel_n_wagons_max: 4
-    tunnel_center_jitter: 0.40
+    # Options (independent toggles; Opt 1+2 can both be on):
+    #   Default — 3 open wagons (all red) + closed loco; drop into ANY wagon succeeds;
+    #     no tunnel. Ball side is random each episode (left arm if −x, right if +x).
+    #   Opt 1 — target_wagon_mode: pick one wagon at random as the drop target; that
+    #     wagon is red and the other two are gray; success only in the red wagon.
+    #     CLI: --task-arg target_wagon_mode=true   or   --option 1
+    #   Opt 2 — tunnel_enabled: arched tunnel on the far (back) arc (2–4 wagon spans),
+    #     upper half only — same tunnel as before.
+    #     CLI: --task-arg tunnel_enabled=true     or   --option 2
+    #     tunnel_enabled: random still samples with tunnel_prob.
+    #   Opt 1+2 — red target wagon + tunnel (set both flags).
+    n_wagons: 3                 # open cargo wagons (plus closed loco); default = 3
+    target_wagon_mode: false    # Opt 1: one random red target wagon; others gray
+    tunnel_enabled: false       # Opt 2: back-arc arched tunnel (true|false|random)
+    tunnel_prob: 0.55           # P(tunnel) only when tunnel_enabled=random
+    tunnel_n_wagons_min: 2      # Opt 2: tunnel length in wagon-spans (low)
+    tunnel_n_wagons_max: 4      # Opt 2: high
+    tunnel_center_jitter: 0.40  # Opt 2: rad; L/R of 12 o'clock for tunnel center
+    rail_radius: 0.20           # m; circular rail radius
+    train_omega_min: 0.10       # rad/(step·0.01); per-ep speed sample low
+    train_omega_max: 0.18       # high; signed direction random ±
+    ball_side: random           # random|left|right — ball on −x/+x; matching arm grasps
+    ball_lateral_min: 0.07      # m; |x| spawn range low
+    ball_lateral_max: 0.12      # m; high
+    ball_y_jitter: 0.02         # m; ±y around near-rail spawn
+    ball_radius: 0.015          # m; ball radius
+    car_floor_h: 0.014          # m; wagon bed thickness
+    car_half_len: 0.045         # m; car half-length along rail
+    car_half_wid: 0.040         # m; car half-width
+    car_arc_spacing: 0.10       # m; arc spacing between car centers
+    car_wall_h: 0.036           # m; wagon wall height
+    ball_side_clearance: 0.11   # m; keep ball clear of passing wagons pre-grasp
+    release_clearance_z: 0.20   # m; release height above rail
+    transport_clearance_z: 0.22 # m; carry height above train
+    pass_angle_offset: 0.22     # rad; side-biased drop station on near arc
+    align_tol: 0.055            # m; wagon under drop before release
+    release_open_steps: 300     # steps during open_gripper / fall lead
+    post_release_steps: 500     # settle steps after release
+    catch_radius: 0.055         # m; ball-in-wagon catch radius
+    drop_reach_tol: 0.030       # m; commanded vs actual drop miss allowed
+    latch_z_max: 0.015          # m; max ball height above bed to latch
+    latch_settle_steps: 12      # consecutive near-floor frames before latch
   sort_apples_belt:
     n_apples_min: 4          # RANDOM apple count per episode
     n_apples_max: 10

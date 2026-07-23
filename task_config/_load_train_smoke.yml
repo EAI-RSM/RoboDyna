@@ -99,7 +99,9 @@ task_args:
     bottom_clearance: 0.15
     ball_radius: 0.012
     roll_off_speed: 0.06
-    natural_ball_stop: false
+    continuous_ball_motion: false
+    oscillating_bowl_enabled: false
+    oscillating_bowl_period: 3.0
     tilt_angle_deg: 45.0
     tilt_duration_sec: 0.5
     smooth_tilt: false
@@ -123,8 +125,10 @@ task_args:
     pop_steps: 90
     grasp_tol: 0.05
   whack_a_mole:
-    num_moles: 4
-    num_distractors: 0        # white rabbit distractors (0..M, M=4); touching one fails
+    num_moles: 3
+    distractor_enabled: false
+    num_distractors: 1
+    relocating_moles: false
     difficulty: easy          # easy = one mole at a time; hard = two simultaneous (both arms)
     pop_steps: 90
     touch_tol: 0.04
@@ -147,29 +151,29 @@ task_args:
     rim_radius: 0.055
     pour_every: 3
   cup_curtain_slot:
-    curtain_freq: 0.4
+    curtain_freq: 0.5
     curtain_amp: 0.05
-    belt_speed: 0.3
-    belt_range: 0.06
-    placement_tol: 0.07
+    belt_speed: 0.08
+    belt_range: 0.08
+    placement_tol: 0.05
     gap_tol: 0.06
-    reach_tol: 0.07
-    blue_curtains_enabled: true
-    blue_curtain_dynamic_enabled: false
-    place_cup_in_middle_of_yellow_tools: true
+    reach_tol: 0.05
+    moving_component_spacing: 0.10
+    blue_curtains_enabled: false      # opt1
+    blue_curtain_dynamic_enabled: false  # opt2
     lift_off_only_after_place: false
     post_place_lift_z: 0.10
   dual_hole_punch:
+    # Opt 1 missing_tile_mode | Opt 2 belt_continous_motion (spacing always variable)
+    # DEFAULT Opt 2 false = discrete; Opt 1 = alternate 1- vs 2-arm punches
     n_pages: 4
     punch_tol: 0.035
     belt_inward_reach: 0.13
     belt_outward_scale: 2.0
-    equal_tile_spacing: true
     belt_speed: 0.0002
-    belt_continous_motion: true
-    missing_tile_mode: true
-    tile_pause_steps: 60
-    square_gap: 0.015
+    belt_continous_motion: false
+    missing_tile_mode: false
+    tile_pause_s: 2.0
     square_gap_min: 0.010
     square_gap_max: 0.030
   dispense_gummy:
@@ -201,6 +205,10 @@ task_args:
     press_hold_steps: 6
     post_press_dwell: 10
   catch_shelf_marble:
+    # Options (independent toggles; Opt 1+2 can both be on):
+    #   Default — marble pauses on the top shelf until a bowl key is pressed
+    #   Opt 1 — reactive_marble: marble starts moving/falling from episode start
+    #   Opt 2 — oscillating_shelf_enabled: one random non-top shelf sweeps -x..+x
     n_shelves_min: 4          # per-episode randomized shelf count (set n_shelves to pin a fixed count)
     n_shelves_max: 7
     shelf_length: 0.20
@@ -209,9 +217,10 @@ task_args:
     tilt_max_deg: 45.0        # independently randomized per shelf, see load_actors
     bottom_clearance: 0.22
     ball_radius: 0.014
-    roll_speed: 0.35
-    reactive_marble: false    # if true: marble drops at play_once start instead of on key-press
-    reactive_roll_speed: 0.09 # slide speed used only when reactive_marble is true (see docstring)
+    roll_speed: 0.35          # non-reactive / Default slide speed
+    reactive_marble: false    # Opt 1: true = marble drops at play_once start (not on key-press)
+    reactive_roll_speed: 0.09 # Opt 1: slide speed used only when reactive_marble is true
+    oscillating_shelf_enabled: false  # Opt 2: one random non-top shelf sweeps -x..+x
     bowl_radius: 0.05
     bowl_speed: 0.18
     bowl_catch_xy_tol: 0.035
@@ -256,7 +265,8 @@ task_args:
     train_omega_min: 0.10
     train_omega_max: 0.18
     n_wagons: 3
-    ball_side: right
+    target_wagon_mode: false
+    ball_side: random
     ball_lateral_min: 0.07
     ball_lateral_max: 0.12
     ball_y_jitter: 0.02
@@ -319,13 +329,17 @@ task_args:
     amp_y: 0.025
     amp_z: 0.018
   quality_control:
+    # Default: color_mode=alternating, black_frac_max=0 (no distractors)
+    # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
+    # tile_pause_s = max hold under stamp; miss unstamped red/green → fail
     n_tiles: 6
-    color_mode: alternating   # alternating | random (non-black tiles)
-    spacing_mode: random      # equal | random inter-tile gaps
-    tile_spacing: 0.08        # equal-mode center-to-center gap
-    spacing_min: 0.07         # random-mode min gap
-    spacing_max: 0.14         # random-mode max gap
-    black_frac_max: 0.50      # randomly blacken up to this fraction; no key on black
+    color_mode: alternating
+    spacing_mode: random
+    tile_spacing: 0.08
+    spacing_min: 0.07
+    spacing_max: 0.14
+    black_frac_max: 0.0
+    tile_pause_s: 2.0
   packing:
     n_per_color: 3            # number of each colored fruit (apples + oranges)
     # n_apple: 3              # optional per-color override (falls back to n_per_color)
@@ -359,16 +373,28 @@ task_args:
     center_rate: 0.25
     catch_tol: 0.07
   catch_ramp_ball:
+    # Ramp meets back wall; drop-then-PhysX roll. Opt1 wall bounce, Opt2 blue distractor.
     ramp_angle: 0.24
+    ramp_back_y: 0.395
+    ramp_front_y: 0.02
     ball_radius: 0.018
     rim_radius: 0.04
     x_span: 0.15
-    roll_time_min: 5.0      # s; kinematic roll(t1)+fall lasts ~10-20s
-    roll_time_max: 20.0
-    fall_time: 0.5          # s; short accelerating drop off the edge
-    idle_time_min: 2.0      # s; robot stays still before grasping
-    idle_time_max: 4.0
-    settle_steps: 70
+    drop_height: 0.08
+    drop_time: 0.45
+    wall_bounce_enabled: false
+    enable_distractor: false
+    angled_path_min_deg: 20.0
+    angled_path_max_deg: 40.0
+    roll_speed: 0.15
+    roll_speed_scale_min: 0.8
+    roll_speed_scale_max: 1.2
+    fall_time: 0.6
+    idle_time_min: 1.5
+    idle_time_max: 3.0
+    settle_steps: 100
+    physics_max_steps: 2500
+    cup_fwd_clearance: 0.025
   catch_valley_ball:
     ramp_half_width: 0.125
     ramp_thickness: 0.012
@@ -379,12 +405,16 @@ task_args:
     down_rise: 0.13
     up_run: 0.20
     up_rise: 0.055
+    platform_length_scale_min: 0.8
+    platform_length_scale_max: 1.2
+    wall_bounce_enabled: false
+    enable_distractor: false
     curve_segments: 16
     rail_height: 0.055
     ball_radius: 0.018
     drop_height: 0.14
     drop_time: 0.60
-    ball_path_mode: angled   # straight, angled, or random
+    ball_path_mode: straight   # straight, angled, or random
     angled_path_min_deg: 15.0
     angled_path_max_deg: 25.0
     drop_forward_angle_min_deg: -8.0
@@ -406,12 +436,10 @@ task_args:
     bowl_outer_radius: 0.037
     bowl_height: 0.040
   play_billiard:
-    # pocket_mode: any = any of 6 holes; top_three = one of top-left/mid/right
-    pocket_mode: any
-    # blocker_mode: none | path_to_top (blockers on way to a top hole)
-    #              | unused_tops (blockers on top holes that are not the goal)
-    blocker_mode: none
-    num_extra_balls: 0      # 0–2 colored blocker balls
+    # Default | Opt1 specific_hole | Opt2 enable_distractors | Opt1+2 both
+    specific_hole: false
+    enable_distractors: false
+    num_extra_balls: 2      # when Opt2 on; 0 → sample 1–2
     ball_radius: 0.012
     # pocket diameter = 1.2 × ball diameter (omit to use that default)
     table_cx: 0.0

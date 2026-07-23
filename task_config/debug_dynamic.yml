@@ -281,6 +281,7 @@ task_args:
     #   Opt 2 — tunnel_enabled: far-arc arched tunnel (2–4 wagon spans).
     #     CLI: --task-arg tunnel_enabled=true     or   --option 2
     #   Opt 1+2 — both flags together.
+    # Ball side: random left (−x / left arm) or right (+x / right arm) each episode.
     n_wagons: 3
     target_wagon_mode: false
     tunnel_enabled: false
@@ -291,7 +292,7 @@ task_args:
     rail_radius: 0.20
     train_omega_min: 0.10
     train_omega_max: 0.18
-    ball_side: random
+    ball_side: random           # random|left|right — ball on −x/+x; matching arm grasps
     ball_lateral_min: 0.07
     ball_lateral_max: 0.12
     ball_y_jitter: 0.02

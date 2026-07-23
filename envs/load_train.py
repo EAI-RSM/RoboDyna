@@ -11,14 +11,25 @@ class load_train(Base_Task):
     """Pick up a ball in front of the robot and drop it into a passing toy train.
 
     A circular rail is centered on the table. A closed locomotive leads three open
-    wagons around the loop (wagon count configurable). The locomotive starts at
-    12 o'clock (far side, opposite the arms) and the train moves continuously.
-    An optional tunnel may spawn on the back arc (2–4 wagons long, upper half only)
-    so it does not interfere with grasping near the robot. The near arc passes in
-    front of the robot. A graspable ball spawns on the left or right near side; the
+    wagons around the loop (wagon count configurable; default 3). The locomotive
+    starts at 12 o'clock (far side, opposite the arms) and the train moves
+    continuously. The near arc passes in front of the robot. A graspable ball
+    spawns randomly on the left (−x) or right (+x) near side each episode; the
     matching arm grasps it, carries it to a drop station above the near rail, times
     the release so an open wagon is underneath, and seats the ball in that wagon —
-    while the train keeps moving the whole time.
+    while the train keeps moving.
+
+    Options (independent toggles; CLI via ``--task-arg`` or legacy ``--option``):
+      Default — three open wagons (all red); drop into any wagon succeeds.
+      Opt 1 — ``target_wagon_mode``: pick one wagon at random as the target; that
+        wagon is red and the other two are gray; success only if the ball lands in
+        the red wagon.
+        CLI: ``--task-arg target_wagon_mode=true`` or ``--option 1``.
+      Opt 2 — ``tunnel_enabled``: arched tunnel on the far (back) arc, 2–4 wagon
+        spans long, upper half only (same as before).
+        CLI: ``--task-arg tunnel_enabled=true`` or ``--option 2``.
+        ``tunnel_enabled: random`` still samples with ``tunnel_prob``.
+      Opt 1+2 — target red wagon plus tunnel (both flags together).
 
     Train motion is step-driven in `_update_kinematic_tasks` so plan and render
     passes stay identical. Once the ball is seated in a wagon it is latched and
@@ -74,8 +85,13 @@ class load_train(Base_Task):
     # Max allowed miss between commanded drop target and where the ball actually ends up
     DROP_REACH_TOL_DEFAULT = 0.030
 
-    # Optional back-side tunnel (covers 2–4 wagons; stays off the robot's near half)
-    TUNNEL_ENABLED_DEFAULT = "random"   # true | false | random
+    # Opt 1 — designate one random open wagon as the drop target (red vs gray)
+    TARGET_WAGON_MODE_DEFAULT = False
+    WAGON_COLOR_TARGET = [0.82, 0.22, 0.18, 1.0]   # red (default / target)
+    WAGON_COLOR_DISTRACTOR = [0.55, 0.55, 0.58, 1.0]  # gray (non-target under Opt 1)
+
+    # Opt 2 — optional back-side tunnel (covers 2–4 wagons; stays off the robot's near half)
+    TUNNEL_ENABLED_DEFAULT = False      # true | false | random (Opt 2 when true)
     TUNNEL_PROB_DEFAULT = 0.55
     TUNNEL_N_WAGONS_MIN_DEFAULT = 2
     TUNNEL_N_WAGONS_MAX_DEFAULT = 4
@@ -100,6 +116,8 @@ class load_train(Base_Task):
         self._bed_contact_steps = 0
         self.selected_arm = None
         self.ball_in_train = False
+        self.target_wagon_mode = False
+        self.target_wagon_idx = None
         self.tunnel_present = False
         self.tunnel_n_wagons = 0
         self.tunnel_center_angle = None
@@ -111,6 +129,74 @@ class load_train(Base_Task):
         self._configure_observer_camera()
         # Start the train after setup so it also runs during policy eval (no play_once).
         self._train_running = True
+
+    # ------------------------------------------------------------------ options
+    @staticmethod
+    def _as_bool(value, default: bool) -> bool:
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        s = str(value).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"load_train expected a boolean, got {value!r}")
+
+    def _parse_target_wagon_mode(self, c) -> bool:
+        """Opt 1: one randomly selected target wagon (red); others gray."""
+        mode = c.get(
+            "target_wagon_mode",
+            c.get("select_target_wagon", c.get("opt1", None)),
+        )
+        legacy = c.get("option", None)
+        if legacy is not None and mode is None:
+            if legacy in (
+                1, "1", "target_wagon_mode", "select_target_wagon", "target_wagon",
+            ):
+                mode = True
+            elif legacy in (2, "2", "tunnel_enabled", "tunnel"):
+                mode = False
+            else:
+                raise ValueError(
+                    "load_train option must be 1/target_wagon_mode or "
+                    "2/tunnel_enabled (or set the named keys directly)"
+                )
+        return self._as_bool(mode, self.TARGET_WAGON_MODE_DEFAULT)
+
+    def _parse_tunnel_enabled_cfg(self, c):
+        """Opt 2: return raw tunnel_enabled config (bool / 'random' / str).
+
+        Legacy ``--option 2`` forces the tunnel on. Named ``tunnel_enabled`` wins
+        when set explicitly alongside ``option``.
+        """
+        tunnel = c.get("tunnel_enabled", c.get("opt2", None))
+        legacy = c.get("option", None)
+        if legacy is not None and tunnel is None:
+            if legacy in (2, "2", "tunnel_enabled", "tunnel"):
+                return True
+            if legacy in (
+                1, "1", "target_wagon_mode", "select_target_wagon", "target_wagon",
+            ):
+                return False
+            raise ValueError(
+                "load_train option must be 1/target_wagon_mode or "
+                "2/tunnel_enabled (or set the named keys directly)"
+            )
+        if tunnel is None:
+            return self.TUNNEL_ENABLED_DEFAULT
+        return tunnel
+
+    def _option_label(self) -> str:
+        parts = []
+        if getattr(self, "target_wagon_mode", False):
+            parts.append("option 1")
+        if getattr(self, "tunnel_present", False):
+            parts.append("option 2")
+        return ", ".join(parts) if parts else "baseline"
 
     def _configure_observer_camera(self):
         """Third-person view on the circular rail (FOV zoom + high-res).
@@ -226,15 +312,24 @@ class load_train(Base_Task):
         self.drop_reach_tol = float(cfg.get("drop_reach_tol", self.DROP_REACH_TOL_DEFAULT))
         self._bed_contact_steps = 0
 
-        # Optional tunnel on the back arc (never on the robot's near / lower half).
-        tunnel_cfg = str(cfg.get("tunnel_enabled", self.TUNNEL_ENABLED_DEFAULT)).lower()
+        # Opt 1 — one randomly selected target wagon (red); others gray.
+        self.target_wagon_mode = self._parse_target_wagon_mode(cfg)
+        self.target_wagon_idx = None
+
+        # Opt 2 — optional tunnel on the back arc (never on the robot's near / lower half).
+        tunnel_cfg = self._parse_tunnel_enabled_cfg(cfg)
         tunnel_prob = float(cfg.get("tunnel_prob", self.TUNNEL_PROB_DEFAULT))
-        if tunnel_cfg in ("true", "1", "yes", "always"):
-            self.tunnel_present = True
-        elif tunnel_cfg in ("false", "0", "no", "never"):
-            self.tunnel_present = False
+        if isinstance(tunnel_cfg, bool):
+            self.tunnel_present = tunnel_cfg
         else:
-            self.tunnel_present = bool(np.random.rand() < tunnel_prob)
+            tunnel_s = str(tunnel_cfg).lower()
+            if tunnel_s in ("true", "1", "yes", "always"):
+                self.tunnel_present = True
+            elif tunnel_s in ("false", "0", "no", "never"):
+                self.tunnel_present = False
+            else:
+                # "random" (or any other string) → sample with tunnel_prob
+                self.tunnel_present = bool(np.random.rand() < tunnel_prob)
         self.tunnel_n_wagons_min = int(cfg.get("tunnel_n_wagons_min", self.TUNNEL_N_WAGONS_MIN_DEFAULT))
         self.tunnel_n_wagons_max = int(cfg.get("tunnel_n_wagons_max", self.TUNNEL_N_WAGONS_MAX_DEFAULT))
         if self.tunnel_n_wagons_max < self.tunnel_n_wagons_min:
@@ -267,14 +362,22 @@ class load_train(Base_Task):
         self._train_angle0 = 0.5 * np.pi
         self._train_angle = self._train_angle0
         self._train_step = 0
+        # Per-episode left/right: ball on −x → left arm, +x → right arm.
         if ball_side_cfg in ("left", "right"):
             self.ball_side = ball_side_cfg
         else:
+            # Default / "random": fair coin flip so either arm is used.
             self.ball_side = "left" if int(np.random.randint(0, 2)) == 0 else "right"
         side_sign = -1.0 if self.ball_side == "left" else 1.0
         # Pass angle: near the robot (-pi/2) biased toward the ball's side.
         self.pass_angle = -0.5 * np.pi + side_sign * self.pass_angle_offset
         self._drop_target_xy = self._xy_on_rail(self.pass_angle)
+
+        # Opt 1: pick which open wagon is the drop target (cars[1..] are cargo).
+        if self.target_wagon_mode and self._cargo_indices:
+            self.target_wagon_idx = int(np.random.choice(self._cargo_indices))
+        else:
+            self.target_wagon_idx = None
 
         self._build_rail()
         if self.tunnel_present:
@@ -282,13 +385,21 @@ class load_train(Base_Task):
         self._build_train()
         self._place_train(self._train_angle)
 
-        # Ball spawn randomized on the chosen half so left/right arms are both used.
-        # Keep spawn near the side-biased drop so the lateral carry stays short.
+        # Spawn on the chosen table half so the matching arm grasps (|x| in
+        # [ball_lateral_min, ball_lateral_max]); keep near the side-biased drop.
+        lateral = float(np.random.uniform(self.ball_lateral_min, self.ball_lateral_max))
         drop_x = float(self._drop_target_xy[0])
         ball_x = float(np.clip(
-            drop_x + side_sign * np.random.uniform(0.02, 0.06),
-            -0.16 if side_sign < 0 else 0.04,
-            -0.04 if side_sign < 0 else 0.16,
+            side_sign * lateral,
+            -0.18 if side_sign < 0 else 0.04,
+            -0.04 if side_sign < 0 else 0.18,
+        ))
+        # Nudge toward the drop station so the lateral carry stays short.
+        ball_x = float(0.65 * ball_x + 0.35 * drop_x)
+        ball_x = float(np.clip(
+            ball_x,
+            -0.18 if side_sign < 0 else 0.04,
+            -0.04 if side_sign < 0 else 0.18,
         ))
         ball_y0 = float(self.rail_cy - self.rail_radius - self.ball_side_clearance)
         ball_y = float(np.clip(
@@ -531,7 +642,7 @@ class load_train(Base_Task):
         builder.add_box_collision(pose=pose, half_size=list(half_size), material=material)
         builder.add_box_visual(pose=pose, half_size=list(half_size), material=visual_material)
 
-    def _build_car(self, name, is_engine=False):
+    def _build_car(self, name, is_engine=False, wall_color=None):
         """Closed locomotive (no cargo opening) or open-top wagon."""
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("dynamic")
@@ -574,7 +685,9 @@ class load_train(Base_Task):
             )
         else:
             # Open-top cargo wagon: thick floor + four walls = a real open box.
-            body_col = [0.82, 0.22, 0.18, 1.0]
+            body_col = list(wall_color) if wall_color is not None else list(self.WAGON_COLOR_TARGET)
+            if len(body_col) == 3:
+                body_col = body_col + [1.0]
             # Dark bed so the floor is obvious against the light wood track underneath.
             floor_vis = sapien.render.RenderMaterial(base_color=[0.16, 0.16, 0.18, 1.0])
             bed_vis = sapien.render.RenderMaterial(base_color=[0.28, 0.28, 0.32, 1.0])
@@ -648,9 +761,22 @@ class load_train(Base_Task):
         self._car_rigids = []
         for i in range(self.n_cars):
             is_engine = (i == 0)
+            wall_color = None
+            if not is_engine:
+                if self.target_wagon_mode and self.target_wagon_idx is not None:
+                    # Opt 1: red target wagon, gray distractors.
+                    wall_color = (
+                        self.WAGON_COLOR_TARGET
+                        if i == self.target_wagon_idx
+                        else self.WAGON_COLOR_DISTRACTOR
+                    )
+                else:
+                    # Default: all open wagons red (any wagon is a valid drop).
+                    wall_color = self.WAGON_COLOR_TARGET
             car = self._build_car(
                 name=f"{'locomotive' if is_engine else 'wagon'}_{i}",
                 is_engine=is_engine,
+                wall_color=wall_color,
             )
             rigid = self._get_rigid(car)
             if rigid is not None:
@@ -837,13 +963,20 @@ class load_train(Base_Task):
                 pass
         self.ball.actor.set_pose(pose)
 
-    def _steps_until_wagon_under_drop(self, target_xy, max_steps=None, tol=None, lead_steps=0):
-        """Return (wait_steps, wagon_idx) until an OPEN wagon is under target_xy."""
+    def _steps_until_wagon_under_drop(
+        self, target_xy, max_steps=None, tol=None, lead_steps=0, wagon_idx=None
+    ):
+        """Return (wait_steps, wagon_idx) until an OPEN wagon is under target_xy.
+
+        If ``wagon_idx`` is set (Opt 1), only that cargo wagon is considered.
+        """
         target_xy = np.asarray(target_xy, dtype=np.float64)
         max_steps = int(self.align_search_steps if max_steps is None else max_steps)
         tol = float(self.align_tol if tol is None else tol)
         lead_steps = max(0, int(lead_steps))
         cargo = getattr(self, "_cargo_indices", list(range(1, self.n_cars)))
+        if wagon_idx is not None:
+            cargo = [int(wagon_idx)] if int(wagon_idx) in cargo else list(cargo)
         best_steps = 0
         best_err = float("inf")
         best_wagon = cargo[0] if cargo else 1
@@ -872,10 +1005,7 @@ class load_train(Base_Task):
             self._try_latch_ball()
         if self._ball_latched:
             self._update_latched_ball()
-        cargo = getattr(self, "_cargo_indices", list(range(1, getattr(self, "n_cars", 1))))
-        self.ball_in_train = bool(
-            self._ball_latched or any(self._ball_in_car(i) for i in cargo)
-        )
+        self.ball_in_train = self._success_in_target_wagon()
 
     def _dwell(self, steps: int):
         for i in range(max(0, int(steps))):
@@ -935,11 +1065,7 @@ class load_train(Base_Task):
 
         # Bail early if still not holding — avoids "random appear in wagon" teleports.
         if float(self.ball.get_pose().p[2]) < release_z - 0.08:
-            self.info["info"] = {
-                "{A}": "train_ball",
-                "{B}": "toy train",
-                "{a}": arm_name,
-            }
+            self.info["info"] = self._episode_info(arm_name)
             return self.info
 
         # Stabilize the carry: disable gravity on the held ball until release so a
@@ -981,14 +1107,21 @@ class load_train(Base_Task):
                     self._ball_rigid.set_disable_gravity(False)
                 except Exception:
                     pass
-            self.info["info"] = {
-                "{A}": "train_ball",
-                "{B}": "toy train",
-                "{a}": arm_name,
-            }
+            self.info["info"] = self._episode_info(arm_name)
             return self.info
 
         timing_xy = self._drop_target_xy
+        # Opt 1: wait only for the designated red target wagon.
+        target_car = (
+            int(self.target_wagon_idx)
+            if self.target_wagon_mode and self.target_wagon_idx is not None
+            else None
+        )
+        wait_cargo = (
+            [target_car]
+            if target_car is not None
+            else list(self._cargo_indices)
+        )
 
         # Lead so an open wagon is under the drop when the ball frees + lands.
         fall_h = max(
@@ -1001,6 +1134,7 @@ class load_train(Base_Task):
         wait_steps, _ = self._steps_until_wagon_under_drop(
             timing_xy,
             lead_steps=lead_steps,
+            wagon_idx=target_car,
         )
         self._dwell(wait_steps)
         for _ in range(2500):
@@ -1009,7 +1143,7 @@ class load_train(Base_Task):
                 float(np.linalg.norm(
                     np.asarray(self._car_pose_at(eng, i)[0].p[:2]) - timing_xy
                 ))
-                for i in self._cargo_indices
+                for i in wait_cargo
             ]
             if float(min(dists)) <= self.align_tol:
                 break
@@ -1024,11 +1158,7 @@ class load_train(Base_Task):
                     self._ball_rigid.set_disable_gravity(False)
                 except Exception:
                     pass
-            self.info["info"] = {
-                "{A}": "train_ball",
-                "{B}": "toy train",
-                "{a}": arm_name,
-            }
+            self.info["info"] = self._episode_info(arm_name)
             return self.info
 
         # Natural drop: open first, then enable latching so seating cannot happen
@@ -1052,32 +1182,52 @@ class load_train(Base_Task):
         self.move(self.back_to_origin(arm_tag))
         self._dwell(80)
 
-        cargo = self._cargo_indices
-        self.ball_in_train = bool(
-            self._ball_latched or any(self._ball_in_car(i) for i in cargo)
-        )
-        self.info["info"] = {
-            "{A}": "train_ball",
-            "{B}": "toy train",
-            "{a}": arm_name,
-        }
+        self.ball_in_train = self._success_in_target_wagon()
+        self.info["info"] = self._episode_info(arm_name)
         return self.info
 
-    def check_success(self):
+    def _episode_info(self, arm_name: str) -> dict:
+        if self.target_wagon_mode:
+            target = "red wagon"
+        else:
+            target = "toy train"
+        return {
+            "{A}": "train_ball",
+            "{B}": target,
+            "{a}": arm_name,
+            "{o}": self._option_label(),
+        }
+
+    def _success_in_target_wagon(self) -> bool:
+        """True if the ball is seated in an allowed wagon (any / Opt-1 target)."""
+        if self.target_wagon_mode and self.target_wagon_idx is not None:
+            idx = int(self.target_wagon_idx)
+            return bool(
+                (self._ball_latched and self._latched_car_idx == idx)
+                or self._ball_in_car(idx)
+            )
         cargo = getattr(self, "_cargo_indices", list(range(1, getattr(self, "n_cars", 1))))
-        self.ball_in_train = bool(
+        return bool(
             self._ball_latched or any(self._ball_in_car(i) for i in cargo)
         )
+
+    def check_success(self):
+        self.ball_in_train = self._success_in_target_wagon()
         self.info["ball_side"] = str(getattr(self, "ball_side", "left"))
         self.info["selected_arm"] = str(getattr(self, "selected_arm", "left"))
         self.info["n_wagons"] = int(getattr(self, "n_wagons", max(0, getattr(self, "n_cars", 1) - 1)))
         self.info["n_cars"] = int(getattr(self, "n_cars", 0))
         self.info["ball_in_train"] = bool(self.ball_in_train)
+        self.info["target_wagon_mode"] = bool(getattr(self, "target_wagon_mode", False))
+        self.info["target_wagon_idx"] = (
+            None if self.target_wagon_idx is None else int(self.target_wagon_idx)
+        )
         self.info["latched_car_idx"] = (
             None if self._latched_car_idx is None else int(self._latched_car_idx)
         )
         self.info["tunnel_present"] = bool(getattr(self, "tunnel_present", False))
         self.info["tunnel_n_wagons"] = int(getattr(self, "tunnel_n_wagons", 0))
+        self.info["option_label"] = self._option_label()
         return bool(self.ball_in_train)
 
     def get_obs(self):
@@ -1095,6 +1245,13 @@ class load_train(Base_Task):
             ),
             "ball_in_train": bool(getattr(self, "ball_in_train", False)),
             "ball_latched": bool(getattr(self, "_ball_latched", False)),
+            "target_wagon_mode": bool(getattr(self, "target_wagon_mode", False)),
+            "target_wagon_idx": (
+                -1 if self.target_wagon_idx is None else int(self.target_wagon_idx)
+            ),
+            "latched_car_idx": (
+                -1 if self._latched_car_idx is None else int(self._latched_car_idx)
+            ),
             "tunnel_present": bool(getattr(self, "tunnel_present", False)),
             "tunnel_n_wagons": int(getattr(self, "tunnel_n_wagons", 0)),
             "tunnel_center_angle": (
@@ -1102,5 +1259,6 @@ class load_train(Base_Task):
                 if getattr(self, "tunnel_center_angle", None) is None
                 else float(self.tunnel_center_angle)
             ),
+            "option_label": self._option_label(),
         }
         return obs

@@ -70,7 +70,7 @@ demo dataset or demo clip yet):
 | `dispense_gummy` | Press the dispense key and belt arrow keys so only the target-colored gummies land in the bowl. Default: alternating target/distractor layouts + discrete belt hops. Opt1 `layout_mode=random` (≤1 target per depth; distractors may both appear). Opt2 `belt_continuous_motion` (hold arrow key; speed ±20%). | <img src="assets/static/demos/dispense_gummy.gif" width="240"/> |
 | `play_billiard` | Grasp a cue and strike the red primary ball into a pocket without robot-link contact with the ball. | <img src="assets/static/demos/play_billiard.gif" width="240"/> |
 | `packing` | Pack apples and oranges from two moving belts into color-matched baskets (single or parallel spawn). | <img src="assets/static/demos/packing.gif" width="240"/> |
-| `load_train` | Pick up a ball and drop it into an open wagon on a continuously circling toy train; optional arched tunnel on the far arc. | <img src="assets/static/demos/load_train.gif" width="240"/> |
+| `load_train` | Pick up a ball and drop it into an open wagon on a continuously circling toy train (default: any of 3 wagons). Opt 1: one random red target wagon (others gray). Opt 2: arched tunnel on the far arc. | <img src="assets/static/demos/load_train.gif" width="240"/> |
 
 ## 🛠️ Adding a task
 

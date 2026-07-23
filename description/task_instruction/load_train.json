@@ -1,6 +1,6 @@
 {
-  "full_description": "Pick up the ball in front of you and drop it into a wagon of the toy train as it circles past on the rail. An optional tunnel may cover part of the far arc.",
-  "schema": "{A} notifies the ball, {B} notifies the toy train, {a} notifies the arm used",
+  "full_description": "Pick up the ball in front of you and drop it into a wagon of the toy train as it circles past on the rail. By default any open wagon is valid. With Opt 1, drop only into the red wagon (gray wagons are distractors). With Opt 2, an arched tunnel covers part of the far arc.",
+  "schema": "{A} notifies the ball, {B} notifies the toy train or red wagon, {a} notifies the arm used, {o} notifies the active option label",
   "preference": "num of words should not exceed 16",
   "seen": [
     "Pick up {A} and drop it into {B} as it passes",
