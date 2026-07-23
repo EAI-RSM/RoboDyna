@@ -333,23 +333,29 @@ task_args:
     theta_spill: 35.0
     fan_far_y: 0.12
   pick_ripe_apple:
+    # Opt 1 (default): two apples — good green→red→black; spoiled green→yellow→black.
+    # Opt 2 (default ON): basket oscillates between branch-tip X bounds.
     ripen_steps: 2500           # sim steps for ripeness 0→1 while apple hangs on the tree
     red_window_min: 0.48        # per-ep red target band low (like cook_meat doneness)
     red_window_max: 0.52        # high; ~0.5 = vivid red
     red_tolerance: 0.12         # how close to target before expert fires grasp
     tree_x: 0.0                 # m; tree at table centerline
     tree_y: 0.05                # m; toward back wall (wall is at y=1; table ~±0.35)
-    basket_x: 0.0               # m; basket centered under/in front of tree
+    basket_x: 0.0               # m; basket start X (then oscillates if Opt 2)
     basket_y: -0.20             # m; clearance so grasp approach clears the rim
     basket_scale: 1.0           # 076_breadbasket scale (packing uses ~1.15)
-    apple_hang_dx: 0.18         # m; |x| of hanging apple from trunk (past branch tip)
+    basket_move_enabled: true   # Opt 2: ping-pong between tree_x ± apple_hang_dx
+    basket_speed_min: 0.08      # Opt 2: m/s lower bound (per-ep Uniform)
+    basket_speed_max: 0.16      # Opt 2: m/s upper bound
+    apple_hang_dx: 0.18         # m; |x| of hanging apple from trunk (branch tip / basket bound)
     branch_z_high: 0.25         # m; taller branch (+10 cm from 0.15)
     branch_z_low: 0.20          # m; shorter branch (+10 cm from 0.10)
     high_branch_side: random    # left|right|random — which side gets the higher branch
     trunk_height: 0.50          # m; +20 cm from 0.30; canopy only at the top
     apple_drop_below_branch: 0.042  # m; lower so ~½ black stem shows under branch
-    apple_x_jitter: 0.02        # m; hang x ∈ [tip−jitter, tip] toward trunk (tip = current pose)
-    apple_side: random          # left|right|random — matching arm picks
+    apple_x_jitter: 0.02        # m; stem+apple x ∈ [branch tip − jitter toward bark, branch tip]
+    good_side: random           # left|right|random — which apple is the red-path (pickable) one
+    apple_side: random          # alias of good_side (compat)
     apple_scale_mult: 0.78
   place_block_belt:
     belt_speed: 0.06
