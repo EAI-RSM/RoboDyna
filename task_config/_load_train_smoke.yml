@@ -88,7 +88,7 @@ task_args:
     ball_bounce_height: 0.012
   marble_shelf_maze:
     n_shelves: 4
-    shelf_length: 0.15
+    shelf_length: 0.18
     glass_gap: 0.05
     shelf_half_depth: 0.0125
     shelf_half_thick: 0.00625
@@ -100,6 +100,8 @@ task_args:
     ball_radius: 0.012
     roll_off_speed: 0.06
     continuous_ball_motion: false
+    continuous_ball_speed_scale: 0.40
+    continuous_tilt_duration_scale: 1.50
     oscillating_bowl_enabled: false
     oscillating_bowl_period: 3.0
     tilt_angle_deg: 45.0
@@ -108,6 +110,7 @@ task_args:
     tilt_speed_deg_per_sec: 30.0
     fall_settle_steps: 160
     final_fall_settle_steps: 220
+    button_x: [-0.18, 0.18]
     button_press_depth: 0.03
     press_hold_steps: 20
     post_press_dwell: 10

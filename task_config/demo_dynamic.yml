@@ -101,29 +101,44 @@ task_args:
     ball_speed_scale_max: 1.2   # target marble speed high scale vs ball_speed
     ball_bounce_height: 0.012   # m; vertical bounce amplitude
   marble_shelf_maze:
-    n_shelves: 4
-    shelf_length: 0.15
-    glass_gap: 0.05
-    shelf_half_depth: 0.0125
-    shelf_half_thick: 0.00625
-    level_gap: 0.055
-    offset_min: 0.085
-    offset_max: 0.11
-    bottom_clearance: 0.15
-    ball_radius: 0.012
-    roll_off_speed: 0.06
-    natural_ball_stop: false
-    tilt_angle_deg: 45.0
-    tilt_duration_sec: 0.5
-    smooth_tilt: false
-    tilt_speed_deg_per_sec: 30.0
-    fall_settle_steps: 160
-    final_fall_settle_steps: 220
-    button_press_depth: 0.03
-    press_hold_steps: 20
-    post_press_dwell: 10
-    bowl_scale_mult: 0.65
-    bowl_catch_radius: 0.032
+    # Options (independent toggles; Opt 1+2 can both be on):
+    #   Default — after each inter-shelf drop the marble snaps to rest at the shelf centre
+    #   Opt 1 — continuous_ball_motion: landed marble keeps real dynamics (no centre snap)
+    #     CLI: --task-arg continuous_ball_motion=true   or   --option 1
+    #     Alias: natural_ball_stop=true
+    #   Opt 2 — oscillating_bowl_enabled: bowl sweeps left↔right under the maze; last drop
+    #     must be timed so the marble falls into the moving bowl
+    #     CLI: --task-arg oscillating_bowl_enabled=true   or   --option 2
+    n_shelves: 4                # shelf count (2–6 hard max); or use n_shelves_min/max
+    shelf_length: 0.18          # m; shelf length along x (10% wider each side vs 0.15)
+    glass_gap: 0.05             # m; spacing between the two glass panes
+    shelf_half_depth: 0.0125    # m; shelf half-extent in y (into gap)
+    shelf_half_thick: 0.00625   # m; shelf half-thickness in z
+    level_gap: 0.055            # m; nominal vertical spacing between shelf centers
+    level_gap_jitter: 0.35      # ±fractional jitter per gap (renormalized to sum)
+    overlap_min: 0.30           # min overlap as fraction of shelf_length
+    overlap_max: 0.75           # max overlap as fraction of shelf_length
+    bottom_clearance: 0.15      # m; bottom shelf → table clearance
+    ball_radius: 0.012          # m; marble radius
+    roll_off_speed: 0.06        # m/s; horizontal kick when leaving a shelf edge
+    continuous_ball_motion: false  # Opt 1: true = keep rolling after landing (no centre snap)
+    continuous_ball_speed_scale: 0.40   # Opt 1: multiply roll_off_speed (slower release)
+    continuous_tilt_duration_scale: 1.50  # Opt 1: slower tilt / slide-to-edge
+    # natural_ball_stop: false     # legacy alias of continuous_ball_motion
+    oscillating_bowl_enabled: false  # Opt 2: true = bowl oscillates L↔R under the maze
+    oscillating_bowl_period: 3.0     # s; Opt 2 full L→R→L cycle
+    tilt_angle_deg: 45.0        # deg; max shelf tilt toward pressed side
+    tilt_duration_sec: 0.5      # s; tilt/reset duration if smooth_tilt=false
+    smooth_tilt: false          # true: use tilt_speed_deg_per_sec instead of fixed duration
+    tilt_speed_deg_per_sec: 30.0  # deg/s; used only when smooth_tilt=true
+    fall_settle_steps: 160      # physics steps after inter-shelf drop
+    final_fall_settle_steps: 220  # physics steps for final drop into bowl
+    button_x: [-0.18, 0.18]     # button x positions (scaled with wider shelves)
+    button_press_depth: 0.03    # m; EE press depth
+    press_hold_steps: 20        # steps holding button down
+    post_press_dwell: 10        # steps after release before next action
+    bowl_scale_mult: 0.65       # uniform bowl asset scale
+    bowl_catch_radius: 0.032    # m; XY catch tolerance around bowl center
   catch_rat:
     # Option 1: two mice from opposite holes; success requires both held.
     catch_two_mice: false

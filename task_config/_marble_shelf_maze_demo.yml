@@ -43,18 +43,28 @@ lerobot_chunks_size: 1000
 lerobot_task_state_dim: 32
 task_args:
   marble_shelf_maze:
+    # Options (independent toggles; Opt 1+2 can both be on):
+    #   Default — marble snaps to shelf centre after each drop
+    #   Opt 1 — continuous_ball_motion: true
+    #   Opt 2 — oscillating_bowl_enabled: true (bowl sweeps L↔R; time the last drop)
     n_shelves: 4
-    shelf_length: 0.15
+    shelf_length: 0.18
     glass_gap: 0.05
     shelf_half_depth: 0.0125
     shelf_half_thick: 0.00625
     level_gap: 0.055
-    offset_min: 0.085
-    offset_max: 0.11
+    level_gap_jitter: 0.35
+    overlap_min: 0.30
+    overlap_max: 0.75
     bottom_clearance: 0.15
     ball_radius: 0.012
     roll_off_speed: 0.06
-    natural_ball_stop: false
+    continuous_ball_motion: false
+    continuous_ball_speed_scale: 0.40
+    continuous_tilt_duration_scale: 1.50
+    oscillating_bowl_enabled: false
+    oscillating_bowl_period: 3.0
+    button_x: [-0.18, 0.18]
     tilt_angle_deg: 45.0
     tilt_duration_sec: 0.5
     smooth_tilt: false
