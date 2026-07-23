@@ -11,13 +11,14 @@ import transforms3d as t3d
 
 
 class pick_ripe_apple(Base_Task):
-    """Pick the good ripening apple from a two-apple tree into a moving basket.
+    """Pick a ripening apple from a tree into a basket.
 
-    A simple decorative tree sits at the table center (x=0, toward the back). Two apples hang — one
-    on each branch. One side is randomly the **good** apple (green → red → black); the other is
-    **spoiled** (green → yellow → black) and must be ignored. The arm matching the good side waits
+    A decorative tree sits at the table center (x=0, toward the back). By default a single
+    **good** apple hangs (green → red → black). Opt 1 adds a second **spoiled** apple
+    (green → yellow → black) that must not be picked. The arm matching the good side waits
     for red, pinches that apple (detaches from the tree, freezes color, held by gripper friction),
-    clears laterally, and drops it into a breadbasket that oscillates left↔right under the branches.
+    clears laterally, and drops it into a breadbasket. Opt 2 makes the basket oscillate
+    left↔right under the branches (default: static).
 
     Metric: ripeness_score = clamp(1 - |r_grasp - red_window| / 0.5, 0, 1), latched at detach of
     the good apple; episode succeeds only if the good apple is in the basket and the spoiled
@@ -66,8 +67,10 @@ class pick_ripe_apple(Base_Task):
     BASKET_Y_DEFAULT = -0.20          # in front of the tree — clearance so the grasp misses the rim
     BASKET_X_DEFAULT = 0.0
     BASKET_SCALE_DEFAULT = 1.0
-    # Opt 2 — oscillating basket between branch-tip X bounds (default ON).
-    BASKET_MOVE_ENABLED_DEFAULT = True
+    # Opt 1 — second spoiled apple (yellow→black); default OFF (single good apple).
+    TWO_APPLES_ENABLED_DEFAULT = False
+    # Opt 2 — oscillating basket between branch-tip X bounds (default OFF / static).
+    BASKET_MOVE_ENABLED_DEFAULT = False
     BASKET_SPEED_MIN_DEFAULT = 0.08   # m/s; per-ep Uniform[min, max]
     BASKET_SPEED_MAX_DEFAULT = 0.16
     DROP_PREDICT_TIME = 1.2           # s; expert aims ahead of moving basket
@@ -176,6 +179,14 @@ class pick_ripe_apple(Base_Task):
         self.good_side = self.apple_side
         self.spoiled_side = -self.apple_side
 
+        # Opt 1: second spoiled apple (aliases: two_apples_enabled / spoiled_apple_enabled).
+        two_raw = cfg.get(
+            "two_apples_enabled",
+            cfg.get("spoiled_apple_enabled", self.TWO_APPLES_ENABLED_DEFAULT),
+        )
+        self.two_apples_enabled = bool(two_raw)
+        self.spoiled_apple_enabled = self.two_apples_enabled
+
         # Opt 2: basket ping-pongs between branch-tip X extents.
         self.basket_move_enabled = bool(cfg.get(
             "basket_move_enabled", self.BASKET_MOVE_ENABLED_DEFAULT))
@@ -210,11 +221,16 @@ class pick_ripe_apple(Base_Task):
         hang_y = self.tree_y - (
             self.APPLE_Y_CENTER_FRAC * self.APPLE_MESH_CENTER_Y * apple_scale)
 
-        # Frozen hang X per side: tip − side * U(0, jitter); independent sample each side.
+        # Hang sides: always good; spoiled only when Opt 1 is on.
+        hang_sides = [self.apple_side]
+        if self.two_apples_enabled:
+            hang_sides.append(self.spoiled_side)
+
+        # Frozen hang X per spawned side: tip − side * U(0, jitter).
         self.hang_x_by_side = {}
         self._hang_poses = {}
         hang_x_locals = {}
-        for side in (-1.0, +1.0):
+        for side in hang_sides:
             tip = self.tree_x + side * hang_dx
             hx = float(tip - side * np.random.uniform(0.0, x_jit))
             self.hang_x_by_side[side] = hx
@@ -227,7 +243,7 @@ class pick_ripe_apple(Base_Task):
         self.hang_x = self.hang_x_by_side[self.apple_side]
         self._hang_pose = self._hang_poses[self.apple_side]
 
-        # ---- tree: stems on BOTH branches (frozen hang coupling per side) ----
+        # ---- tree: stems only under spawned apples (frozen hang coupling) ----
         self.tree = self._build_tree(
             sapien.Pose([self.tree_x, self.tree_y, z0], [1, 0, 0, 0]),
             trunk_h=trunk_h,
@@ -238,11 +254,11 @@ class pick_ripe_apple(Base_Task):
             hang_x_locals=hang_x_locals,
         )
 
-        # ---- two hanging apples (kinematic while attached) ----
+        # ---- hanging apple(s) (kinematic while attached) ----
         self.apples = {}
         self._apple_rigids = {}
         self._apple_shapes_by_side = {}
-        for side in (-1.0, +1.0):
+        for side in hang_sides:
             tag = "left" if side < 0 else "right"
             apple = create_actor(
                 self, pose=self._hang_poses[side],
@@ -257,11 +273,16 @@ class pick_ripe_apple(Base_Task):
 
         # Frozen grasp / detach / success aliases → good apple only.
         self.apple = self.apples[self.apple_side]
-        self.spoiled_apple = self.apples[self.spoiled_side]
         self._apple_rigid = self._apple_rigids[self.apple_side]
-        self._spoiled_rigid = self._apple_rigids[self.spoiled_side]
         self._apple_shapes = self._apple_shapes_by_side[self.apple_side]
-        self._spoiled_shapes = self._apple_shapes_by_side[self.spoiled_side]
+        if self.two_apples_enabled:
+            self.spoiled_apple = self.apples[self.spoiled_side]
+            self._spoiled_rigid = self._apple_rigids[self.spoiled_side]
+            self._spoiled_shapes = self._apple_shapes_by_side[self.spoiled_side]
+        else:
+            self.spoiled_apple = None
+            self._spoiled_rigid = None
+            self._spoiled_shapes = []
 
         # ---- basket (same asset as packing) in front of the tree ----
         # Start at center; Opt 2 oscillates between branch-tip X bounds.
@@ -298,19 +319,20 @@ class pick_ripe_apple(Base_Task):
         self.basket_center = np.array(
             [self.basket_x, self.basket_y], dtype=np.float64)
 
-        self.add_prohibit_area(self.apples[-1.0], padding=0.03)
-        self.add_prohibit_area(self.apples[+1.0], padding=0.03)
+        for apple in self.apples.values():
+            self.add_prohibit_area(apple, padding=0.03)
         self.add_prohibit_area(self.basket, padding=0.05)
 
-        # ripeness / attach state (good = red path; spoiled = yellow path)
+        # ripeness / attach state (good = red path; spoiled = yellow path if Opt 1)
         self.ripeness = 0.0
         self.spoiled_ripeness = 0.0
         self._ripen_started = False
         self._apple_attached = True          # good apple still hanging
-        self._spoiled_attached = True
+        self._spoiled_attached = bool(self.two_apples_enabled)
         self.r_grasp = None                  # latched at good-apple detach
         self._set_apple_color(self.ripeness)
-        self._set_spoiled_color(self.spoiled_ripeness)
+        if self.two_apples_enabled:
+            self._set_spoiled_color(self.spoiled_ripeness)
 
     def _build_tree(self, pose, trunk_h, branch_z_left, branch_z_right,
                     hang_dx, apple_drop, hang_x_locals):
@@ -871,6 +893,9 @@ class pick_ripe_apple(Base_Task):
         self.info["spoiled_side"] = float(getattr(self, "spoiled_side", 0.0))
         self.info["basket_speed"] = float(getattr(self, "basket_speed", 0.0))
         self.info["basket_move_enabled"] = bool(getattr(self, "basket_move_enabled", False))
+        self.info["two_apples_enabled"] = bool(getattr(self, "two_apples_enabled", False))
+        self.info["spoiled_apple_enabled"] = bool(getattr(self, "spoiled_apple_enabled", False))
+        self.info["n_apples"] = int(len(getattr(self, "apples", {}) or {}))
         return success
 
     def get_obs(self):
@@ -891,5 +916,7 @@ class pick_ripe_apple(Base_Task):
             "basket_speed": float(getattr(self, "basket_speed", 0.0)),
             "basket_move_enabled": bool(getattr(self, "basket_move_enabled", False)),
             "basket_dir": float(getattr(self, "_basket_move_dir", 0.0)),
+            "two_apples_enabled": bool(getattr(self, "two_apples_enabled", False)),
+            "n_apples": int(len(getattr(self, "apples", {}) or {})),
         }
         return obs

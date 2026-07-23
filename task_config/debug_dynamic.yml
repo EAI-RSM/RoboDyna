@@ -241,8 +241,9 @@ task_args:
     theta_spill: 35.0
     fan_far_y: 0.12
   pick_ripe_apple:
-    # Opt 1 (default): two apples — good green→red→black; spoiled green→yellow→black.
-    # Opt 2 (default ON): basket oscillates between branch-tip X bounds.
+    # Default: single good apple + static basket.
+    # Opt 1 — two_apples_enabled: spoiled yellow→black apple (do not pick)
+    # Opt 2 — basket_move_enabled: oscillating basket
     ripen_steps: 2500   # slow ripening: apple stays ~red through the grasp
     red_window_min: 0.48   # per-episode red target band (like cook_meat doneness)
     red_window_max: 0.52
@@ -252,7 +253,8 @@ task_args:
     basket_x: 0.0
     basket_y: -0.20
     basket_scale: 1.0
-    basket_move_enabled: true   # Opt 2
+    two_apples_enabled: false   # Opt 1 (alias: spoiled_apple_enabled)
+    basket_move_enabled: false  # Opt 2
     basket_speed_min: 0.08      # Opt 2: m/s
     basket_speed_max: 0.16      # Opt 2: m/s
     apple_hang_dx: 0.18
