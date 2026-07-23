@@ -11,9 +11,15 @@ import transforms3d as t3d
 class hit_target(Base_Task):
     """Single-arm dynamic-intercept task (left or right).
 
-    A round target board sways left/right across the table, centered at x=0.
-    A dart ("stick") spawns on a random side; that side's arm grasps it, leads the
-    target's motion, and drives the tip into the yellow center circle.
+    A round target board sways on the stick's half of the table (mirror about x=0).
+    A dart ("stick") spawns on a random side of the table midline (x=0); that side's
+    arm grasps it, leads the target's motion, and drives the tip into the yellow center.
+
+    Left/right: each episode samples ``dart_side ∈ {−1, +1}`` (or config ``arm_side``).
+    Left (−x) is the exact mirror of right (+x) about the table center plane x=0
+    (dart pose, tip orientation, which arm acts, and the target / dynamic-blocker
+    travel band). Target and moving blocker stay on the stick's half of the table
+    (right → x∈[0, span], left → x∈[−span, 0]); the static blocker stays on the midline.
 
     Task options (independent toggles in ``task_args.hit_target``):
       - Opt 1 — static blocker: ``blocker_enabled`` (green disc in front of the target)
@@ -47,7 +53,7 @@ class hit_target(Base_Task):
     # ----- blockers (Opt 1 = static green, Opt 2 = dynamic red)
     BLOCKER_ENABLED_DEFAULT = False       # Opt 1
     BLOCKER_DYNAMIC_DEFAULT = False       # Opt 2
-    BLOCKER_RADIUS_DEFAULT = 0.032
+    BLOCKER_RADIUS_DEFAULT = 0.028        # 30% smaller diameter than original 0.040
     BLOCKER_THICKNESS_DEFAULT = 0.002
     BLOCKER_Y_GAP_DEFAULT = 0.065         # nominal; per-ep sample in [min, max]
     BLOCKER_Y_GAP_MIN_DEFAULT = 0.050     # Opt1 / Opt2 / Opt1+2 static: m from target
@@ -55,24 +61,24 @@ class hit_target(Base_Task):
     DUAL_BLOCKER_GAP_DEFAULT = 0.010      # Opt1+2: dynamic in front of static (m)
     BLOCKER_Z_OFFSET_DEFAULT = 0.0        # coplanar with target center (same z axis)
     BLOCKER_X_OFFSET_DEFAULT = 0.0
-    BLOCKER_SPEED_DEFAULT = 1.15          # base mult; per-ep ×U(1±speed_jitter)
+    BLOCKER_SPEED_DEFAULT = 0.65          # match target
     STATIC_BLOCKER_COLOR = [0.15, 0.72, 0.28]   # green
     DYNAMIC_BLOCKER_COLOR = [0.85, 0.12, 0.12]  # red
     BLOCKER_CLEARANCE_Z = 0.015
     TARGET_Y_OFFSET_DEFAULT = 0.050
 
-    # ----- dart geometry (tip→butt ≪ blocker_y_gap_min so tip can clear discs before the board)
-    DART_SHAFT_HALF = [0.008, 0.007, 0.007]
-    DART_TIP_HALF = [0.004, 0.003, 0.003]
+    # ----- dart geometry (scale=[1,1,1]; matrices are in meters; original stick size)
+    DART_SHAFT_HALF = [0.045, 0.008, 0.008]   # half extents of the grip shaft (long axis = local X)
+    DART_TIP_HALF = [0.012, 0.004, 0.004]     # half extents of the pointed tip
     DART_COLOR = [0.20, 0.85, 0.55]
 
     # ----- target motion (step-driven, applied in _update_kinematic_tasks)
-    SWAY_AMP_DEFAULT = 0.10
+    SWAY_AMP_DEFAULT = 0.243              # +0.10 m outer vs 0.143 (right→+x / left→−x)
     SWAY_PERIOD_DEFAULT = 900
-    TARGET_SPEED_DEFAULT = 1.0            # base mult; per-ep ×U(1±speed_jitter)
+    TARGET_SPEED_DEFAULT = 0.65           # base mult; per-ep ×U(1±speed_jitter)
     SPEED_JITTER_FRAC_DEFAULT = 0.20      # ±20% of base speed
-    MOTION_X_MIN_DEFAULT = -0.12          # shared travel band (centered at x=0)
-    MOTION_X_MAX_DEFAULT = 0.12
+    MOTION_X_MIN_DEFAULT = -0.272         # +0.10 m outer vs ±0.172
+    MOTION_X_MAX_DEFAULT = 0.272
     TARGET_CENTER_X_DEFAULT = 0.0
 
     # ----- contact / stick
@@ -120,7 +126,7 @@ class hit_target(Base_Task):
         self.motion_x_max = float(cfg.get("motion_x_max", self.MOTION_X_MAX_DEFAULT))
         if self.motion_x_min > self.motion_x_max:
             self.motion_x_min, self.motion_x_max = self.motion_x_max, self.motion_x_min
-        # Motion is always centered on the table midline.
+        # Nominal path center from config (overridden per-side after dart_side is chosen).
         self.target_center_x = float(cfg.get("target_center_x", self.TARGET_CENTER_X_DEFAULT))
 
         # Opt 1 / Opt 2 — independent toggles (both → static green + dynamic red).
@@ -144,10 +150,29 @@ class hit_target(Base_Task):
         self.blocker_x_offset = float(cfg.get("blocker_x_offset", self.BLOCKER_X_OFFSET_DEFAULT))
         self.target_y_offset = float(cfg.get("target_y_offset", self.TARGET_Y_OFFSET_DEFAULT))
 
+        # ---- arm / stick side first (path is mirrored about table midline x=0).
+        arm_side_cfg = cfg.get("arm_side", None)
+        if arm_side_cfg is None:
+            self.dart_side = float(np.random.choice([-1.0, 1.0]))
+        else:
+            s = str(arm_side_cfg).strip().lower()
+            if s in ("left", "l", "-1"):
+                self.dart_side = -1.0
+            elif s in ("right", "r", "+1", "1"):
+                self.dart_side = 1.0
+            else:
+                raise ValueError(
+                    f"hit_target arm_side must be left/right/null, got {arm_side_cfg!r}"
+                )
+
         # Per-episode speed: base ± speed_jitter_frac (default ±20%).
+        # Shared scale keeps Opt2 opposite-phase stable when blocker_speed_base == target_speed_base.
         j = self.speed_jitter_frac
-        self.target_speed = float(self.target_speed_base * np.random.uniform(1.0 - j, 1.0 + j))
-        self.blocker_speed = float(self.blocker_speed_base * np.random.uniform(1.0 - j, 1.0 + j))
+        speed_scale = float(np.random.uniform(1.0 - j, 1.0 + j))
+        self.target_speed = float(self.target_speed_base * speed_scale)
+        self.blocker_speed = float(self.blocker_speed_base * speed_scale)
+        # Keep RNG stream length stable vs prior independent draws.
+        _ = float(np.random.uniform(0.0, 1.0))
 
         # Per-episode path randomization (amplitude / period / phase / direction).
         self.sway_amp *= float(np.random.uniform(0.7, 1.0))
@@ -161,45 +186,43 @@ class hit_target(Base_Task):
             self.sway_phase0 + np.pi + np.random.uniform(-0.35, 0.35)
         )
 
-        # Clamp sway so the travel band stays inside [motion_x_min, motion_x_max] about center.
-        self.sway_amp = float(
-            max(
-                0.0,
-                min(
-                    self.sway_amp,
-                    self.target_center_x - self.motion_x_min,
-                    self.motion_x_max - self.target_center_x,
-                ),
-            )
+        # Side-local travel span: old symmetric ±sway_amp about 0 becomes [0, span] on the
+        # stick's half (right) or [-span, 0] on the left — exact mirror about x=0.
+        side_limit = float(
+            self.motion_x_max if self.dart_side > 0 else -self.motion_x_min
         )
-        # With coplanar solid blockers the tip column must clear the discs while still
-        # reaching the bullseye near the sway peak — floor the amp so that is possible.
+        side_limit = max(0.0, side_limit)
+        self.side_span = float(max(0.0, min(abs(self.sway_amp), side_limit)))
         if self.blocker_enabled or self.blocker_dynamic:
-            need_amp = float(
+            need_span = float(
                 self.blocker_radius + self._shaft_clear_margin() + self.center_radius + 0.020
             )
-            band = min(
-                self.target_center_x - self.motion_x_min,
-                self.motion_x_max - self.target_center_x,
-            )
-            self.sway_amp = float(min(max(self.sway_amp, need_amp), band))
+            self.side_span = float(min(max(self.side_span, need_span), side_limit))
+        # Midpoint of this side's band (for board spawn / logging); static blocker stays at 0.
+        self.target_center_x = float(self.dart_side * 0.5 * self.side_span)
+        self.sway_amp = float(self.side_span)  # expert prefer uses sway_amp as peak |x|
 
-        # ---- dart: near zone on a random side; that arm grasps it.
-        self.dart_side = float(np.random.choice([-1.0, 1.0]))
+        # ---- dart: tip points outward; matching arm grasps.
+        # Left is the exact mirror of right (x → −x).
         dart_x = self.dart_side * float(np.random.uniform(0.10, 0.22))
         dart_y = float(np.random.uniform(-0.12, -0.04))
+        # Right: identity → tip along +X. Left: 180° about Z → tip along −X (mirror).
+        if self.dart_side > 0:
+            dart_q = [1.0, 0.0, 0.0, 0.0]
+        else:
+            dart_q = list(t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], np.pi))
         dart_pose = sapien.Pose(
             [dart_x, dart_y, 0.74 + self.table_z_bias + self.DART_SHAFT_HALF[2]],
-            [1, 0, 0, 0],
+            dart_q,
         )
         self.dart = self._build_dart(dart_pose)
         self.dart.set_mass(0.02)
 
-        # ---- target board: mid zone, facing the robot, path centered at x=0.
+        # ---- target board: sways on the stick's half of the table (mirror about x=0).
         self.target_y = 0.08 + self.target_y_offset + float(np.random.uniform(-0.02, 0.02))
         self.target_z = 0.77 + self.table_z_bias + self.board_radius
         board_pose = sapien.Pose(
-            [self.target_center_x, self.target_y, self.target_z],
+            [self._target_x_at(0), self.target_y, self.target_z],
             [1, 0, 0, 0],
         )
         self.target = self._build_target(board_pose)
@@ -405,18 +428,28 @@ class hit_target(Base_Task):
                 return c
         return None
 
+    def _side_path_x(self, phase):
+        """Map a phase angle to x on the stick's half of the table (mirror about x=0).
+
+        Right (dart_side=+1): x ∈ [0, side_span]
+        Left  (dart_side=−1): x ∈ [−side_span, 0]
+        """
+        s = float(self.sway_dir) * float(np.sin(phase))  # [-1, 1]
+        u = 0.5 * (1.0 + s)  # [0, 1]
+        return float(self.dart_side) * float(self.side_span) * u
+
     def _target_x_at(self, step):
         ph = self.sway_phase0 + 2.0 * np.pi * self.target_speed * step / max(1, self.sway_period)
-        return self.target_center_x + self.sway_dir * self.sway_amp * np.sin(ph)
+        return self._side_path_x(ph)
 
     def _static_blocker_x(self):
-        return self.target_center_x + self.blocker_x_offset
+        # Static disc stays on the table midline; only target/dynamic path is side-mirrored.
+        return float(self.blocker_x_offset)
 
     def _dynamic_blocker_x_at(self, step):
         ph0 = float(getattr(self, "blocker_phase0", self.sway_phase0 + np.pi))
         ph = ph0 + 2.0 * np.pi * self.blocker_speed * step / max(1, self.sway_period)
-        base_x = self.target_center_x + self.sway_dir * self.sway_amp * np.sin(ph)
-        return base_x + self.blocker_x_offset
+        return self._side_path_x(ph) + float(self.blocker_x_offset)
 
     def _blocker_x_at(self, step):
         """Frontmost / primary blocker x (compat for debug / obs)."""
@@ -432,13 +465,38 @@ class hit_target(Base_Task):
 
     def _shaft_clear_margin(self):
         """Extra XZ margin beyond disc radius for shaft/tip half-width + PhysX slack."""
-        return 0.020
+        # Shaft half-width is 0.008 m; keep a modest PhysX buffer without eating the sway band.
+        return 0.014
 
     def _blocker_clear_abs_x(self):
         """Min |x| so the shaft (same xz as tip) clears a centered static disc."""
         if not self._any_blocker():
             return 0.03
-        return float(self.blocker_radius + self._shaft_clear_margin() + 0.012)
+        return float(self.blocker_radius + self._shaft_clear_margin() + 0.008)
+
+    def _safe_retreat_from_board(self, arm, side_sign, clear_need):
+        """Pull tip back in front of discs without sweeping the shaft through them."""
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        out_x = side_sign * max(abs(float(tip[0])), float(clear_need) + 0.028)
+        self._move_tip_x(arm, out_x, side_sign, clear_blockers=True)
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        target_y = self._standoff_y()
+        while float(tip[1]) > target_y + 0.012:
+            if self._hit_blocker or not self.plan_success:
+                break
+            if self._shaft_spans_blockers(tip[1]) and not self._xz_clear_of_blockers(
+                tip[0], tip[2], step=self._step_count + 10
+            ):
+                out_x = side_sign * (abs(float(tip[0])) + 0.020)
+                self._move_tip_x(arm, out_x, side_sign, clear_blockers=True)
+                tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            step = min(0.028, float(tip[1]) - target_y)
+            if step <= 0.006:
+                break
+            self.move(self.move_by_displacement(arm_tag=arm, y=float(-step), move_axis="world"))
+            self._check_blocker_hit()
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        self._align_tip_z(arm)
 
     def _xz_clear_of_blockers(self, x, z, step=None, margin=None):
         """Whether a vertical shaft at (x,z) clears every blocker disc in XZ."""
@@ -476,12 +534,20 @@ class hit_target(Base_Task):
         if not getattr(self, "blocker_dynamic", False):
             return True
         m = float(self._shaft_clear_margin() if margin is None else margin)
-        need_r2 = float(self.blocker_radius + m) ** 2
+        need_r2 = float(self.blocker_radius + m + 0.012) ** 2
         for dt in range(0, int(duration) + 1, 4):
             bx = self._dynamic_blocker_x_at(self._step_count + dt)
             if (float(tip_x) - bx) ** 2 + (float(tip_z) - self.blocker_z) ** 2 < need_r2:
                 return False
         return True
+
+    def _dyn_threatens_tip(self, tip_x, tip_z=None, horizon=40):
+        """True if the red disc is (or will soon be) too close to the tip column."""
+        if not getattr(self, "blocker_dynamic", False):
+            return False
+        if tip_z is None:
+            tip_z = self.blocker_z
+        return not self._dynamic_clear_window(tip_x, tip_z, duration=horizon)
 
     def _point_hits_disc(self, point, bx, by, bz, radius=None, y_tol=None):
         """True if ``point`` intersects a thin disc in the XZ plane at (bx,by,bz)."""
@@ -505,10 +571,11 @@ class hit_target(Base_Task):
             tip_dir = np.array([0.0, 1.0, 0.0])
         else:
             tip_dir = tip_dir / n
-        # Cover tip → butt (~0.024 m).
+        # Full tip→butt length (original stick ≈ 0.114 m).
+        length = self._dart_length()
         pts = [tip]
-        for d in (0.008, 0.016, 0.024):
-            pts.append(tip - tip_dir * d)
+        for d in np.linspace(0.008, length, max(6, int(length / 0.012) + 1)):
+            pts.append(tip - tip_dir * float(d))
         return pts
 
     def _geom_hits_blocker(self, blocker_actor, bx, by, bz):
@@ -520,7 +587,11 @@ class hit_target(Base_Task):
         return False
 
     def _check_blocker_hit(self):
-        """Latch failure if the stick contacts any blocker (geom + PhysX contact)."""
+        """Latch failure if the stick intersects any blocker disc (geometry).
+
+        Thin 2 mm discs are unreliable in PhysX contact queries (false positives when the
+        shaft is still several cm clear), so we use full-length shaft samples instead.
+        """
         if getattr(self, "_hit_blocker", False):
             return True
         if not self._any_blocker():
@@ -528,30 +599,16 @@ class hit_target(Base_Task):
         if getattr(self, "dart", None) is None:
             return False
 
-        # PhysX contact (names match builder.build name=...).
         if getattr(self, "static_blocker", None) is not None:
-            try:
-                if self.check_actors_contact("dart", "target_blocker_static"):
-                    self._hit_blocker = True
-                    return True
-            except Exception:
-                pass
             bx, by, bz = self._static_blocker_x(), self.static_blocker_y, self.blocker_z
             if self._geom_hits_blocker(self.static_blocker, bx, by, bz):
                 self._hit_blocker = True
                 return True
 
         if getattr(self, "dynamic_blocker", None) is not None:
-            try:
-                if self.check_actors_contact("dart", "target_blocker_dynamic"):
-                    self._hit_blocker = True
-                    return True
-            except Exception:
-                pass
-            pose = self.dynamic_blocker.get_pose().p
-            if self._geom_hits_blocker(
-                self.dynamic_blocker, float(pose[0]), float(self.dynamic_blocker_y), float(pose[2])
-            ):
+            bx = self._dynamic_blocker_x_at(self._step_count)
+            by, bz = self.dynamic_blocker_y, self.blocker_z
+            if self._geom_hits_blocker(self.dynamic_blocker, bx, by, bz):
                 self._hit_blocker = True
                 return True
         return False
@@ -670,6 +727,94 @@ class hit_target(Base_Task):
     def _dart_length(self):
         return float(2 * self.DART_SHAFT_HALF[0] + 2 * self.DART_TIP_HALF[0])
 
+    def _high_pass_to_board(self, arm, side_sign, clear_need):
+        """Lift above discs, advance to the board, then drop to bullseye height.
+
+        Full-length stick + 5–8 cm gap means a coplanar Y push lets the moving disc
+        drift into the tip before the IK finishes; flying over the discs avoids that.
+        """
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        out_x = side_sign * max(abs(float(tip[0])), float(clear_need))
+        self._move_tip_x(arm, out_x, side_sign, clear_blockers=True)
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        hi = float(self.blocker_z + self.blocker_radius + 0.028)
+        if hi - float(tip[2]) > 0.008:
+            self.move(self.move_by_displacement(arm_tag=arm, z=float(hi - tip[2]), move_axis="world"))
+        if not self.plan_success or self._hit_blocker:
+            return False
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        goal_y = float(self.target_y - 0.018)
+        for _ in range(12):
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            if float(tip[1]) >= goal_y - 0.006:
+                break
+            if not self.plan_success or self._hit_blocker:
+                return False
+            self._move_tip_x(
+                arm,
+                side_sign * max(abs(float(tip[0])), float(clear_need)),
+                side_sign,
+                clear_blockers=True,
+            )
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            step = min(0.045, goal_y - float(tip[1]))
+            if step <= 0.005:
+                break
+            self.move(self.move_by_displacement(arm_tag=arm, y=float(step), move_axis="world"))
+            self._check_blocker_hit()
+        if self._hit_blocker or not self.plan_success:
+            return False
+
+        # Hover high near the board until the bullseye is aligned AND the disc is clear.
+        align_tol = 1.15 * self.center_radius
+        for _ in range(70):
+            if self._hit_blocker or not self.plan_success:
+                return False
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            # Stay high while waiting.
+            hi = float(self.blocker_z + self.blocker_radius + 0.028)
+            if hi - float(tip[2]) > 0.010:
+                self.move(self.move_by_displacement(arm_tag=arm, z=float(hi - tip[2]), move_axis="world"))
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            cx = float(self._target_center_world()[0])
+            if abs(cx) >= float(clear_need) * 0.90 and cx * side_sign > 0:
+                self._move_tip_x(arm, cx, side_sign, clear_blockers=True)
+                tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            if (
+                abs(cx) >= float(clear_need) * 0.90
+                and cx * side_sign > 0
+                and abs(cx - float(tip[0])) <= align_tol + 0.022
+                and not self._dyn_threatens_tip(tip[0], self.blocker_z, horizon=60)
+                and self._xz_clear_of_blockers(tip[0], self.blocker_z, step=self._step_count + 20)
+            ):
+                break
+            self._advance(8, try_stick=False)
+        else:
+            self._go_to_standoff(arm)
+            self._align_tip_z(arm)
+            return False
+
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        if self._dyn_threatens_tip(tip[0], self.blocker_z, horizon=45):
+            self._go_to_standoff(arm)
+            self._align_tip_z(arm)
+            return False
+        # Snap tip onto live bullseye one last time while still high, then drop.
+        cx = float(self._target_center_world()[0])
+        if abs(cx) >= float(clear_need) * 0.90 and cx * side_sign > 0:
+            self._move_tip_x(arm, cx, side_sign, clear_blockers=True)
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        cz = float(self._target_center_world()[2])
+        if float(tip[2]) - cz > 0.006:
+            self.move(self.move_by_displacement(arm_tag=arm, z=float(cz - tip[2]), move_axis="world"))
+        self._check_blocker_hit()
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+        return bool(
+            self.plan_success
+            and not self._hit_blocker
+            and self._tip_past_blockers(tip[1])
+        )
+
     def _align_tip_z(self, arm):
         tip = np.array(self.dart.get_functional_point(0, "list")[:3])
         cz = float(self._target_center_world()[2])
@@ -694,13 +839,41 @@ class hit_target(Base_Task):
         return float(min(ys)) if ys else None
 
     def _tip_past_blockers(self, tip_y=None):
-        """True once tip is far enough past the front disc that the butt clears it."""
+        """True once the tip has crossed beyond the front disc face (Y progress)."""
         front = self._front_blocker_y()
         if front is None:
             return True
         if tip_y is None:
             tip_y = float(self.dart.get_functional_point(0, "list")[1])
-        return float(tip_y) >= float(front) + self._dart_length() + 0.004
+        return float(tip_y) >= float(front) + 0.012
+
+    def _shaft_spans_blockers(self, tip_y=None):
+        """True while the stick body still intersects a blocker y-plane.
+
+        Full-length stick tip→butt (~11.4 cm) exceeds the 5–8 cm blocker gap, so once the
+        tip is near the board the shaft always spans the discs until a center stick forms.
+        """
+        front = self._front_blocker_y()
+        if front is None:
+            return False
+        if tip_y is None:
+            tip_y = float(self.dart.get_functional_point(0, "list")[1])
+        return float(front) - 0.01 < float(tip_y) < float(front) + self._dart_length() + 0.01
+
+    def _safe_chase_x(self, desired_x, side_sign, tip_z=None):
+        """Clamp a chase x so the tip column stays outside every disc when the shaft spans."""
+        x_cmd = float(desired_x)
+        if tip_z is None:
+            tip_z = float(self.dart.get_functional_point(0, "list")[2])
+        if abs(x_cmd) < 0.025 or x_cmd * side_sign < 0.02:
+            x_cmd = side_sign * max(0.06, abs(x_cmd))
+        if self._any_blocker() and self._shaft_spans_blockers():
+            need = self._blocker_clear_abs_x()
+            if abs(x_cmd) < need or not self._xz_clear_of_blockers(
+                x_cmd, tip_z, step=self._step_count + 20
+            ):
+                x_cmd = side_sign * max(need, abs(x_cmd))
+        return float(x_cmd)
 
     def _standoff_y(self):
         """Pre-strike hover: short of the board; stay in front of discs until the high pass."""
@@ -728,15 +901,10 @@ class hit_target(Base_Task):
         x_cmd = float(target_x)
         if abs(x_cmd) < 0.025 or x_cmd * side_sign < 0.02:
             x_cmd = side_sign * max(0.06, abs(x_cmd))
-        # While the shaft still spans a disc plane, keep the tip column clear.
-        if (
-            clear_blockers
-            and self._any_blocker()
-            and not self._tip_past_blockers(tip[1])
-            and abs(float(tip[2]) - self.blocker_z) < self.blocker_radius + 0.02
-        ):
-            if not self._xz_clear_of_blockers(x_cmd, tip[2], step=self._step_count + 30):
-                x_cmd = side_sign * max(abs(x_cmd), self._blocker_clear_abs_x())
+        # Keep tip column clear whenever the shaft spans a disc (full-length stick near board).
+        if clear_blockers or self._shaft_spans_blockers(tip[1]):
+            if abs(float(tip[2]) - self.blocker_z) < self.blocker_radius + 0.03:
+                x_cmd = self._safe_chase_x(x_cmd, side_sign, tip_z=tip[2])
         dx = x_cmd - float(tip[0])
         if abs(dx) > 0.004:
             self.move(self.move_by_displacement(arm_tag=arm, x=float(dx), move_axis="world"))
@@ -750,8 +918,11 @@ class hit_target(Base_Task):
         self.move(self.grasp_actor(self.dart, arm_tag=arm, pre_grasp_dis=0.08, contact_point_id=0))
         self._dbg("after grasp")
 
+        # Yaw tip toward the board (+Y): +π/2 from +X (right), −π/2 from −X (left mirror).
         cur_q = np.array(self.get_arm_pose(str(arm))[3:])
-        yaw = t3d.quaternions.axangle2quat([0, 0, 1], np.pi / 2)
+        yaw = t3d.quaternions.axangle2quat(
+            [0, 0, 1], (np.pi / 2.0) if side_sign > 0 else (-np.pi / 2.0)
+        )
         new_q = t3d.quaternions.qmult(yaw, cur_q)
         self.move(self.move_by_displacement(arm_tag=arm, z=0.10, quat=list(new_q), move_axis="world"))
         self._dbg("after lift+yaw")
@@ -760,23 +931,44 @@ class hit_target(Base_Task):
         self._go_to_standoff(arm)
         self._dbg("after standoff")
 
-        prefer = float(min(0.105, max(0.080, 0.92 * float(self.sway_amp))))
+        # Use the wider sway: plant on the live bullseye once it is outside the discs.
+        prefer = float(max(0.085, 0.95 * float(self.sway_amp)))
         align_tol = 0.90 * self.center_radius
+        clear_need = float(self._blocker_clear_abs_x() + 0.008) if self._any_blocker() else 0.04
         cleared = False
-        for attempt in range(16):
+        for attempt in range(20):
             if self._stuck or self._hit_blocker or not self.plan_success:
                 break
 
             if cleared:
-                # Already past discs — only chase/stick.
-                for _ in range(35):
+                # Tip near board; shaft spans discs — stick if aligned, retreat only on real threat.
+                for _ in range(50):
                     if self._stuck or self._hit_blocker or not self.plan_success:
                         break
                     self._align_tip_z(arm)
+                    tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+                    if self._dyn_threatens_tip(tip[0], tip[2], horizon=55):
+                        self._safe_retreat_from_board(arm, side_sign, clear_need)
+                        cleared = False
+                        break
                     cx = float(self._target_center_world()[0])
-                    if cx * side_sign > 0.02:
-                        self._move_tip_x(arm, cx, side_sign, clear_blockers=False)
+                    if (
+                        abs(cx) >= clear_need * 0.95
+                        and cx * side_sign > 0
+                        and self._xz_clear_of_blockers(cx, tip[2], step=self._step_count + 10)
+                        and not self._dyn_threatens_tip(cx, tip[2], horizon=40)
+                    ):
+                        self._move_tip_x(arm, cx, side_sign, clear_blockers=True)
+                    else:
+                        self._move_tip_x(
+                            arm,
+                            side_sign * max(abs(float(tip[0])), clear_need),
+                            side_sign,
+                            clear_blockers=True,
+                        )
                     self._dwell(50)
+                if not cleared:
+                    continue
                 break
 
             intercept_step, x_lead = self._predict_side_intercept(
@@ -799,28 +991,29 @@ class hit_target(Base_Task):
                 self._go_to_standoff(arm)
                 self._advance(8, try_stick=False)
 
-            x_push = float(self._target_x_at(self._step_count + 45))
-            if x_push * side_sign < prefer * 0.45:
+            # Aim at the live bullseye a short horizon ahead (must already clear discs).
+            x_push = float(self._target_x_at(self._step_count + 40))
+            min_side = clear_need if self._any_blocker() else 0.030
+            if abs(x_push) < min_side or x_push * side_sign <= 0:
                 continue
-            # High-pass / lateral cross is slow — require the bullseye to stay on our side.
-            if float(self._target_x_at(self._step_count + 140)) * side_sign < 0.035:
+            if float(self._target_x_at(self._step_count + 120)) * side_sign < min_side * 0.85:
                 continue
-            plant_x = side_sign * max(prefer * 0.85, abs(x_push) * 0.9)
+            if self._any_blocker() and not self._strike_clear_window(duration=160):
+                continue
+            plant_x = side_sign * abs(x_push)
             self._align_tip_z(arm)
             self._move_tip_x(arm, plant_x, side_sign, clear_blockers=False)
             tip = np.array(self.dart.get_functional_point(0, "list")[:3])
             plant_x = float(tip[0])
-            if plant_x * side_sign < 0.04:
+            if plant_x * side_sign < min_side * 0.9:
                 continue
 
             if self._any_blocker():
-                # Lateral cross at bullseye height. Short dart clears discs once tip is near the board,
-                # so tip_x only needs to stay outside every disc while the shaft still spans them.
-                clear_x = side_sign * max(abs(plant_x), self._blocker_clear_abs_x() + 0.018)
+                clear_x = side_sign * max(abs(plant_x), clear_need)
                 if self.blocker_dynamic:
                     waited = 0
-                    while waited < 700 and not self._dynamic_clear_window(
-                        clear_x, self.blocker_z, duration=160
+                    while waited < 800 and not self._dynamic_clear_window(
+                        clear_x, self.blocker_z, duration=120
                     ):
                         if self._hit_blocker or not self.plan_success:
                             break
@@ -828,49 +1021,59 @@ class hit_target(Base_Task):
                         waited += 12
                     if self._hit_blocker or not self.plan_success:
                         break
-                    if not self._dynamic_clear_window(clear_x, self.blocker_z, duration=120):
+                    if not self._dynamic_clear_window(clear_x, self.blocker_z, duration=80):
                         continue
+                if not self._strike_clear_window(duration=140):
+                    continue
+                # Re-check: bullseye still outside discs and near the plant column.
+                x_now = float(self._target_x_at(self._step_count + 25))
+                if abs(x_now) < clear_need or x_now * side_sign <= 0:
+                    continue
+                if abs(x_now - clear_x) > align_tol + 0.035:
+                    clear_x = side_sign * max(abs(x_now), clear_need)
                 self._align_tip_z(arm)
                 self._move_tip_x(arm, clear_x, side_sign, clear_blockers=True)
                 tip = np.array(self.dart.get_functional_point(0, "list")[:3])
                 plant_x = float(tip[0])
-                if abs(plant_x) < self._blocker_clear_abs_x() + 0.005:
+                if abs(plant_x) < clear_need * 0.95:
                     continue
-                while float(self.target_y - tip[1]) > 0.018:
-                    if self._hit_blocker or not self.plan_success:
-                        break
-                    tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-                    if abs(float(tip[0])) < self._blocker_clear_abs_x() + 0.005:
-                        self._move_tip_x(
-                            arm,
-                            side_sign * (self._blocker_clear_abs_x() + 0.015),
-                            side_sign,
-                            clear_blockers=True,
-                        )
-                        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-                        plant_x = float(tip[0])
-                        if abs(plant_x) < self._blocker_clear_abs_x() + 0.004:
+                if self.blocker_dynamic:
+                    # Full-length stick + moving disc: fly over, hover until aligned, then drop.
+                    if not self._high_pass_to_board(arm, side_sign, clear_need):
+                        self._safe_retreat_from_board(arm, side_sign, clear_need)
+                        continue
+                else:
+                    # Static disc only: lateral Y push at bullseye height (shaft stays outside x=0).
+                    while float(self.target_y - tip[1]) > 0.018:
+                        if self._hit_blocker or not self.plan_success:
                             break
-                    if not self._tip_past_blockers(tip[1]):
+                        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+                        if abs(float(tip[0])) < clear_need * 0.95:
+                            self._move_tip_x(
+                                arm,
+                                side_sign * (clear_need + 0.010),
+                                side_sign,
+                                clear_blockers=True,
+                            )
+                            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+                            if abs(float(tip[0])) < clear_need * 0.95:
+                                break
                         if not self._xz_clear_of_blockers(tip[0], tip[2], step=self._step_count + 15):
                             break
-                        if self.blocker_dynamic and not self._dynamic_clear_window(
-                            tip[0], tip[2], duration=30
-                        ):
+                        step_y = min(0.035, float(self.target_y - tip[1]) - 0.016)
+                        if step_y <= 0.004:
                             break
-                    # Never drive the tip through the board face (knocks dart out of grasp).
-                    step_y = min(0.035, float(self.target_y - tip[1]) - 0.016)
-                    if step_y <= 0.004:
-                        break
-                    self.move(self.move_by_displacement(arm_tag=arm, y=float(step_y), move_axis="world"))
-                    self._check_blocker_hit()
-                    tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+                        self.move(
+                            self.move_by_displacement(arm_tag=arm, y=float(step_y), move_axis="world")
+                        )
+                        self._check_blocker_hit()
+                        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
                 self._check_blocker_hit()
                 if self._hit_blocker:
                     break
                 tip = np.array(self.dart.get_functional_point(0, "list")[:3])
                 if not self._tip_past_blockers(tip[1]):
-                    self._go_to_standoff(arm)
+                    self._safe_retreat_from_board(arm, side_sign, clear_need)
                     continue
                 self._align_tip_z(arm)
                 cleared = True
@@ -890,30 +1093,48 @@ class hit_target(Base_Task):
             if self._hit_blocker:
                 break
 
-            # Chase bullseye on our side (tip is past discs or there are none).
             tip = np.array(self.dart.get_functional_point(0, "list")[:3])
             plant_x = float(tip[0])
-            for _ in range(55):
+            for _ in range(40):
                 if self._stuck or self._hit_blocker or not self.plan_success:
                     break
                 self._align_tip_z(arm)
                 if not self.plan_success:
                     break
+                tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+                if self._dyn_threatens_tip(tip[0], tip[2], horizon=55):
+                    self._safe_retreat_from_board(arm, side_sign, clear_need)
+                    cleared = False
+                    break
                 cx = float(self._target_center_world()[0])
-                # Hold the plant column; only micro-track when the bullseye is nearby.
-                if abs(cx - plant_x) <= align_tol + 0.010 and cx * side_sign > 0.02:
-                    self._move_tip_x(arm, cx, side_sign, clear_blockers=False)
-                elif cx * side_sign > 0.04 and abs(cx - plant_x) < 0.05:
-                    self._move_tip_x(arm, cx, side_sign, clear_blockers=False)
+                if not self._any_blocker():
+                    if cx * side_sign > 0.02:
+                        self._move_tip_x(arm, cx, side_sign, clear_blockers=False)
+                        plant_x = float(self.dart.get_functional_point(0, "list")[0])
+                elif (
+                    abs(cx) >= clear_need * 0.95
+                    and cx * side_sign > 0
+                    and self._xz_clear_of_blockers(cx, tip[2], step=self._step_count + 10)
+                    and not self._dyn_threatens_tip(cx, tip[2], horizon=40)
+                ):
+                    self._move_tip_x(arm, cx, side_sign, clear_blockers=True)
+                    plant_x = float(self.dart.get_functional_point(0, "list")[0])
+                else:
+                    self._move_tip_x(
+                        arm,
+                        side_sign * max(abs(plant_x), clear_need),
+                        side_sign,
+                        clear_blockers=True,
+                    )
                 if not self.plan_success:
                     break
-                self._dwell(50)
+                self._dwell(45)
             if self._stuck or self._hit_blocker:
                 break
             if cleared:
                 break
             if self.plan_success:
-                self._retreat_to_standoff(arm)
+                self._safe_retreat_from_board(arm, side_sign, clear_need)
 
         self._dbg("done")
         self.info["info"] = {

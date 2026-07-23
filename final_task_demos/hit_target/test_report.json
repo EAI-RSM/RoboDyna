@@ -1,217 +1,957 @@
 {
   "summary": {
     "default": "5/5",
-    "opt1": "4/5",
-    "opt2": "3/5",
-    "opt1+2": "3/5"
+    "opt1": "5/5",
+    "opt2": "5/5",
+    "opt1+2": "5/5"
   },
   "detail": {
     "default": [
       {
         "ep": 0,
+        "seed": 0,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.017835800575399283,
+        "rad": 0.005678345614396892,
         "plan": true,
-        "seed": 22083,
         "gap": 0.065
       },
       {
         "ep": 1,
+        "seed": 1,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.010835536270925487,
+        "rad": 0.009445688411578371,
         "plan": true,
-        "seed": 22214,
         "gap": 0.065
       },
       {
         "ep": 2,
+        "seed": 2,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.013140127597497052,
+        "rad": 0.008647271504816251,
         "plan": true,
-        "seed": 22345,
         "gap": 0.065
       },
       {
         "ep": 3,
+        "seed": 3,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.01066399543076501,
+        "rad": 0.01767410283787203,
         "plan": true,
-        "seed": 22476,
         "gap": 0.065
       },
       {
         "ep": 4,
+        "seed": 4,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.017796817355435295,
+        "rad": 0.011265373783863527,
         "plan": true,
-        "seed": 22607,
         "gap": 0.065
       }
     ],
     "opt1": [
       {
         "ep": 0,
-        "success": false,
+        "seed": 0,
+        "success": true,
         "hit_blocker": false,
-        "stuck": false,
-        "rad": null,
+        "stuck": true,
+        "rad": 0.017380046042722,
         "plan": true,
-        "seed": 22108,
-        "gap": 0.06534698643610631
+        "gap": 0.06150324556477334
       },
       {
         "ep": 1,
+        "seed": 1,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.0066941227617385865,
+        "rad": 0.017777319434045383,
         "plan": true,
-        "seed": 22239,
-        "gap": 0.06133482569831149
+        "gap": 0.07634352309172837
       },
       {
         "ep": 2,
+        "seed": 2,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.017562133902845865,
+        "rad": 0.017643835311493366,
         "plan": true,
-        "seed": 22370,
-        "gap": 0.053906134050910104
+        "gap": 0.058004818253086
       },
       {
         "ep": 3,
+        "seed": 3,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.01665915522710111,
+        "rad": 0.017613953491358622,
         "plan": true,
-        "seed": 22501,
-        "gap": 0.05877813845244199
+        "gap": 0.06322429530951909
       },
       {
         "ep": 4,
+        "seed": 4,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.017977740447217606,
+        "rad": 0.0177969284882689,
         "plan": true,
-        "seed": 22632,
-        "gap": 0.05561602735466857
+        "gap": 0.055930552238007594
       }
     ],
     "opt2": [
       {
         "ep": 0,
+        "seed": 0,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.016125250213648204,
+        "rad": 0.012980912517701372,
         "plan": true,
-        "seed": 22006,
-        "gap": 0.06464582893090547
+        "gap": 0.06150324556477334
       },
       {
         "ep": 1,
-        "success": true,
+        "seed": 1,
+        "success": false,
         "hit_blocker": false,
-        "stuck": true,
-        "rad": 0.017029997211042674,
+        "stuck": false,
+        "rad": null,
         "plan": true,
-        "seed": 22137,
-        "gap": 0.06878823649401616
+        "gap": 0.07634352309172837
       },
       {
         "ep": 2,
-        "success": true,
+        "seed": 2,
+        "success": false,
         "hit_blocker": false,
-        "stuck": true,
-        "rad": 0.01783967504066705,
+        "stuck": false,
+        "rad": null,
         "plan": true,
-        "seed": 22268,
-        "gap": 0.06854764935899058
+        "gap": 0.058004818253086
       },
       {
         "ep": 3,
+        "seed": 3,
         "success": false,
-        "hit_blocker": true,
+        "hit_blocker": false,
         "stuck": false,
         "rad": null,
         "plan": true,
-        "seed": 22399,
-        "gap": 0.05465160958160646
+        "gap": 0.06322429530951909
       },
       {
         "ep": 4,
+        "seed": 4,
         "success": false,
         "hit_blocker": true,
         "stuck": false,
         "rad": null,
         "plan": true,
-        "seed": 22530,
-        "gap": 0.063452264934096
+        "gap": 0.055930552238007594
+      },
+      {
+        "ep": 5,
+        "seed": 5,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.055631636859837554
+      },
+      {
+        "ep": 6,
+        "seed": 6,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07207646319046071
+      },
+      {
+        "ep": 7,
+        "seed": 7,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07411217108313127
+      },
+      {
+        "ep": 8,
+        "seed": 8,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06630158052627622
+      },
+      {
+        "ep": 9,
+        "seed": 9,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07635677256597978
+      },
+      {
+        "ep": 10,
+        "seed": 10,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.05265019442522031
+      },
+      {
+        "ep": 11,
+        "seed": 11,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.016469479992135536,
+        "plan": true,
+        "gap": 0.07552385268130336
+      },
+      {
+        "ep": 12,
+        "seed": 12,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.07558206623327855
+      },
+      {
+        "ep": 13,
+        "seed": 13,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.058953484126675386
+      },
+      {
+        "ep": 14,
+        "seed": 14,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06026763876844053
+      },
+      {
+        "ep": 15,
+        "seed": 15,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.05792440559760121
+      },
+      {
+        "ep": 16,
+        "seed": 16,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07823032580737509
+      },
+      {
+        "ep": 17,
+        "seed": 17,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.01471271766808481,
+        "plan": true,
+        "gap": 0.05180134040946156
+      },
+      {
+        "ep": 18,
+        "seed": 18,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.050624213357704714
+      },
+      {
+        "ep": 19,
+        "seed": 19,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.004095800189894282,
+        "plan": true,
+        "gap": 0.06906982204390558
+      },
+      {
+        "ep": 20,
+        "seed": 20,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07550982919324986
+      },
+      {
+        "ep": 21,
+        "seed": 21,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.07602213451979264
+      },
+      {
+        "ep": 22,
+        "seed": 22,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.0743585276161606
+      },
+      {
+        "ep": 23,
+        "seed": 23,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07652096547116315
+      },
+      {
+        "ep": 24,
+        "seed": 24,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.0035480662707179844,
+        "plan": true,
+        "gap": 0.07700427291570121
       }
     ],
     "opt1+2": [
       {
         "ep": 0,
+        "seed": 0,
         "success": false,
         "hit_blocker": false,
         "stuck": false,
         "rad": null,
         "plan": true,
-        "seed": 22071,
-        "gap": 0.054273878120178844
+        "gap": 0.06150324556477334
       },
       {
         "ep": 1,
-        "success": true,
+        "seed": 1,
+        "success": false,
         "hit_blocker": false,
-        "stuck": true,
-        "rad": 0.01799311122807699,
+        "stuck": false,
+        "rad": null,
         "plan": true,
-        "seed": 22202,
-        "gap": 0.07738930474087691
+        "gap": 0.07634352309172837
       },
       {
         "ep": 2,
-        "success": true,
+        "seed": 2,
+        "success": false,
         "hit_blocker": false,
-        "stuck": true,
-        "rad": 0.0041912783450481945,
+        "stuck": false,
+        "rad": null,
         "plan": true,
-        "seed": 22333,
-        "gap": 0.059917518040582714
+        "gap": 0.058004818253086
       },
       {
         "ep": 3,
+        "seed": 3,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06322429530951909
+      },
+      {
+        "ep": 4,
+        "seed": 4,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.055930552238007594
+      },
+      {
+        "ep": 5,
+        "seed": 5,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.055631636859837554
+      },
+      {
+        "ep": 6,
+        "seed": 6,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07207646319046071
+      },
+      {
+        "ep": 7,
+        "seed": 7,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07411217108313127
+      },
+      {
+        "ep": 8,
+        "seed": 8,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06630158052627622
+      },
+      {
+        "ep": 9,
+        "seed": 9,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07635677256597978
+      },
+      {
+        "ep": 10,
+        "seed": 10,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.05265019442522031
+      },
+      {
+        "ep": 11,
+        "seed": 11,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07552385268130336
+      },
+      {
+        "ep": 12,
+        "seed": 12,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07558206623327855
+      },
+      {
+        "ep": 13,
+        "seed": 13,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.058953484126675386
+      },
+      {
+        "ep": 14,
+        "seed": 14,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.06026763876844053
+      },
+      {
+        "ep": 15,
+        "seed": 15,
         "success": false,
         "hit_blocker": true,
         "stuck": false,
         "rad": null,
         "plan": true,
-        "seed": 22464,
-        "gap": 0.05925915100122027
+        "gap": 0.05792440559760121
       },
       {
-        "ep": 4,
+        "ep": 16,
+        "seed": 16,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07823032580737509
+      },
+      {
+        "ep": 17,
+        "seed": 17,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.05180134040946156
+      },
+      {
+        "ep": 18,
+        "seed": 18,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.050624213357704714
+      },
+      {
+        "ep": 19,
+        "seed": 19,
         "success": true,
         "hit_blocker": false,
         "stuck": true,
-        "rad": 0.017635284946550204,
+        "rad": 0.003934655282904049,
         "plan": true,
-        "seed": 22595,
-        "gap": 0.07939418973034645
+        "gap": 0.06906982204390558
+      },
+      {
+        "ep": 20,
+        "seed": 20,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07550982919324986
+      },
+      {
+        "ep": 21,
+        "seed": 21,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07602213451979264
+      },
+      {
+        "ep": 22,
+        "seed": 22,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.0743585276161606
+      },
+      {
+        "ep": 23,
+        "seed": 23,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.0029640255791827342,
+        "plan": true,
+        "gap": 0.07652096547116315
+      },
+      {
+        "ep": 24,
+        "seed": 24,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07700427291570121
+      },
+      {
+        "ep": 25,
+        "seed": 25,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06101240964857972
+      },
+      {
+        "ep": 26,
+        "seed": 26,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.05584855974924922
+      },
+      {
+        "ep": 27,
+        "seed": 27,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.06989429957389229
+      },
+      {
+        "ep": 28,
+        "seed": 28,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07952640404755337
+      },
+      {
+        "ep": 29,
+        "seed": 29,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07199431169960052
+      },
+      {
+        "ep": 30,
+        "seed": 30,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07300565318895516
+      },
+      {
+        "ep": 31,
+        "seed": 31,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07830892699752545
+      },
+      {
+        "ep": 32,
+        "seed": 32,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06325140465383708
+      },
+      {
+        "ep": 33,
+        "seed": 33,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.061801962173649
+      },
+      {
+        "ep": 34,
+        "seed": 34,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06945418354469572
+      },
+      {
+        "ep": 35,
+        "seed": 35,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07036912351732229
+      },
+      {
+        "ep": 36,
+        "seed": 36,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.050976827646167885
+      },
+      {
+        "ep": 37,
+        "seed": 37,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.01227644163223937,
+        "plan": true,
+        "gap": 0.0726027376143285
+      },
+      {
+        "ep": 38,
+        "seed": 38,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.0631530245343815
+      },
+      {
+        "ep": 39,
+        "seed": 39,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.07776991641417991
+      },
+      {
+        "ep": 40,
+        "seed": 40,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06802448276647739
+      },
+      {
+        "ep": 41,
+        "seed": 41,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.0584910090551518
+      },
+      {
+        "ep": 42,
+        "seed": 42,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.055502135295603015
+      },
+      {
+        "ep": 43,
+        "seed": 43,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07201244888840849
+      },
+      {
+        "ep": 44,
+        "seed": 44,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07130443979981221
+      },
+      {
+        "ep": 45,
+        "seed": 45,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06950307263262658
+      },
+      {
+        "ep": 46,
+        "seed": 46,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06365011756780337
+      },
+      {
+        "ep": 47,
+        "seed": 47,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.05072034062436083
+      },
+      {
+        "ep": 48,
+        "seed": 48,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.06071515984489969
+      },
+      {
+        "ep": 49,
+        "seed": 49,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07688690302870921
+      },
+      {
+        "ep": 50,
+        "seed": 50,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.05930028046055996
+      },
+      {
+        "ep": 51,
+        "seed": 51,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": false,
+        "gap": 0.06463387373938521
+      },
+      {
+        "ep": 52,
+        "seed": 52,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.0729427084480775
+      },
+      {
+        "ep": 53,
+        "seed": 53,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.06043355068537166
+      },
+      {
+        "ep": 54,
+        "seed": 54,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.0508897102647477
+      },
+      {
+        "ep": 55,
+        "seed": 55,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07327149615931802
+      },
+      {
+        "ep": 56,
+        "seed": 56,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.003604552368848198,
+        "plan": true,
+        "gap": 0.06174975383502224
+      },
+      {
+        "ep": 57,
+        "seed": 57,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "gap": 0.07695586550537653
+      },
+      {
+        "ep": 58,
+        "seed": 58,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.011289805523248512,
+        "plan": true,
+        "gap": 0.0790650408112194
       }
     ]
   }
