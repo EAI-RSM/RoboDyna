@@ -245,6 +245,20 @@ task_args:
     red_window_min: 0.48   # per-episode red target band (like cook_meat doneness)
     red_window_max: 0.52
     red_tolerance: 0.12
+    tree_x: 0.0
+    tree_y: 0.05
+    basket_x: 0.0
+    basket_y: -0.20
+    basket_scale: 1.0
+    apple_hang_dx: 0.18
+    branch_z_high: 0.25
+    branch_z_low: 0.20
+    high_branch_side: random
+    trunk_height: 0.50
+    apple_drop_below_branch: 0.042
+    apple_x_jitter: 0.02
+    apple_side: random
+    apple_scale_mult: 0.78
   place_block_belt:
     belt_speed: 0.06
     theta_max_deg: 30.0
