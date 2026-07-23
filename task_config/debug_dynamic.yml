@@ -320,26 +320,30 @@ task_args:
     advance_every: 4
     gate_default_left: true
   hit_target:
+    # Options (independent toggles):
+    #   Opt 1 — static blocker  →  blocker_enabled   (green disc, fixed at x=0)
+    #   Opt 2 — dynamic blocker →  blocker_dynamic   (red disc, sways with target)
+    #   Opt 1+2: both discs; red (dynamic) sits dual_blocker_gap in front of green (static)
+    blocker_enabled: false         # Opt 1: green static blocker in front of target
+    blocker_dynamic: false         # Opt 2: red dynamic blocker (sways L/R)
+    dual_blocker_gap: 0.010        # Opt 1+2: m; dynamic in front of static (−y)
     board_half_size: 0.075
     center_half_size: 0.018
     sway_amp: 0.10
     sway_period: 900
     target_speed: 1.0
+    blocker_speed: 1.15
+    speed_jitter_frac: 0.20
     target_y_offset: 0.050
-    motion_x_min: 0.03
-    motion_x_max: 0.24
-    target_center_x_min: 0.12
-    target_center_x_max: 0.15
-    blocker_enabled: false
-    blocker_dynamic: false
-    blocker_radius: 0.040
+    target_center_x: 0.0
+    motion_x_min: -0.12
+    motion_x_max: 0.12
+    blocker_radius: 0.032       # m; blocker disc radius (sized so 5–8 cm gap is plantable)
     blocker_thickness: 0.002
-    blocker_y_gap: 0.050
+    blocker_y_gap_min: 0.050
+    blocker_y_gap_max: 0.080
     blocker_z_offset: 0.0
     blocker_x_offset: 0.0
-    blocker_speed_min: 0.70
-    blocker_speed_max: 1.45
-    blocker_speed_min_delta: 0.10
   ring_on_moving_peg:
     r_ring: 0.028
     catch_r: 0.07

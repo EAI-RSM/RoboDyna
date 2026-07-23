@@ -1,0 +1,218 @@
+{
+  "summary": {
+    "default": "5/5",
+    "opt1": "4/5",
+    "opt2": "3/5",
+    "opt1+2": "3/5"
+  },
+  "detail": {
+    "default": [
+      {
+        "ep": 0,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.017835800575399283,
+        "plan": true,
+        "seed": 22083,
+        "gap": 0.065
+      },
+      {
+        "ep": 1,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.010835536270925487,
+        "plan": true,
+        "seed": 22214,
+        "gap": 0.065
+      },
+      {
+        "ep": 2,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.013140127597497052,
+        "plan": true,
+        "seed": 22345,
+        "gap": 0.065
+      },
+      {
+        "ep": 3,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.01066399543076501,
+        "plan": true,
+        "seed": 22476,
+        "gap": 0.065
+      },
+      {
+        "ep": 4,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.017796817355435295,
+        "plan": true,
+        "seed": 22607,
+        "gap": 0.065
+      }
+    ],
+    "opt1": [
+      {
+        "ep": 0,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "seed": 22108,
+        "gap": 0.06534698643610631
+      },
+      {
+        "ep": 1,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.0066941227617385865,
+        "plan": true,
+        "seed": 22239,
+        "gap": 0.06133482569831149
+      },
+      {
+        "ep": 2,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.017562133902845865,
+        "plan": true,
+        "seed": 22370,
+        "gap": 0.053906134050910104
+      },
+      {
+        "ep": 3,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.01665915522710111,
+        "plan": true,
+        "seed": 22501,
+        "gap": 0.05877813845244199
+      },
+      {
+        "ep": 4,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.017977740447217606,
+        "plan": true,
+        "seed": 22632,
+        "gap": 0.05561602735466857
+      }
+    ],
+    "opt2": [
+      {
+        "ep": 0,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.016125250213648204,
+        "plan": true,
+        "seed": 22006,
+        "gap": 0.06464582893090547
+      },
+      {
+        "ep": 1,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.017029997211042674,
+        "plan": true,
+        "seed": 22137,
+        "gap": 0.06878823649401616
+      },
+      {
+        "ep": 2,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.01783967504066705,
+        "plan": true,
+        "seed": 22268,
+        "gap": 0.06854764935899058
+      },
+      {
+        "ep": 3,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "seed": 22399,
+        "gap": 0.05465160958160646
+      },
+      {
+        "ep": 4,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "seed": 22530,
+        "gap": 0.063452264934096
+      }
+    ],
+    "opt1+2": [
+      {
+        "ep": 0,
+        "success": false,
+        "hit_blocker": false,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "seed": 22071,
+        "gap": 0.054273878120178844
+      },
+      {
+        "ep": 1,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.01799311122807699,
+        "plan": true,
+        "seed": 22202,
+        "gap": 0.07738930474087691
+      },
+      {
+        "ep": 2,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.0041912783450481945,
+        "plan": true,
+        "seed": 22333,
+        "gap": 0.059917518040582714
+      },
+      {
+        "ep": 3,
+        "success": false,
+        "hit_blocker": true,
+        "stuck": false,
+        "rad": null,
+        "plan": true,
+        "seed": 22464,
+        "gap": 0.05925915100122027
+      },
+      {
+        "ep": 4,
+        "success": true,
+        "hit_blocker": false,
+        "stuck": true,
+        "rad": 0.017635284946550204,
+        "plan": true,
+        "seed": 22595,
+        "gap": 0.07939418973034645
+      }
+    ]
+  }
+}

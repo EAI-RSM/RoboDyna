@@ -1,0 +1,35 @@
+hit_target — expert controller demos
+
+default  : blocker_enabled=false, blocker_dynamic=false  (moving target only)
+opt1     : blocker_enabled=true,  blocker_dynamic=false  (green static blocker)
+opt2     : blocker_enabled=false, blocker_dynamic=true   (red moving blocker)
+opt1+2   : blocker_enabled=true,  blocker_dynamic=true   (green static + red dynamic;
+           red sits dual_blocker_gap=1cm in front of green)
+
+Blocker–target gap (per episode, Uniform):
+  Opt1 / Opt2 : blocker is sampled 5–8 cm in front of the target
+                (blocker_y_gap ~ U[0.050, 0.080]).
+  Opt1+2      : static (green) uses the same 5–8 cm sample; dynamic (red)
+                stays dual_blocker_gap=0.010 m further in front of green.
+
+Motion: target (and dynamic blocker) sway about table center x=0.
+Speeds: target_speed / blocker_speed sampled per-ep as base ± speed_jitter_frac (20%).
+Stick: spawns left or right; matching arm grasps and strikes.
+
+Blockers: solid collision (no pass-through). Blocker disc centers are at the same
+  height as the target / yellow bullseye (z-aligned; blocker_z_offset forced to 0).
+  Stick–blocker contact fails the episode.
+  Expert clears discs laterally (short dart tip→butt < gap_min) and plants short of
+  the board face so the stick is not knocked out of the gripper.
+
+Success:
+  - tip contacts the yellow center (plane ≤ STICK_DIST=0.035 m AND
+    radial offset ≤ center_radius=0.018 m), AND
+  - stick never contacts a blocker (_hit_blocker must stay false).
+
+Expert suite (see test_report.json): default 5/5, opt1 4/5, opt2 3/5, opt1+2 3/5.
+
+Files (side-by-side is the primary deliverable):
+  default_sidebyside.mp4   opt1_sidebyside.mp4
+  opt2_sidebyside.mp4      opt1+2_sidebyside.mp4
+Also: <tag>_head.mp4, <tag>_topdown.mp4
