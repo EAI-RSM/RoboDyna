@@ -1,0 +1,16 @@
+play_billiard — expert controller demos
+
+default  : specific_hole=false, enable_distractors=false
+           (red ball only; success = any of 6 pockets)
+opt1     : specific_hole=true,  enable_distractors=false
+           (nominated top pocket + yellow arrow; only that pocket)
+opt2     : specific_hole=false, enable_distractors=true
+           (up to 2 distractors; any pocket; distractor pocketed fails)
+opt1+2   : specific_hole=true,  enable_distractors=true
+           (distractors block one hole; nominated open hole + arrow)
+
+Success: primary red ball in an allowed pocket; no robot-ball contact;
+any distractor ball in any pocket fails the episode.
+
+Files: <tag>_sidebyside.mp4, <tag>_head.mp4, <tag>_topdown.mp4
+Tags: default | opt1 | opt2 | opt1+2

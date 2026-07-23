@@ -379,7 +379,11 @@ def main():
         default=None,
         help="Legacy shorthand for task_args.<task>.option "
              "(catch_rat: 1/catch_two_mice, 2/opaque_surface; "
-             "goalkeeper: 1/players_enabled, 2/cover_enabled; catch_valley_ball: 1/wall_bounce_enabled, 2/enable_distractor). "
+             "goalkeeper: 1/players_enabled, 2/cover_enabled; "
+             "dual_hole_punch: 1/missing_tile_mode, 2/belt_continous_motion; "
+             "catch_valley_ball: 1/wall_bounce_enabled, 2/enable_distractor; "
+             "catch_ramp_ball: 1/wall_bounce_enabled, 2/enable_distractor; "
+             "play_billiard: 1/specific_hole, 2/enable_distractors). "
              "Prefer --task-arg.",
     )
     parser.add_argument(

@@ -20,14 +20,20 @@ class play_billiard(Base_Task):
     ball falls through an allowed pocket into the hollow interior. Robot-link contact
     with the primary ball fails (cue contact is allowed).
 
-    Config knobs (task_args.play_billiard):
-      pocket_mode: "any" | "top_three"
-        any       — success in any of the 6 pockets
-        top_three — episode picks one of top-left / top-middle / top-right
-      blocker_mode: "none" | "path_to_top" | "unused_tops"
-        path_to_top — up to 2 colored balls between primary and a top-three pocket
-        unused_tops — up to 2 balls blocking the top pockets that are NOT the goal
-      num_extra_balls: 0..2
+    Options (independent toggles; CLI via ``--task-arg`` or legacy ``--option``):
+      Default — only the red target ball; success in any of the 6 pockets.
+      Opt 1 — ``specific_hole``: episode picks one top pocket (left / middle / right)
+        and draws an arrow pointing at it; success only in that pocket.
+        CLI: ``--task-arg specific_hole=true`` or ``--option 1``.
+      Opt 2 — ``enable_distractors``: spawn up to 2 colored balls on the table;
+        robot may still pocket in any hole.
+        CLI: ``--task-arg enable_distractors=true`` or ``--option 2``.
+      Opt 1+2 — distractors block exactly one pocket; target is chosen at random
+        among the remaining open top pockets (arrow marks the target).
+        CLI: both ``--task-arg`` flags together.
+
+    Legacy aliases still work: ``pocket_mode=top_three`` → Opt 1;
+    ``blocker_mode=path_to_top|unused_tops|block_one`` → Opt 2.
 
     Built entirely from SAPIEN primitives (reserved ids [350,359] in the NOTICE below).
     """
@@ -62,6 +68,8 @@ class play_billiard(Base_Task):
     # ----- balls
     BALL_RADIUS_DEFAULT = 0.012
     NUM_EXTRA_BALLS_DEFAULT = 0
+    SPECIFIC_HOLE_DEFAULT = False       # Opt 1
+    ENABLE_DISTRACTORS_DEFAULT = False  # Opt 2
     PRIMARY_COLOR = [0.90, 0.12, 0.12]
     EXTRA_COLORS = [
         [0.15, 0.35, 0.90],  # blue
@@ -69,6 +77,17 @@ class play_billiard(Base_Task):
         [0.55, 0.20, 0.75],  # purple
     ]
     BALL_MASS = 0.04
+    # Target-hole arrow (Opt 1): bright marker pointing at the goal pocket.
+    ARROW_COLOR = [0.98, 0.85, 0.10]
+    # PhysX only applies restitution when |v_rel| > bounce_threshold (engine
+    # default is 2 m/s). Cue strike is ~0.55 m/s, so we must lower it or
+    # ball–ball hits stay inelastic (both balls "stick" and slide together).
+    BOUNCE_THRESHOLD_DEFAULT = 0.15
+    BALL_RESTITUTION = 0.92
+    BALL_FRICTION = 0.05
+    BALL_LINEAR_DAMPING = 0.04
+    BALL_ANGULAR_DAMPING = 0.08
+    BALL_SLEEP_THRESHOLD = 0.001
 
     # ----- cue rod (local +X = tip direction; cylinder + spherical ends)
     CUE_RADIUS = 0.0072  # 1.2× prior 6 mm shaft for a more graspable stick
@@ -76,9 +95,22 @@ class play_billiard(Base_Task):
     CUE_COLOR = [0.72, 0.52, 0.28]
     CUE_TIP_COLOR = [0.05, 0.35, 1.0]  # vivid blue tip (was off-white)
     CUE_MASS = 0.05
-    # After measuring the natural grasp weld, raise the cue this much in world +Z
-    # so the shaft seats into the finger pads (measured pose often sits below them).
-    CUE_WELD_LIFT_Z = 0.02
+    # Grasp must seat the shaft between the finger pads. Do NOT teleport-lift the
+    # cue into the gripper after close — that looks like a magnet attach.
+    CUE_WELD_LIFT_Z = 0.0
+    # WSG50 pads sit only ~3 cm below the planning EE (not the 12 cm TCP offset
+    # assumed by get_grasp_pose). Top-down IK also cannot reach table height, so
+    # the cue rests on a short stand and we target finger-pad height explicitly.
+    CUE_STAND_HEIGHT = 0.12
+    # Planning-EE Z − shaft Z. Pads sit ≈3 cm below EE; +3 cm extra puts the
+    # shaft between the fingertips instead of deep in the jaw.
+    CUE_FINGER_EE_Z = 0.060
+    CUE_TIP_GRASP_CLEARANCE = 0.030  # target pad-link Z − shaft Z
+    # After lift, deepen weld slightly so tip↔felt strikes stay reachable.
+    CUE_STRIKE_HANG = 0.085
+    CUE_PRE_GRASP_DIS = 0.12
+    CUE_GRASP_OPEN = 0.85
+    CUE_GRASP_CLOSE = 0.0
 
     # ----- strike / settle
     APPROACH_GAP = 0.050
@@ -86,7 +118,7 @@ class play_billiard(Base_Task):
     # Tip hover clearance above the felt so the shaft clears the 10 cm box + rails.
     HOVER_CLEARANCE = 0.10
     SETTLE_STEPS_DEFAULT = 500
-    STRIKE_IMPULSE = 0.48
+    STRIKE_IMPULSE = 0.62
     # Tip apex → ball-center distance at surface touch ≈ ball_r + 2*cue_r
     # (apex sits one cue radius past the tip-sphere center). Extra slack for
     # alignment error; PhysX contact is still required to fire the impulse.
@@ -105,15 +137,109 @@ class play_billiard(Base_Task):
         self._cue_welded = False
         self._primary_pocketed = False
         self._primary_pocket_id = None
+        self._distractor_pocketed = False
+        self._pocketed_extra_ids = set()
+        self._pocketed_extra_entities = set()
         self._robot_ball_contact = False
         self._strike_armed = False
         self._strike_done = False
         self.cue = None
         self.primary_ball = None
         self.extra_balls = []
+        self._extra_rigids = []
+        self._primary_rigid = None
         self._pocket_centers = []
         self._arm_side = "right"
+        self._target_arrow_parts = []
+        self._blocked_pocket_id = None
         super()._init_task_env_(**kwags)
+
+    def setup_scene(self, **kwargs):
+        """Create the scene with a low bounce threshold so ball–ball hits rebound.
+
+        SAPIEN/PhysX defaults ``bounce_threshold=2`` m/s, which silently disables
+        restitution for our cue-strike speeds. Patch ``Engine.create_scene`` for
+        this call only so Base_Task's scene setup picks up the billiard values.
+        """
+        bounce_th = float(
+            self._cfg.get("bounce_threshold", self.BOUNCE_THRESHOLD_DEFAULT)
+        )
+        orig_create = sapien.Engine.create_scene
+
+        def _create_with_bounce(engine, config=None):
+            if config is None:
+                config = sapien.SceneConfig()
+            config.bounce_threshold = bounce_th
+            # Fast primary after the strike can otherwise tunnel through a resting ball.
+            try:
+                config.enable_ccd = True
+            except Exception:
+                pass
+            return orig_create(engine, config)
+
+        sapien.Engine.create_scene = _create_with_bounce
+        try:
+            super().setup_scene(**kwargs)
+        finally:
+            sapien.Engine.create_scene = orig_create
+
+    @staticmethod
+    def _as_bool(value, default: bool) -> bool:
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        s = str(value).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"play_billiard expected a boolean, got {value!r}")
+
+    def _parse_specific_hole(self, c) -> bool:
+        """Opt 1: specific target pocket (+ arrow)."""
+        specific = c.get("specific_hole", c.get("opt1", None))
+        legacy = c.get("option", None)
+        if legacy is not None and specific is None:
+            if legacy in (1, "1", "specific_hole", "specific", "top_three"):
+                specific = True
+            elif legacy in (2, "2", "enable_distractors", "enable_distractor", "distractors"):
+                specific = False
+            else:
+                raise ValueError(
+                    "play_billiard option must be 1/specific_hole or "
+                    "2/enable_distractors (or set the named booleans directly)"
+                )
+        if specific is not None:
+            return self._as_bool(specific, self.SPECIFIC_HOLE_DEFAULT)
+        # Legacy pocket_mode
+        mode = str(c.get("pocket_mode", "any")).strip().lower()
+        return mode in ("top_three", "specific", "specific_hole")
+
+    def _parse_enable_distractors(self, c) -> bool:
+        """Opt 2: up to two colored distractor balls on the table."""
+        distractors = c.get(
+            "enable_distractors",
+            c.get("enable_distractor", c.get("opt2", None)),
+        )
+        legacy = c.get("option", None)
+        if legacy is not None and distractors is None:
+            if legacy in (2, "2", "enable_distractors", "enable_distractor", "distractors"):
+                distractors = True
+            elif legacy in (1, "1", "specific_hole", "specific", "top_three"):
+                distractors = False
+            else:
+                raise ValueError(
+                    "play_billiard option must be 1/specific_hole or "
+                    "2/enable_distractors (or set the named booleans directly)"
+                )
+        if distractors is not None:
+            return self._as_bool(distractors, self.ENABLE_DISTRACTORS_DEFAULT)
+        # Legacy blocker_mode (num_extra_balls is now only a count when Opt2 is on)
+        blocker = str(c.get("blocker_mode", "none")).strip().lower()
+        return blocker in ("path_to_top", "unused_tops", "block_one")
 
     # ------------------------------------------------------------------ actors
     def load_actors(self):
@@ -126,12 +252,27 @@ class play_billiard(Base_Task):
         # Pocket diameter = 1.2 × ball diameter (override with pocket_radius if given).
         default_pr = self.POCKET_DIAMETER_SCALE * self.ball_radius
         self.pocket_radius = float(c.get("pocket_radius", default_pr))
-        self.num_extra_balls = int(np.clip(int(c.get("num_extra_balls", self.NUM_EXTRA_BALLS_DEFAULT)), 0, 2))
-        self.pocket_mode = str(c.get("pocket_mode", "any")).lower()
-        if self.pocket_mode not in ("any", "top_three"):
-            self.pocket_mode = "any"
-        self.blocker_mode = str(c.get("blocker_mode", "none")).lower()
-        if self.blocker_mode not in ("none", "path_to_top", "unused_tops"):
+        self.specific_hole = self._parse_specific_hole(c)
+        self.enable_distractors = self._parse_enable_distractors(c)
+        # Compat aliases used by aim / success / obs.
+        self.pocket_mode = "top_three" if self.specific_hole else "any"
+        n_cfg = int(c.get("num_extra_balls", self.NUM_EXTRA_BALLS_DEFAULT))
+        if self.enable_distractors:
+            # Up to two balls: keep an explicit 1–2, else sample.
+            if n_cfg <= 0:
+                self.num_extra_balls = int(np.random.randint(1, 3))
+            else:
+                self.num_extra_balls = int(np.clip(n_cfg, 1, 2))
+            # Prefer unused_tops when Opt1+2 (block one hole); else path obstacles.
+            raw_blocker = str(c.get("blocker_mode", "")).strip().lower()
+            if raw_blocker in ("none", "path_to_top", "unused_tops", "block_one"):
+                self.blocker_mode = raw_blocker if raw_blocker != "none" else (
+                    "block_one" if self.specific_hole else "path_to_top"
+                )
+            else:
+                self.blocker_mode = "block_one" if self.specific_hole else "path_to_top"
+        else:
+            self.num_extra_balls = 0
             self.blocker_mode = "none"
         self.settle_steps = int(c.get("settle_steps", self.SETTLE_STEPS_DEFAULT))
         self.strike_impulse = float(c.get("strike_impulse", self.STRIKE_IMPULSE))
@@ -144,6 +285,7 @@ class play_billiard(Base_Task):
 
         self._primary_pocketed = False
         self._primary_pocket_id = None
+        self._distractor_pocketed = False
         self._robot_ball_contact = False
         self._cue_welded = False
         self._strike_armed = False
@@ -153,6 +295,10 @@ class play_billiard(Base_Task):
         self._target_pocket_id = None
         self._target_pocket_name = "any"
         self._allowed_pocket_ids = list(range(6))
+        self._target_arrow_parts = []
+        self._blocked_pocket_id = None
+        self._pocketed_extra_ids = set()
+        self._pocketed_extra_entities = set()
 
         self._build_table()
         self._spawn_balls()
@@ -326,26 +472,92 @@ class play_billiard(Base_Task):
         y_hi = self.table_cy + self.table_half_wid - margin
         return x_lo, x_hi, y_lo, y_hi
 
+    def _set_target_pocket(self, pid):
+        """Lock success / language / aim to a single pocket id."""
+        self._target_pocket_id = int(pid)
+        self._target_pocket = self._pocket_centers[self._target_pocket_id]
+        self._target_pocket_name = self.POCKET_NAMES[self._target_pocket_id]
+        self._allowed_pocket_ids = [self._target_pocket_id]
+
     def _select_goal_pocket(self):
-        """Choose the episode goal pocket (and allowed success set) from pocket_mode."""
-        if self.pocket_mode == "top_three":
-            forced = str(self._cfg.get("target_pocket", "")).lower()
-            name_to_id = {
-                "top_left": 1, "top_middle": 5, "top_mid": 5, "top_right": 3,
-            }
-            if forced in name_to_id:
-                pid = name_to_id[forced]
-            else:
-                pid = int(np.random.choice(self.TOP_POCKET_IDS))
-            self._target_pocket_id = pid
-            self._target_pocket = self._pocket_centers[pid]
-            self._target_pocket_name = self.POCKET_NAMES[pid]
-            self._allowed_pocket_ids = [pid]
-        else:
+        """Choose the episode goal pocket (and allowed success set).
+
+        Default / Opt 2 only → any of 6 pockets.
+        Opt 1 → one of the three far (+Y) pockets.
+        Opt 1+2 → block one top pocket with distractors, then pick target among
+        the remaining open top pockets.
+        """
+        self._blocked_pocket_id = None
+        if not self.specific_hole:
             self._target_pocket_id = None
             self._target_pocket = None
             self._target_pocket_name = "any"
             self._allowed_pocket_ids = list(range(6))
+            return
+
+        forced = str(self._cfg.get("target_pocket", "")).lower()
+        name_to_id = {
+            "top_left": 1, "top_middle": 5, "top_mid": 5, "top_right": 3,
+            "near_left": 0, "near_middle": 4, "near_mid": 4, "near_right": 2,
+        }
+
+        if self.enable_distractors:
+            # Opt 1+2: distractors occupy exactly one hole; target is an open one.
+            if forced in name_to_id and name_to_id[forced] in self.TOP_POCKET_IDS:
+                pid = name_to_id[forced]
+                blocked = int(np.random.choice(
+                    [i for i in self.TOP_POCKET_IDS if i != pid]
+                ))
+            else:
+                blocked = int(np.random.choice(self.TOP_POCKET_IDS))
+                open_ids = [i for i in self.TOP_POCKET_IDS if i != blocked]
+                pid = int(np.random.choice(open_ids))
+            self._blocked_pocket_id = blocked
+            self._set_target_pocket(pid)
+            return
+
+        # Opt 1 only: specific hole among the top three.
+        if forced in name_to_id and name_to_id[forced] in self.TOP_POCKET_IDS:
+            pid = name_to_id[forced]
+        else:
+            pid = int(np.random.choice(self.TOP_POCKET_IDS))
+        self._set_target_pocket(pid)
+
+    def _draw_target_arrow(self, pocket_id):
+        """Flat yellow arrow on the felt pointing at the given pocket (Opt 1)."""
+        pxy = np.asarray(self._pocket_centers[int(pocket_id)][:2], dtype=np.float64)
+        center = np.array([self.table_cx, self.table_cy], dtype=np.float64)
+        toward = pxy - center
+        n = float(np.linalg.norm(toward))
+        if n < 1e-6:
+            toward = np.array([0.0, 1.0], dtype=np.float64)
+        else:
+            toward = toward / n
+        # Tip just inboard of the pocket rim; shaft extends toward table center.
+        tip_xy = pxy - toward * (self.pocket_radius + 0.012)
+        yaw = float(np.arctan2(toward[1], toward[0]))
+        z = float(self.felt_top + 0.0015)
+        # Local +X = pointing direction (toward the hole).
+        parts = [
+            ("shaft", [-0.018, 0.0], 0.0, [0.016, 0.0035, 0.0012]),
+            ("head_upper", [0.006, 0.007], 0.70, [0.012, 0.0032, 0.0012]),
+            ("head_lower", [0.006, -0.007], -0.70, [0.012, 0.0032, 0.0012]),
+        ]
+        c, s = np.cos(yaw), np.sin(yaw)
+        self._target_arrow_parts = []
+        for name, (lx, ly), local_yaw, half_size in parts:
+            x = float(tip_xy[0] + c * lx - s * ly)
+            y = float(tip_xy[1] + s * lx + c * ly)
+            part_yaw = yaw + local_yaw
+            q = [np.cos(part_yaw / 2.0), 0.0, 0.0, np.sin(part_yaw / 2.0)]
+            arrow = create_visual_box(
+                self,
+                sapien.Pose([x, y, z], q),
+                half_size=half_size,
+                color=self.ARROW_COLOR,
+                name=f"target_pocket_arrow_{name}",
+            )
+            self._target_arrow_parts.append(arrow)
 
     def _spawn_balls(self):
         x_lo, x_hi, y_lo, y_hi = self._table_xy_bounds()
@@ -363,35 +575,45 @@ class play_billiard(Base_Task):
         )
         self._primary_rigid = self._get_rigid_entity(self.primary_ball)
 
-        # Goal pocket before blockers so unused_tops / path placement know the target.
+        # Goal pocket before blockers so Opt1+2 knows which hole to block / leave open.
         self._select_goal_pocket()
+        if self.specific_hole and self._target_pocket_id is not None:
+            self._draw_target_arrow(self._target_pocket_id)
 
         self.extra_balls = []
         self._extra_rigids = []
         occupied = [np.array([px, py], dtype=np.float64)]
-        if self.blocker_mode == "none" or self.num_extra_balls <= 0:
+        if not self.enable_distractors or self.num_extra_balls <= 0:
             return
 
         n = self.num_extra_balls
-        if self.blocker_mode == "unused_tops":
-            # Block top pockets that are not the chosen goal.
-            focus_id = self._target_pocket_id
-            if focus_id is None:
-                # pocket_mode=any: pick a focus top pocket for blocker placement only.
-                focus_id = int(np.random.choice(self.TOP_POCKET_IDS))
-            unused = [i for i in self.TOP_POCKET_IDS if i != focus_id]
-            np.random.shuffle(unused)
-            for i, pid in enumerate(unused[:n]):
-                pos = self._blocker_near_pocket(pid, occupied)
+        if self.blocker_mode in ("block_one", "unused_tops") or (
+            self.specific_hole and self._blocked_pocket_id is not None
+        ):
+            # Opt 1+2 (and unused_tops): put all distractors on one blocked hole.
+            blocked = self._blocked_pocket_id
+            if blocked is None:
+                # Opt1 without pre-chosen block, or Opt2+unused_tops: block a
+                # non-goal top pocket (or a random top if goal is any).
+                focus = self._target_pocket_id
+                candidates = [
+                    i for i in self.TOP_POCKET_IDS if i != focus
+                ] if focus is not None else list(self.TOP_POCKET_IDS)
+                blocked = int(np.random.choice(candidates))
+                self._blocked_pocket_id = blocked
+            for i in range(n):
+                pos = self._blocker_near_pocket(blocked, occupied)
                 if pos is None:
                     continue
                 color = self.EXTRA_COLORS[i % len(self.EXTRA_COLORS)]
-                ball = self._make_ball([pos[0], pos[1], self.ball_z], color, f"extra_ball_{i}")
+                ball = self._make_ball(
+                    [pos[0], pos[1], self.ball_z], color, f"extra_ball_{i}"
+                )
                 self.extra_balls.append(ball)
                 self._extra_rigids.append(self._get_rigid_entity(ball))
                 occupied.append(pos)
         else:
-            # path_to_top: place up to 2 balls between primary and one of the top-three holes.
+            # Opt 2 only: place up to 2 balls between primary and a random top hole.
             top_ids = list(self.TOP_POCKET_IDS)
             np.random.shuffle(top_ids)
             path_pocket = self._pocket_centers[top_ids[0]]
@@ -400,12 +622,13 @@ class play_billiard(Base_Task):
                     occupied[0], path_pocket[:2], occupied, frac=0.35 + 0.2 * i
                 )
                 if pos is None:
-                    # Fallback: near that pocket mouth.
                     pos = self._blocker_near_pocket(top_ids[0], occupied)
                 if pos is None:
                     continue
                 color = self.EXTRA_COLORS[i % len(self.EXTRA_COLORS)]
-                ball = self._make_ball([pos[0], pos[1], self.ball_z], color, f"extra_ball_{i}")
+                ball = self._make_ball(
+                    [pos[0], pos[1], self.ball_z], color, f"extra_ball_{i}"
+                )
                 self.extra_balls.append(ball)
                 self._extra_rigids.append(self._get_rigid_entity(ball))
                 occupied.append(pos)
@@ -466,33 +689,106 @@ class play_billiard(Base_Task):
         rigid = self._get_rigid_entity(ball)
         if rigid is not None:
             try:
-                rigid.set_mass(self.BALL_MASS)
-                rigid.set_linear_damping(0.15)
-                rigid.set_angular_damping(0.4)
+                # Keep full dynamic simulation (distractors must roll/bounce too).
+                rigid.set_kinematic(False)
+                rigid.set_disable_gravity(False)
+                mass = float(self.BALL_MASS)
+                rigid.set_mass(mass)
+                # set_mass disables auto inertia; use solid-sphere I = 2/5 m r^2.
+                inertia = 0.4 * mass * (self.ball_radius ** 2)
+                rigid.set_inertia([inertia, inertia, inertia])
+                rigid.set_linear_damping(self.BALL_LINEAR_DAMPING)
+                rigid.set_angular_damping(self.BALL_ANGULAR_DAMPING)
+                rigid.set_sleep_threshold(self.BALL_SLEEP_THRESHOLD)
+                try:
+                    rigid.set_solver_position_iterations(8)
+                    rigid.set_solver_velocity_iterations(4)
+                except Exception:
+                    pass
             except Exception:
                 pass
-            # Low friction so the ball rolls toward pockets after a strike.
+            # Bouncy, low-friction surfaces so ball–ball impacts transfer momentum.
             try:
                 mat = sapien.physx.PhysxMaterial(
-                    static_friction=0.15, dynamic_friction=0.10, restitution=0.55
+                    static_friction=self.BALL_FRICTION,
+                    dynamic_friction=self.BALL_FRICTION,
+                    restitution=self.BALL_RESTITUTION,
                 )
                 for shape in rigid.get_collision_shapes():
                     shape.set_physical_material(mat)
             except Exception:
                 pass
+            try:
+                rigid.wake_up()
+            except Exception:
+                pass
         return ball
 
+    def _iter_live_ball_rigids(self):
+        """Yield (entity, rigid) for non-pocketed dynamic balls."""
+        if self.primary_ball is not None and self._primary_rigid is not None:
+            if not self._primary_pocketed:
+                yield self.primary_ball, self._primary_rigid
+        for ball, rigid in zip(self.extra_balls, getattr(self, "_extra_rigids", [])):
+            if ball is None or rigid is None:
+                continue
+            try:
+                if rigid.get_kinematic():
+                    continue
+            except Exception:
+                pass
+            yield ball, rigid
+
+    def _wake_all_balls(self):
+        """Wake resting distractors so a moving primary can transfer momentum."""
+        for _, rigid in self._iter_live_ball_rigids():
+            try:
+                rigid.set_kinematic(False)
+                rigid.set_disable_gravity(False)
+                rigid.wake_up()
+            except Exception:
+                pass
+
+    def _ensure_balls_dynamic(self):
+        """Keep non-pocketed balls fully dynamic every physics tick."""
+        for _, rigid in self._iter_live_ball_rigids():
+            try:
+                if rigid.get_kinematic():
+                    rigid.set_kinematic(False)
+                if rigid.get_disable_gravity():
+                    rigid.set_disable_gravity(False)
+            except Exception:
+                pass
+
     # ------------------------------------------------------------- cue
+    def _spawn_cue_stand(self, cue_x, cue_y):
+        """Short wood cradle so the WSG can top-down grasp without hitting the table."""
+        stand_h = float(self.CUE_STAND_HEIGHT)
+        half_h = 0.5 * stand_h
+        z = float(self.z0 + half_h)
+        wood = (0.42, 0.28, 0.16)
+        # Two posts under the shaft (along +Y); mid-span clear for butt grasp.
+        for i, dy in enumerate((-0.052, 0.052)):
+            create_box(
+                self,
+                pose=sapien.Pose([float(cue_x), float(cue_y + dy), z], [1, 0, 0, 0]),
+                half_size=[0.014, 0.010, half_h],
+                color=wood,
+                is_static=True,
+                name=f"cue_stand_{i}",
+            )
+
     def _spawn_cue(self):
-        """Lie the cue flat beside the table, shaft along +Y (same side as arm)."""
+        """Lie the cue on a side stand, shaft along +Y (same side as arm)."""
         side_clear = 0.09
         if self._arm_side == "right":
             cue_x = float(self.table_cx + self.table_half_len + side_clear)
         else:
             cue_x = float(self.table_cx - self.table_half_len - side_clear)
         cue_y = float(self.table_cy + np.random.uniform(-0.04, 0.04))
-        # Flat on the workspace table (same z as the original front-of-table spawn).
-        cue_z = float(self.z0 + self.CUE_RADIUS)
+        self._spawn_cue_stand(cue_x, cue_y)
+        # Resting on the stand top (reachable by WSG finger pads).
+        cue_z = float(self.z0 + self.CUE_STAND_HEIGHT + self.CUE_RADIUS)
         # Local +X (tip) → world +Y so the shaft runs along the table short side.
         along_y_q = t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], np.pi / 2).tolist()
         pose = sapien.Pose([cue_x, cue_y, cue_z], along_y_q)
@@ -532,17 +828,16 @@ class play_billiard(Base_Task):
             "extents": [2 * tip_x, 2 * r, 2 * r],
             "transform_matrix": np.eye(4).tolist(),
             "target_pose": [np.eye(4).tolist()],
-            # Top-down grasp on a flat shaft (local +X = tip). World yaw in
-            # _spawn_cue aligns the shaft with +Y; these frames stay local.
+            # Top-down frames at shaft center (local +X = tip). Z overridden in pick.
             "contact_points_pose": [
                 [
-                    [1, 0, 0, -0.015],
+                    [1, 0, 0, 0.0],
                     [0, 0, -1, 0.0],
                     [0, 1, 0, 0.0],
                     [0, 0, 0, 1],
                 ],
                 [
-                    [1, 0, 0, 0.01],
+                    [1, 0, 0, 0.0],
                     [0, 0, -1, 0.0],
                     [0, 1, 0, 0.0],
                     [0, 0, 0, 1],
@@ -624,8 +919,8 @@ class play_billiard(Base_Task):
         blockers = [self._ball_xy(b) for b in self.extra_balls]
         clearance = 2.2 * self.ball_radius
 
-        # Prefer the episode goal when pocket_mode=top_three; else any allowed.
-        if self.pocket_mode == "top_three" and self._target_pocket_id is not None:
+        # Prefer the episode goal when Opt 1 (specific hole); else any allowed.
+        if self.specific_hole and self._target_pocket_id is not None:
             aim_ids = [self._target_pocket_id]
         else:
             aim_ids = list(self._allowed_pocket_ids)
@@ -656,7 +951,7 @@ class play_billiard(Base_Task):
         candidates = collect(aim_ids, require_plus_y=True)
         if not candidates:
             candidates = collect(aim_ids, require_plus_y=False)
-        if not candidates and self.pocket_mode == "any":
+        if not candidates and not self.specific_hole:
             candidates = collect(list(range(6)), require_plus_y=False)
         if not candidates:
             # Absolute fallback: farthest +Y pocket on this side.
@@ -702,20 +997,22 @@ class play_billiard(Base_Task):
         except Exception:
             pass
 
-    def _weld_cue_to_ee(self, arm_tag):
-        """Lock cue to EE using the post-grasp relative pose (natural pick).
+    def _weld_cue_to_ee(self, arm_tag, lift_z=None):
+        """Lock cue to EE using the post-grasp relative pose (no teleport seat).
 
-        Keeps the measured EE↔cue transform, then applies a world +Z lift
-        (CUE_WELD_LIFT_Z) into the jaw aperture so the stick is not welded
-        below/outside the finger pads.
+        Records the EE↔cue transform after the fingers have closed on the shaft.
+        Optional ``lift_z`` is kept for debugging only; production uses 0 so the
+        stick does not jump into the gripper.
         """
+        if lift_z is None:
+            lift_z = float(self.CUE_WELD_LIFT_Z)
         ee = np.asarray(self.get_arm_pose(str(arm_tag)), dtype=np.float64)
         ee_T = self._pose_to_mat(ee)
         cue_T = self.cue.get_pose().to_transformation_matrix()
         self._cue_ee_T = np.linalg.inv(ee_T) @ cue_T
-        # World +Z → EE-local translation so _update_welded_cue keeps the lift.
-        lift_world = np.array([0.0, 0.0, float(self.CUE_WELD_LIFT_Z)], dtype=np.float64)
-        self._cue_ee_T[:3, 3] += ee_T[:3, :3].T @ lift_world
+        if abs(lift_z) > 1e-6:
+            lift_world = np.array([0.0, 0.0, float(lift_z)], dtype=np.float64)
+            self._cue_ee_T[:3, 3] += ee_T[:3, :3].T @ lift_world
         self._cue_arm = str(arm_tag)
         seated = self._mat_to_pose(ee_T @ self._cue_ee_T)
         self.cue.actor.set_pose(seated)
@@ -728,6 +1025,88 @@ class play_billiard(Base_Task):
             rigid.set_kinematic_target(seated)
         self._disable_cue_robot_collision()
         self._cue_welded = True
+
+    def _finger_pad_z(self, arm):
+        """Mean world-Z of the WSG finger links (approx. pad height)."""
+        ent = self.robot.left_entity if str(arm) == "left" else self.robot.right_entity
+        zs = [
+            float(link.entity_pose.p[2])
+            for link in ent.get_links()
+            if "finger" in link.get_name()
+        ]
+        return float(np.mean(zs)) if zs else None
+
+    def _pick_up_cue(self, arm):
+        """Open → descend onto shaft center (fingertip height) → close → weld."""
+        cue_p = np.asarray(self.cue.get_pose().p, dtype=np.float64)
+        _pre, grasp = self.choose_grasp_pose(
+            self.cue,
+            arm_tag=arm,
+            pre_dis=float(self.CUE_PRE_GRASP_DIS),
+            target_dis=0.0,
+            contact_point_id=0,
+        )
+        if grasp is None:
+            return False
+        # Grasp at the stick center; EE a bit high so tips (not the palm) pinch it.
+        grasp_z = float(cue_p[2] + self.CUE_FINGER_EE_Z)
+        pre_z = float(grasp_z + self.CUE_PRE_GRASP_DIS)
+        quat = list(grasp[3:7])
+        pre_pose = [float(cue_p[0]), float(cue_p[1]), pre_z, *quat]
+        grasp_pose = [float(cue_p[0]), float(cue_p[1]), grasp_z, *quat]
+
+        self._disable_cue_robot_collision()
+
+        self.move(self.open_gripper(arm, pos=float(self.CUE_GRASP_OPEN)))
+        if not self.plan_success:
+            return False
+
+        self.move(self.move_to_pose(arm, pre_pose))
+        if not self.plan_success:
+            return False
+
+        self.move(self.move_to_pose(arm, grasp_pose))
+        if not self.plan_success:
+            return False
+
+        # Keep pad links ~3 cm above the shaft (fingertip pinch).
+        target_pad_z = float(cue_p[2] + self.CUE_TIP_GRASP_CLEARANCE)
+        pad_z = self._finger_pad_z(arm)
+        if pad_z is not None:
+            for _ in range(4):
+                err = float(target_pad_z - pad_z)
+                if abs(err) < 0.008:
+                    break
+                step = float(np.clip(err, -0.025, 0.025))
+                self.move(
+                    self.move_by_displacement(
+                        arm_tag=arm, z=step, move_axis="world"
+                    )
+                )
+                if not self.plan_success:
+                    self.plan_success = True
+                    break
+                pad_z = self._finger_pad_z(arm)
+                if pad_z is None:
+                    break
+
+        self.move(self.close_gripper(arm, pos=float(self.CUE_GRASP_CLOSE)))
+        if not self.plan_success:
+            return False
+
+        self._dwell(20)
+        self._weld_cue_to_ee(arm, lift_z=0.0)
+        return True
+
+    def _seat_cue_for_strike(self, arm):
+        """Deepen the post-grasp weld so tip↔felt strikes stay reachable."""
+        hang = float(self.CUE_STRIKE_HANG)
+        if hang < 1e-4 or not self._cue_welded:
+            return
+        self._cue_ee_T = np.array(self._cue_ee_T, dtype=np.float64, copy=True)
+        self._cue_ee_T[0, 3] += hang
+        self._update_welded_cue()
+        self._dwell(8)
 
     def _cue_ball_contacting(self):
         """True only when PhysX reports touching cue↔ball contact.
@@ -777,6 +1156,11 @@ class play_billiard(Base_Task):
         if self._robot_ball_contact or not self._loaded:
             return
         if self.primary_ball is None:
+            return
+        # During the cue-strike window the WSG pads can ghost through the welded
+        # cue (cue↔robot collisions are disabled) and spuriously touch the ball.
+        # Fail only on arm/ball contact outside that window.
+        if self._strike_armed or self._strike_done:
             return
         ball_name = self.primary_ball.get_name()
         for contact in self.scene.get_contacts():
@@ -830,8 +1214,11 @@ class play_billiard(Base_Task):
         try:
             rigid.set_linear_velocity(direction * self.strike_impulse)
             rigid.set_angular_velocity(np.zeros(3))
+            rigid.wake_up()
         except Exception:
             pass
+        # Distractors start asleep on the felt; wake them so the impact can bounce.
+        self._wake_all_balls()
         self._strike_done = True
         self._strike_armed = False
         if os.environ.get("PLAY_BILLIARD_DEBUG"):
@@ -859,20 +1246,36 @@ class play_billiard(Base_Task):
                 best_d, best_i = d, i
         return best_i, best_d
 
+    def _mark_distractor_pocketed(self, ball):
+        """Any distractor in a pocket fails the episode."""
+        self._distractor_pocketed = True
+        try:
+            idx = self.extra_balls.index(ball)
+            self._pocketed_extra_ids.add(idx)
+        except ValueError:
+            pass
+
     def _check_and_sink_pockets(self):
-        if self._primary_pocketed:
-            return
+        # Always scan primary + distractors (do not stop after primary sinks).
         balls = [(self.primary_ball, True)] + [(b, False) for b in self.extra_balls]
         for ball, is_primary in balls:
             if ball is None:
+                continue
+            if (not is_primary) and ball in getattr(self, "_pocketed_extra_entities", set()):
                 continue
             p = np.asarray(ball.get_pose().p, dtype=np.float64)
             # Natural fall through a real pocket opening into the hollow interior.
             if self._ball_inside_hollow(p):
                 if is_primary:
-                    pid, _ = self._nearest_pocket_id(p[:2])
-                    self._primary_pocket_id = pid
-                    self._primary_pocketed = True
+                    if not self._primary_pocketed:
+                        pid, _ = self._nearest_pocket_id(p[:2])
+                        self._primary_pocket_id = pid
+                        self._primary_pocketed = True
+                else:
+                    self._mark_distractor_pocketed(ball)
+                    if not hasattr(self, "_pocketed_extra_entities"):
+                        self._pocketed_extra_entities = set()
+                    self._pocketed_extra_entities.add(ball)
                 self._rest_ball_on_floor(ball, p)
                 continue
             for i, pocket in enumerate(self._pocket_centers):
@@ -880,11 +1283,18 @@ class play_billiard(Base_Task):
                     # Nudge through the opening so physics can finish the drop.
                     if float(p[2]) > self.base_top - 0.002:
                         self._drop_ball_through_pocket(ball, pocket)
-                    if is_primary and self._ball_inside_hollow(
+                    inside = self._ball_inside_hollow(
                         np.asarray(ball.get_pose().p, dtype=np.float64)
-                    ):
-                        self._primary_pocket_id = i
-                        self._primary_pocketed = True
+                    )
+                    if inside:
+                        if is_primary and not self._primary_pocketed:
+                            self._primary_pocket_id = i
+                            self._primary_pocketed = True
+                        elif not is_primary:
+                            self._mark_distractor_pocketed(ball)
+                            if not hasattr(self, "_pocketed_extra_entities"):
+                                self._pocketed_extra_entities = set()
+                            self._pocketed_extra_entities.add(ball)
                     break
 
     def _drop_ball_through_pocket(self, ball, pocket):
@@ -928,16 +1338,28 @@ class play_billiard(Base_Task):
         self._update_welded_cue()
         self._check_robot_ball_contact()
         self._try_apply_strike_impulse()
+        self._ensure_balls_dynamic()
         self._check_and_sink_pockets()
 
     def _dwell(self, steps):
+        # After the primary sinks, keep simulating briefly so a trailing
+        # distractor that also falls is still detected as a failure.
+        post_primary_steps = 80
+        post = None
         for i in range(max(0, int(steps))):
             self._update_kinematic_tasks()
             self.scene.step()
             if self.save_freq and i % self.save_freq == 0:
                 self._take_picture()
-            if self._primary_pocketed or self._robot_ball_contact:
+            if self._robot_ball_contact or self._distractor_pocketed:
                 break
+            if self._primary_pocketed:
+                if post is None:
+                    post = 0
+                else:
+                    post += 1
+                    if post >= post_primary_steps:
+                        break
 
     def _dbg(self, tag):
         if os.environ.get("PLAY_BILLIARD_DEBUG"):
@@ -977,14 +1399,8 @@ class play_billiard(Base_Task):
         arm = ArmTag(self._arm_side)
         hover_z = float(self.felt_top + self.HOVER_CLEARANCE)
 
-        # 1) Natural top-down grasp, then weld the measured EE↔cue transform.
-        self.move(
-            self.grasp_actor(
-                self.cue, arm_tag=arm, pre_grasp_dis=0.10, contact_point_id=0
-            )
-        )
-        self._dbg("after_grasp")
-        if not self.plan_success:
+        # 1) Proper pick: open → descend onto shaft → close → weld (no teleport).
+        if not self._pick_up_cue(arm):
             self.info["info"] = {
                 "{A}": "cue stick",
                 "{B}": "red ball",
@@ -992,9 +1408,10 @@ class play_billiard(Base_Task):
                 "{C}": self._target_pocket_name.replace("_", " "),
             }
             return self.info
-        self._weld_cue_to_ee(arm)
+        self._dbg("after_grasp")
 
         # Retreat slightly in -Y then lift high BEFORE any approach.
+        # Lift is a real arm motion that carries the already-grasped cue.
         table_near_y = self.table_cy - self.table_half_wid
         tip = self._tip_xyz()
         if tip[1] > table_near_y - 0.04:
@@ -1006,12 +1423,16 @@ class play_billiard(Base_Task):
                 )
             )
         self._move_tip_z_to(arm, hover_z, max_step=0.09)
+        # Deepen hold for strike reachability (jaws already closed around shaft).
+        self._seat_cue_for_strike(arm)
+        # Tip drops with the reseat — climb back to hover for the table approach.
+        self._move_tip_z_to(arm, hover_z, max_step=0.09)
         self._dbg("after_lift")
 
         # 2) Choose aim pocket and point the stick at it.
         pocket, aim_pid = self._choose_pocket()
-        # Keep episode goal for top_three; for any-mode record what we aimed at.
-        if self.pocket_mode != "top_three":
+        # Keep episode goal for Opt 1; for any-mode record what we aimed at.
+        if not self.specific_hole:
             self._target_pocket = pocket
             self._target_pocket_id = aim_pid
             self._target_pocket_name = self.POCKET_NAMES[aim_pid]
@@ -1122,18 +1543,49 @@ class play_billiard(Base_Task):
             _home_tip_xy(behind, tol=0.010)
         if self.plan_success:
             self._move_tip_z_to(arm, strike_z, max_step=0.06)
+        # Arm strike phase: tip near the ball; ignore gripper ghost contacts.
+        self._strike_armed = True
+        self._strike_done = False
         if self.plan_success:
             _home_tip_xy(contact_xy, tol=0.006, hops=6)
         if self.plan_success:
             # Re-seat Z after XY hops (planner often lifts the tip).
             self._move_tip_z_to(arm, strike_z, max_step=0.04)
+        # Final close: drive tip straight at the ball until near contact.
+        if self.plan_success:
+            contact_thresh = (
+                self.ball_radius + 2.0 * self.CUE_RADIUS + self.STRIKE_CONTACT_GAP
+            )
+            for _ in range(8):
+                tip = self._tip_xyz()
+                ball_p = np.asarray(self.primary_ball.get_pose().p, dtype=np.float64)
+                dist = float(np.linalg.norm(tip - ball_p))
+                if dist <= contact_thresh * 0.95:
+                    break
+                delta = ball_p - tip
+                # Prefer closing in XY; keep Z near strike height.
+                step = min(0.02, 0.55 * dist)
+                nxy = float(np.linalg.norm(delta[:2]))
+                if nxy < 1e-6:
+                    break
+                self.move(
+                    self.move_by_displacement(
+                        arm_tag=arm,
+                        x=float(delta[0] / nxy * step),
+                        y=float(delta[1] / nxy * step),
+                        z=float(np.clip(strike_z - tip[2], -0.02, 0.02)),
+                        move_axis="world",
+                    )
+                )
+                if not self.plan_success:
+                    self.plan_success = True
+                    break
+                self._dwell(6)
         self._dbg("after_align_z")
 
         # Strike: push through the ball along aim. Impulse only after tip–ball contact.
-        self._strike_armed = True
-        self._strike_done = False
         through_xy = ball_xy + self._aim_dir * self.STRIKE_PUSH
-        for _ in range(8):
+        for _ in range(10):
             if self._strike_done or self._primary_pocketed or not self.plan_success:
                 break
             tip = self._tip_xyz()
@@ -1148,8 +1600,8 @@ class play_billiard(Base_Task):
             along = float(np.dot(to_ball, self._aim_dir))
             lateral = to_ball - self._aim_dir * along
             # If already past the ball center, keep driving toward through_xy.
-            advance = self._aim_dir * (0.018 if along > -0.005 else 0.012)
-            target = tip[:2] + lateral * 0.7 + advance
+            advance = self._aim_dir * (0.022 if along > -0.005 else 0.015)
+            target = tip[:2] + lateral * 0.85 + advance
             # Clamp progress so we don't overshoot the through point badly.
             to_through = through_xy - tip[:2]
             if float(np.linalg.norm(to_through)) < 0.008:
@@ -1190,8 +1642,24 @@ class play_billiard(Base_Task):
 
     # ------------------------------------------------------------------ success
     def check_success(self):
+        """Success = primary in an allowed pocket AND no distractor pocketed.
+
+        Default / Opt 2: any of the 6 pockets is allowed.
+        Opt 1 / Opt 1+2: only the nominated target pocket is allowed.
+        Any distractor ball falling into any pocket fails the episode.
+        """
         if self._robot_ball_contact:
             return False
+        if getattr(self, "_distractor_pocketed", False):
+            return False
+        # Re-scan distractors in case success is checked without a sink step.
+        for ball in self.extra_balls:
+            if ball is None:
+                continue
+            p = np.asarray(ball.get_pose().p, dtype=np.float64)
+            if self._ball_inside_hollow(p):
+                self._distractor_pocketed = True
+                return False
         if not self._primary_pocketed:
             if self.primary_ball is None:
                 return False
@@ -1227,10 +1695,16 @@ class play_billiard(Base_Task):
             "target_pocket": pocket,
             "target_pocket_name": self._target_pocket_name,
             "pocket_mode": self.pocket_mode,
+            "specific_hole": float(self.specific_hole),
+            "enable_distractors": float(self.enable_distractors),
             "blocker_mode": self.blocker_mode,
+            "blocked_pocket_id": float(
+                -1 if self._blocked_pocket_id is None else self._blocked_pocket_id
+            ),
             "arm_side": self._arm_side,
             "aim_dir": self._aim_dir.tolist(),
             "primary_pocketed": float(self._primary_pocketed),
+            "distractor_pocketed": float(getattr(self, "_distractor_pocketed", False)),
             "robot_ball_contact": float(self._robot_ball_contact),
             "num_extra_balls": float(len(self.extra_balls)),
             "strike_done": float(self._strike_done),

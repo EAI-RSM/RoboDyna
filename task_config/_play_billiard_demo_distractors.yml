@@ -1,0 +1,327 @@
+render_freq: 0
+episode_num: 1
+use_seed: false
+save_freq: 15
+embodiment:
+- ur5-wsg
+- ur5-wsg
+- 0.6
+language_num: 100
+use_dynamic: true
+dynamic_level: 1
+dynamic_coefficient: 0.1
+domain_randomization:
+  random_background: false
+  cluttered_table: false
+  clean_background_rate: 1
+  random_head_camera_dis: 0
+  random_table_height: 0
+  random_light: false
+  crazy_random_light_rate: 0
+camera:
+  head_camera_type: D435
+  wrist_camera_type: D435
+  collect_head_camera: true
+  collect_wrist_camera: true
+data_type:
+  rgb: true
+  third_view: false
+  depth: false
+  pointcloud: false
+  observer: false
+  endpose: true
+  qpos: true
+  mesh_segmentation: false
+  actor_segmentation: false
+pcd_down_sample_num: 1024
+pcd_crop: true
+save_path: ./tmp_play_billiard
+clear_cache_freq: 5
+collect_data: true
+eval_video_log: true
+check_render_success: false
+export_lerobot: false
+lerobot_root: ./data_lerobot/domino_suite
+lerobot_chunks_size: 1000
+lerobot_task_state_dim: 32
+task_args:
+  toast_bread:
+    toast_steps: 1000
+    target_doneness: 0.45
+    plate_scale_mult: 0.65
+    steamer_scale_mult: 0.1
+  cook_meat:
+    cook_steps_min: 2000
+    cook_steps_max: 8000
+    target_doneness_min: 0.45
+    target_doneness_max: 0.55
+    place_dx: 0.01
+    place_dy: -0.015
+  assemble_markers_cylinder:
+    side_cyl_radius: 0.018
+    side_cyl_half_len: 0.1
+    center_cyl_radius: 0.09
+    center_cyl_half_len: 0.1
+    center_x: 0.0
+    center_y: 0.0
+    attach_dist: 0.06
+    attach_z: 0.04
+    dwell_steps: 40
+    side_group_x_offset: 0.18
+    side_group_y_offset: 0.1
+    side_group_x_jitter: 0.03
+    side_group_y_jitter: 0.01
+    center_table_clearance: 0.005
+    rotation_direction: counter_clockwise
+  catch_marbles_trapdoors:
+    press_hold_steps: 24
+    final_dwell_steps: 100
+    button_press_depth: 0.03
+    door_open_angle_deg: 95.0
+    door_open_speed_deg: 220.0
+    ball_speed: 0.18
+    ball_bounce_height: 0.012
+  catch_rat:
+    num_appearances: 3
+    pop_steps: 90
+    grasp_tol: 0.05
+  whack_a_mole:
+    num_moles: 3
+    difficulty: easy
+    pop_steps: 90
+    touch_tol: 0.04
+    hole_count: 9
+    hole_size: 0.055
+    cube_hole_scale: 1.3
+  collect_falling_bowl:
+    num_objects: 4
+    emit_interval: 40
+    fall_steps: 55
+    rim_radius: 0.055
+    pour_every: 3
+  cup_curtain_slot:
+    curtain_freq: 0.5
+    curtain_amp: 0.05
+    belt_speed: 0.08
+    belt_range: 0.08
+    placement_tol: 0.05
+    gap_tol: 0.06
+    reach_tol: 0.05
+    moving_component_spacing: 0.10
+    blue_curtains_enabled: false      # opt1
+    blue_curtain_dynamic_enabled: false  # opt2
+    lift_off_only_after_place: false
+    post_place_lift_z: 0.1
+  dual_hole_punch:
+    # Opt 1 missing_tile_mode | Opt 2 belt_continous_motion (spacing always variable)
+    # DEFAULT Opt 2 false = discrete; Opt 1 = alternate 1- vs 2-arm punches
+    n_pages: 4
+    punch_tol: 0.035
+    belt_inward_reach: 0.13
+    belt_outward_scale: 2.0
+    belt_speed: 0.0002
+    belt_continous_motion: false
+    missing_tile_mode: false
+    tile_pause_s: 2.0
+    square_gap_min: 0.01
+    square_gap_max: 0.03
+  dispense_gummy:
+    tube_capacity: 4
+    layout_mode: alternating
+    belt_continuous_motion: false
+    bowl_speed: 0.15
+    belt_speed_jitter: 0.20
+    target_color: yellow
+    ball_diameter: 0.03
+    ball_slot_gap: 0.003
+    tube_inner_radius: 0.017
+    tube_wall_thickness: 0.003
+    tube_bottom_z_offset: 0.075
+    tube_center_y: 0.03
+    tube_x_left: -0.06
+    tube_x_right: 0.06
+    bowl_radius: 0.06
+    bowl_align_tol: 0.035
+    bowl_catch_z_tol: 0.025
+    belt_thickness: 0.015
+    belt_move_steps: 30
+    belt_key_x: 0.26
+    belt_key_y_left: -0.14
+    belt_key_y_right: -0.06
+    key_x: -0.26
+    key_y: -0.13
+    dispense_steps: 24
+    press_hold_steps: 6
+    post_press_dwell: 10
+  goalkeeper:
+    ball_speed_min: 0.07
+    ball_speed_max: 0.09
+    ball_angle_deg_min: -10.0
+    ball_angle_deg_max: 10.0
+    goal_center_y: 0.05
+    goal_center_y_jitter: 0.0
+    green_area_x_len: 0.1
+    green_area_y_extra: 0.05
+    red_line_x: 0.2
+    goal_x: 0.3
+    keeper_x: 0.16
+    keeper_goal_clearance: 0.05
+    keeper_pose_tol: 0.03
+  pick_cup_behind_fan:
+    fan_omega_deg: 2.0
+    gap_frac: 0.4
+    theta_spill: 35.0
+    fan_far_y: 0.12
+  pick_ripe_apple:
+    ripen_steps: 2500
+    red_window_min: 0.48
+    red_window_max: 0.52
+    red_tolerance: 0.12
+  place_block_belt:
+    belt_speed: 0.06
+    theta_max_deg: 30.0
+    belt_ride_steps: 600
+  rotating_shape_sorter:
+    spin_speed: 1.9
+    r_tol: 0.06
+    align_window: 0.18
+    max_track_steps: 900
+  sort_apples_belt:
+    n_apples_min: 4
+    n_apples_max: 10
+    belt_speed_min: 0.0005
+    belt_speed_max: 0.001
+    belt_speed_scale: 1.0
+    advance_every: 4
+    gate_default_left: true
+  hit_target:
+    board_half_size: 0.075
+    center_half_size: 0.018
+    sway_amp: 0.1
+    sway_period: 900
+    target_speed: 1.0
+    target_y_offset: 0.05
+    motion_x_min: 0.03
+    motion_x_max: 0.24
+    target_center_x_min: 0.12
+    target_center_x_max: 0.15
+    blocker_enabled: true
+    blocker_dynamic: true
+    blocker_radius: 0.04
+    blocker_thickness: 0.002
+    blocker_y_gap: 0.05
+    blocker_z_offset: 0.0
+    blocker_x_offset: 0.0
+    blocker_speed_min: 0.7
+    blocker_speed_max: 1.45
+    blocker_speed_min_delta: 0.1
+  ring_on_moving_peg:
+    r_ring: 0.028
+    catch_r: 0.07
+    period: 3000
+    amp_x: 0.01
+    amp_y: 0.025
+    amp_z: 0.018
+  quality_control:
+    # Default: color_mode=alternating, black_frac_max=0 (no distractors)
+    # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
+    # tile_pause_s = max hold under stamp; miss unstamped red/green → fail
+    n_tiles: 6
+    color_mode: alternating
+    spacing_mode: random
+    tile_spacing: 0.08
+    spacing_min: 0.07
+    spacing_max: 0.14
+    black_frac_max: 0.0
+    tile_pause_s: 2.0
+  packing:
+    n_per_color: 3
+    spawn_mode: parallel
+    spawn_delay_s: 2.0
+    belt_gap: 0.1
+    belt_speed: 0.0008
+    advance_every: 3
+    spawn_gap: 0.16
+    pick_y: 0.24
+    pick_y_end: -0.16
+    pick_station_y: 0.02
+    fruit_scale: 0.8
+    basket_y: -0.16
+    basket_x: 0.3
+    basket_scale: 0.75
+  two_type_sorting_catch:
+    num_objects: 4
+    fall_steps: 90
+    lateral_bias: 0.16
+    center_rate: 0.25
+    catch_tol: 0.07
+  catch_ramp_ball:
+    # Default: straight. Opt1 wall_bounce_enabled. Opt2 enable_distractor (blue).
+    # Both balls sample roll_speed × U(0.8, 1.2).
+    ramp_angle: 0.24
+    ball_radius: 0.018
+    rim_radius: 0.04
+    x_span: 0.15
+    wall_bounce_enabled: false
+    enable_distractor: false
+    angled_path_min_deg: 20.0
+    angled_path_max_deg: 40.0
+    roll_speed: 0.030
+    roll_speed_scale_min: 0.8
+    roll_speed_scale_max: 1.2
+    fall_time: 0.5
+    idle_time_min: 2.0
+    idle_time_max: 4.0
+    settle_steps: 70
+  catch_valley_ball:
+    ramp_half_width: 0.125
+    ramp_thickness: 0.012
+    ramp_center_y: 0.08
+    ramp_valley_x: -0.02
+    ramp_valley_height: 0.025
+    down_run: 0.27
+    down_rise: 0.13
+    up_run: 0.2
+    up_rise: 0.055
+    platform_length_scale_min: 0.8
+    platform_length_scale_max: 1.2
+    wall_bounce_enabled: false
+    enable_distractor: false
+    curve_segments: 16
+    rail_height: 0.055
+    ball_radius: 0.018
+    drop_height: 0.14
+    drop_time: 0.6
+    ball_path_mode: straight
+    angled_path_min_deg: 15.0
+    angled_path_max_deg: 25.0
+    drop_forward_angle_min_deg: -8.0
+    drop_forward_angle_max_deg: 12.0
+    initial_forward_speed_min: 0.9
+    initial_forward_speed_max: 1.1
+    physics_max_steps: 1200
+    red_line_gap: 0.1
+    roll_time_min: 4.0
+    roll_time_max: 7.0
+    roll_acceleration: 0.35
+    launch_speed: 0.72
+    idle_time_min: 1.0
+    idle_time_max: 2.0
+    settle_steps: 150
+    bowl_id: 1
+    bowl_scale_mult: 0.65
+    bowl_inner_radius: 0.028
+    bowl_outer_radius: 0.037
+    bowl_height: 0.04
+  play_billiard:
+    specific_hole: false
+    enable_distractors: true     # Opt 2: up to 2 balls; any pocket OK
+    num_extra_balls: 2
+    ball_radius: 0.012
+    table_cx: 0.0
+    table_cy: 0.1
+    table_half_len: 0.22
+    table_half_wid: 0.14
+    settle_steps: 500
+    strike_impulse: 0.55
+save_failed_cases: true
