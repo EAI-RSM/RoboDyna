@@ -151,23 +151,31 @@ task_args:
     pop_steps: 90
     grasp_tol: 0.05
   whack_a_mole:
-    num_moles: 4
-    num_distractors: 0        # white rabbit distractors (0..M, M=4); touching one fails
-    difficulty: easy          # easy = one mole at a time; hard = two simultaneous (both arms)
-    pop_steps: 90
-    touch_tol: 0.04
-    hole_count: 9
-    hole_size: 0.0825         # 1.5x former openings
-    hole_bar_thickness: 0.014
-    cube_hole_scale: 1.20     # blue mallet cube side = hole_size * scale (>1 so it can't enter)
-    cube_grasp_drop_z: 0.05   # lower cube 5 cm below finger midpoint
-    mole_scale_mult: 1.80     # 1.5x prior mole size
-    mole_height: 0.1053       # world height after mole_scale_mult
-    rabbit_scale_mult: 2.40   # match enlarged mole world height
-    rabbit_height: 0.1053
-    table_height_bias: 0.05   # raise table (+board) 5 cm
-    board_z_lift: 0.12        # play surface ~12 cm above table; solid base sits on table
-    board_color: [0.98, 0.82, 0.05]  # yellow
+    num_moles: 2                # default: 2 moles; pop speed randomized in [60%, 100%] of POP_SPEED
+    # Opt 1 — rabbit distractor (avoid; touching fails). Combinable with Opt 2.
+    #   CLI: --task-arg distractor_enabled=true   or   --option 1
+    distractor_enabled: false
+    num_distractors: 1          # rabbits when Opt 1 on (clamped to free holes)
+    # Opt 2 — moles reappear from a free hole each time they go down.
+    #   CLI: --task-arg relocating_moles=true     or   --option 2
+    relocating_moles: false
+    difficulty: easy            # easy = one mole at a time; hard = two simultaneous (both arms)
+    pop_steps: 90               # sim steps a mole/rabbit stays up
+    mole_speed_spread: 0.40     # lower bound = POP_SPEED * (1 - spread)
+    press_ready_frac: 0.70      # start press once mole has risen this far (no freeze)
+    touch_tol: 0.04             # m; cube–mole XY touch tolerance
+    hole_count: 9               # openings on board
+    hole_size: 0.0825           # m; hole opening side length
+    hole_bar_thickness: 0.014   # m; bar thickness between holes
+    cube_hole_scale: 1.20       # mallet cube side = hole_size * scale (>1 so it can't enter)
+    cube_grasp_drop_z: 0.05     # m; lower cube below finger midpoint after grasp
+    mole_scale_mult: 1.80       # mole mesh scale multiplier
+    mole_height: 0.1053         # m; world height after mole_scale_mult (pop travel)
+    rabbit_scale_mult: 1.00     # 224_rabbit authored near mole height
+    rabbit_height: 0.1047       # m; rabbit world height
+    table_height_bias: 0.05     # m; raise table (+board) this much
+    board_z_lift: 0.12          # m; play surface above table; solid base sits on table
+    board_color: [0.98, 0.82, 0.05]  # RGB board color (yellow)
   collect_falling_bowl:
     num_objects: 4
     emit_interval: 40

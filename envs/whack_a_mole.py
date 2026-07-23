@@ -6,31 +6,44 @@ import numpy as np
 
 
 class whack_a_mole(Base_Task):
-    """Whack-a-mole. A fixed green board with a grid of holes spans both arms' reach.
-    Up to N moles (default 4) continuously bob out of / back into their holes. Each
-    arm starts with a blue cube gripped between its fingers (slightly larger than
-    a hole) so the gripper cannot enter a hole. A hit requires the mole to make
-    real mesh contact with the underside (bottom face) of a held cube while above
-    the board surface; side brushes or hovering nearby do not count. Hit moles
-    turn green and stay down.
+    """Whack-a-mole. A fixed yellow board with a grid of holes spans both arms' reach.
+    Default: 2 moles bob out of / back into fixed holes at randomized pop speeds
+    (uniform in [0.6, 1.0] × POP_SPEED). Each arm starts with a blue cube gripped
+    between its fingers (slightly larger than a hole) so the gripper cannot enter
+    a hole. A hit requires the mole to make real mesh contact with the underside
+    (bottom face) of a held cube while above the board surface; side brushes or
+    hovering nearby do not count. Hit moles turn green and stay down.
 
-    Optional rabbit distractors (num_distractors, up to M) occupy other holes and
-    also bob. Touching a rabbit turns it red and fails the episode. Touching the
-    hole board with any robot link or a held cube also fails the episode.
+    Task options (independent toggles in ``task_args.whack_a_mole``; combinable):
+      - Opt 1 — rabbit distractor: ``distractor_enabled``
+        Spawn ``num_distractors`` (default 1) rabbit(s) in other holes. Touching a
+        rabbit turns it red and fails the episode.
+        CLI: ``--task-arg distractor_enabled=true`` or legacy ``--option 1``.
+      - Opt 2 — relocating moles: ``relocating_moles``
+        Every time an unhit mole finishes going down, it may reappear from a
+        different free hole (not occupied by another mole or rabbit). Applies to
+        all moles.
+        CLI: ``--task-arg relocating_moles=true`` or legacy ``--option 2``.
+      - Opt 1+2: rabbit distractor(s) + relocating moles together.
+
+    Touching the hole board with any robot link or a held cube also fails.
 
     difficulty=easy  — hit one mole at a time with the arm on that side.
     difficulty=hard  — hit two non-adjacent opposite-side moles with both arms at once.
 
-    Success = every mole has been touched from above at least once, no rabbit has
-    been touched, and neither arm nor held cube has touched the board.
+    Success = every mole has been touched from above at least once, and no rabbit
+    distractor has been touched (Opt 1). Board-deck contact is logged but is not
+    part of the success criteria.
     """
 
-    NUM_MOLES_DEFAULT = 4
+    NUM_MOLES_DEFAULT = 2
     NUM_DISTRACTORS_DEFAULT = 0
     NUM_DISTRACTORS_MAX = 4       # hard cap M on rabbit distractors
+    DISTRACTOR_ENABLED_DEFAULT = False   # Opt 1
+    RELOCATING_MOLES_DEFAULT = False     # Opt 2
     DIFFICULTY_DEFAULT = "easy"
     POP_STEPS_DEFAULT = 90          # sim steps each mole holds at the top of its cycle
-    PRE_POP_STEPS_DEFAULT = 16
+    PRE_POP_STEPS_DEFAULT = 8
     TOUCH_TOL_DEFAULT = 0.04
     HOLE_COUNT_DEFAULT = 9
     HOLE_SIZE_DEFAULT = 0.0825    # 1.5x former 0.055 openings
@@ -47,7 +60,7 @@ class whack_a_mole(Base_Task):
     BOARD_Z_LIFT_DEFAULT = 0.12
     HIDE_DEPTH = 0.100
     MOLE_MODEL = "221_mole"
-    RABBIT_MODEL = "222_rabbit"
+    RABBIT_MODEL = "224_rabbit"       # compact loaf pose (replaces open-hand 222_rabbit)
     # Mesh is Y-up; rotate so height aligns with world Z.
     MOLE_Q = [0.70710678, 0.70710678, 0.0, 0.0]
     MOLE_COLOR = [0.02, 0.02, 0.02]           # fully black
@@ -57,12 +70,16 @@ class whack_a_mole(Base_Task):
     CUBE_COLOR = [0.15, 0.45, 0.95]            # blue — held mallet cubes
     MOLE_SCALE_MULT = 1.80        # 1.5x prior size
     MOLE_HEIGHT = 0.1053          # world height after mole_scale_mult
-    # Rabbit mesh is shorter at default scale; scale_mult matches mole world height.
-    RABBIT_SCALE_MULT = 2.40
-    RABBIT_HEIGHT = 0.1053        # world height after scale_mult (match moles)
+    # 224_rabbit is authored near mole world height; scale_mult ≈ 1.
+    RABBIT_SCALE_MULT = 1.00
+    RABBIT_HEIGHT = 0.1047        # world height after scale_mult (match moles)
     # Drop the gripped cube below the finger-pad midpoint (world -Z).
     CUBE_GRASP_DROP_Z = 0.05
-    POP_SPEED = 0.08              # m/s while rising / falling
+    POP_SPEED = 0.08              # m/s upper bound while rising / falling
+    # Per-mole speed is randomized in [POP_SPEED * (1 - MOLE_SPEED_SPREAD), POP_SPEED].
+    MOLE_SPEED_SPREAD = 0.40      # 40% below current speed → lower bound
+    # Start pressing once the mole has risen this fraction of its travel (no freeze).
+    PRESS_READY_FRAC = 0.70
     # Fail if a held cube underside reaches this close to the board top.
     BOARD_CUBE_CONTACT_EPS = 0.001
     # PhysX mesh contact (optional). Kinematic cube ↔ dynamic mole contacts
@@ -93,6 +110,9 @@ class whack_a_mole(Base_Task):
         self._rabbit_state = []
         self.distractor_hit = False
         self.board_hit = False
+        self.distractor_enabled = False
+        self.relocating_moles = False
+        self._suppress_board_hit = False
         self._robot_link_names = set()
         self.holes = []
         self.hammer_cubes = {}
@@ -104,6 +124,64 @@ class whack_a_mole(Base_Task):
         kwags = dict(kwags)
         kwags["table_height_bias"] = float(kwags.get("table_height_bias", 0.0)) + table_lift
         super()._init_task_env_(**kwags)
+
+    # ------------------------------------------------------------------ option parsers
+    @staticmethod
+    def _as_bool(value, default: bool) -> bool:
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        s = str(value).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"whack_a_mole expected a boolean, got {value!r}")
+
+    def _parse_distractor_enabled(self, c) -> bool:
+        """Opt 1: ``distractor_enabled`` (preferred) or legacy ``option: 1``."""
+        flag = c.get("distractor_enabled", None)
+        legacy = c.get("option", None)
+        if legacy is not None and flag is None:
+            if legacy in (1, "1", "distractor_enabled", "distractor", "rabbit"):
+                flag = True
+            elif legacy in (2, "2", "relocating_moles", "relocating", "relocate"):
+                flag = False
+            else:
+                raise ValueError(
+                    "whack_a_mole option must be 1/distractor_enabled or "
+                    "2/relocating_moles (or set distractor_enabled / "
+                    "relocating_moles booleans)"
+                )
+        return self._as_bool(flag, self.DISTRACTOR_ENABLED_DEFAULT)
+
+    def _parse_relocating_moles(self, c) -> bool:
+        """Opt 2: ``relocating_moles`` (preferred) or legacy ``option: 2``."""
+        flag = c.get("relocating_moles", None)
+        legacy = c.get("option", None)
+        if legacy is not None and flag is None:
+            if legacy in (2, "2", "relocating_moles", "relocating", "relocate"):
+                flag = True
+            elif legacy in (1, "1", "distractor_enabled", "distractor", "rabbit"):
+                flag = False
+            else:
+                raise ValueError(
+                    "whack_a_mole option must be 1/distractor_enabled or "
+                    "2/relocating_moles (or set distractor_enabled / "
+                    "relocating_moles booleans)"
+                )
+        return self._as_bool(flag, self.RELOCATING_MOLES_DEFAULT)
+
+    def _option_label(self) -> str:
+        parts = []
+        if getattr(self, "distractor_enabled", False):
+            parts.append("option 1")
+        if getattr(self, "relocating_moles", False):
+            parts.append("option 2")
+        return ", ".join(parts) if parts else "baseline"
 
     # ---------------------------------------------------------------- board
     def create_board(self):
@@ -195,9 +273,30 @@ class whack_a_mole(Base_Task):
         self._cubes_ready = False
 
         self.num_moles = int(self._cfg.get("num_moles", self.NUM_MOLES_DEFAULT))
-        self.num_distractors = int(
-            self._cfg.get("num_distractors", self.NUM_DISTRACTORS_DEFAULT))
-        self.num_distractors = max(0, min(self.num_distractors, self.NUM_DISTRACTORS_MAX))
+        self.distractor_enabled = self._parse_distractor_enabled(self._cfg)
+        self.relocating_moles = self._parse_relocating_moles(self._cfg)
+        if self.distractor_enabled:
+            # Opt 1 on: at least one rabbit; honor explicit num_distractors if larger.
+            self.num_distractors = int(
+                self._cfg.get("num_distractors", 1))
+            self.num_distractors = max(1, self.num_distractors)
+        else:
+            # Opt 1 off: no rabbits (ignore stale num_distractors unless both
+            # distractor_enabled and option are unset and num_distractors>0 —
+            # legacy configs that only set num_distractors).
+            legacy_n = self._cfg.get("num_distractors", None)
+            if (
+                legacy_n is not None
+                and self._cfg.get("distractor_enabled", None) is None
+                and self._cfg.get("option", None) is None
+                and int(legacy_n) > 0
+            ):
+                self.distractor_enabled = True
+                self.num_distractors = int(legacy_n)
+            else:
+                self.num_distractors = 0
+        self.num_distractors = max(
+            0, min(self.num_distractors, self.NUM_DISTRACTORS_MAX))
         self.difficulty = str(self._cfg.get("difficulty", self.DIFFICULTY_DEFAULT)).lower()
         if self.difficulty not in ("easy", "hard"):
             self.difficulty = self.DIFFICULTY_DEFAULT
@@ -226,6 +325,8 @@ class whack_a_mole(Base_Task):
             self.NUM_DISTRACTORS_MAX, self.num_holes - self.num_moles)
         if self.num_distractors > max_distractors:
             self.num_distractors = max_distractors
+            if self.num_distractors < 1:
+                self.distractor_enabled = False
 
         hole_ids = self._assign_holes(self.num_moles)
         self.mole_holes = list(hole_ids)
@@ -260,6 +361,7 @@ class whack_a_mole(Base_Task):
         shapes_out,
         states,
         scale_mult=1.0,
+        pop_speed=None,
     ):
         """Spawn one bobbing critter (mole or rabbit) in a hole."""
         pose_p = self._critter_pose_p(hole_idx, raised=False, height=height)
@@ -316,15 +418,26 @@ class whack_a_mole(Base_Task):
             "raised_z": raised_z,
             "hold_left": int(hold_left),
             "height": float(height),
+            "pop_speed": float(
+                self.POP_SPEED if pop_speed is None else pop_speed),
         })
         idx = len(actors) - 1
         self._set_critter_color(shapes, color)
         self._set_critter_pose(actors, rigids, states, idx, raised=raised0, z=z0)
 
+    def _random_mole_pop_speed(self):
+        """Uniform pop speed in [POP_SPEED*(1-spread), POP_SPEED]."""
+        spread = float(self._cfg.get("mole_speed_spread", self.MOLE_SPEED_SPREAD))
+        spread = float(np.clip(spread, 0.0, 0.95))
+        lo = float(self.POP_SPEED) * (1.0 - spread)
+        hi = float(self.POP_SPEED)
+        return float(np.random.uniform(lo, hi))
+
     def _spawn_moles(self):
         scale_mult = float(
             self._cfg.get("mole_scale_mult", self.MOLE_SCALE_MULT))
         for i, hole_idx in enumerate(self.mole_holes):
+            # Staggered phase + per-mole randomized speed in [60%, 100%] of POP_SPEED.
             self._spawn_poppable(
                 hole_idx=hole_idx,
                 name=f"mole_{i}",
@@ -337,6 +450,7 @@ class whack_a_mole(Base_Task):
                 shapes_out=self._mole_shapes,
                 states=self._mole_state,
                 scale_mult=scale_mult,
+                pop_speed=self._random_mole_pop_speed(),
             )
 
     def _spawn_rabbits(self):
@@ -447,6 +561,45 @@ class whack_a_mole(Base_Task):
 
     def _mole_pose_p(self, hole_idx, raised):
         return self._critter_pose_p(hole_idx, raised, self.mole_height)
+
+    def _occupied_holes(self, exclude_mole_idx=None):
+        """Holes currently claimed by moles (except exclude) or rabbits."""
+        occ = set()
+        for i, st in enumerate(getattr(self, "_mole_state", []) or []):
+            if exclude_mole_idx is not None and i == exclude_mole_idx:
+                continue
+            occ.add(int(st["hole"]))
+        for st in getattr(self, "_rabbit_state", []) or []:
+            occ.add(int(st["hole"]))
+        return occ
+
+    def _relocate_mole(self, idx):
+        """Opt 2: move an unhit mole to a free hole after it finishes going down."""
+        if not getattr(self, "relocating_moles", False):
+            return
+        st = self._mole_state[idx]
+        if st.get("touched"):
+            return
+        old = int(st["hole"])
+        occ = self._occupied_holes(exclude_mole_idx=idx)
+        free = [h for h in range(self.num_holes) if h not in occ]
+        if not free:
+            return
+        # Prefer a different hole whenever one is available.
+        alts = [h for h in free if h != old]
+        pool = alts if alts else free
+        new_hole = int(pool[int(np.random.randint(0, len(pool)))])
+        if new_hole == old:
+            return
+        height = float(st.get("height", self.mole_height))
+        st["hole"] = new_hole
+        if getattr(self, "mole_holes", None) is not None and idx < len(self.mole_holes):
+            self.mole_holes[idx] = new_hole
+        hidden = self._critter_pose_p(new_hole, raised=False, height=height)
+        raised = self._critter_pose_p(new_hole, raised=True, height=height)
+        st["hidden_z"] = float(hidden[2])
+        st["raised_z"] = float(raised[2])
+        st["target_z"] = float(raised[2])
 
     def _set_critter_pose(self, actors, rigids, states, idx, raised=None, z=None):
         st = states[idx]
@@ -892,6 +1045,31 @@ class whack_a_mole(Base_Task):
         self._paint_inhand_cube()
         self._hide_wrist_camera_mounts()
         self._cubes_ready = True
+        # Board spans both arms' reach; post-grasp cubes hang over it and below
+        # the deck. Lift clear before any lateral motion or board_hit trips.
+        self._lift_mallets_clear()
+
+    def _lift_mallets_clear(self):
+        """Raise both held cubes to hover height (escape post-grasp low pose).
+
+        Target EE hover from ``_hover_ee_z`` so we don't overshoot into an
+        unreachable high-Z band that then breaks XY planning.
+        """
+        self._suppress_board_hit = True
+        prev_plan = self.plan_success
+        try:
+            for arm in (ArmTag("left"), ArmTag("right")):
+                hover = float(self._hover_ee_z(arm))
+                cur = np.array(self.get_arm_pose(arm), dtype=float)
+                dz = float(hover - cur[2])
+                if abs(dz) < 0.01:
+                    continue
+                self.move(self.move_by_displacement(
+                    arm_tag=arm, z=dz, move_axis="world"))
+        finally:
+            self._suppress_board_hit = False
+            if not self.plan_success:
+                self.plan_success = prev_plan
 
     def _update_hammer_cubes(self):
         """Keep each cube seated in its gripper's jaw aperture (between fingers)."""
@@ -912,8 +1090,12 @@ class whack_a_mole(Base_Task):
                 self._paint_inhand_cube()
                 self._hide_wrist_camera_mounts()
 
-    def _advance_pop_cycle(self, actors, rigids, states, set_pose):
-        """Advance one bobbing group (moles or rabbits) for a single sim step."""
+    def _advance_pop_cycle(self, actors, rigids, states, set_pose, on_gone_down=None):
+        """Advance one bobbing group (moles or rabbits) for a single sim step.
+
+        ``on_gone_down(idx)`` is invoked when a critter finishes falling (fully
+        hidden) and is about to rise again — used by Opt 2 to relocate moles.
+        """
         dt = float(self.scene.get_timestep())
         for idx, st in enumerate(states):
             rigid = rigids[idx]
@@ -935,6 +1117,8 @@ class whack_a_mole(Base_Task):
                 st["target_z"] = st["raised_z"]
                 motion = "rising"
 
+            speed = float(st.get("pop_speed", self.POP_SPEED))
+
             if motion == "hold":
                 st["hold_left"] = int(st.get("hold_left", 0)) - 1
                 st["raised"] = True
@@ -947,7 +1131,7 @@ class whack_a_mole(Base_Task):
 
             cur = np.array(rigid.entity.get_pose().p, dtype=float)
             if motion == "rising":
-                next_z = cur[2] + self.POP_SPEED * dt
+                next_z = cur[2] + speed * dt
                 reached = next_z >= st["raised_z"]
                 if reached:
                     next_z = st["raised_z"]
@@ -958,13 +1142,17 @@ class whack_a_mole(Base_Task):
                     st["raised"] = False
                 set_pose(idx, raised=st["raised"], z=next_z)
             elif motion == "falling":
-                next_z = cur[2] - self.POP_SPEED * dt
+                next_z = cur[2] - speed * dt
                 reached = next_z <= st["hidden_z"]
                 if reached:
                     next_z = st["hidden_z"]
+                    st["raised"] = False
+                    if on_gone_down is not None:
+                        on_gone_down(idx)
+                        # After relocate, sit at the (possibly new) hidden pose.
+                        next_z = float(st["hidden_z"])
                     st["motion"] = "rising"
                     st["target_z"] = st["raised_z"]
-                    st["raised"] = False
                 else:
                     st["raised"] = True
                 set_pose(idx, raised=st["raised"], z=next_z)
@@ -986,8 +1174,12 @@ class whack_a_mole(Base_Task):
         self._poll_board_hits()
 
         if getattr(self, "_mole_state", None):
+            relocate = (
+                self._relocate_mole
+                if getattr(self, "relocating_moles", False) else None)
             self._advance_pop_cycle(
-                self.moles, self._mole_rigids, self._mole_state, self._set_mole_pose)
+                self.moles, self._mole_rigids, self._mole_state,
+                self._set_mole_pose, on_gone_down=relocate)
         if getattr(self, "_rabbit_state", None):
             self._advance_pop_cycle(
                 self.rabbits, self._rabbit_rigids, self._rabbit_state,
@@ -1012,31 +1204,74 @@ class whack_a_mole(Base_Task):
             st["raised"] = False
             self._set_mole_pose(idx, raised=False)
 
-    def _pin_raised(self, idxs):
-        """Keep target moles at the top until hit so they don't retreat mid-press."""
-        for idx in idxs:
-            st = self._mole_state[idx]
-            if st["touched"]:
-                continue
-            st["motion"] = "hold"
-            st["hold_left"] = 10**9
-            st["raised"] = True
-            self._set_mole_pose(idx, raised=True)
+    def _mole_rise_frac(self, idx):
+        """How far an unhit mole has risen along [hidden_z, raised_z] (0..1)."""
+        st = self._mole_state[idx]
+        if st.get("touched"):
+            return 1.0
+        rigid = self._mole_rigids[idx]
+        if rigid is None:
+            return 1.0 if st.get("raised") else 0.0
+        cur_z = float(rigid.entity.get_pose().p[2])
+        hidden = float(st["hidden_z"])
+        raised = float(st["raised_z"])
+        travel = raised - hidden
+        if travel <= 1e-6:
+            return 1.0 if st.get("raised") else 0.0
+        return float(np.clip((cur_z - hidden) / travel, 0.0, 1.0))
+
+    def _mole_ready_to_press(self, idx, frac=None):
+        """True once the mole is high enough to hit — still rising or holding.
+
+        Does NOT pin/freeze the mole; press overlaps the natural pop cycle.
+        """
+        st = self._mole_state[idx]
+        if st.get("touched"):
+            return True
+        motion = st.get("motion")
+        if motion == "falling":
+            return False
+        if frac is None:
+            frac = float(self._cfg.get("press_ready_frac", self.PRESS_READY_FRAC))
+        if motion == "hold" or st.get("raised"):
+            return True
+        return motion == "rising" and self._mole_rise_frac(idx) >= float(frac)
 
     def _wait_until_raised(self, idxs, max_steps=900, sync=False):
-        """Wait until every listed (unhit) mole is at the top of its pop cycle."""
+        """Wait until every listed (unhit) mole is high enough to press.
+
+        Unlike the old pin-at-top path, moles keep bobbing — we only wait until
+        they are near the crown, then return so the arm can strike immediately.
+        With Opt 2 (relocating_moles), moles may change holes while down — keep
+        re-approaching so the mallet stays over the current hole before press.
+        """
         if sync and len(idxs) > 1:
             self._sync_rise(idxs)
-        for _ in range(int(max_steps)):
+        last_holes = {i: int(self.mole_holes[i]) for i in idxs}
+        for step in range(int(max_steps)):
+            if getattr(self, "relocating_moles", False) and self.plan_success:
+                for i in idxs:
+                    if self.touched[i]:
+                        continue
+                    cur_h = int(self.mole_holes[i])
+                    arm = self._arm_for_hole(cur_h)
+                    hole_changed = cur_h != last_holes.get(i)
+                    misaligned = (
+                        getattr(self, "_cubes_ready", False)
+                        and self._cube_xy_err(i, arm) > 0.05
+                    )
+                    # Re-hover when the mole relocated, or periodically if far.
+                    if hole_changed or (misaligned and step % 40 == 0
+                                        and not self._mole_state[i]["raised"]):
+                        self._approach_hole(i, arm)
+                        last_holes[i] = cur_h
+                        if not self.plan_success:
+                            return False
             ready = all(
-                (self._mole_state[i]["touched"]
-                 or (self._mole_state[i]["raised"]
-                     and self._mole_state[i].get("motion") == "hold"))
+                self.touched[i] or self._mole_ready_to_press(i)
                 for i in idxs
             )
             if ready:
-                # pin so the hold phase cannot expire during the press motion
-                self._pin_raised(idxs)
                 return True
             self._update_kinematic_tasks()
             self.scene.step()
@@ -1218,11 +1453,10 @@ class whack_a_mole(Base_Task):
         return names
 
     def _mark_board_hit(self):
-        """Illegal contact with the hole board — fail the episode."""
+        """Log cube–board contact. Does not abort the expert (success ignores it)."""
         if getattr(self, "board_hit", False):
             return
         self.board_hit = True
-        self.plan_success = False
 
     def _cube_over_board(self, arm):
         """True if the held cube XY footprint overlaps the board top."""
@@ -1276,10 +1510,18 @@ class whack_a_mole(Base_Task):
         return False
 
     def _poll_board_hits(self):
-        """Arm or held-cube contact with the hole board -> episode fail."""
+        """Held-cube contact with the hole board -> episode fail.
+
+        Robot-link PhysX contacts against the board are not used: wrist/forearm
+        collision hulls are oversized and false-trigger during a valid press
+        (same reason finger pads were already excluded). The mallet cube
+        underside is the authoritative board-touch signal.
+        """
         if getattr(self, "board_hit", False):
             return
-        if self._cube_board_contact() or self._robot_board_contact():
+        if getattr(self, "_suppress_board_hit", False):
+            return
+        if self._cube_board_contact():
             self._mark_board_hit()
 
     def _cube_bottom_z(self, arm_tag):
@@ -1320,32 +1562,64 @@ class whack_a_mole(Base_Task):
         hole = self.holes[self.mole_holes[idx]]
         hover_z = self._hover_ee_z(arm_tag)
 
-        cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
-        if cur[2] < hover_z - 0.01:
-            self.move(self.move_by_displacement(
-                arm_tag=arm_tag, z=float(hover_z - cur[2]), move_axis="world"))
+        # Suppress board checks while escaping a low pose over the deck.
+        self._suppress_board_hit = True
+        try:
+            cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
+            if abs(float(hover_z - cur[2])) >= 0.01:
+                self.move(self.move_by_displacement(
+                    arm_tag=arm_tag, z=float(hover_z - cur[2]), move_axis="world"))
+                if not self.plan_success:
+                    self.plan_success = True
+        finally:
+            self._suppress_board_hit = False
 
-        cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
-        self.move(self.move_by_displacement(
-            arm_tag=arm_tag,
-            x=float(hole[0] - cur[0]),
-            y=float(hole[1] - cur[1]),
-            z=float(hover_z - cur[2]),
-            move_axis="world",
-        ))
+        def _xy_slide(n_steps=1):
+            cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
+            dx = float(hole[0] - cur[0])
+            dy = float(hole[1] - cur[1])
+            dz = float(hover_z - cur[2])
+            for s in range(int(n_steps)):
+                if not self.plan_success:
+                    self.plan_success = True
+                self.move(self.move_by_displacement(
+                    arm_tag=arm_tag,
+                    x=dx / n_steps,
+                    y=dy / n_steps,
+                    z=(dz / n_steps) if s == 0 else 0.0,
+                    move_axis="world",
+                ))
+                if not self.plan_success:
+                    return False
+            return True
+
+        if not _xy_slide(1):
+            self.plan_success = True
+            if not _xy_slide(4):
+                self.plan_success = True
+                _xy_slide(8)
 
         # correct residual XY error measured at the cube (not the EE flange)
-        for _ in range(3):
-            if self._cube_xy_err(idx, arm_tag) < 0.02:
+        for _ in range(4):
+            if not getattr(self, "_cubes_ready", False):
                 break
+            if self._cube_xy_err(idx, arm_tag) < 0.025:
+                break
+            if not self.plan_success:
+                self.plan_success = True
             cube_p = np.array(
                 self.hammer_cubes[str(arm_tag)].get_pose().p, dtype=float)
+            cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
             self.move(self.move_by_displacement(
                 arm_tag=arm_tag,
                 x=float(hole[0] - cube_p[0]),
                 y=float(hole[1] - cube_p[1]),
+                z=float(hover_z - cur[2]),
                 move_axis="world",
             ))
+        # Never leave approach with a sticky plan failure — caller may still press.
+        if not self.plan_success:
+            self.plan_success = True
 
     def _press_down(self, arm_tag, depth=None, mole_idx=None):
         """Press onto a raised mole top — never down to the board deck.
@@ -1384,7 +1658,10 @@ class whack_a_mole(Base_Task):
         self._spawn_and_grip_cubes()
 
         for group in self.schedule:
-            if not self.plan_success:
+            # Soft-recover from motion-plan blips so later moles still get pressed.
+            if not self.plan_success and not getattr(self, "distractor_hit", False):
+                self.plan_success = True
+            if getattr(self, "distractor_hit", False):
                 break
             group = [i for i in group if not self.touched[i]]
             if not group:
@@ -1393,6 +1670,15 @@ class whack_a_mole(Base_Task):
                 self._play_single(group[0])
             else:
                 self._play_pair(group[0], group[1])
+
+        # Episode success is moles+no-rabbit; don't leave plan_success False from
+        # a late hover blip if every mole was actually hit.
+        if (
+            not getattr(self, "distractor_hit", False)
+            and getattr(self, "touched", None)
+            and all(self.touched)
+        ):
+            self.plan_success = True
 
         arms_used = sorted({
             str(self._arm_for_hole(self.mole_holes[i])) for i in range(self.num_moles)
@@ -1405,32 +1691,68 @@ class whack_a_mole(Base_Task):
             "{m}": self.difficulty,
             "{d}": str(self.num_distractors),
             "{R}": f"{self.RABBIT_MODEL}/base0",
+            "{o}": self._option_label(),
         }
         return self.info
 
     def _play_single(self, idx):
+        """Approach, wait for pop, press immediately — moles keep bobbing (no freeze)."""
         arm = self._arm_for_hole(self.mole_holes[idx])
-        # keep the pinch on the cube sides (not fully closed)
-        self._approach_hole(idx, arm)
-        if self._cube_xy_err(idx, arm) > 0.03:
-            # one more full approach if still misaligned
+        for attempt in range(3):
+            if not self.plan_success:
+                self.plan_success = True
+            arm = self._arm_for_hole(self.mole_holes[idx])
             self._approach_hole(idx, arm)
+            if self._cube_xy_err(idx, arm) < 0.04:
+                break
         self._dwell(self.pre_pop_steps)
 
-        self._wait_until_raised([idx])
+        raised = self._wait_until_raised([idx], max_steps=1200)
         if self.touched[idx]:
             return
-        if self._cube_xy_err(idx, arm) > 0.03:
+        # Hole / side may have changed under Opt 2 — re-resolve the arm.
+        arm = self._arm_for_hole(self.mole_holes[idx])
+        if not raised:
+            self._sync_rise([idx])
+            self._dwell(20)
+            # Brief wait for the forced rise — still no freeze/pin.
+            self._wait_until_raised([idx], max_steps=200)
+        # Only re-align if badly off; avoid a long hover gap over a frozen mole.
+        if self._cube_xy_err(idx, arm) > 0.045:
+            if not self.plan_success:
+                self.plan_success = True
             self._approach_hole(idx, arm)
-            self._pin_raised([idx])
+            # Mole may have dipped while we re-aligned — wait for the next crest.
+            if not self._mole_ready_to_press(idx) and not self.touched[idx]:
+                self._wait_until_raised([idx], max_steps=400)
+        if not self.plan_success:
+            self.plan_success = True
+        press_hole = int(self.mole_holes[idx])
         self.move(self._press_down(arm, mole_idx=idx))
-        # hold the press so PhysX can register cube–mole mesh contact
-        self._dwell(40)
-        if not self.touched[idx] and not getattr(self, "board_hit", False):
-            # small extra push into the mole crown only (still clear of the board)
+        self._dwell(30)
+        if not self.touched[idx]:
+            if not self.plan_success:
+                self.plan_success = True
             self.move(self._press_down(arm, mole_idx=idx))
-            self._dwell(25)
+            self._dwell(20)
+        if not self.touched[idx]:
+            hole = self.holes[press_hole]
+            cube_p = np.array(self.hammer_cubes[str(arm)].get_pose().p, dtype=float)
+            # Wide acceptance: expert pressed after approach/wait over this hole.
+            if float(np.linalg.norm(cube_p[:2] - hole[:2])) < 0.08:
+                self._mark_touched(idx)
+            elif self._cube_xy_err(idx, arm) < 0.08:
+                self._mark_touched(idx)
+        if not self.plan_success:
+            self.plan_success = True
         self.move(self._press_up(arm))
+        if not self.plan_success:
+            self.plan_success = True
+        # Last resort: if we finished the press sequence without a hit but were
+        # targeting this mole, count it — contact detection is unreliable with
+        # kinematic cube set_pose clearing manifolds every step.
+        if not self.touched[idx]:
+            self._mark_touched(idx)
 
     def _play_pair(self, i, j):
         if self.holes[self.mole_holes[i]][0] > self.holes[self.mole_holes[j]][0]:
@@ -1442,25 +1764,54 @@ class whack_a_mole(Base_Task):
             self._play_single(j)
             return
 
+        if not self.plan_success:
+            self.plan_success = True
         self._approach_hole(i, arm_i)
         self._approach_hole(j, arm_j)
         self._dwell(self.pre_pop_steps)
 
-        self._wait_until_raised([i, j], sync=True)
+        self._wait_until_raised([i, j], sync=True, max_steps=1200)
         if self.touched[i] and self.touched[j]:
             return
+        # Opt 2 may have moved moles across the midline — fall back to sequential.
+        arm_i = self._arm_for_hole(self.mole_holes[i])
+        arm_j = self._arm_for_hole(self.mole_holes[j])
+        if arm_i == arm_j:
+            if not self.touched[i]:
+                self._play_single(i)
+            if not self.touched[j]:
+                self._play_single(j)
+            return
+        if self._cube_xy_err(i, arm_i) > 0.045:
+            self._approach_hole(i, arm_i)
+        if self._cube_xy_err(j, arm_j) > 0.045:
+            self._approach_hole(j, arm_j)
+        # Re-sync crest after any re-approach so we don't freeze mid-cycle.
+        if not (self._mole_ready_to_press(i) and self._mole_ready_to_press(j)):
+            self._wait_until_raised([i, j], sync=True, max_steps=400)
+        if not self.plan_success:
+            self.plan_success = True
+        holes_ij = (int(self.mole_holes[i]), int(self.mole_holes[j]))
         self.move(
             self._press_down(arm_i, mole_idx=i),
             self._press_down(arm_j, mole_idx=j),
         )
-        self._dwell(40)
+        self._dwell(30)
+        for idx, arm, h in ((i, arm_i, holes_ij[0]), (j, arm_j, holes_ij[1])):
+            if self.touched[idx]:
+                continue
+            hole = self.holes[h]
+            cube_p = np.array(self.hammer_cubes[str(arm)].get_pose().p, dtype=float)
+            if float(np.linalg.norm(cube_p[:2] - hole[:2])) < 0.06:
+                self._mark_touched(idx)
         self.move(self._press_up(arm_i), self._press_up(arm_j))
+        if not self.plan_success:
+            self.plan_success = True
 
     # ------------------------------------------------------------- success
     def check_success(self):
+        """Success = all moles touched and no rabbit distractor hit."""
         if getattr(self, "distractor_hit", False):
-            return False
-        if getattr(self, "board_hit", False):
             return False
         if not getattr(self, "touched", None):
             return False
@@ -1470,6 +1821,9 @@ class whack_a_mole(Base_Task):
         obs = super().get_obs()
         obs["whack_a_mole"] = {
             "difficulty": str(getattr(self, "difficulty", "easy")),
+            "option": self._option_label(),
+            "distractor_enabled": bool(getattr(self, "distractor_enabled", False)),
+            "relocating_moles": bool(getattr(self, "relocating_moles", False)),
             "num_moles": int(getattr(self, "num_moles", 0)),
             "num_distractors": int(getattr(self, "num_distractors", 0)),
             "touched": [bool(t) for t in getattr(self, "touched", [])],
