@@ -1,0 +1,101 @@
+{
+  "task": "cook_meat",
+  "n_per_condition": 5,
+  "early_stop": false,
+  "summary": {
+    "default": {
+      "successes": 4,
+      "attempts": 5,
+      "rate": 0.8,
+      "criteria_consistent": 5,
+      "config": {
+        "cook_button_enabled": false,
+        "dual_setup_enabled": false
+      }
+    },
+    "opt1": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "config": {
+        "cook_button_enabled": true,
+        "dual_setup_enabled": false
+      }
+    },
+    "opt2": {
+      "successes": 4,
+      "attempts": 5,
+      "rate": 0.8,
+      "criteria_consistent": 5,
+      "config": {
+        "cook_button_enabled": false,
+        "dual_setup_enabled": true
+      }
+    },
+    "opt1+2": {
+      "successes": 4,
+      "attempts": 5,
+      "rate": 0.8,
+      "criteria_consistent": 5,
+      "config": {
+        "cook_button_enabled": true,
+        "dual_setup_enabled": true
+      }
+    }
+  },
+  "conditions": {
+    "default": {
+      "successes": 4,
+      "attempts": 5,
+      "rate": 0.8,
+      "criteria_consistent": 5,
+      "config": {
+        "cook_button_enabled": false,
+        "dual_setup_enabled": false
+      },
+      "episodes": "see run.log (suite completed before demo abort)"
+    },
+    "opt1": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "config": {
+        "cook_button_enabled": true,
+        "dual_setup_enabled": false
+      },
+      "episodes": "see run.log (suite completed before demo abort)"
+    },
+    "opt2": {
+      "successes": 4,
+      "attempts": 5,
+      "rate": 0.8,
+      "criteria_consistent": 5,
+      "config": {
+        "cook_button_enabled": false,
+        "dual_setup_enabled": true
+      },
+      "episodes": "see run.log (suite completed before demo abort)"
+    },
+    "opt1+2": {
+      "successes": 4,
+      "attempts": 5,
+      "rate": 0.8,
+      "criteria_consistent": 5,
+      "config": {
+        "cook_button_enabled": true,
+        "dual_setup_enabled": true
+      },
+      "episodes": "see run.log (suite completed before demo abort)"
+    }
+  },
+  "demos": {
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/cook_meat/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/cook_meat/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/cook_meat/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/cook_meat/opt1+2_sidebyside.mp4"
+  },
+  "success_criterion": "|grasp_doneness \u2212 target_doneness| \u2264 0.08 for every steak; each steak returned to its cutting board off the pan; dual (2 steaks) requires both cooked properly",
+  "note": "Episode-level rows not re-run; scores taken from completed suite SUMMARY in run.log."
+}

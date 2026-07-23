@@ -1,24 +1,31 @@
 {
-  "full_description": "pick up the raw meat from the cutting board, cook it on the pan until done, then place it on the serving plate",
-  "schema": "{A} notifies the meat, {B} notifies the pan, {C} notifies the cutting board, {D} notifies the plate, {a} notifies the arm that handles the meat",
-  "preference": "num of words should not exceed 15. Degree of detail avg is 6",
+  "full_description": "default: pick up the raw meat from the cutting board, place it on the pan to cook on contact, then put it back on the cutting board; option 1: hold the red cook key to cook; option 2: mirrored dual stations — both arms cook both steaks to target doneness then return them; option 1+2: dual stations each with a cook key (both steaks must be cooked properly)",
+  "schema": "{A} notifies the meat, {B} notifies the pan, {C} notifies the cutting board, {E} notifies the cook key when option 1 is active, {n} notifies dual-station count when option 2 is on, {a} notifies the arm(s) that handle the meat, {o} notifies option 1 (cook button) and/or option 2 (dual setup)",
+  "preference": "num of words should not exceed 20. Degree of detail avg is 6",
   "seen": [
-    "Pick up {A} from {C}, cook it on {B}, then set it on {D}",
-    "Use {a} to fry {A} on {B} and plate it on {D}",
-    "Take {A} off {C}, cook on {B}, then put it on {D}",
-    "Grill {A} on {B} then place it on {D}",
-    "Move {A} from {C} to {B}, cook it, then onto {D}",
-    "Cook {A} on {B} and set it on {D} using {a}",
-    "Fry {A} on {B} then plate it on {D}",
-    "With {a}, cook {A} on {B} and move it to {D}",
-    "Sear {A} on {B} and place it on {D}",
-    "Brown {A} on {B}, then set it on {D}",
-    "Cook {A} on {B}, then put the meat on {D}",
-    "Use {a} to cook {A} on {B} and set it down on {D}"
+    "Pick up {A} from {C}, cook it on {B}, then put it back on {C}",
+    "Use {a} to fry {A} on {B} and return it to {C}",
+    "Take {A} off {C}, cook on {B}, then set it back on {C}",
+    "Grill {A} on {B} then place it back on {C}",
+    "Move {A} from {C} to {B}, cook it, then back onto {C}",
+    "Cook {A} on {B} and return it to {C} using {a}",
+    "Fry {A} on {B} then put it on {C}",
+    "With {a}, cook {A} on {B} and move it back to {C}",
+    "Sear {A} on {B} and place it back on {C}",
+    "Brown {A} on {B}, then set it on {C}",
+    "Cook {A} on {B}, then put the meat back on {C}",
+    "Use {a} to cook {A} on {B} and set it down on {C}",
+    "Place {A} on {B}, hold {E} to cook, then return to {C}",
+    "Press {E} to cook {A} on {B}, then set it on {C}",
+    "With {a}, cook {A} via {E} on {B} and move it to {C}",
+    "Cook both steaks with {a} on dual pans, then return them to the boards",
+    "Use both arms to cook {n} steaks and put them back on {C}"
   ],
   "unseen": [
-    "Heat {A} on {B} until cooked, then transfer it to {D}",
-    "Take {A} from {C}, cook on {B}, then plate it on {D}",
-    "Cook the meat on the pan and plate it"
+    "Heat {A} on {B} until cooked, then transfer it back to {C}",
+    "Take {A} from {C}, cook on {B}, then return it to {C}",
+    "Cook the meat on the pan and put it back on the board",
+    "Hold the cook key until {A} is done, then return it to {C}",
+    "Mirror-cook both sides then return both steaks to the boards"
   ]
 }

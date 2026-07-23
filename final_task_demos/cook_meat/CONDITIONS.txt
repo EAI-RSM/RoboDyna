@@ -1,0 +1,22 @@
+cook_meat — expert controller demos
+
+default  : cook_button_enabled=false, dual_setup_enabled=false
+           single station; contact cook on pan (no key)
+opt1     : cook_button_enabled=true,  dual_setup_enabled=false
+           single station; hold red cook key while steak is on pan
+opt2     : cook_button_enabled=false, dual_setup_enabled=true
+           dual stations (≥10 cm clearance); both arms; contact cook; no keys
+opt1+2   : cook_button_enabled=true,  dual_setup_enabled=true
+           dual stations; each side has its own cook key (hold to cook)
+
+Success: every station steak returned to its cutting board off the pan with
+         |grasp_doneness − target| ≤ 0.08
+         (rejects under-cooked and over-cooked meat).
+         Dual (opt2 / opt1+2): both steaks must be cooked properly;
+         one under-/over-cooked steak fails the episode.
+
+Files (side-by-side is the primary deliverable):
+  default_sidebyside.mp4   opt1_sidebyside.mp4
+  opt2_sidebyside.mp4      opt1+2_sidebyside.mp4
+Also: <tag>_head.mp4, <tag>_topdown.mp4
+Tags: default | opt1 | opt2 | opt1+2

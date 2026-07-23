@@ -55,12 +55,39 @@ task_args:
     plate_scale_mult: 0.65
     steamer_scale_mult: 0.10
   cook_meat:
-    cook_steps_min: 2000      # KEY random: cook SPEED (steps for doneness 0->1.0)
-    cook_steps_max: 8000      # ~4-16 s to reach medium(~0.5) at 250Hz
-    target_doneness_min: 0.45 # tight band around medium
+    # ---- knobs (change these) ----
+    #   cook_button_enabled  ← Opt 1 (default false = contact cook, no key)
+    #   dual_setup_enabled   ← Opt 2; dual stations, both arms; ≥10 cm clearance
+    #   cook_steps           ← nominal cook duration (steps for doneness 0→1)
+    #   cook_speed_jitter    ← per-ep ± fraction on cook_steps (default 0.20)
+    #   key_offset_x         ← |lateral| key offset from pan (same side as station)
+    #   key_y_bias           ← key y relative to pan
+    #   key_press_depth      ← EE press depth onto keycap
+    #   target_doneness_*    ← success / expert cook band
+    #   cook_doneness_tol    ← |grasp_doneness − target|; dual needs BOTH steaks in band
+    # Combinations:
+    #   Default            : single + contact cook (no key)
+    #   Opt1               : single + red key hold-to-cook
+    #   Opt2               : dual stations, contact cook (no keys); both steaks cooked
+    #   Opt1+2             : dual stations, each with its own cook key; both steaks cooked
+    # CLI: --task-arg cook_button_enabled=... / dual_setup_enabled=...
+    #      --option 1 | --option 2
+    cook_steps: 5000            # CHANGE: nominal steps for doneness 0→1.0 (~10 s to medium@0.5, 250Hz)
+    cook_speed_jitter: 0.20     # CHANGE: per-ep cook_steps ~ U(nom×(1±jitter))
+    cook_button_enabled: false  # CHANGE: Opt 1; true = hold red key to cook
+    dual_setup_enabled: false   # CHANGE: Opt 2; true = dual stations (both arms)
+    key_offset_x: 0.14          # CHANGE: m; |lateral| distance of key from pan center
+    key_y_bias: -0.04           # CHANGE: m; key y relative to pan (toward robot)
+    key_press_depth: 0.055      # CHANGE: m; EE press depth onto keycap
+    place_jitter_xy: 0.01       # CHANGE: ±m XY jitter on pan/board (small diversity)
+    place_yaw_lim: 0.175        # CHANGE: ±rad Z yaw on pan/board (~10 deg)
+    target_doneness_min: 0.45 # CHANGE: tight band around medium
     target_doneness_max: 0.55
+    cook_doneness_tol: 0.08   # CHANGE: |grasp_doneness − target| per steak (dual: both)
     place_dx: 0.010           # center the steak in the bowl (+x)
     place_dy: -0.015          # center the steak in the bowl (-y)
+    board_scale_mult: 0.075 # cutting board size (steak starts and finishes here)
+    # plate removed: cooked steak returns to the cutting board
   assemble_markers_cylinder:
     side_cyl_radius: 0.018
     side_cyl_half_len: 0.10
