@@ -115,6 +115,9 @@ class sort_apples_belt(Base_Task):
     DUSTBIN_DY = 0.052
     # Episode budget (sim steps via _step_ctr / _step_record); ~40 s at 250 Hz.
     MAX_EPISODE_STEPS = 10000
+    # Cap per button-hold wait so a stuck apple can reseat/retry instead of burning
+    # the whole episode budget waiting for a deposit that never comes.
+    HOLD_WAIT_MAX = 900
 
     def setup_demo(self, **kwags):
         self._cfg = dict(kwags.get("task_args", {}).get("sort_apples_belt", {}))
@@ -1137,13 +1140,14 @@ class sort_apples_belt(Base_Task):
         return bool(over_belt)
 
     def _belt_stream_cleared(self):
-        """True once every apple has spawned and none remain on the belt."""
+        """True once every apple has spawned and been deposited.
+
+        Do not treat mid-flight physics apples (off the belt footprint but not yet
+        caught in a basket/bin) as cleared — that ended episodes before the catch.
+        """
         if int(getattr(self, "_spawned", 0)) < int(getattr(self, "n_apples", 0)):
             return False
-        for i in range(self.n_apples):
-            if self._apple_on_belt(i):
-                return False
-        return True
+        return all(bool(self._deposited[i]) for i in range(self.n_apples))
 
     def _step_record(self):
         if self._episode_timed_out():
@@ -1183,10 +1187,10 @@ class sort_apples_belt(Base_Task):
         self.press_count += 1
         self._gate_mode = "dump"
         self._set_gate_target()
-        # Wait within remaining episode budget only.
-        for _ in range(self._budget_left()):
+        # Wait for dump deposit (not merely leaving the belt); cap so retries can run.
+        for _ in range(min(self.HOLD_WAIT_MAX, self._budget_left())):
             self._step_record()
-            if (self._deposited[apple_idx] or not self._apple_on_belt(apple_idx)
+            if (self._deposited[apple_idx]
                     or self._belt_stream_cleared() or self._episode_timed_out()):
                 break
         self._expert_hold = None
@@ -1225,16 +1229,15 @@ class sort_apples_belt(Base_Task):
         for i in queued:
             self._decided[i] = True
         self._set_gate_target()
-        for _ in range(self._budget_left()):
+        for _ in range(min(self.HOLD_WAIT_MAX, self._budget_left())):
             self._step_record()
             if self._episode_timed_out() or self._belt_stream_cleared():
                 break
-            if self._divert_batch and all(
-                    self._deposited[i] or not self._apple_on_belt(i)
-                    for i in self._divert_batch):
+            # Wait for deposit (not merely leaving the belt footprint) so mid-air
+            # fruit still falling into the basket keeps the divert held.
+            if self._divert_batch and all(self._deposited[i] for i in self._divert_batch):
                 break
-            if not self._divert_batch and (
-                    self._deposited[apple_idx] or not self._apple_on_belt(apple_idx)):
+            if not self._divert_batch and self._deposited[apple_idx]:
                 break
         self._expert_hold = None
         self._divert_batch = []
@@ -1363,10 +1366,18 @@ class sort_apples_belt(Base_Task):
         self._dump_open = False
         self._gate_mode = "rest"
         self._set_gate_target()
-        # Brief settle only if budget remains (do not blow past the episode cap).
-        settle = min(40 if self.rotten_enabled else 30, self._budget_left())
+        # Settle remaining mid-flight fruit into baskets/bin (budget permitting).
+        settle = min(120 if self.rotten_enabled else 80, self._budget_left())
         for _ in range(settle):
             self._step_record()
+            if all(self._deposited[i] for i in range(self.n_apples)):
+                break
+        # Final plan flag from deposits (per-hold overwrites can leave a stale False).
+        if self._timed_out or self._episode_timed_out():
+            self._timed_out = True
+            self.plan_success = False
+        else:
+            self.plan_success = all(bool(self._deposited[i]) for i in range(self.n_apples))
 
         self.info["info"] = {
             "{A}": "220_apple_plain/base0",

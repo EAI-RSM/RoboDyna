@@ -1623,9 +1623,11 @@ class Base_Task(gym.Env):
 
         def get_grasp_pose(pre_grasp_pose, pre_grasp_dis):
             grasp_pose = deepcopy(pre_grasp_pose)
-            grasp_pose = np.array(grasp_pose)
+            grasp_pose = np.asarray(grasp_pose, dtype=np.float64).copy()
             direction_mat = t3d.quaternions.quat2mat(grasp_pose[-4:])
-            grasp_pose[:3] += [pre_grasp_dis, 0, 0] @ np.linalg.inv(direction_mat)
+            grasp_pose[:3] += np.asarray([pre_grasp_dis, 0, 0], dtype=np.float64) @ np.linalg.inv(
+                direction_mat
+            )
             grasp_pose = grasp_pose.tolist()
             return grasp_pose
 

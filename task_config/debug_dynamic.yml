@@ -2,7 +2,7 @@ render_freq: 0
 episode_num: 8                 # debug: small batch
 use_seed: false
 save_freq: 15
-embodiment: [aloha-agilex] #[ur5-wsg, ur5-wsg, 0.6]
+embodiment: [ur5-wsg, ur5-wsg, 0.6] #[aloha-agilex] #
 language_num: 100
 use_dynamic: false            # static path by default; tasks with a moving element flip this themselves
 dynamic_level: 1              # dynamic complexity level(1,2,3)
@@ -55,8 +55,13 @@ task_args:
     plate_scale_mult: 0.65
     steamer_scale_mult: 0.10
   cook_meat:
-    cook_steps: 1000
+    cook_steps: 1000            # nominal; per-ep × U(1±cook_speed_jitter)
+    cook_speed_jitter: 0.20
+    cook_button_enabled: false  # default = contact cook; Opt 1 = true
+    dual_setup_enabled: false   # Opt 2: dual stations (≥10 cm clearance)
     target_doneness: 0.5
+    board_scale_mult: 0.07    # cutting board size (steak starts and finishes here)
+    # plate removed: cooked steak returns to the cutting board
   assemble_markers_cylinder:
     side_cyl_radius: 0.018
     side_cyl_half_len: 0.10
@@ -93,8 +98,13 @@ task_args:
     pop_steps: 90
     grasp_tol: 0.05
   whack_a_mole:
-    num_moles: 4
-    num_distractors: 0        # white rabbit distractors (0..M, M=4); touching one fails
+    num_moles: 2
+    # Opt 1 — rabbit distractor. CLI: --task-arg distractor_enabled=true  or  --option 1
+    distractor_enabled: false
+    num_distractors: 1
+    # Opt 2 — moles relocate to a free hole when they go down.
+    #   CLI: --task-arg relocating_moles=true  or  --option 2
+    relocating_moles: false
     difficulty: easy
     pop_steps: 90
     touch_tol: 0.04
@@ -105,8 +115,8 @@ task_args:
     cube_grasp_drop_z: 0.05   # lower cube 5 cm below finger midpoint
     mole_scale_mult: 1.80     # 1.5x prior mole size
     mole_height: 0.1053       # world height after mole_scale_mult
-    rabbit_scale_mult: 2.40   # match enlarged mole world height
-    rabbit_height: 0.1053
+    rabbit_scale_mult: 1.00   # match enlarged mole world height
+    rabbit_height: 0.1047
     table_height_bias: 0.05   # raise table (+board) 5 cm
     board_z_lift: 0.12        # play surface ~12 cm above table; solid base sits on table
     board_color: [0.98, 0.82, 0.05]  # yellow
@@ -173,14 +183,26 @@ task_args:
     press_hold_steps: 5
     post_press_dwell: 8
   catch_shelf_marble:
-    n_shelves: 4
+    # Options (independent toggles; Opt 1+2 can both be on):
+    #   Default — marble pauses on the top shelf until a bowl key is pressed
+    #   Opt 1 — reactive_marble: marble starts moving/falling from episode start
+    #     CLI: --task-arg reactive_marble=true   or   --option 1
+    #   Opt 2 — oscillating_shelf_enabled: one random non-top shelf sweeps -x..+x
+    #     CLI: --task-arg oscillating_shelf_enabled=true   or   --option 2
+    n_shelves_min: 4          # per-episode randomized shelf count (set n_shelves to pin a fixed count)
+    n_shelves_max: 7
     shelf_length: 0.20
-    level_gap: 0.13
-    tilt_min_deg: 15.0
-    tilt_max_deg: 45.0
+    stack_height: 0.39        # total bottom-to-top-shelf span; level_gap = stack_height/(n_shelves-1)
+    tilt_min_deg: 15.0        # randomized per-shelf tilt magnitude range (degrees); direction is
+    tilt_max_deg: 45.0        # independently randomized per shelf, see load_actors
     bottom_clearance: 0.22
     ball_radius: 0.014
-    roll_speed: 0.35
+    roll_speed: 0.35          # non-reactive / Default slide speed
+    reactive_marble: false    # Opt 1: true = marble drops at play_once start (not on key-press)
+    reactive_roll_speed: 0.09 # Opt 1: slide speed used only when reactive_marble is true
+    oscillating_shelf_enabled: false  # Opt 2: one random non-top shelf sweeps -x..+x
+    oscillating_shelf_period: 3.0     # s; Opt 2 full sweep cycle (episode-absolute clock)
+    # oscillating_shelf_index: 1      # optional: pin which shelf oscillates (0/top rejected; default: random 1..N-1)
     bowl_radius: 0.05
     bowl_speed: 0.18
     bowl_catch_xy_tol: 0.035
@@ -268,9 +290,25 @@ task_args:
     apple_side: random          # alias of good_side (compat)
     apple_scale_mult: 0.78
   place_block_belt:
-    belt_speed: 0.06
+    # Options (independent toggles):
+    #   Opt 1 — moving bowl  →  bowl_move_enabled
+    #   Opt 2 — belt blocker →  blocker_enabled
+    bowl_move_enabled: true        # Opt 1: full belt y travel even with Opt 2
+    bowl_move_speed: 0.30          # Opt 1: nominal; ±speed_jitter_frac per ep
+    place_line_offset: 0.10        # m; red line; contact past it fails
+    blocker_enabled: false         # Opt 2
+    blocker_start_clearance: 0.15  # Opt 2: min near-face from load edge
+    blocker_length_frac_min: 0.20  # Opt 2: y-size frac of belt width
+    blocker_length_frac_max: 0.30  # Opt 2
+    blocker_half_x: 0.012          # Opt 2: nominal x half-thickness
+    blocker_half_x_jitter_frac: 0.50  # Opt 2: ±50% on half_x
+    belt_speed: 0.06               # nominal; ±speed_jitter_frac per ep
+    speed_jitter_frac: 0.20
     theta_max_deg: 30.0
     belt_ride_steps: 600
+    block_belt_clearance: 0.05
+    block_y_jitter: 0.05
+    random_belt_flip: true
   rotating_shape_sorter:
     spin_speed: 0.9
     spin_speed_jitter: 0.20     # sample ~ U(0.8, 1.2) × spin_speed
@@ -338,8 +376,8 @@ task_args:
   sort_apples_belt:
     n_apples_min: 4
     n_apples_max: 10
-    belt_speed_min: 0.0010
-    belt_speed_max: 0.0020
+    belt_speed_min: 0.0005
+    belt_speed_max: 0.0010
     belt_speed_scale: 1.0
     advance_every: 4
     gate_default_left: true
@@ -382,13 +420,17 @@ task_args:
     amp_y: 0.025
     amp_z: 0.018
   quality_control:
+    # Default: color_mode=alternating, black_frac_max=0 (no distractors)
+    # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
+    # tile_pause_s = max hold under stamp; miss unstamped red/green → fail
     n_tiles: 6
-    color_mode: alternating   # alternating | random (non-black tiles)
-    spacing_mode: random      # equal | random inter-tile gaps
+    color_mode: alternating
+    spacing_mode: random
     tile_spacing: 0.08
     spacing_min: 0.07
     spacing_max: 0.14
-    black_frac_max: 0.50      # randomly blacken up to this fraction; no key on black
+    black_frac_max: 0.0
+    tile_pause_s: 2.0
   packing:
     n_per_color: 3
     spawn_mode: parallel      # single | parallel; next wave after drop or belt-exit
@@ -481,9 +523,10 @@ task_args:
     bowl_outer_radius: 0.037
     bowl_height: 0.040
   play_billiard:
-    pocket_mode: any          # any | top_three
-    blocker_mode: none        # none | path_to_top | unused_tops
-    num_extra_balls: 0        # 0–2
+    # Default | Opt1 specific_hole | Opt2 enable_distractors | Opt1+2 both
+    specific_hole: false
+    enable_distractors: false
+    num_extra_balls: 2        # when Opt2 on; 0 → sample 1–2
     ball_radius: 0.012
     table_cx: 0.0
     table_cy: 0.1

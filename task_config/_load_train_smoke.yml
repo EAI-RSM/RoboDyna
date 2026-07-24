@@ -56,8 +56,10 @@ task_args:
     plate_scale_mult: 0.65
     steamer_scale_mult: 0.10
   cook_meat:
-    cook_steps_min: 2000      # KEY random: cook SPEED (steps for doneness 0->1.0)
-    cook_steps_max: 8000      # ~4-16 s to reach medium(~0.5) at 250Hz
+    cook_steps: 5000            # nominal steps for doneness 0→1.0
+    cook_speed_jitter: 0.20     # Default: per-ep cook_steps ~ U(nom×(1±jitter))
+    cook_button_enabled: false  # default = contact cook; Opt 1 = true
+    dual_setup_enabled: false
     target_doneness_min: 0.45 # tight band around medium
     target_doneness_max: 0.55
     place_dx: 0.010           # center the steak in the bowl (+x)
@@ -128,7 +130,7 @@ task_args:
     pop_steps: 90
     grasp_tol: 0.05
   whack_a_mole:
-    num_moles: 3
+    num_moles: 2
     distractor_enabled: false
     num_distractors: 1
     relocating_moles: false
@@ -142,8 +144,8 @@ task_args:
     cube_grasp_drop_z: 0.05   # lower cube 5 cm below finger midpoint
     mole_scale_mult: 1.80     # 1.5x prior mole size
     mole_height: 0.1053       # world height after mole_scale_mult
-    rabbit_scale_mult: 2.40   # match enlarged mole world height
-    rabbit_height: 0.1053
+    rabbit_scale_mult: 1.00   # match enlarged mole world height
+    rabbit_height: 0.1047
     table_height_bias: 0.05   # raise table (+board) 5 cm
     board_z_lift: 0.12        # play surface ~12 cm above table; solid base sits on table
     board_color: [0.98, 0.82, 0.05]  # yellow
@@ -303,6 +305,8 @@ task_args:
     belt_speed_scale: 1.0
     advance_every: 4
     gate_default_left: true
+    color_mode: alternating  # Opt1: random; Opt2: rotten_prob>0
+    rotten_prob: 0.0
   hit_target:
     board_half_size: 0.075
     center_half_size: 0.018

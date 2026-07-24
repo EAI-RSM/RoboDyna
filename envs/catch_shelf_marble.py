@@ -10,14 +10,20 @@ _CSM_DEBUG = os.environ.get("CSM_DEBUG", "0") == "1"
 
 
 class catch_shelf_marble(Base_Task):
-    """A belt-mounted bowl catches a marble that cascades down four tilted, interleaved shelves.
+    """A belt-mounted bowl catches a marble that cascades down a stack of tilted, interleaved shelves.
 
-    Four short shelves hang above a belt, stacked top to bottom, each shifted left/right of the
-    one above it (overlapping by at most half a shelf length) so the layout zig-zags like a
-    bagatelle board; each shelf's tilt (15-45 degrees, direction tied to which way the marble must
-    exit to reach the shelf below it) is randomized independently every episode. A marble starts
-    at rest on the centre of the top shelf and slides/falls down through all four shelves onto the
-    belt below.
+    Between `n_shelves_min` and `n_shelves_max` (default 4-7) short shelves hang above a belt,
+    stacked top to bottom, each shifted left/right of the one above it (overlapping by at most half
+    a shelf length) so the layout zig-zags like a bagatelle board; each shelf's tilt magnitude
+    (`tilt_min_deg`-`tilt_max_deg`, default 15-45) is randomized independently every episode, and
+    the *direction* each shelf leans is also drawn independently (not forced to alternate), so the
+    cascade's net horizontal drift -- and therefore which part of the belt the marble ultimately
+    drops onto -- varies far more from episode to episode than a strict left-right-left zig-zag
+    would allow. The number of shelves is randomized per episode too (unless `n_shelves` is set
+    explicitly), and the vertical spacing between shelves auto-scales with the shelf count (see
+    `stack_height`) so the overall stack height stays roughly constant regardless of how many
+    shelves are in play. A marble starts at rest on the centre of the top shelf and slides/falls
+    down through the whole stack onto the belt below.
 
     Unlike a button-hop belt, the bowl here moves CONTINUOUSLY: a left action key (pressed by the
     left arm) slides the bowl left at a constant speed for as long as it is held, and a right
@@ -30,31 +36,64 @@ class catch_shelf_marble(Base_Task):
     analytically in `load_actors` from the randomized geometry, so both collector passes replay the
     identical marble path and the same `target_catch_x` the expert policy aims for.
 
-    Two task_args knobs beyond the basics:
+    Options (independent toggles; CLI via ``--task-arg`` or legacy ``--option``):
+      - Default — marble pauses on the top shelf until a bowl key is pressed.
+      - Option 1 — ``reactive_marble``: marble starts moving/falling from episode start
+        (released at ``play_once``, not on key-press). Uses ``reactive_roll_speed`` so the arm
+        can still catch up. CLI: ``--task-arg reactive_marble=true`` or ``--option 1``.
+      - Option 2 — ``oscillating_shelf_enabled``: one random non-top shelf sweeps ``-x..+x``.
+        CLI: ``--task-arg oscillating_shelf_enabled=true`` or ``--option 2``.
+      Options 1 and 2 may be combined.
+
+    Other task_args knobs:
+    - `n_shelves_min`/`n_shelves_max`: per-episode randomized shelf count range. Defaults 4-7. Set
+      `n_shelves` explicitly to pin a fixed count instead (skips the randomization).
+    - `stack_height`: total vertical span (m) from the bottom shelf to the top shelf; `level_gap`
+      (the per-level spacing) is derived as `stack_height / (n_shelves - 1)` so taller stacks
+      (more shelves) don't grow the scene's overall height. Set `level_gap` explicitly to pin a
+      fixed per-level spacing instead (skips the derivation).
+    - `max_stack_span` (default 0.55m): cap on the cascade's total horizontal width (max minus min
+      shelf-centre x). Independently-random lean directions can occasionally compound into a long
+      same-direction run; if that would exceed this cap, only the sign combination is resampled
+      (offset *magnitudes*, and therefore shelf overlap, are never touched) so the belt this
+      produces never spills past the table's edge.
     - `tilt_min_deg`/`tilt_max_deg`: the randomized range (degrees) each shelf's tilt magnitude is
-      drawn from independently every episode (direction is separately tied to the zig-zag offset;
-      see `load_actors`). Defaults 15-45.
-    - `reactive_marble` (bool, default False): if True, the marble is released the instant
-      `play_once` starts (before the arm even begins moving) instead of waiting for the bowl's key
-      to be pressed -- the robot has to react to an already-falling marble rather than
-      pre-positioning the bowl and then dropping it on cue. Because the fixed close_gripper +
-      reach-the-key + press-down sequence alone takes far longer than a descent run at the default
-      `roll_speed`, this mode also switches the *effective* roll speed to `reactive_roll_speed`
-      (much slower, so the marble's slide legs take long enough for the arm to still catch up;
-      the physically-timed free-fall legs between shelves are unaffected).
+      drawn from independently every episode (direction is separately, independently randomized per
+      shelf and tied to that shelf's own zig-zag offset; see `load_actors`). Defaults 15-45.
+    - Opt 1 ``reactive_marble``: release at ``play_once`` start; effective slide speed becomes
+      ``reactive_roll_speed`` (free-fall legs between shelves are unaffected).
+    - Opt 2 ``oscillating_shelf_enabled``: one *non-top* shelf (indices ``1..n_shelves-1``, or
+      pinned via ``oscillating_shelf_index``; index ``0`` rejected) sweeps
+      ``x * cos(2*pi*t/oscillating_shelf_period)`` for the whole episode, including while the
+      marble is parked. Descent plan is recomputed at release against the live osc phase so both
+      collector passes agree on ``target_catch_x``.
     """
 
-    N_SHELVES_DEFAULT = 4
+    N_SHELVES_MIN_DEFAULT = 4
+    N_SHELVES_MAX_DEFAULT = 7
     SHELF_LENGTH_DEFAULT = 0.20
     SHELF_DEPTH_DEFAULT = 0.10
     SHELF_THICK_DEFAULT = 0.016
-    LEVEL_GAP_DEFAULT = 0.13
+    LEVEL_GAP_DEFAULT = 0.13              # per-level spacing when n_shelves == 4 (the old fixed count)
+    STACK_HEIGHT_DEFAULT = LEVEL_GAP_DEFAULT * (N_SHELVES_MIN_DEFAULT - 1)  # 0.39; kept constant
+                                           # across n_shelves so a 7-shelf stack isn't much taller
+                                           # than a 4-shelf one -- level_gap is derived from this
     OFFSET_MIN_FRAC_DEFAULT = 0.55        # min |offset| as a fraction of shelf_length -> overlap <= 45%
     OFFSET_MAX_FRAC_DEFAULT = 0.92        # max |offset| as a fraction of shelf_length -> overlap >= 8%
     TILT_MIN_DEG_DEFAULT = 15.0
     TILT_MAX_DEG_DEFAULT = 45.0
     BOTTOM_CLEARANCE_DEFAULT = 0.22       # belt surface up to the bottom shelf's underside
     STACK_SHIFT_RANGE_DEFAULT = 0.05      # random overall shift of the whole cascade along the belt
+    MAX_STACK_SPAN_DEFAULT = 0.55         # cap on (max - min) shelf-centre x, so independently-random
+                                           # lean directions can't compound into a cascade (+ belt) that
+                                           # spills past the table edge (table length is 1.2m -> half 0.6)
+
+    OSCILLATING_SHELF_ENABLED_DEFAULT = False
+    OSCILLATING_SHELF_PERIOD_DEFAULT = 3.0    # s, full -x -> +x -> -x cycle (runs even while marble parked)
+    # Heuristic lead (sim steps) from "decide which key" to "key actually pressed / marble released"
+    # in non-reactive mode -- used only to pick a provisional `target_catch_x` for arm selection;
+    # the true plan is recomputed at `_release_marble` against the live osc phase.
+    OSC_KEY_APPROACH_LEAD_STEPS_DEFAULT = 280
 
     BALL_RADIUS_DEFAULT = 0.014
     ROLL_SPEED_DEFAULT = 0.35             # m/s, constant scripted speed for both slide and fall legs
@@ -90,12 +129,18 @@ class catch_shelf_marble(Base_Task):
     PRESS_LOOP_MAX_STEPS_DEFAULT = 500
     POST_CATCH_DWELL_DEFAULT = 20
 
-    SHELF_COLOR = [0.62, 0.46, 0.30]
+    # Glass shelves (catch_rat window-glass path): very light blue tint + 80% transmission.
+    SHELF_COLOR = [0.94, 0.97, 1.0]
+    SHELF_TRANSMISSION = 0.8
+    SHELF_TRANSMISSION_ROUGHNESS = 0.0
+    SHELF_ROUGHNESS = 0.02
+    SHELF_IOR = 1.45
     BELT_COLOR = [0.10, 0.10, 0.12]
     KEY_BASE_COLOR = [0.28, 0.28, 0.31]
     LEFT_KEY_COLOR = [0.20, 0.70, 0.35]
     RIGHT_KEY_COLOR = [0.18, 0.48, 0.82]
     MARBLE_COLOR = [0.85, 0.15, 0.15]
+    BOWL_COLOR = [0.95, 0.82, 0.12]
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("catch_shelf_marble", {})
@@ -121,6 +166,10 @@ class catch_shelf_marble(Base_Task):
         self._marble_result = None        # None | "caught" | "missed"
         self._leg_idx = 0
         self._leg_step = 0
+        self.osc_enabled = False
+        self.osc_shelf_idx = -1
+        self._osc_steps = 0
+        self._osc_armed = False  # flipped True at play_once; keeps check_stable from seeing motion
         self.key_xy = {}
         self.key_rest_xyz = {}
         self.key_arrows = {}
@@ -135,10 +184,33 @@ class catch_shelf_marble(Base_Task):
     def _configure_observer_camera(self):
         """Frame the whole belt + shelf stack from the table's upper-right corner (third-person
         overview), mirroring `dispense_gummy`'s convention. The shelf stack here is taller than
-        that fixture, so the camera sits further back and higher."""
-        camera = getattr(getattr(self, "cameras", None), "observer_camera", None)
-        if camera is None:
+        that fixture, so the camera sits further back and higher.
+
+        Recreates the shared `observer_camera` (default 320×240 / 93° fovy) at 1280×960 with a
+        true 2× optical zoom (fovy halved via `2*atan(tan(fovy/2)/2)`), so demo recordings stay
+        sharp and fill the frame with the fixture instead of empty table/background."""
+        cams = getattr(self, "cameras", None)
+        if cams is None or getattr(cams, "observer_camera", None) is None:
             return
+        old = cams.observer_camera
+        near = float(old.near) if hasattr(old, "near") else 0.1
+        far = float(old.far) if hasattr(old, "far") else 100.0
+        old_fovy = float(old.fovy) if hasattr(old, "fovy") else np.deg2rad(93.0)
+        # 2× optical zoom: new_fovy = 2 * atan(tan(old_fovy/2) / 2)
+        zoom_fovy = 2.0 * float(np.arctan(np.tan(old_fovy / 2.0) / 2.0))
+        try:
+            self.scene.remove_camera(old)
+        except Exception:
+            pass
+        cams.observer_camera = self.scene.add_camera(
+            name="observer_camera",
+            width=1280,
+            height=960,
+            fovy=zoom_fovy,
+            near=near,
+            far=far,
+        )
+        camera = cams.observer_camera
         camera_pos = np.array([0.38, 0.52, 1.45], dtype=np.float64)
         look_at = np.array([0.0, -0.05, 0.95], dtype=np.float64)
         forward = look_at - camera_pos
@@ -152,6 +224,152 @@ class catch_shelf_marble(Base_Task):
         camera.entity.set_pose(sapien.Pose(camera_matrix))
 
     # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _as_bool(value, default: bool) -> bool:
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        s = str(value).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"catch_shelf_marble expected a boolean, got {value!r}")
+
+    def _parse_reactive_marble(self, c) -> bool:
+        """Opt 1: marble starts moving at episode start (preferred) or legacy ``option: 1``."""
+        reactive = c.get("reactive_marble", c.get("opt1", None))
+        legacy = c.get("option", None)
+        if legacy is not None and reactive is None:
+            if legacy in (1, "1", "reactive_marble", "reactive"):
+                reactive = True
+            elif legacy in (2, "2", "oscillating_shelf_enabled", "oscillating_shelf", "osc"):
+                reactive = False
+            else:
+                raise ValueError(
+                    "catch_shelf_marble option must be 1/reactive_marble or "
+                    "2/oscillating_shelf_enabled (or set the booleans directly)"
+                )
+        return self._as_bool(reactive, self.REACTIVE_MARBLE_DEFAULT)
+
+    def _parse_oscillating_shelf_enabled(self, c) -> bool:
+        """Opt 2: one shelf oscillates (preferred) or legacy ``option: 2``."""
+        osc = c.get("oscillating_shelf_enabled", c.get("opt2", None))
+        legacy = c.get("option", None)
+        if legacy is not None and osc is None:
+            if legacy in (2, "2", "oscillating_shelf_enabled", "oscillating_shelf", "osc"):
+                osc = True
+            elif legacy in (1, "1", "reactive_marble", "reactive"):
+                osc = False
+            else:
+                raise ValueError(
+                    "catch_shelf_marble option must be 1/reactive_marble or "
+                    "2/oscillating_shelf_enabled (or set the booleans directly)"
+                )
+        return self._as_bool(osc, self.OSCILLATING_SHELF_ENABLED_DEFAULT)
+
+    def _option_label(self) -> str:
+        parts = []
+        if getattr(self, "reactive_marble", False):
+            parts.append("option 1")
+        if getattr(self, "osc_enabled", False):
+            parts.append("option 2")
+        return ", ".join(parts) if parts else "baseline"
+
+    def _make_glass_material(self):
+        """catch_rat-style window glass: very light blue hue + 80% transmission."""
+        glass = sapien.render.RenderMaterial(base_color=[*self.SHELF_COLOR, 1.0])
+        glass.set_transmission(float(self.SHELF_TRANSMISSION))
+        glass.set_transmission_roughness(float(self.SHELF_TRANSMISSION_ROUGHNESS))
+        glass.set_roughness(float(self.SHELF_ROUGHNESS))
+        glass.set_metallic(0.0)
+        try:
+            glass.set_ior(float(self.SHELF_IOR))
+        except Exception:
+            glass.ior = float(self.SHELF_IOR)
+        return glass
+
+    def _create_glass_shelf(self, pose, half_size, is_static, name):
+        """Shelf box with collision + catch_rat-style glass visual (moves with the entity)."""
+        # Mirror create_entity_box, but attach a transmission glass material instead of opaque paint.
+        scene = self.scene
+        entity = sapien.Entity()
+        entity.set_name(name)
+        # Respect table_z_bias the same way create_box(self, ...) does via preprocess.
+        z_bias = float(getattr(self, "table_z_bias", 0.0) or 0.0)
+        posed = sapien.Pose(
+            [float(pose.p[0]), float(pose.p[1]), float(pose.p[2]) + z_bias],
+            pose.q,
+        )
+        entity.set_pose(posed)
+
+        rigid = (
+            sapien.physx.PhysxRigidDynamicComponent()
+            if not is_static
+            else sapien.physx.PhysxRigidStaticComponent()
+        )
+        rigid.attach(
+            sapien.physx.PhysxCollisionShapeBox(
+                half_size=half_size,
+                material=scene.default_physical_material,
+            )
+        )
+        render = sapien.render.RenderBodyComponent()
+        render.attach(sapien.render.RenderShapeBox(half_size, self._make_glass_material()))
+        entity.add_component(rigid)
+        entity.add_component(render)
+        scene.add_entity(entity)
+
+        # Same Actor metadata create_box attaches, so helpers that expect an Actor keep working.
+        data = {
+            "center": [0, 0, 0],
+            "extents": half_size,
+            "scale": half_size,
+            "target_pose": [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]]],
+            "contact_points_pose": [],
+            "transform_matrix": np.eye(4).tolist(),
+            "functional_matrix": [],
+            "contact_points_description": [],
+            "contact_points_group": [],
+            "contact_points_mask": [],
+            "target_point_description": [],
+        }
+        return Actor(entity, data)
+
+    def _recolor(self, actor, rgb):
+        """Solid-color override. Clears base-color textures (002_bowl ships textured)."""
+        entity = actor.actor if hasattr(actor, "actor") else actor
+        rgba = [*list(rgb)[:3], 1.0]
+        for comp in entity.get_components():
+            if not isinstance(comp, sapien.render.RenderBodyComponent):
+                continue
+            for shape in comp.render_shapes:
+                try:
+                    mat = shape.material
+                except Exception:
+                    continue
+                try:
+                    mat.set_base_color_texture(None)
+                except Exception:
+                    pass
+                try:
+                    mat.set_base_color(rgba)
+                    mat.base_color = rgba
+                except Exception:
+                    try:
+                        mat.set_base_color(rgba)
+                    except Exception:
+                        pass
+                # Drop metallic/speckled look so the solid yellow reads cleanly.
+                try:
+                    mat.set_metallic(0.0)
+                    mat.set_roughness(0.35)
+                except Exception:
+                    pass
+
     def _get_rigid(self, entity):
         obj = entity.actor if hasattr(entity, "actor") else entity
         for comp in obj.get_components():
@@ -182,20 +400,35 @@ class catch_shelf_marble(Base_Task):
         obj.set_pose(pose)
 
     # -------------------------------------------------------- shelf geometry
-    def _shelf_phi(self, idx):
+    def _shelf_phi(self, idx, osc_steps=None):
         """`phi` fed into both the shelf's rendered/collision quaternion (`load_actors`) and the
         `_shelf_local_to_world`/`_shelf_surface_z_at_local` family below. No sign flip here: with
         `quat = [cos(phi/2), 0, sin(phi/2), 0]` (a standard +Y-axis rotation) and those helpers'
         `R_y(phi)` convention, `phi = +deg2rad(angle_deg)` is exactly what makes a positive
         `shelf_angle_deg` tip the +local_x (right) edge down, matching the convention the
         offset/tilt-direction coupling in `load_actors` (`shelf_angle_deg[i] = shelf_dir[i] *
-        magnitude`) relies on."""
-        return np.deg2rad(self.shelf_angle_deg[idx])
+        magnitude`) relies on.
 
-    def _shelf_local_to_world(self, idx, local_x):
-        """World point on shelf `idx`'s (fixed, static) tilted top surface, `local_x` measured
-        along the shelf's own long axis from its centre (matches the +x=>right-edge-down
-        convention used throughout: positive angle tips the +local_x edge down).
+        For the one shelf picked as `osc_shelf_idx` (never the top shelf; see
+        `oscillating_shelf_enabled`), the angle is modulated by
+        `cos(2*pi * osc_steps*dt / oscillating_shelf_period)` against the episode-absolute
+        `_osc_steps` clock (defaults to live `self._osc_steps` when `osc_steps` is None). All
+        other shelves ignore the clock entirely."""
+        base_deg = self.shelf_angle_deg[idx]
+        if self.osc_enabled and idx == self.osc_shelf_idx:
+            if osc_steps is None:
+                osc_steps = self._osc_steps
+            dt = float(self.scene.get_timestep())
+            t = float(osc_steps) * dt
+            base_deg = base_deg * float(np.cos(2.0 * np.pi * t / self.osc_period))
+        return np.deg2rad(base_deg)
+
+    def _shelf_local_to_world(self, idx, local_x, osc_steps=None):
+        """World point on shelf `idx`'s tilted top surface, `local_x` measured along the shelf's own
+        long axis from its centre (matches the +x=>right-edge-down convention used throughout:
+        positive angle tips the +local_x edge down). For the oscillating shelf, `osc_steps`
+        selects which point in its sweep to evaluate (see `_shelf_phi`); for every other shelf the
+        surface is fixed and this argument has no effect.
 
         Must exactly match the rotation actually applied to the shelf's box actor -- the quaternion
         built from `phi` in `load_actors` (`[cos(phi/2), 0, sin(phi/2), 0]`) is a standard +Y-axis
@@ -204,7 +437,7 @@ class catch_shelf_marble(Base_Task):
         `R_y(-phi)`, which put the marble's scripted position off the real tilted surface by an
         amount that grew with `|local_x|` -- visually, the marble drifted through the shelf mesh
         instead of riding its top face.)"""
-        phi = self._shelf_phi(idx)
+        phi = self._shelf_phi(idx, osc_steps=osc_steps)
         cphi, sphi = np.cos(phi), np.sin(phi)
         local_z = self.shelf_half_thick + self.ball_radius
         wx = local_x * cphi + local_z * sphi
@@ -213,9 +446,10 @@ class catch_shelf_marble(Base_Task):
         cz = self.shelf_z[idx]
         return np.array([cx + wx, self.belt_y, cz + wz], dtype=np.float64)
 
-    def _shelf_world_x_to_local(self, idx, world_x):
-        """Inverse of `_shelf_local_to_world`'s x-mapping (same `R_y(phi)` convention)."""
-        phi = self._shelf_phi(idx)
+    def _shelf_world_x_to_local(self, idx, world_x, osc_steps=None):
+        """Inverse of `_shelf_local_to_world`'s x-mapping (same `R_y(phi)` convention, same
+        `osc_steps` semantics)."""
+        phi = self._shelf_phi(idx, osc_steps=osc_steps)
         cphi, sphi = np.cos(phi), np.sin(phi)
         if abs(cphi) < 1e-6:
             return None
@@ -223,26 +457,32 @@ class catch_shelf_marble(Base_Task):
         cx = self.shelf_centers_x[idx]
         return (world_x - cx - local_z * sphi) / cphi
 
-    def _shelf_surface_z_at_local(self, idx, local_x):
-        """Same `R_y(phi)` convention as `_shelf_local_to_world`'s z-mapping."""
-        phi = self._shelf_phi(idx)
+    def _shelf_surface_z_at_local(self, idx, local_x, osc_steps=None):
+        """Same `R_y(phi)` convention (and `osc_steps` semantics) as
+        `_shelf_local_to_world`'s z-mapping."""
+        phi = self._shelf_phi(idx, osc_steps=osc_steps)
         cphi, sphi = np.cos(phi), np.sin(phi)
         local_z = self.shelf_half_thick + self.ball_radius
         cz = self.shelf_z[idx]
         return cz - local_x * sphi + local_z * cphi
 
     # -------------------------------------------------- offline descent plan
-    def _compute_descent_plan(self):
+    def _compute_descent_plan(self, origin_osc_steps=0):
         """Analytically precompute the marble's entire path (a list of deterministic kinematic
         "legs": slide-along-a-shelf, then parabolic-free-fall-to-the-next-shelf-or-the-belt) from
         the randomized shelf geometry. This is what makes the two collector passes replay
-        bit-identically and gives the expert policy a `target_catch_x` to aim the bowl at before
-        the marble ever starts moving."""
+        bit-identically and gives the expert policy a `target_catch_x` to aim the bowl at.
+
+        `origin_osc_steps` is the episode-absolute `_osc_steps` value at the instant of marble
+        release; `cum_steps` then counts ticks since that release. Every `_shelf_*` lookup below
+        therefore sees the oscillating shelf (if any) at precisely the angle it will actually be
+        at when the marble gets there -- matching live playback, which keys off `_osc_steps`."""
         dt = float(self.scene.get_timestep())
         g = self.GRAVITY
         legs = []
         cur_shelf = 0
         cur_local = 0.0
+        cum_steps = 0
         x = z = 0.0
         for _ in range(self.n_shelves + 2):
             sign = self.shelf_dir[cur_shelf]
@@ -256,8 +496,11 @@ class catch_shelf_marble(Base_Task):
                 "end_local": float(edge_local),
                 "steps": int(slide_steps),
             })
+            cum_steps += slide_steps
 
-            edge_pos = self._shelf_local_to_world(cur_shelf, edge_local)
+            edge_pos = self._shelf_local_to_world(
+                cur_shelf, edge_local, osc_steps=origin_osc_steps + cum_steps
+            )
             vx = sign * self.roll_speed
             landed_shelf, landed_local = None, None
             k = 0
@@ -270,10 +513,11 @@ class catch_shelf_marble(Base_Task):
                     break
                 hit = False
                 for j in range(cur_shelf + 1, self.n_shelves):
-                    lx = self._shelf_world_x_to_local(j, x)
+                    osc_at = origin_osc_steps + cum_steps + k
+                    lx = self._shelf_world_x_to_local(j, x, osc_steps=osc_at)
                     if lx is None or abs(lx) > self.shelf_half_len:
                         continue
-                    surf_z = self._shelf_surface_z_at_local(j, lx)
+                    surf_z = self._shelf_surface_z_at_local(j, lx, osc_steps=osc_at)
                     if z <= surf_z:
                         landed_shelf, landed_local = j, float(lx)
                         hit = True
@@ -286,6 +530,7 @@ class catch_shelf_marble(Base_Task):
                 "vx": float(vx),
                 "steps": int(k),
             })
+            cum_steps += k
 
             if landed_shelf is None:
                 self.target_catch_x = float(x)
@@ -297,32 +542,75 @@ class catch_shelf_marble(Base_Task):
         self.descent_legs = legs
         self.total_marble_steps = int(sum(leg["steps"] for leg in legs))
 
+    def _apply_target_catch_bounds(self):
+        """Clip `target_catch_x` into the bowl's travel range and grow `press_loop_max_steps` if the
+        new target is farther than the budget sized at load time."""
+        self.target_catch_x = float(np.clip(self.target_catch_x, self.bowl_x_min, self.bowl_x_max))
+        bowl_x0 = float(self.bowl.get_pose().p[0]) if self.bowl is not None else 0.5 * (
+            self.bowl_x_min + self.bowl_x_max
+        )
+        dt = float(self.scene.get_timestep())
+        needed_steps = int(np.ceil(abs(self.target_catch_x - bowl_x0) / max(self.bowl_speed, 1e-4) / dt)) + 80
+        self.press_loop_max_steps = max(self.press_loop_max_steps, needed_steps)
+
     # ------------------------------------------------------------------ actors
     def load_actors(self):
         c = self._cfg
-        self.n_shelves = int(c.get("n_shelves", self.N_SHELVES_DEFAULT))
+        self.n_shelves_min = int(c.get("n_shelves_min", self.N_SHELVES_MIN_DEFAULT))
+        self.n_shelves_max = int(c.get("n_shelves_max", self.N_SHELVES_MAX_DEFAULT))
+        if "n_shelves" in c:
+            self.n_shelves = int(c["n_shelves"])
+        else:
+            self.n_shelves = int(np.random.randint(self.n_shelves_min, self.n_shelves_max + 1))
         self.shelf_length = float(c.get("shelf_length", self.SHELF_LENGTH_DEFAULT))
         self.shelf_depth = float(c.get("shelf_depth", self.SHELF_DEPTH_DEFAULT))
         self.shelf_thick = float(c.get("shelf_thick", self.SHELF_THICK_DEFAULT))
-        self.level_gap = float(c.get("level_gap", self.LEVEL_GAP_DEFAULT))
+        self.stack_height = float(c.get("stack_height", self.STACK_HEIGHT_DEFAULT))
+        if "level_gap" in c:
+            self.level_gap = float(c["level_gap"])
+        else:
+            self.level_gap = self.stack_height / max(1, self.n_shelves - 1)
         self.offset_min_frac = float(c.get("offset_min_frac", self.OFFSET_MIN_FRAC_DEFAULT))
         self.offset_max_frac = float(c.get("offset_max_frac", self.OFFSET_MAX_FRAC_DEFAULT))
         self.tilt_min_deg = float(c.get("tilt_min_deg", self.TILT_MIN_DEG_DEFAULT))
         self.tilt_max_deg = float(c.get("tilt_max_deg", self.TILT_MAX_DEG_DEFAULT))
         self.bottom_clearance = float(c.get("bottom_clearance", self.BOTTOM_CLEARANCE_DEFAULT))
         self.stack_shift_range = float(c.get("stack_shift_range", self.STACK_SHIFT_RANGE_DEFAULT))
+        self.max_stack_span = float(c.get("max_stack_span", self.MAX_STACK_SPAN_DEFAULT))
 
         self.ball_radius = float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT))
         self.roll_speed = float(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
         self.max_fall_steps = int(c.get("max_fall_steps", self.MAX_FALL_STEPS_DEFAULT))
 
-        self.reactive_marble = bool(c.get("reactive_marble", self.REACTIVE_MARBLE_DEFAULT))
+        self.reactive_marble = self._parse_reactive_marble(c)
         self.reactive_roll_speed = float(c.get("reactive_roll_speed", self.REACTIVE_ROLL_SPEED_DEFAULT))
         if self.reactive_marble:
             # The marble starts falling immediately (see `play_once`), well before the arm's fixed
             # reach/press sequence finishes -- slow the slide legs down so the descent has a chance
             # of still being catchable. The gravity-timed free-fall legs are untouched.
             self.roll_speed = self.reactive_roll_speed
+
+        self.osc_enabled = self._parse_oscillating_shelf_enabled(c)
+        self.osc_period = float(c.get("oscillating_shelf_period", self.OSCILLATING_SHELF_PERIOD_DEFAULT))
+        self.osc_key_approach_lead_steps = int(
+            c.get("osc_key_approach_lead_steps", self.OSC_KEY_APPROACH_LEAD_STEPS_DEFAULT)
+        )
+        # Never oscillate the top shelf (idx 0) -- the marble parks / launches from there.
+        if self.osc_enabled and self.n_shelves >= 2:
+            osc_idx_cfg = c.get("oscillating_shelf_index", None)
+            if osc_idx_cfg is not None:
+                idx = int(osc_idx_cfg) % self.n_shelves
+                if idx == 0:
+                    idx = 1
+                self.osc_shelf_idx = idx
+            else:
+                self.osc_shelf_idx = int(np.random.randint(1, self.n_shelves))
+        else:
+            if self.osc_enabled and self.n_shelves < 2:
+                self.osc_enabled = False
+            self.osc_shelf_idx = -1
+        self._osc_steps = 0
+        self._osc_armed = False
 
         self.bowl_id = int(c.get("bowl_id", self.BOWL_ID_DEFAULT))
         self.bowl_radius = float(c.get("bowl_radius", self.BOWL_RADIUS_DEFAULT))
@@ -355,20 +643,28 @@ class catch_shelf_marble(Base_Task):
         self.shelf_half_depth = self.shelf_depth / 2.0
         self.shelf_half_thick = self.shelf_thick / 2.0
 
-        # ---- randomize the zig-zag positions: alternating left/right offsets between consecutive
-        # shelves, magnitude in [offset_min_frac, offset_max_frac] * shelf_length so consecutive
-        # shelves always overlap by somewhere in (0%, 50%] ----
-        s0 = float(np.random.choice([-1.0, 1.0]))
-        offset_signs = [s0 * ((-1.0) ** i) for i in range(self.n_shelves - 1)]
-        offsets = [
-            float(sign * np.random.uniform(
-                self.offset_min_frac * self.shelf_length, self.offset_max_frac * self.shelf_length
-            ))
-            for sign in offset_signs
-        ]
-        centers = [0.0]
-        for off in offsets:
-            centers.append(centers[-1] + off)
+        # ---- randomize the zig-zag positions: each consecutive shelf-to-shelf offset direction is
+        # drawn independently (not forced to alternate left-right-left), so the cascade's net drift
+        # varies a lot more episode to episode -- sometimes several shelves in a row drift the same
+        # way (large net displacement, marble drops near one end of the belt), sometimes they zig-zag
+        # back and forth (small net displacement, marble drops near the middle). Magnitude is always
+        # in [offset_min_frac, offset_max_frac] * shelf_length so consecutive shelves overlap by
+        # somewhere in (0%, 50%] regardless of direction; only the *sign* combination is resampled
+        # (never the magnitudes) if it would push the total cascade width past `max_stack_span`, so a
+        # long run of same-direction shelves can't spill the belt off the edge of the table. ----
+        for _attempt in range(200):
+            offset_signs = [float(np.random.choice([-1.0, 1.0])) for _ in range(self.n_shelves - 1)]
+            offsets = [
+                float(sign * np.random.uniform(
+                    self.offset_min_frac * self.shelf_length, self.offset_max_frac * self.shelf_length
+                ))
+                for sign in offset_signs
+            ]
+            centers = [0.0]
+            for off in offsets:
+                centers.append(centers[-1] + off)
+            if (max(centers) - min(centers)) <= self.max_stack_span:
+                break
         shift = float(np.random.uniform(-self.stack_shift_range, self.stack_shift_range))
         self.shelf_centers_x = [c + shift for c in centers]
 
@@ -388,16 +684,37 @@ class catch_shelf_marble(Base_Task):
         self.shelf_z = [top_z - i * self.level_gap for i in range(self.n_shelves)]
 
         # ---- precompute the marble's full path (needs belt_surface_z + shelf geometry, not the
-        # belt's x-extent) so target_catch_x is known before the belt/bowl bounds are sized ----
-        self._compute_descent_plan()
+        # belt's x-extent) so target_catch_x is known before the belt/bowl bounds are sized.
+        # With an oscillating shelf the landing x depends on release phase -- sample a few phases
+        # so the belt spans every reachable landing, then keep the phase-0 plan as the provisional
+        # target (replaced at `_release_marble` with the live-phase plan). ----
+        dt = float(self.scene.get_timestep())
+        landing_xs = []
+        if self.osc_enabled:
+            period_steps = max(1, int(round(self.osc_period / max(dt, 1e-6))))
+            for frac in np.linspace(0.0, 1.0, 8, endpoint=False):
+                self._compute_descent_plan(origin_osc_steps=int(round(frac * period_steps)))
+                landing_xs.append(float(self.target_catch_x))
+        self._compute_descent_plan(origin_osc_steps=0)
+        landing_xs.append(float(self.target_catch_x))
 
         shelf_min_x = min(self.shelf_centers_x) - self.shelf_half_len
         shelf_max_x = max(self.shelf_centers_x) + self.shelf_half_len
-        self.belt_x_min = min(shelf_min_x, self.target_catch_x) - self.belt_margin
-        self.belt_x_max = max(shelf_max_x, self.target_catch_x) + self.belt_margin
+        land_min_x = min(landing_xs)
+        land_max_x = max(landing_xs)
+        self.belt_x_min = min(shelf_min_x, land_min_x) - self.belt_margin
+        self.belt_x_max = max(shelf_max_x, land_max_x) + self.belt_margin
         self.bowl_x_min = self.belt_x_min + self.bowl_radius + 0.01
         self.bowl_x_max = self.belt_x_max - self.bowl_radius - 0.01
         self.target_catch_x = float(np.clip(self.target_catch_x, self.bowl_x_min, self.bowl_x_max))
+
+        # ---- the belt width (and therefore how far the bowl may need to slide) now varies with the
+        # randomized cascade -- resize the key-hold step budget to the farthest landing this episode
+        # can produce so a wide-belt / late-phase episode can't spuriously time out mid-slide. ----
+        bowl_x0 = 0.5 * (self.bowl_x_min + self.bowl_x_max)
+        farthest = max(abs(x - bowl_x0) for x in landing_xs)
+        needed_steps = int(np.ceil(farthest / max(self.bowl_speed, 1e-4) / dt)) + 80
+        self.press_loop_max_steps = max(self.press_loop_max_steps, needed_steps)
 
         # ---- belt (static) ----
         belt_center_x = 0.5 * (self.belt_x_min + self.belt_x_max)
@@ -412,19 +729,22 @@ class catch_shelf_marble(Base_Task):
         )
         self.add_prohibit_area(self.belt, padding=0.03)
 
-        # ---- shelves (static, fixed-tilt) ----
+        # ---- shelves: static + fixed-tilt, except the one oscillating shelf (if enabled), which is
+        # built kinematic instead so `_animate_oscillating_shelf` can re-pose it every step.
+        # Visual: catch_rat-style light-blue glass (80% transmission). ----
         self.shelves = []
         for i in range(self.n_shelves):
-            phi = self._shelf_phi(i)
+            phi = self._shelf_phi(i, osc_steps=0)  # rest pose at episode start (_osc_steps == 0)
             quat = [np.cos(phi / 2.0), 0.0, np.sin(phi / 2.0), 0.0]
-            shelf = create_box(
-                self,
+            is_osc = self.osc_enabled and i == self.osc_shelf_idx
+            shelf = self._create_glass_shelf(
                 pose=sapien.Pose([self.shelf_centers_x[i], self.belt_y, self.shelf_z[i]], quat),
                 half_size=[self.shelf_half_len, self.shelf_half_depth, self.shelf_half_thick],
-                color=self.SHELF_COLOR,
-                is_static=True,
+                is_static=not is_osc,
                 name=f"catch_shelf_{i}",
             )
+            if is_osc:
+                self._make_kinematic(shelf)
             self.shelves.append(shelf)
 
         # ---- marble: parked (kinematic) at the centre of the top shelf until play_once releases it ----
@@ -456,11 +776,14 @@ class catch_shelf_marble(Base_Task):
             scale_mult=self.bowl_scale_mult,
         )
         self.bowl.set_mass(0.06)
+        self._recolor(self.bowl, self.BOWL_COLOR)
         self._make_kinematic(self.bowl)
         self.add_prohibit_area(self.bowl, padding=0.05)
         if _CSM_DEBUG:
             print(
-                f"[CSM] load_actors done: bowl_x_start={self.bowl_x_start:.4f} "
+                f"[CSM] load_actors done: n_shelves={self.n_shelves} level_gap={self.level_gap:.4f} "
+                f"osc_enabled={self.osc_enabled} osc_shelf_idx={self.osc_shelf_idx} "
+                f"bowl_x_start={self.bowl_x_start:.4f} "
                 f"bowl_x_min={self.bowl_x_min:.4f} bowl_x_max={self.bowl_x_max:.4f} "
                 f"bowl_pose_p={self.bowl.get_pose().p.round(4)} "
                 f"target_catch_x={self.target_catch_x:.4f}",
@@ -531,6 +854,14 @@ class catch_shelf_marble(Base_Task):
         self._marble_result = None
         self._leg_idx = 0
         self._leg_step = 0
+        # Oscillation may have been running the whole time the marble was parked -- replan against
+        # the live phase so `target_catch_x` / descent legs match what the shelf will actually do.
+        if self.osc_enabled:
+            self._compute_descent_plan(origin_osc_steps=self._osc_steps)
+            self._apply_target_catch_bounds()
+            if self._bowl_drive_clamp is not None:
+                sign = self._bowl_drive_clamp[0]
+                self._bowl_drive_clamp = (sign, self.target_catch_x)
 
     def _advance_marble(self):
         if self.ball is None or self._marble_state != "descending":
@@ -547,7 +878,9 @@ class catch_shelf_marble(Base_Task):
         if leg["type"] == "slide":
             frac = min(1.0, step / steps_total)
             local_x = leg["start_local"] + frac * (leg["end_local"] - leg["start_local"])
-            pos = self._shelf_local_to_world(leg["shelf"], local_x)
+            # Live `_osc_steps` matches `_compute_descent_plan(origin_osc_steps=...)`'s absolute
+            # clock, so the oscillating shelf (if this is that shelf) is at the planned angle.
+            pos = self._shelf_local_to_world(leg["shelf"], local_x, osc_steps=self._osc_steps)
         else:
             dt = float(self.scene.get_timestep())
             t = min(step, steps_total) * dt
@@ -668,6 +1001,19 @@ class catch_shelf_marble(Base_Task):
         self._set_entity_pose(self.bowl, sapien.Pose([new_x, self.belt_y, self.belt_surface_z], self.bowl_q))
 
     # ---------------------------------------------------------- scene motion
+    def _animate_oscillating_shelf(self):
+        """Smoothly re-pose the one oscillating (non-top) shelf every step -- including while the
+        marble is still frozen/parked on the top shelf. See `_shelf_phi` for the `cos(...)` sweep;
+        `_compute_descent_plan` / `_advance_marble` stay in lockstep via the shared `_osc_steps`
+        clock."""
+        if not (self.osc_enabled and self.shelves and 0 <= self.osc_shelf_idx < len(self.shelves)):
+            return
+        idx = self.osc_shelf_idx
+        phi = self._shelf_phi(idx, osc_steps=self._osc_steps)
+        quat = [np.cos(phi / 2.0), 0.0, np.sin(phi / 2.0), 0.0]
+        pos = [self.shelf_centers_x[idx], self.belt_y, self.shelf_z[idx]]
+        self._set_entity_pose(self.shelves[idx], sapien.Pose(pos, quat))
+
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
@@ -675,6 +1021,12 @@ class catch_shelf_marble(Base_Task):
         self._detect_action_keys()
         self._animate_keys()
         self._advance_bowl()
+        # Osc clock starts at play_once (`_osc_armed`), not during check_stable settle -- otherwise
+        # the moving shelf fails the pose-stability test. Once armed it advances whether or not the
+        # marble has been released, so the shelf keeps sweeping while the ball is still frozen.
+        if self._osc_armed:
+            self._osc_steps += 1
+            self._animate_oscillating_shelf()
         if self._marble_state == "descending":
             self._advance_marble()
         elif self._marble_state == "resolved" and self._marble_result == "caught":
@@ -750,6 +1102,10 @@ class catch_shelf_marble(Base_Task):
         left = ArmTag("left")
         right = ArmTag("right")
 
+        # Start the oscillating shelf as soon as the episode action begins -- including the
+        # close_gripper / approach window where the marble is still frozen on the top shelf.
+        self._osc_armed = True
+
         if _CSM_DEBUG:
             print(f"[CSM] play_once start: bowl_pose_p={self.bowl.get_pose().p.round(4)}", flush=True)
 
@@ -770,6 +1126,15 @@ class catch_shelf_marble(Base_Task):
                 flush=True,
             )
 
+        # With an oscillating shelf the landing depends on the release-time phase. In non-reactive
+        # mode release is still ~reach+press away -- provisionally replan with that lead so the
+        # chosen key side matches the eventual target; `_release_marble` then replans exactly.
+        if self.osc_enabled and not self.reactive_marble:
+            self._compute_descent_plan(
+                origin_osc_steps=self._osc_steps + self.osc_key_approach_lead_steps
+            )
+            self._apply_target_catch_bounds()
+
         bowl_x0 = float(self.bowl.get_pose().p[0])
         dx = self.target_catch_x - bowl_x0
         held_side = None
@@ -778,7 +1143,7 @@ class catch_shelf_marble(Base_Task):
             if _CSM_DEBUG:
                 print(
                     f"[CSM] holding {held_side}: bowl_x0={bowl_x0:.4f} dx={dx:.4f} "
-                    f"target_catch_x={self.target_catch_x:.4f}",
+                    f"target_catch_x={self.target_catch_x:.4f} osc_shelf_idx={self.osc_shelf_idx}",
                     flush=True,
                 )
             # In the default (non-reactive) mode, release the marble only once the key is actually
@@ -831,9 +1196,14 @@ class catch_shelf_marble(Base_Task):
     def get_obs(self):
         obs = super().get_obs()
         obs["catch_shelf_marble"] = {
+            "n_shelves": int(self.n_shelves),
             "shelf_centers_x": list(map(float, self.shelf_centers_x)),
             "shelf_z": list(map(float, self.shelf_z)),
             "shelf_angles_deg": list(map(float, self.shelf_angle_deg)),
+            "reactive_marble": bool(self.reactive_marble),
+            "oscillating_shelf_enabled": bool(self.osc_enabled),
+            "oscillating_shelf_idx": int(self.osc_shelf_idx) if self.osc_enabled else -1,
+            "option_label": self._option_label(),
             "target_catch_x": float(self.target_catch_x),
             "bowl_x": float(self.bowl.get_pose().p[0]) if self.bowl is not None else 0.0,
             "marble_state": str(self._marble_state),

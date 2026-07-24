@@ -10,31 +10,49 @@ class place_block_belt(Base_Task):
     """Set a tall, top-heavy block onto a moving conveyor belt so it drops into a
     bowl placed at the belt exit.
 
-    A flat conveyor belt spans the mid zone of the RIGHT half of the table and
-    carries anything resting on it laterally (along +x) at a constant belt speed.
-    A tall block with a high center of mass spawns in the near zone within the
-    right arm's reach. The scripted expert:
-      1) grasps the block in the near zone,
+    Layout is randomly mirrored about x=0 each episode:
+      - default: belt flows +x, block loads on the left, left arm places, bowl at +x exit
+      - mirrored: belt flows -x, block loads on the right, right arm places, bowl at -x exit
+
+    The block always spawns >= ``block_belt_clearance`` (default 5 cm) clear of the
+    belt's start edge, with y jittered by +/- ``block_y_jitter`` (default 5 cm)
+    about the belt centerline.
+
+    Task options (independent; set in ``task_args.place_block_belt``):
+      - Opt 1 — moving bowl:  ``bowl_move_enabled``
+        (bowl traverses the FULL belt y-range even when Opt 2 is also on)
+      - Opt 2 — belt blocker: ``blocker_enabled``
+        (rod ≥15 cm past load edge; y-size 20–30% of belt width; x-thickness
+        nominal ±50%; flush to a random y-edge so the expert must release in
+        the unblocked lane)
+
+    A red placement line sits ``place_line_offset`` (default 10 cm) past the load
+    edge across the belt. The cube must first contact the belt *before* that
+    line; contact past it fails the episode.
+
+    Belt speed and (if Opt 1) bowl speed are sampled each episode as
+    nominal ± ``speed_jitter_frac`` (default ±20%).
+
+    The scripted expert:
+      1) grasps the block on the start side,
       2) lifts it and carries it above the belt surface,
       3) MATCHES the gripper's horizontal (x) velocity to the belt speed by a
-         short move_by_displacement along +x just before release, so the block is
-         not sheared/tipped by a velocity mismatch on release,
+         short move_by_displacement along the belt direction just before release,
       4) opens the gripper; the belt then carries the upright block to the exit,
          where it falls into the bowl on the table.
 
     The belt motion is driven step-by-step in the overridden _update_kinematic_tasks:
     once the block is released and resting on the belt, the block is set kinematic
-    and advanced along +x by belt_speed * dt every physics step. Tilt of the block
-    away from vertical is recorded each step.
+    and advanced along the belt direction by belt_speed * dt every physics step.
 
-    Single-arm (right). Key mechanic: release at belt speed to keep the top-heavy
-    block upright. Metric: tilt_score = clamp(1 - max_tilt_angle/theta_max, 0, 1).
+    Single-arm (arm on the load side). Metric: tilt_score =
+    clamp(1 - max_tilt_angle/theta_max, 0, 1).
     """
 
     # ----------------------------------------------------------------- params (class defaults)
-    BELT_SPEED_DEFAULT = 0.4          # m/s lateral (+x) belt surface speed
-    BELT_X_START_DEFAULT = -0.2        # near-center x where the belt begins (right half)
-    BELT_X_END_DEFAULT = 0.2         # outer x where the belt ends (success line)
+    BELT_SPEED_DEFAULT = 0.4          # m/s lateral belt surface speed (signed via belt_dir)
+    BELT_X_START_DEFAULT = -0.2        # load-side x (default / non-mirrored layout)
+    BELT_X_END_DEFAULT = 0.2           # exit-side x (default / non-mirrored layout)
     BELT_Y_DEFAULT = -0.02             # y of the belt centerline (mid zone)
     BELT_HALF_W_DEFAULT = 0.15         # belt half-width in y
     BELT_RIDE_STEPS_DEFAULT = 600      # max physics steps to let the block ride the belt
@@ -43,20 +61,43 @@ class place_block_belt(Base_Task):
     BELT_BAND_HALF_X_DEFAULT = 0.012   # half-length of each moving tread band along x
     BELT_BAND_HALF_Z_DEFAULT = 0.0006  # thin render-only band height
     BELT_BAND_Z_OFFSET_DEFAULT = 0.0008  # lift above the top face to avoid z-fighting
+    RANDOM_BELT_FLIP_DEFAULT = True    # randomly mirror layout about x=0
     BOWL_X_OFFSET_DEFAULT = 0.04       # bowl center offset beyond the physical belt exit
     BOWL_Y_OFFSET_DEFAULT = 0.0        # bowl shares the belt lane by default
     BOWL_Y_RANDOM_RANGE_DEFAULT = 0.08 # per-episode y randomization around bowl_y_offset
-    BOWL_MOVE_ENABLED_DEFAULT = True  # optionally oscillate the bowl along the belt y axis
-    BOWL_MOVE_SPEED_DEFAULT = 0.30     # m/s signed speed used by the y-oscillation
-    BOWL_MOVE_RANGE_DEFAULT = 0.12     # half-range of the bowl motion around its start y
+    # Opt 1 — moving bowl
+    BOWL_MOVE_ENABLED_DEFAULT = True   # Opt 1 master switch: oscillate bowl along belt y
+    BOWL_MOVE_SPEED_DEFAULT = 0.30     # Opt 1: nominal m/s bowl oscillation (then ± speed_jitter)
+    BOWL_MOVE_RANGE_DEFAULT = 0.12     # Opt 1: half-range of the bowl motion around its start y
     BOWL_INNER_RADIUS_DEFAULT = 0.065  # geometric success radius around bowl center
     BOWL_SUCCESS_HEIGHT_DEFAULT = 0.10 # block center must settle below this height above bowl base
     BOWL_SETTLE_STEPS_DEFAULT = 140    # extra physics steps after the block leaves the belt
+
+    # Per-episode speed jitter applied to belt_speed and (if Opt 1) bowl_move_speed.
+    SPEED_JITTER_FRAC_DEFAULT = 0.20   # sample U(nom*(1-j), nom*(1+j)) — default ±20%
 
     BLOCK_HALF_W_DEFAULT = 0.02       # block half-width (x,y) -> narrow base (top-heavy)
     BLOCK_HALF_H_DEFAULT = 0.02      # block half-height (z) -> 12 cm tall
     BLOCK_MASS_DEFAULT = 0.05          # block mass (kg)
     BLOCK_COM_FRAC_DEFAULT = 0.55      # COM height as fraction of half-height above center (top-heavy)
+    BLOCK_BELT_CLEARANCE_DEFAULT = 0.05  # min edge-to-edge gap from block to belt (m)
+    BLOCK_Y_JITTER_DEFAULT = 0.05        # +/- y randomization about belt centerline (m)
+    BLOCK_X_SPAN_DEFAULT = 0.06          # extra spawn depth beyond the clearance line (m)
+
+    # Placement line: cube must first touch the belt before this offset from load edge.
+    PLACE_LINE_OFFSET_DEFAULT = 0.10     # m; red line across belt (fail if contact past it)
+    PLACE_LINE_HALF_X_DEFAULT = 0.003    # m; visual strip half-thickness along flow
+    PLACE_LINE_HALF_Z_DEFAULT = 0.0015   # m; visual strip half-height above belt
+
+    # Opt 2 — belt blocker rod
+    BLOCKER_ENABLED_DEFAULT = False      # Opt 2 master switch: rod occluding part of the belt lane
+    BLOCKER_START_CLEARANCE_DEFAULT = 0.15  # Opt 2: min near-face distance from load edge (m)
+    BLOCKER_LENGTH_FRAC_MIN_DEFAULT = 0.20  # Opt 2: rod y-length as fraction of belt width
+    BLOCKER_LENGTH_FRAC_MAX_DEFAULT = 0.30  # Opt 2: upper y-length frac
+    BLOCKER_HALF_X_DEFAULT = 0.012       # Opt 2: nominal rod half-thickness along flow (m)
+    BLOCKER_HALF_X_JITTER_FRAC_DEFAULT = 0.50  # Opt 2: sample half_x ∈ nom*(1±this)
+    BLOCKER_HALF_Z_DEFAULT = 0.04        # rod half-height above belt surface (m)
+    BLOCKER_END_MARGIN_DEFAULT = 0.04    # keep rod short of the exit edge (m)
 
     THETA_MAX_DEG_DEFAULT = 30.0       # tilt threshold for the metric / success
 
@@ -96,10 +137,24 @@ class place_block_belt(Base_Task):
         self._bowl_base_x = 0.0
         self._bowl_base_y = 0.0
         self._bowl_move_dir = 1.0
-        self._belt_start_zone_max_x = 0.0
+        self._belt_start_zone_boundary = 0.0
         self._belt_contact_latched = False
         self._belt_contact_x = None
         self._belt_contact_y = None
+        self.belt_mirrored = False
+        self.belt_dir = 1.0
+        self.blocker_enabled = False
+        self.blocker = None
+        self.blocker_x = 0.0
+        self.blocker_y = 0.0
+        self.blocker_half_y = 0.0
+        self.blocker_half_x = 0.0
+        self.clear_y_lo = 0.0
+        self.clear_y_hi = 0.0
+        self.hit_blocker = False
+        self.avoided_blocker = True
+        self.place_line = None
+        self.place_line_x = 0.0
         super()._init_task_env_(**kwags)
 
     # ----------------------------------------------------------------- actors
@@ -117,7 +172,31 @@ class place_block_belt(Base_Task):
         self.block_mass = float(cfg.get("block_mass", self.BLOCK_MASS_DEFAULT))
         self.block_com_frac = float(cfg.get("block_com_frac", self.BLOCK_COM_FRAC_DEFAULT))
         self.theta_max_deg = float(cfg.get("theta_max_deg", self.THETA_MAX_DEG_DEFAULT))
-      
+        self.block_belt_clearance = float(cfg.get("block_belt_clearance", self.BLOCK_BELT_CLEARANCE_DEFAULT))
+        self.block_y_jitter = float(cfg.get("block_y_jitter", self.BLOCK_Y_JITTER_DEFAULT))
+        self.block_x_span = float(cfg.get("block_x_span", self.BLOCK_X_SPAN_DEFAULT))
+        random_belt_flip = bool(cfg.get("random_belt_flip", self.RANDOM_BELT_FLIP_DEFAULT))
+        self.place_line_offset = float(
+            cfg.get("place_line_offset", self.PLACE_LINE_OFFSET_DEFAULT)
+        )
+        self.blocker_enabled = bool(cfg.get("blocker_enabled", self.BLOCKER_ENABLED_DEFAULT))
+        self.blocker_start_clearance = float(
+            cfg.get("blocker_start_clearance", self.BLOCKER_START_CLEARANCE_DEFAULT)
+        )
+        self.blocker_length_frac_min = float(
+            cfg.get("blocker_length_frac_min", self.BLOCKER_LENGTH_FRAC_MIN_DEFAULT)
+        )
+        self.blocker_length_frac_max = float(
+            cfg.get("blocker_length_frac_max", self.BLOCKER_LENGTH_FRAC_MAX_DEFAULT)
+        )
+        self.blocker_half_x_nom = float(cfg.get("blocker_half_x", self.BLOCKER_HALF_X_DEFAULT))
+        self.blocker_half_x_jitter_frac = float(
+            cfg.get("blocker_half_x_jitter_frac", self.BLOCKER_HALF_X_JITTER_FRAC_DEFAULT)
+        )
+        self.blocker_half_x = float(self.blocker_half_x_nom)  # overwritten per-ep in _spawn_belt_blocker
+        self.blocker_half_z = float(cfg.get("blocker_half_z", self.BLOCKER_HALF_Z_DEFAULT))
+        self.blocker_end_margin = float(cfg.get("blocker_end_margin", self.BLOCKER_END_MARGIN_DEFAULT))
+
         self.bowl_x_offset = float(cfg.get("bowl_x_offset", self.BOWL_X_OFFSET_DEFAULT))
         self.bowl_y_offset = float(cfg.get("bowl_y_offset", self.BOWL_Y_OFFSET_DEFAULT))
         self.bowl_y_random_range = float(cfg.get("bowl_y_random_range", self.BOWL_Y_RANDOM_RANGE_DEFAULT))
@@ -128,14 +207,31 @@ class place_block_belt(Base_Task):
         self.bowl_success_height = float(cfg.get("bowl_success_height", self.BOWL_SUCCESS_HEIGHT_DEFAULT))
         self.bowl_settle_steps = int(cfg.get("bowl_settle_steps", self.BOWL_SETTLE_STEPS_DEFAULT))
 
-        # randomize within the configured envelope (seed-driven) for variety
-        self.belt_speed = float(np.random.uniform(self.belt_speed * 0.8, self.belt_speed * 1.2))
+        # Per-episode speed sampling: nominal ± speed_jitter_frac (default ±20%).
+        speed_jitter = float(cfg.get("speed_jitter_frac", self.SPEED_JITTER_FRAC_DEFAULT))
+        speed_jitter = float(np.clip(speed_jitter, 0.0, 0.95))
+        belt_nom = float(self.belt_speed)
+        self.belt_speed = float(
+            np.random.uniform(belt_nom * (1.0 - speed_jitter), belt_nom * (1.0 + speed_jitter))
+        )
+        if self.bowl_move_enabled:
+            bowl_nom = float(self.bowl_move_speed)
+            self.bowl_move_speed = float(
+                np.random.uniform(bowl_nom * (1.0 - speed_jitter), bowl_nom * (1.0 + speed_jitter))
+            )
+        # Other light randomization
         self.block_half_h = float(np.random.uniform(self.block_half_h * 0.9, self.block_half_h * 1.1))
         self.block_mass = float(np.random.uniform(self.block_mass * 0.8, self.block_mass * 1.2))
 
+        # Randomly mirror the whole layout about x=0 so either arm can be the placer.
+        # Default: start=-0.2 → end=+0.2 (flow +x, left arm). Mirrored: start=+0.2 → end=-0.2.
+        self.belt_mirrored = bool(random_belt_flip and (np.random.rand() < 0.5))
+        if self.belt_mirrored:
+            self.belt_x_start = -self.belt_x_start
+            self.belt_x_end = -self.belt_x_end
+        self.belt_dir = 1.0 if self.belt_x_end > self.belt_x_start else -1.0
+
         belt_step_dx = max(self.belt_speed * self.scene.get_timestep(), 1e-6)
-        # min_ride_steps = int(np.ceil((self.belt_x_end - self.belt_x_start + 0.04) / belt_step_dx))
-        # self.belt_ride_steps = max(self.belt_ride_steps, min_ride_steps)
 
         table_z = 0.74 + self.table_z_bias
         self.table_top_z = table_z
@@ -144,14 +240,14 @@ class place_block_belt(Base_Task):
         support_box_height = 0.10  # 10 cm elevation
         support_box_half_h = support_box_height * 0.5
         belt_cx = 0.5 * (self.belt_x_start + self.belt_x_end)
-        belt_half_len_x = 0.5 * (self.belt_x_end - self.belt_x_start)
+        belt_half_len_x = 0.5 * abs(self.belt_x_end - self.belt_x_start)
         belt_xy_padding = 0.02
         self._belt_cx = belt_cx
         self._belt_half_len_x = belt_half_len_x + belt_xy_padding
         self._belt_half_w = self.belt_half_w + belt_xy_padding
-        self._belt_start_zone_max_x = float(
-            self.belt_x_start + max(0.05, 0.18 * (self.belt_x_end - self.belt_x_start))
-        )
+        # Red placement line: first belt contact must be before this x (else fail).
+        self.place_line_x = float(self.belt_x_start + self.belt_dir * self.place_line_offset)
+        self._belt_start_zone_boundary = float(self.place_line_x)
 
         support_box_pose = sapien.Pose(
             p=[belt_cx, self.belt_y, table_z + support_box_half_h],
@@ -182,15 +278,25 @@ class place_block_belt(Base_Task):
         )
         self.belt_surface_z = table_z + support_box_height + self.belt_thickness  # top face of the belt
         self._init_belt_visual_motion()
+        self._spawn_place_line()
+        self._spawn_belt_blocker()
 
-        # ------- receiving bowl on the table at the RIGHT / exit side of the belt
+        # ------- receiving bowl on the table at the exit side of the belt
         bowl_x_clearance = max(self.bowl_x_offset, self.bowl_inner_radius + 0.005)
-        bowl_x = self._belt_cx + self._belt_half_len_x + bowl_x_clearance
-        bowl_lane_low = float(self.belt_y - self.belt_half_w)
-        bowl_lane_high = float(self.belt_y + self.belt_half_w)
+        bowl_x = self._belt_cx + self.belt_dir * (self._belt_half_len_x + bowl_x_clearance)
+        full_y_lo = float(self.belt_y - self.belt_half_w)
+        full_y_hi = float(self.belt_y + self.belt_half_w)
         if self.bowl_move_enabled:
+            # Opt 1: bowl always traverses the FULL belt y-range, even when Opt 2
+            # blocker is on (expert still releases only in the clear lane).
+            bowl_lane_low, bowl_lane_high = full_y_lo, full_y_hi
             bowl_y = bowl_lane_low
+        elif self.blocker_enabled and self.blocker is not None and self.clear_y_hi > self.clear_y_lo:
+            # Static bowl + blocker: seat the bowl in the clear lane.
+            bowl_lane_low, bowl_lane_high = float(self.clear_y_lo), float(self.clear_y_hi)
+            bowl_y = float(np.random.uniform(bowl_lane_low, bowl_lane_high))
         else:
+            bowl_lane_low, bowl_lane_high = full_y_lo, full_y_hi
             bowl_y = float(np.random.uniform(bowl_lane_low, bowl_lane_high))
         self.bowl_id = int(np.random.choice([1, 2, 3, 4, 5, 6, 7]))
         self.bowl = create_actor(
@@ -217,21 +323,45 @@ class place_block_belt(Base_Task):
         self._bowl_move_dir = 1.0 if self.bowl_move_enabled else float(np.random.choice([-1.0, 1.0]))
         # Release only after the whole block has cleared the physical belt edge;
         # otherwise the dynamic block can remain supported and appear to stop there.
-        self._belt_drop_x = self._belt_cx + self._belt_half_len_x + self.block_half_w + 0.005
-        min_ride_steps = int(np.ceil((self._belt_drop_x - self.belt_x_start + 0.02) / belt_step_dx)) + self.bowl_settle_steps
+        self._belt_drop_x = self._belt_cx + self.belt_dir * (
+            self._belt_half_len_x + self.block_half_w + 0.005
+        )
+        ride_dist = abs(self._belt_drop_x - self.belt_x_start) + 0.02
+        min_ride_steps = int(np.ceil(ride_dist / belt_step_dx)) + self.bowl_settle_steps
         self.belt_ride_steps = max(self.belt_ride_steps, min_ride_steps)
 
-        # ------- tall top-heavy block, spawned on the LEFT/start side of the belt within the
-        # right arm's reach (spawned on table surface, will be lifted above the elevated belt)
-        block_x_min = max(0.015, self.belt_x_start - 0.06)
-        block_x_max = max(block_x_min + 0.01, self.belt_x_start - 0.01)
-        block_x = float(np.random.uniform(block_x_min, block_x_max))
-        block_y = float(np.random.uniform(self.belt_y + 0.05, self.belt_y + 0.12))
+        # ------- tall top-heavy block on the load/start side, >= clearance from the belt edge,
+        # with y jittered +/- block_y_jitter about the belt centerline.
+        start_edge_x = self._belt_cx - self.belt_dir * self._belt_half_len_x
+        clear = max(0.0, self.block_belt_clearance)
+        # Closest allowed block center (edge-to-edge gap == clear).
+        closest_x = start_edge_x - self.belt_dir * (self.block_half_w + clear)
+        farthest_x = closest_x - self.belt_dir * self.block_x_span
+        block_x_lo = float(min(closest_x, farthest_x))
+        block_x_hi = float(max(closest_x, farthest_x))
+        # Keep the block on the same table half as the load edge (arm reachability).
+        if self.belt_dir > 0:
+            block_x_hi = min(block_x_hi, -0.02)
+            block_x_lo = max(block_x_lo, -0.34)
+        else:
+            block_x_lo = max(block_x_lo, 0.02)
+            block_x_hi = min(block_x_hi, 0.34)
+        if block_x_hi < block_x_lo + 1e-3:
+            # Degenerate after clamping: pin to the closest valid center.
+            block_x = float(np.clip(closest_x, -0.34, 0.34))
+            if abs(block_x) < 0.02:
+                block_x = -0.05 if self.belt_dir > 0 else 0.05
+        else:
+            block_x = float(np.random.uniform(block_x_lo, block_x_hi))
+        block_y = float(self.belt_y + np.random.uniform(-self.block_y_jitter, self.block_y_jitter))
+        # Long-box contact frames are approach-asymmetric: left-arm loads use +90° yaw,
+        # right-arm (mirrored) loads need the mirrored -90° frame or grasp IK fails.
+        block_q = get_quat_euler([0, 90, 0]) if self.belt_dir > 0 else get_quat_euler([0, -90, 0])
         block_pose = rand_pose(
-            xlim=[self.belt_x_start-0.3, self.belt_x_start-0.05],
+            xlim=[block_x, block_x],
             ylim=[block_y, block_y],
             zlim=[table_z + self.block_half_h],
-            qpos=get_quat_euler([0,90,0]), #[1, 0, 0, 0],
+            qpos=block_q,
             rotate_rand=False,
             rotate_lim=[0, 0, np.pi / 18],
         )
@@ -261,6 +391,8 @@ class place_block_belt(Base_Task):
         self.add_prohibit_area(self.belt, padding=0.03)
         self.add_prohibit_area(self.bowl, padding=0.04)
         self.add_prohibit_area(self.block, padding=0.05)
+        if self.blocker is not None:
+            self.add_prohibit_area(self.blocker, padding=0.02)
 
         # ------- belt / tilt bookkeeping
         self._belt_active = False
@@ -275,10 +407,142 @@ class place_block_belt(Base_Task):
         self.placed_on_belt = False
         self.dropped_at_start_left = False
         self.in_bowl = False
+        self.hit_blocker = False
+        self.avoided_blocker = True
         self._bowl_move_dir = float(np.random.choice([-1.0, 1.0]))
         self._belt_contact_latched = False
         self._belt_contact_x = None
         self._belt_contact_y = None
+
+    def _spawn_place_line(self):
+        """Red strip across the belt at ``place_line_offset`` past the load edge.
+
+        Visual cue for the placement rule: first contact must be before this line.
+        """
+        half_x = float(self.PLACE_LINE_HALF_X_DEFAULT)
+        half_z = float(self.PLACE_LINE_HALF_Z_DEFAULT)
+        half_y = max(float(self._belt_half_w) - 0.002, 0.01)
+        line_z = self.belt_surface_z + self.BELT_BAND_Z_OFFSET_DEFAULT + half_z + 0.0005
+        self.place_line = create_visual_box(
+            scene=self,
+            pose=sapien.Pose(
+                [self.place_line_x, self.belt_y, line_z],
+                [1, 0, 0, 0],
+            ),
+            half_size=(half_x, half_y, half_z),
+            color=(0.95, 0.08, 0.08),
+            name="place_line",
+        )
+
+    # ----------------------------------------------------------------- optional belt blocker
+    def _spawn_belt_blocker(self):
+        """Place a static rod on the belt that occludes part of the y-lane.
+
+        - x position: near face ≥ ``blocker_start_clearance`` (default 15 cm) past load edge
+        - y size (width across belt): 20–30% of belt width
+        - x size (thickness along flow): nominal ``blocker_half_x`` ± 50%
+        Flush to a random y-edge so a contiguous clear lane remains for placement.
+        """
+        self.blocker = None
+        self.hit_blocker = False
+        self.avoided_blocker = True
+        belt_width = 2.0 * float(self.belt_half_w)
+        # Full-width clear lane when disabled (expert can use any y on the belt).
+        self.clear_y_lo = float(self.belt_y - self.belt_half_w)
+        self.clear_y_hi = float(self.belt_y + self.belt_half_w)
+        self.blocker_x = 0.0
+        self.blocker_y = 0.0
+        self.blocker_half_y = 0.0
+        if not self.blocker_enabled:
+            return
+
+        # y extent: 20–30% of belt width
+        frac_lo = min(self.blocker_length_frac_min, self.blocker_length_frac_max)
+        frac_hi = max(self.blocker_length_frac_min, self.blocker_length_frac_max)
+        frac = float(np.random.uniform(frac_lo, frac_hi))
+        rod_len_y = float(np.clip(frac * belt_width, 0.02, belt_width * 0.9))
+        self.blocker_half_y = 0.5 * rod_len_y
+
+        # x thickness: nominal half_x ± jitter (default ±50%)
+        x_jit = float(np.clip(self.blocker_half_x_jitter_frac, 0.0, 0.95))
+        nom_hx = max(float(self.blocker_half_x_nom), 1e-4)
+        self.blocker_half_x = float(np.random.uniform(nom_hx * (1.0 - x_jit), nom_hx * (1.0 + x_jit)))
+
+        end_edge_x = self._belt_cx + self.belt_dir * self._belt_half_len_x
+        # Near face of the rod must be ≥ clearance past the logical load edge (belt_x_start).
+        clear = max(float(self.blocker_start_clearance), 0.0)
+        x_a = self.belt_x_start + self.belt_dir * (clear + self.blocker_half_x)
+        x_b = end_edge_x - self.belt_dir * max(self.blocker_end_margin, self.blocker_half_x)
+        x_lo, x_hi = (x_a, x_b) if x_a <= x_b else (x_b, x_a)
+        if x_hi < x_lo + 1e-3:
+            self.blocker_x = float(x_a)
+        else:
+            self.blocker_x = float(np.random.uniform(x_lo, x_hi))
+
+        # Flush rod to a random belt y-edge so the complementary side stays open.
+        flush_low = bool(np.random.rand() < 0.5)
+        y_low = float(self.belt_y - self.belt_half_w)
+        y_high = float(self.belt_y + self.belt_half_w)
+        if flush_low:
+            self.blocker_y = y_low + self.blocker_half_y
+            self.clear_y_lo = self.blocker_y + self.blocker_half_y
+            self.clear_y_hi = y_high
+        else:
+            self.blocker_y = y_high - self.blocker_half_y
+            self.clear_y_lo = y_low
+            self.clear_y_hi = self.blocker_y - self.blocker_half_y
+
+        # Keep a usable clear lane for the cube (+ small margin).
+        lane_margin = self.block_half_w + 0.01
+        self.clear_y_lo = float(self.clear_y_lo + lane_margin)
+        self.clear_y_hi = float(self.clear_y_hi - lane_margin)
+        if self.clear_y_hi < self.clear_y_lo + 0.02:
+            # Degenerate: shrink rod and reopen a minimal lane on the opposite side.
+            self.blocker_half_y = 0.5 * 0.2 * belt_width
+            if flush_low:
+                self.blocker_y = y_low + self.blocker_half_y
+                self.clear_y_lo = self.blocker_y + self.blocker_half_y + lane_margin
+                self.clear_y_hi = y_high - lane_margin
+            else:
+                self.blocker_y = y_high - self.blocker_half_y
+                self.clear_y_lo = y_low + lane_margin
+                self.clear_y_hi = self.blocker_y - self.blocker_half_y - lane_margin
+
+        rod_z = self.belt_surface_z + self.blocker_half_z
+        self.blocker = create_box(
+            scene=self,
+            pose=sapien.Pose(
+                p=[self.blocker_x, self.blocker_y, rod_z],
+                q=[1, 0, 0, 0],
+            ),
+            half_size=(self.blocker_half_x, self.blocker_half_y, self.blocker_half_z),
+            color=(0.75, 0.15, 0.12),
+            name="belt_blocker",
+            is_static=True,
+        )
+
+    def _y_overlaps_blocker(self, y: float) -> bool:
+        if not self.blocker_enabled or self.blocker is None:
+            return False
+        return bool(abs(float(y) - self.blocker_y) <= (self.blocker_half_y + self.block_half_w + 0.005))
+
+    def _y_in_clear_lane(self, y: float) -> bool:
+        y = float(y)
+        if not self.blocker_enabled or self.blocker is None:
+            return True
+        return bool(self.clear_y_lo <= y <= self.clear_y_hi)
+
+    def _choose_release_lane_y(self, preferred_y: float | None = None) -> float:
+        """Pick a release y on the belt; with a blocker, stay inside the clear lane."""
+        if preferred_y is None:
+            preferred_y = float(self.belt_y)
+        preferred_y = float(preferred_y)
+        if not self.blocker_enabled or self.blocker is None:
+            return preferred_y
+        if self.clear_y_lo <= preferred_y <= self.clear_y_hi:
+            return preferred_y
+        # Prefer the clear-lane point closest to the preferred y (usually bowl lane).
+        return float(np.clip(preferred_y, self.clear_y_lo, self.clear_y_hi))
 
     # ----------------------------------------------------------------- tilt helper
     def _current_tilt_deg(self):
@@ -308,8 +572,15 @@ class place_block_belt(Base_Task):
         above_table = block_p[2] >= (self.table_top_z - 0.02)
         return bool(xy_close and below_rim and above_table)
 
-    def _is_start_left_drop_x(self, x: float) -> bool:
-        return bool(float(x) <= self._belt_start_zone_max_x)
+    def _is_start_drop_x(self, x: float) -> bool:
+        """True if first contact is before the red placement line (not past it)."""
+        x = float(x)
+        boundary = float(
+            getattr(self, "place_line_x", getattr(self, "_belt_start_zone_boundary", self.belt_x_start))
+        )
+        if getattr(self, "belt_dir", 1.0) > 0:
+            return bool(x <= boundary)
+        return bool(x >= boundary)
 
     def _latch_belt_contact(self):
         if getattr(self, "_belt_contact_latched", False) or getattr(self, "block", None) is None:
@@ -319,16 +590,25 @@ class place_block_belt(Base_Task):
         p = np.array(self.block.get_pose().p, dtype=np.float64)
         self._belt_contact_x = float(p[0])
         self._belt_contact_y = float(p[1])
-        self.dropped_at_start_left = self._is_start_left_drop_x(self._belt_contact_x)
+        # Keep legacy key name; means "dropped at the belt start / load zone".
+        self.dropped_at_start_left = self._is_start_drop_x(self._belt_contact_x)
         self._belt_contact_latched = True
+
+    def _bowl_lane_bounds(self):
+        """Y-range for Opt 1 bowl oscillation.
+
+        Always the full belt width — even with Opt 2 blocker active — so the bowl
+        still travels up and down the entire exit lane. Cube release stays constrained
+        to the clear lane via ``_choose_release_lane_y``.
+        """
+        return float(self.belt_y - self.belt_half_w), float(self.belt_y + self.belt_half_w)
 
     def _advance_bowl_motion(self):
         if not getattr(self, "bowl_move_enabled", False) or getattr(self, "bowl", None) is None:
             return
         pose = self.bowl.get_pose()
         next_y = float(pose.p[1] + self._bowl_move_dir * abs(self.bowl_move_speed) * self.scene.get_timestep())
-        low = float(self.belt_y - self.belt_half_w)
-        high = float(self.belt_y + self.belt_half_w)
+        low, high = self._bowl_lane_bounds()
         if high <= low:
             return
         if next_y > high:
@@ -351,8 +631,7 @@ class place_block_belt(Base_Task):
         if speed <= 1e-8:
             return y_now
 
-        low = float(self.belt_y - self.belt_half_w)
-        high = float(self.belt_y + self.belt_half_w)
+        low, high = self._bowl_lane_bounds()
         if high <= low:
             return float(np.clip(y_now, low, high))
 
@@ -381,8 +660,20 @@ class place_block_belt(Base_Task):
             return float(self.belt_y)
         if not getattr(self, "bowl_move_enabled", False):
             return float(self.bowl.get_pose().p[1])
-        belt_travel_time = max(float(self._belt_drop_x - release_x), 0.0) / max(self.belt_speed, 1e-8)
+        belt_travel_time = abs(float(self._belt_drop_x - release_x)) / max(self.belt_speed, 1e-8)
         return self._predict_bowl_y(release_time + belt_travel_time)
+
+    def _past_belt_drop(self, x: float) -> bool:
+        x = float(x)
+        if getattr(self, "belt_dir", 1.0) > 0:
+            return bool(x >= self._belt_drop_x)
+        return bool(x <= self._belt_drop_x)
+
+    def _past_belt_end(self, x: float) -> bool:
+        x = float(x)
+        if getattr(self, "belt_dir", 1.0) > 0:
+            return bool(x >= self.belt_x_end)
+        return bool(x <= self.belt_x_end)
 
     def _move_block_to_belt_clearance(self, arm_tag: ArmTag, clearance: float):
         block_bottom_z = float(self.block.get_pose().p[2]) - self.block_half_h
@@ -437,7 +728,10 @@ class place_block_belt(Base_Task):
 
         self._belt_band_min_x = self._belt_cx - self._belt_half_len_x + band_half_x + edge_margin
         self._belt_band_max_x = self._belt_cx + self._belt_half_len_x - band_half_x - edge_margin
-        self._belt_band_start_x = self._belt_band_min_x
+        # Bands originate at the load edge and travel toward the exit.
+        self._belt_band_start_x = (
+            self._belt_band_min_x if self.belt_dir > 0 else self._belt_band_max_x
+        )
         self._belt_band_span = max(self._belt_band_max_x - self._belt_band_min_x, 1e-6)
         self._belt_band_z = self.belt_surface_z + self.BELT_BAND_Z_OFFSET_DEFAULT + band_half_z
 
@@ -450,7 +744,8 @@ class place_block_belt(Base_Task):
             (0.32, 0.32, 0.35),
         )
         for i, offset in enumerate(self._belt_band_offsets):
-            x = self._belt_band_start_x + float(offset)
+            x = self._belt_band_start_x + self.belt_dir * float(offset)
+            x = float(np.clip(x, self._belt_band_min_x, self._belt_band_max_x))
             band = create_visual_box(
                 scene=self,
                 pose=sapien.Pose([x, self.belt_y, self._belt_band_z], [1, 0, 0, 0]),
@@ -464,9 +759,13 @@ class place_block_belt(Base_Task):
         if not getattr(self, "_belt_bands", None) or self._belt_band_span <= 0.0:
             return
 
-        self._belt_band_phase = (self._belt_band_phase + self.belt_speed * self.scene.get_timestep()) % self._belt_band_span
+        self._belt_band_phase = (
+            self._belt_band_phase + self.belt_speed * self.scene.get_timestep()
+        ) % self._belt_band_span
         for band, offset in zip(self._belt_bands, self._belt_band_offsets):
-            x = self._belt_band_start_x + float((offset + self._belt_band_phase) % self._belt_band_span)
+            x = self._belt_band_start_x + self.belt_dir * float(
+                (offset + self._belt_band_phase) % self._belt_band_span
+            )
             x = float(np.clip(x, self._belt_band_min_x, self._belt_band_max_x))
             band.set_pose(sapien.Pose([x, self.belt_y, self._belt_band_z], [1, 0, 0, 0]))
 
@@ -504,11 +803,36 @@ class place_block_belt(Base_Task):
                 dt = self.scene.get_timestep()
                 pose = self.block.get_pose()
                 new_p = np.array(pose.p, dtype=np.float64)
-                new_p[0] += self.belt_speed * dt
+                new_p[0] += self.belt_dir * self.belt_speed * dt
                 # keep the block seated on the belt surface
                 new_p[2] = self.belt_surface_z + self.block_half_h
+
+                # If the cube is riding in the blocked y-lane, collide with the rod:
+                # stop the kinematic conveyor hand-off and let physics take over.
+                if (
+                    self.blocker_enabled
+                    and self.blocker is not None
+                    and self._y_overlaps_blocker(new_p[1])
+                    and abs(new_p[0] - self.blocker_x) <= (self.blocker_half_x + self.block_half_w + 0.01)
+                ):
+                    self.hit_blocker = True
+                    self.avoided_blocker = False
+                    self._belt_active = False
+                    self.block.actor.set_pose(sapien.Pose(p=new_p.tolist(), q=self._belt_q))
+                    if self._block_dyn is not None:
+                        try:
+                            self._block_dyn.set_kinematic(False)
+                            self._block_dyn.set_linear_velocity(
+                                np.array([self.belt_dir * self.belt_speed, 0.0, 0.0])
+                            )
+                            self._block_dyn.set_angular_velocity(np.zeros(3))
+                        except Exception:
+                            pass
+                    self._block_kinematic = False
+                    return
+
                 self.block.actor.set_pose(sapien.Pose(p=new_p.tolist(), q=self._belt_q))
-                if new_p[0] >= self._belt_drop_x:
+                if self._past_belt_drop(new_p[0]):
                     self.reached_end = True
                     self._belt_active = False
                     self._block_dropped = True
@@ -516,12 +840,14 @@ class place_block_belt(Base_Task):
                     if self._block_dyn is not None:
                         try:
                             self._block_dyn.set_kinematic(False)
-                            self._block_dyn.set_linear_velocity(np.array([self.belt_speed, 0.0, 0.0]))
+                            self._block_dyn.set_linear_velocity(
+                                np.array([self.belt_dir * self.belt_speed, 0.0, 0.0])
+                            )
                             self._block_dyn.set_angular_velocity(np.zeros(3))
                         except Exception:
                             pass
                     self._block_kinematic = False
-                elif new_p[0] >= self.belt_x_end:
+                elif self._past_belt_end(new_p[0]):
                     self.reached_end = True
 
     def _ride_belt(self):
@@ -548,6 +874,7 @@ class place_block_belt(Base_Task):
 
     # ----------------------------------------------------------------- policy
     def play_once(self):
+        # Arm on the load side: left for default (+x flow), right for mirrored (-x flow).
         arm_tag = ArmTag("right" if self.block.get_pose().p[0] > 0 else "left")
         moving_bowl = bool(getattr(self, "bowl_move_enabled", False))
 
@@ -555,21 +882,31 @@ class place_block_belt(Base_Task):
         #    stays well above the belt surface during the lower / release steps (a low grasp
         #    puts the fingers right at the belt and the open/lift plan collides with the slab).
         self.move(self.grasp_actor(self.block, arm_tag=arm_tag, pre_grasp_dis=0.1))
-        #,            contact_point_id=[0, 1, 2, 3]))
         # 2) lift well clear of the table
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.14, move_axis="arm"))
 
-        # Release at the LEFT/start of the belt; for the moving bowl case we still time the
-        # release so the bowl will line up with the lane by the time the block reaches the exit.
+        # Release at the load/start of the belt, always before the red placement line.
+        # With a blocker, the release y must lie in the unblocked lane.
         match_dist = max(0.02, self.belt_speed * 0.5)
+        # Keep the release center a small margin before the place line.
+        max_match = max(
+            0.01,
+            abs(float(self.place_line_x) - float(self.belt_x_start)) - (self.block_half_w + 0.01),
+        )
+        match_dist = float(min(match_dist, max_match))
         hover_x = self.belt_x_start
-        release_x = hover_x + match_dist
+        release_x = hover_x + self.belt_dir * match_dist
         if moving_bowl:
-            target_lane_y = float(self.belt_y)
+            preferred_y = float(self.belt_y)
         else:
-            target_lane_y = float(self.bowl.get_pose().p[1]) if getattr(self, "bowl", None) is not None else self.belt_y
+            preferred_y = (
+                float(self.bowl.get_pose().p[1])
+                if getattr(self, "bowl", None) is not None
+                else float(self.belt_y)
+            )
+        target_lane_y = self._choose_release_lane_y(preferred_y)
 
-        # carry it over above the chosen belt lane.
+        # carry it over above the chosen (clear) belt lane.
         dx = hover_x - float(self.block.get_pose().p[0])
         dy = target_lane_y - float(self.block.get_pose().p[1])
         self.move(self.move_by_displacement(arm_tag=arm_tag, x=dx, y=dy))
@@ -577,25 +914,31 @@ class place_block_belt(Base_Task):
         self._move_block_to_belt_clearance(arm_tag=arm_tag, clearance=hover_clearance)
 
         # 3) KEY MECHANIC: match the gripper's horizontal velocity to the belt before releasing.
-        #    A short, smooth +x move at (approximately) belt speed gives the block forward momentum
-        #    so it is not sheared/tipped by a sudden velocity mismatch when the belt grabs it.
+        #    A short, smooth move along the belt direction at (approximately) belt speed gives the
+        #    block forward momentum so it is not sheared/tipped by a velocity mismatch on grab.
         if moving_bowl:
             release_time = (
                 match_dist / max(self.belt_speed, 1e-8)
                 + self.belt_release_delay_steps * self.scene.get_timestep()
             )
+            # Align to a bowl y that is still inside the clear lane (blocker-safe).
+            release_y_goal = self._choose_release_lane_y(
+                self._estimate_drop_lane_y(release_x=release_x, release_time=release_time)
+            )
             wait_steps = self._steps_until_drop_alignment(
                 release_x=release_x,
-                release_y=float(self.block.get_pose().p[1]),
+                release_y=release_y_goal,
                 lead_time=release_time,
             )
             self._dwell(wait_steps)
-            target_lane_y = self._estimate_drop_lane_y(release_x=release_x, release_time=release_time)
+            target_lane_y = self._choose_release_lane_y(
+                self._estimate_drop_lane_y(release_x=release_x, release_time=release_time)
+            )
             dy = target_lane_y - float(self.block.get_pose().p[1])
             if abs(dy) > 1e-3:
                 self.move(self.move_by_displacement(arm_tag=arm_tag, y=dy))
             self._move_block_to_belt_clearance(arm_tag=arm_tag, clearance=0.005)
-        self.move(self.move_by_displacement(arm_tag=arm_tag, x=match_dist))
+        self.move(self.move_by_displacement(arm_tag=arm_tag, x=self.belt_dir * match_dist))
 
         # 4) release. Open the gripper and let a few dynamic steps pass so the (top-heavy) block's
         #    response to the release is what the tilt metric captures, THEN hand it to the belt's
@@ -608,11 +951,6 @@ class place_block_belt(Base_Task):
         # before the kinematic conveyor hand-off begins.
         self._dwell(self.belt_release_delay_steps)
         self._belt_active = True
-        # ride-tilt metric measures stability AFTER the hand-off to the belt
-        # self.max_tilt_deg = 0.0
-        # retract the arm clear of the (now belt-borne) block
-        # self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.12, move_axis="arm"))
-        # self.move(self.back_to_origin(arm_tag))
 
         # let the belt carry the block to the end
         self._ride_belt()
@@ -620,23 +958,56 @@ class place_block_belt(Base_Task):
         # finalize the metric
         self.tilt_score = float(np.clip(1.0 - self.max_tilt_deg / self.theta_max_deg, 0.0, 1.0))
 
+        # If we rode past the blocker without a hit, mark the clear-lane placement as successful.
+        if self.blocker_enabled and self.blocker is not None and not self.hit_blocker:
+            contact_y = self._belt_contact_y
+            if contact_y is None:
+                contact_y = float(self.block.get_pose().p[1])
+            self.avoided_blocker = bool(self._y_in_clear_lane(contact_y))
+
         self.info["info"] = {
             "{A}": "tall_block",
             "{B}": f"002_bowl/base{self.bowl_id}",
             "{C}": "conveyor_belt",
             "{a}": str(arm_tag),
+            "{flip}": "mirrored" if self.belt_mirrored else "default",
+            # Opt 1 = bowl_move_enabled; Opt 2 = blocker_enabled
+            "{opt1}": "on" if self.bowl_move_enabled else "off",
+            "{opt2}": "on" if self.blocker_enabled else "off",
         }
         return self.info
 
     # ----------------------------------------------------------------- success + metric
     def check_success(self):
-        # success = the block was dropped onto the left/start of the belt and ends inside the bowl
+        # success = first contact before red place line, cleared blocker lane, ends in bowl
         self._latch_belt_contact()
         self.placed_on_belt = bool(self.placed_on_belt or self._on_belt())
         self.in_bowl = bool(self._block_in_bowl())
-        success = bool(self.dropped_at_start_left and self.placed_on_belt and self.in_bowl)
+        if self.blocker_enabled and self.blocker is not None:
+            contact_y = self._belt_contact_y
+            if contact_y is None and getattr(self, "block", None) is not None:
+                contact_y = float(self.block.get_pose().p[1])
+            self.avoided_blocker = bool(
+                (not self.hit_blocker)
+                and (contact_y is not None)
+                and self._y_in_clear_lane(contact_y)
+            )
+        else:
+            self.avoided_blocker = True
+        success = bool(
+            self.dropped_at_start_left
+            and self.placed_on_belt
+            and self.avoided_blocker
+            and self.in_bowl
+        )
         self.info["placed_on_belt"] = self.placed_on_belt
         self.info["dropped_at_start_left"] = self.dropped_at_start_left
+        self.info["placed_before_line"] = bool(self.dropped_at_start_left)
+        self.info["place_line_x"] = float(getattr(self, "place_line_x", 0.0))
+        self.info["belt_mirrored"] = bool(getattr(self, "belt_mirrored", False))
+        self.info["blocker_enabled"] = bool(getattr(self, "blocker_enabled", False))
+        self.info["avoided_blocker"] = bool(self.avoided_blocker)
+        self.info["hit_blocker"] = bool(self.hit_blocker)
         self.info["in_bowl"] = success
         self.info["tilt_score"] = float(self.tilt_score)
         return success
@@ -652,9 +1023,22 @@ class place_block_belt(Base_Task):
             "tilt_score": float(np.clip(1.0 - getattr(self, "max_tilt_deg", 0.0) /
                                         getattr(self, "theta_max_deg", self.THETA_MAX_DEG_DEFAULT), 0.0, 1.0)),
             "belt_speed": float(getattr(self, "belt_speed", self.BELT_SPEED_DEFAULT)),
+            "belt_dir": float(getattr(self, "belt_dir", 1.0)),
+            "belt_mirrored": bool(getattr(self, "belt_mirrored", False)),
+            "blocker_enabled": bool(getattr(self, "blocker_enabled", False)),
+            "blocker_x": float(getattr(self, "blocker_x", 0.0)),
+            "blocker_y": float(getattr(self, "blocker_y", 0.0)),
+            "blocker_half_y": float(getattr(self, "blocker_half_y", 0.0)),
+            "clear_y_lo": float(getattr(self, "clear_y_lo", 0.0)),
+            "clear_y_hi": float(getattr(self, "clear_y_hi", 0.0)),
+            "avoided_blocker": bool(getattr(self, "avoided_blocker", True)),
+            "hit_blocker": bool(getattr(self, "hit_blocker", False)),
+            "place_line_x": float(getattr(self, "place_line_x", 0.0)),
+            "place_line_offset": float(getattr(self, "place_line_offset", self.PLACE_LINE_OFFSET_DEFAULT)),
             "reached_end": bool(getattr(self, "reached_end", False)),
             "placed_on_belt": bool(getattr(self, "placed_on_belt", False)),
             "dropped_at_start_left": bool(getattr(self, "dropped_at_start_left", False)),
+            "placed_before_line": bool(getattr(self, "dropped_at_start_left", False)),
             "in_bowl": bool(getattr(self, "in_bowl", False)),
             "belt_contact_x": float(getattr(self, "_belt_contact_x", 0.0) or 0.0),
             "bowl_center": self.bowl.get_pose().p.tolist() if getattr(self, "bowl", None) is not None else [0.0, 0.0, 0.0],

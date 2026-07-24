@@ -51,8 +51,10 @@ task_args:
     plate_scale_mult: 0.65
     steamer_scale_mult: 0.1
   cook_meat:
-    cook_steps_min: 2000
-    cook_steps_max: 8000
+    cook_steps: 5000
+    cook_speed_jitter: 0.20
+    cook_button_enabled: false  # default = contact cook; Opt 1 = true
+    dual_setup_enabled: false
     target_doneness_min: 0.45
     target_doneness_max: 0.55
     place_dx: 0.01
@@ -86,7 +88,7 @@ task_args:
     pop_steps: 90
     grasp_tol: 0.05
   whack_a_mole:
-    num_moles: 3
+    num_moles: 2
     difficulty: easy
     pop_steps: 90
     touch_tol: 0.04
@@ -194,6 +196,8 @@ task_args:
     belt_speed_scale: 1.0
     advance_every: 4
     gate_default_left: true
+    color_mode: alternating
+    rotten_prob: 0.0
   hit_target:
     board_half_size: 0.075
     center_half_size: 0.018
@@ -256,23 +260,28 @@ task_args:
     center_rate: 0.25
     catch_tol: 0.07
   catch_ramp_ball:
-    # Default: straight. Opt1 wall_bounce_enabled. Opt2 enable_distractor (blue).
-    # Both balls sample roll_speed × U(0.8, 1.2).
+    # Ramp meets back wall; drop-then-PhysX roll. Opt1 wall bounce, Opt2 blue distractor.
     ramp_angle: 0.24
+    ramp_back_y: 0.395
+    ramp_front_y: 0.02
     ball_radius: 0.018
     rim_radius: 0.04
     x_span: 0.15
+    drop_height: 0.08
+    drop_time: 0.45
     wall_bounce_enabled: false
     enable_distractor: false
     angled_path_min_deg: 20.0
     angled_path_max_deg: 40.0
-    roll_speed: 0.030
+    roll_speed: 0.15
     roll_speed_scale_min: 0.8
     roll_speed_scale_max: 1.2
-    fall_time: 0.5
-    idle_time_min: 2.0
-    idle_time_max: 4.0
-    settle_steps: 70
+    fall_time: 0.6
+    idle_time_min: 1.5
+    idle_time_max: 3.0
+    settle_steps: 100
+    physics_max_steps: 2500
+    cup_fwd_clearance: 0.025
   catch_valley_ball:
     ramp_half_width: 0.125
     ramp_thickness: 0.012
