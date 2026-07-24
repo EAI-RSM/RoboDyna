@@ -375,7 +375,7 @@ task_args:
     latch_settle_steps: 12
   sort_apples_belt:
     n_apples_min: 4
-    n_apples_max: 10
+    n_apples_max: 4
     belt_speed_min: 0.0014      # 30% below max; per-ep U[min, max]
     belt_speed_max: 0.0020      # upper = current (post-×2) speed
     belt_speed_scale: 1.0

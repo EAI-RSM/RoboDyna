@@ -7,7 +7,7 @@ import transforms3d as t3d
 
 
 class sort_apples_belt(Base_Task):
-    """Sort a random number (4-10) of red/green apples streaming down a conveyor into the
+    """Sort a fixed number (4) of red/green apples streaming down a conveyor into the
     color-matched basket by HOLDING the matching side button to aim a pivoting diverter plank.
 
     Apples spawn at the far end with spacing and ride the belt as a continuous STREAM (2-3 on the
@@ -46,7 +46,7 @@ class sort_apples_belt(Base_Task):
 
     # ---- class-default task params (override via task_args.sort_apples_belt) ----
     N_APPLES_MIN_DEFAULT = 4
-    N_APPLES_MAX_DEFAULT = 10
+    N_APPLES_MAX_DEFAULT = 4              # fixed episode size (all options)
     # Upper = current (post-×2) belt speed; lower = 30% below upper. Sample U[lower, upper] per ep.
     BELT_SPEED_MAX_DEFAULT = 0.0020    # m per advance tick; upper bound
     BELT_SPEED_MIN_DEFAULT = BELT_SPEED_MAX_DEFAULT * 0.7  # 0.0014; 30% below upper
@@ -61,7 +61,10 @@ class sort_apples_belt(Base_Task):
     DUMP_DECISION_EXTRA = 0.32         # start dual press early; hatch opens only on contact
     PRESS_XY = 0.06
     PRESS_DZ = 0.18                    # proximity for "near button" (side divert)
-    PRESS_DZ_ACTIVE = 0.05             # must be this close in z to count as pressed (dump)
+    # EE frame sits above the TCP; CuRobo also undershoots deep −Z presses. 12 cm
+    # still requires a clear downward press (hover is ~20 cm) without being so tight
+    # that a successful contact never registers.
+    PRESS_DZ_ACTIVE = 0.12
     BUTTON_DX = 0.25
     BUTTON_Y_DEFAULT = -0.16
     COLOR_MODE_DEFAULT = "alternating"  # Default; Opt 1 = "random"
@@ -84,7 +87,7 @@ class sort_apples_belt(Base_Task):
     BELT_X_DEFAULT = 0.0
     BELT_HALF_W = 0.10
     BELT_Y_FAR = 0.42
-    BELT_Y_FORK = -0.06
+    BELT_Y_FORK = -0.03                 # was -0.06; plank +3 cm toward +Y (upstream)
     BELT_Y_END = -0.12                  # physical near end of the belt slab (past the fork)
     # Dump release must be PAST the slab so PhysX can fall (cannot fall through the belt).
     BELT_Y_DUMP = -0.16
@@ -93,7 +96,7 @@ class sort_apples_belt(Base_Task):
     APPLE_SCALE = 0.5
     BASKET_SCALE = 0.65                 # keep plasticbox lip below belt so fruit can fall in
     BASKET_MODEL = "062_plasticbox"
-    BASKET_INSTANCE_IDS = (5, 7, 8, 9, 10)
+    BASKET_INSTANCE_IDS = (7, 8, 9, 10)
     # Upright open-top plasticbox (same as place_cans_plasticbox).
     BASKET_Q = [0.5, 0.5, 0.5, 0.5]
     APPLE_R = 0.017
@@ -205,8 +208,8 @@ class sort_apples_belt(Base_Task):
         self.green_on_left = bool(np.random.rand() < 0.5)
 
         self._basket_x = {"left": -0.18, "right": 0.18}
-        # Plastic boxes +5 cm in +Y vs v22 (toward belt upstream / higher Y).
-        self._basket_y = self.BELT_Y_FORK - 0.01 + 0.05
+        # Plastic boxes stay at prior Y (old fork -0.01 + 0.05); do not follow plank +3 cm.
+        self._basket_y = -0.02
         if self.green_on_left:
             self._color_side = {self.COLOR_GREEN: "left", self.COLOR_RED: "right"}
         else:
@@ -974,11 +977,14 @@ class sort_apples_belt(Base_Task):
             if self._apple_mode[i] in ("physics", "done"):
                 continue
             y = float(self._apple_y[i])
-            # Opt 2: rotten stay kinematic until past the belt end, then fall into the bin
-            # (physics cannot fall through the slab — releasing on-belt froze them on the rim).
+            # Opt 2: rotten stay kinematic on the belt. Closed hatch → stop at the plank
+            # face (do not teleport through wood). Open hatch → ride the parted gap past
+            # the belt end, then fall into the bin (physics cannot fall through the slab).
             if self.apple_colors[i] == self.COLOR_ROTTEN:
-                past_end = y <= float(self.BELT_Y_END) - 0.03
-                if past_end and (self._dump_gap_open() or y <= float(self.BELT_Y_END) - 0.05):
+                if not self._dump_gap_open():
+                    self._apple_y[i] = max(y, release_y)
+                    continue
+                if y <= float(self.BELT_Y_END) - 0.03:
                     self._release_dump_fall(i)
                 continue
             # Near the fork: become dynamic for the *matching* divert. If the plank is
@@ -1194,6 +1200,24 @@ class sort_apples_belt(Base_Task):
         self._gate_mode = "rest"
         self._set_gate_target()
 
+    def _press_depth_from_ee(self, arm_tag):
+        """Lower EE from the current hover onto the button (within PRESS_DZ_ACTIVE).
+
+        ``grasp_actor(..., grasp_dis≈0.09)`` parks ~20 cm above the keycap; a fixed
+        −7 cm tap never reaches the button, so the plank was driven only by the
+        expert latch (looks like an automatic open after a tap).
+        """
+        get_ee = (self.robot.get_left_ee_pose if str(arm_tag) == "left"
+                  else self.robot.get_right_ee_pose)
+        try:
+            ee_z = float(get_ee()[2])
+        except Exception:
+            ee_z = float(self._button_top_z) + 0.20
+        # Aim at the keycap; IK typically stops a few cm short, which is still
+        # inside PRESS_DZ_ACTIVE after the deeper press.
+        target_z = float(self._button_top_z)
+        return float(np.clip(ee_z - target_z, 0.08, 0.28))
+
     def _hold_both_buttons_until(self, apple_idx):
         """Hold BOTH buttons until the dump apple is deposited, then release → rest.
 
@@ -1218,9 +1242,11 @@ class sort_apples_belt(Base_Task):
             self._release_gate_to_rest()
             self.plan_success = False
             return
+        dz_l = self._press_depth_from_ee(left)
+        dz_r = self._press_depth_from_ee(right)
         self.move(
-            self.move_by_displacement(left, z=-0.07),
-            self.move_by_displacement(right, z=-0.07),
+            self.move_by_displacement(left, z=-dz_l),
+            self.move_by_displacement(right, z=-dz_r),
         )
         if not self.plan_success or self._episode_timed_out():
             self._awaiting_dump_press = False
@@ -1235,25 +1261,28 @@ class sort_apples_belt(Base_Task):
         self._dump_open = True
         self._gate_mode = "dump"
         self._set_gate_target()
-        # Stay pressed until dump deposit (or apple clear of belt after hatch opened).
+        # Stay pressed until the hatch has parted AND the dump apple is done.
+        # Releasing on deposit alone (before the plank finishes opening) looks like
+        # a tap followed by an automatic hatch animation.
+        gap_seen = False
         for _ in range(min(self.HOLD_WAIT_MAX, self._budget_left())):
             self._step_record_holding(("left", "right"))
+            if self._dump_gap_open():
+                gap_seen = True
             if self._belt_stream_cleared() or self._episode_timed_out():
                 break
-            if self._deposited[apple_idx]:
-                break
-            # Only treat off-belt as done once the hatch has actually parted —
-            # avoids press-and-release while the plank is still interpolating open.
-            if (not self._apple_on_belt(apple_idx)) and self._dump_gap_open():
+            if gap_seen and (
+                    self._deposited[apple_idx] or not self._apple_on_belt(apple_idx)):
                 break
         # Rest first (suppress proximity re-latch), then lift — never animate dump
         # after the arms leave the buttons.
         self._awaiting_dump_press = True
         self._release_gate_to_rest()
+        lift = 0.5 * (dz_l + dz_r)
         if not self._episode_timed_out() and self.plan_success:
             self.move(
-                self.move_by_displacement(left, z=0.08),
-                self.move_by_displacement(right, z=0.08),
+                self.move_by_displacement(left, z=lift),
+                self.move_by_displacement(right, z=lift),
             )
             for _ in range(min(20, self._budget_left())):
                 self._step_record()
@@ -1275,7 +1304,8 @@ class sort_apples_belt(Base_Task):
             self._release_gate_to_rest()
             self.plan_success = False
             return
-        self.move(self.move_by_displacement(arm_tag, z=-0.07))
+        dz = self._press_depth_from_ee(arm_tag)
+        self.move(self.move_by_displacement(arm_tag, z=-dz))
         if not self.plan_success or self._episode_timed_out():
             self._release_gate_to_rest()
             self.plan_success = False
@@ -1309,7 +1339,7 @@ class sort_apples_belt(Base_Task):
         self._divert_batch = []
         self._release_gate_to_rest()
         if not self._episode_timed_out() and self.plan_success:
-            self.move(self.move_by_displacement(arm_tag, z=0.08))
+            self.move(self.move_by_displacement(arm_tag, z=dz))
             for _ in range(min(16, self._budget_left())):
                 self._step_record()
         self._release_gate_to_rest()

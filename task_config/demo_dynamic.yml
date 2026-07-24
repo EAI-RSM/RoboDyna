@@ -636,8 +636,8 @@ task_args:
     dummy_hole_nest_depth: 0.35   # sink depth as fraction of ball_radius when stuck in dummy hole
     # dummy_hole_radius: 0.023    # optional absolute m; if set, overrides radius_frac
   sort_apples_belt:
-    n_apples_min: 4             # RANDOM apple count low
-    n_apples_max: 10            # high
+    n_apples_min: 4             # fixed episode size (all options)
+    n_apples_max: 4
     belt_speed_min: 0.0014      # 30% below max; per-ep U[min, max]
     belt_speed_max: 0.0020      # upper = current (post-×2) speed; ~0.12 m/s surface w/ advance_every
     belt_speed_scale: 1.0       # multiplier on sampled belt_speed
