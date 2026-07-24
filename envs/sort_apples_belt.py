@@ -92,7 +92,7 @@ class sort_apples_belt(Base_Task):
     APPLE_SCALE = 0.5
     BASKET_SCALE = 0.65                 # keep plasticbox lip below belt so fruit can fall in
     BASKET_MODEL = "062_plasticbox"
-    BASKET_INSTANCE_IDS = (4, 5, 8, 9, 10)
+    BASKET_INSTANCE_IDS = (5, 7, 8, 9, 10)
     # Upright open-top plasticbox (same as place_cans_plasticbox).
     BASKET_Q = [0.5, 0.5, 0.5, 0.5]
     APPLE_R = 0.017
@@ -765,11 +765,12 @@ class sort_apples_belt(Base_Task):
             pass
 
     def _step_physics_apples(self):
-        """Belt push into the plank + catch detection; lateral motion from along-blade feed.
+        """Belt push into the plank + catch detection; lateral divert from PhysX contact.
 
-        Diverted fruit get continuous tangential velocity along the plank (not a pure -Y
-        belt slam that stalls on first contact). No kinematic tip→box slide / teleport.
-        Off-belt: gravity finishes the drop; catch freezes only once down in-box.
+        Keep a -Y belt feed so fruit press into the diverted plank; lateral motion comes
+        from collision (not a free along-blade velocity assist). A light outward nudge
+        applies only after |x| shows the plank already deflected the apple. No kinematic
+        tip→box slide / teleport. Off-belt: gravity finishes the drop.
         """
         for i in range(self._spawned):
             if self._deposited[i] or self._apple_mode[i] != "physics":
@@ -814,49 +815,30 @@ class sort_apples_belt(Base_Task):
                     vz = min(float(v[2]), -0.35)
                     comp.set_linear_velocity([0.0, vy, vz])
                 continue
-            # Keep feeding belt / plank-slide velocity — never teleport toward a basket.
+            # Keep feeding belt velocity — never teleport toward a basket.
             if over_belt and self._routed[i] != "dump":
                 try:
                     v = np.array(comp.get_linear_velocity(), dtype=float)
                 except Exception:
                     v = np.zeros(3)
                 vb = -self._belt_vel()
+                # Pure -Y belt feed into the plank face (do not inject free lateral vx).
                 vy = min(float(v[1]), vb)
                 vx = float(v[0])
                 vz = float(v[2])
                 diverted = self._divert_tilted()
                 if diverted and self._routed[i] in (None, "left", "right"):
                     self._routed[i] = "left" if self.gate_left else "right"
-                # Along-blade only once at/near the fork (or already deflected). Feeding
-                # earlier while still upstream skates fruit off the belt before the plank.
-                at_plank = p[1] <= (self.BELT_Y_FORK + 0.04)
-                on_blade = at_plank or abs(p[0]) > 0.003
-                if on_blade and (diverted or self._routed[i] in ("left", "right")):
-                    if self._routed[i] == "left" or (self._routed[i] not in ("left", "right")
-                                                     and self.gate_left):
-                        sgn = -1.0
-                    elif self._routed[i] == "right" or (self._routed[i] not in ("left", "right")
-                                                        and not self.gate_left):
-                        sgn = 1.0
-                    else:
-                        sgn = -1.0 if p[0] < 0 else 1.0
-                    tilt = float(abs(getattr(self, "_gate_yaw_left", self.GATE_TILT)))
-                    if tilt < 0.12:
-                        tilt = float(abs(self.GATE_TILT))
-                    # Unit tangent along diverted plank toward the outer tip / basket.
-                    tx = sgn * float(np.cos(tilt))
-                    ty = -float(np.sin(tilt))
-                    speed = max(abs(vb) * 1.55, 0.13)
-                    along = float(vx) * tx + float(vy) * ty
-                    if along < speed:
-                        miss = speed - along
-                        vx = float(vx) + miss * tx
-                        vy = float(vy) + miss * ty
-                    vx = float(np.clip(vx, -0.34, 0.34))
-                    # Prefer blade tangent over pure head-on belt slam into the face.
-                    vy = float(np.clip(vy, min(vb * 0.55, -0.04), 0.05))
-                    if abs(vx) < 0.07:
-                        vx = sgn * 0.10
+                # Contact-gated only: |x| > ~8 mm means PhysX already deflected the
+                # apple off the centerline. Then a light outward nudge keeps the slide
+                # alive — never steer along the blade before contact (that left a gap).
+                if abs(p[0]) > 0.008:
+                    sgn = -1.0 if (self._routed[i] == "left" or p[0] < 0) else 1.0
+                    slide = 0.14 if diverted else 0.10
+                    vx = float(np.clip(vx + sgn * slide * 0.08, -0.28, 0.28))
+                    if abs(vx) < 0.04:
+                        vx = sgn * 0.06
+                    vy = min(vy, vb * 0.85)
                 # Near the belt rim: stop upward belt-sit bias and start the drop so
                 # fruit is not held at tip height by over_belt vz lift.
                 near_rim = abs(p[0]) > self.BELT_HALF_W * 0.82
@@ -1134,6 +1116,35 @@ class sort_apples_belt(Base_Task):
     def _episode_timed_out(self):
         return int(getattr(self, "_step_ctr", 0)) >= int(self.MAX_EPISODE_STEPS)
 
+    def _apple_on_belt(self, idx):
+        """True while an in-flight apple is still on / over the conveyor footprint.
+
+        Deposited fruit and fruit that have left the belt (basket, dump, or past the
+        near end) are off-belt. Uses the same over_belt test as `_step_physics_apples`.
+        """
+        if idx >= int(getattr(self, "_spawned", 0)):
+            return False
+        if self._deposited[idx] or self._apple_mode[idx] == "done":
+            return False
+        if self._apple_y[idx] is None:
+            return False
+        if self._apple_mode[idx] == "belt":
+            return True
+        p = np.array(self.apples[idx].get_pose().p, dtype=float)
+        over_belt = (abs(p[0]) < self.BELT_HALF_W * 1.15
+                     and p[1] > self._belt_near - 0.04
+                     and p[2] < self._belt_surf + self.APPLE_R + 0.06)
+        return bool(over_belt)
+
+    def _belt_stream_cleared(self):
+        """True once every apple has spawned and none remain on the belt."""
+        if int(getattr(self, "_spawned", 0)) < int(getattr(self, "n_apples", 0)):
+            return False
+        for i in range(self.n_apples):
+            if self._apple_on_belt(i):
+                return False
+        return True
+
     def _step_record(self):
         if self._episode_timed_out():
             self._timed_out = True
@@ -1175,7 +1186,8 @@ class sort_apples_belt(Base_Task):
         # Wait within remaining episode budget only.
         for _ in range(self._budget_left()):
             self._step_record()
-            if self._deposited[apple_idx] or self._episode_timed_out():
+            if (self._deposited[apple_idx] or not self._apple_on_belt(apple_idx)
+                    or self._belt_stream_cleared() or self._episode_timed_out()):
                 break
         self._expert_hold = None
         if not self._episode_timed_out():
@@ -1215,11 +1227,14 @@ class sort_apples_belt(Base_Task):
         self._set_gate_target()
         for _ in range(self._budget_left()):
             self._step_record()
-            if self._episode_timed_out():
+            if self._episode_timed_out() or self._belt_stream_cleared():
                 break
-            if self._divert_batch and all(self._deposited[i] for i in self._divert_batch):
+            if self._divert_batch and all(
+                    self._deposited[i] or not self._apple_on_belt(i)
+                    for i in self._divert_batch):
                 break
-            if not self._divert_batch and self._deposited[apple_idx]:
+            if not self._divert_batch and (
+                    self._deposited[apple_idx] or not self._apple_on_belt(apple_idx)):
                 break
         self._expert_hold = None
         self._divert_batch = []
@@ -1253,7 +1268,9 @@ class sort_apples_belt(Base_Task):
         retries = [0] * self.n_apples
         while guard < max_steps and not self._episode_timed_out():
             guard += 1
-            if self._spawned >= self.n_apples and all(self._deposited):
+            # End once the last apple has spawned and every apple is off the belt —
+            # do not burn the remaining MAX_EPISODE_STEPS budget.
+            if self._belt_stream_cleared():
                 break
             fi = self._front_undeposited()
             if (fi is not None and self._apple_y[fi] is not None and not self._deposited[fi]):
