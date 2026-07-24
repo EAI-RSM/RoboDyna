@@ -102,6 +102,9 @@ class sort_apples_belt(Base_Task):
     # Apple must clear this |x| (past the belt rim) before a basket catch can fire —
     # prevents early snap while still sliding along the plank (v22).
     BASKET_CATCH_MIN_ABS_X = 0.115
+    # Max height above table origin for a basket catch. Must stay below belt_surf
+    # (~_z0+0.135) so tip/mid-air freezes never return; high enough for plasticbox rim.
+    BASKET_CATCH_MAX_DZ = 0.090
     N_SLATS = 4
     # 011_dustbin default scale 0.2 → ~0.74 m tall; scale_mult is 1.5× the prior 0.16.
     DUSTBIN_SCALE_MULT = 0.24
@@ -737,7 +740,7 @@ class sort_apples_belt(Base_Task):
             return None
         # Off-belt fall fix: freeze only once clearly down in the receptacle —
         # never at plank-tip / belt height (that was the mid-air freeze).
-        if p[2] > self._z0 + 0.055:
+        if p[2] > self._z0 + self.BASKET_CATCH_MAX_DZ:
             return None
         for side in ("left", "right"):
             if np.hypot(p[0] - self._basket_x[side], p[1] - self._basket_y) < self.BASKET_CATCH_R:
@@ -873,7 +876,7 @@ class sort_apples_belt(Base_Task):
                     vx = float(np.clip(vx, -0.35, 0.35))
                     vy = float(np.clip(v[1], -0.25, 0.15))
                     vz = float(v[2])
-                    if p[2] > self._z0 + 0.055:
+                    if p[2] > self._z0 + self.BASKET_CATCH_MAX_DZ:
                         vz = min(vz, -0.50)
                     vz = float(np.clip(vz, -0.65, 0.05))
                     try:
@@ -1187,10 +1190,12 @@ class sort_apples_belt(Base_Task):
         self.press_count += 1
         self._gate_mode = "dump"
         self._set_gate_target()
-        # Wait for dump deposit (not merely leaving the belt); cap so retries can run.
+        # Hold until dump apple deposits or leaves the belt (then play_once keeps
+        # stepping until catch). Cap wait so a stuck apple can reseat/retry.
         for _ in range(min(self.HOLD_WAIT_MAX, self._budget_left())):
             self._step_record()
             if (self._deposited[apple_idx]
+                    or not self._apple_on_belt(apple_idx)
                     or self._belt_stream_cleared() or self._episode_timed_out()):
                 break
         self._expert_hold = None
@@ -1233,11 +1238,14 @@ class sort_apples_belt(Base_Task):
             self._step_record()
             if self._episode_timed_out() or self._belt_stream_cleared():
                 break
-            # Wait for deposit (not merely leaving the belt footprint) so mid-air
-            # fruit still falling into the basket keeps the divert held.
-            if self._divert_batch and all(self._deposited[i] for i in self._divert_batch):
+            # Release once every batch apple is deposited or has left the belt
+            # footprint (mid-air fall finishes under play_once settle / wait).
+            if self._divert_batch and all(
+                    self._deposited[i] or not self._apple_on_belt(i)
+                    for i in self._divert_batch):
                 break
-            if not self._divert_batch and self._deposited[apple_idx]:
+            if not self._divert_batch and (
+                    self._deposited[apple_idx] or not self._apple_on_belt(apple_idx)):
                 break
         self._expert_hold = None
         self._divert_batch = []
@@ -1271,12 +1279,18 @@ class sort_apples_belt(Base_Task):
         retries = [0] * self.n_apples
         while guard < max_steps and not self._episode_timed_out():
             guard += 1
-            # End once the last apple has spawned and every apple is off the belt —
-            # do not burn the remaining MAX_EPISODE_STEPS budget.
+            # End once every apple is deposited (not merely off the belt footprint).
             if self._belt_stream_cleared():
                 break
             fi = self._front_undeposited()
             if (fi is not None and self._apple_y[fi] is not None and not self._deposited[fi]):
+                # Already released to PhysX with a route — wait for catch; do not
+                # re-press (that would steal the divert for the next color).
+                if (self._apple_mode[fi] == "physics"
+                        and self._routed[fi] is not None
+                        and not self._apple_on_belt(fi)):
+                    self._step_record()
+                    continue
                 queued = self._plank_queue()
                 # Opt 2: if any rotten is already in the plank queue, dump first (hatch lets
                 # only brown fruit through; fresh fruit keep packing). Then divert.
@@ -1395,7 +1409,7 @@ class sort_apples_belt(Base_Task):
         if abs(p[0]) < self.BASKET_CATCH_MIN_ABS_X * 0.9:
             return None
         # Must have dropped into the box volume (not tip / belt height).
-        if p[2] > self._z0 + 0.055:
+        if p[2] > self._z0 + self.BASKET_CATCH_MAX_DZ:
             return None
         for side in ("left", "right"):
             if np.hypot(p[0] - self._basket_x[side], p[1] - self._basket_y) < self.BASKET_CATCH_R:
@@ -1404,6 +1418,7 @@ class sort_apples_belt(Base_Task):
 
     def _settled_side(self, idx):
         p = np.array(self.apples[idx].get_pose().p, dtype=float)
+        catch_z = self._z0 + self.BASKET_CATCH_MAX_DZ
         # Opt 2: rotten in a basket always counts as that basket — never as dump —
         # even if it was freeze-routed toward the bin.
         if self.rotten_enabled and self.apple_colors[idx] == self.COLOR_ROTTEN:
@@ -1412,7 +1427,7 @@ class sort_apples_belt(Base_Task):
                 return basket
             if (self._deposited[idx] and self._routed[idx] in ("left", "right")
                     and abs(p[0]) >= self.BASKET_CATCH_MIN_ABS_X * 0.9
-                    and p[2] < self._z0 + 0.055):
+                    and p[2] < catch_z):
                 return self._routed[idx]
             gx, gy = self._garbage_xy
             if (np.hypot(p[0] - gx, p[1] - gy) < self.GARBAGE_CATCH_R
@@ -1426,7 +1441,7 @@ class sort_apples_belt(Base_Task):
         if (self._deposited[idx] and self._routed[idx] is not None
                 and (self._routed[idx] == "dump"
                      or (abs(p[0]) >= self.BASKET_CATCH_MIN_ABS_X * 0.9
-                         and p[2] < self._z0 + 0.055))):
+                         and p[2] < catch_z))):
             return self._routed[idx]
         if self.rotten_enabled:
             gx, gy = self._garbage_xy
