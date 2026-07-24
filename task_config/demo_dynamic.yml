@@ -642,6 +642,7 @@ task_args:
     belt_speed_max: 0.0020      # upper = current (post-×2) speed; ~0.12 m/s surface w/ advance_every
     belt_speed_scale: 1.0       # multiplier on sampled belt_speed
     advance_every: 4            # physics steps between belt ticks
+    gate_center_y: -0.03        # divert plank hinge center along belt Y (m); was -0.06
     gate_default_left: true     # diverter aims left before first button press
     # Options (independent toggles):
     #   Default — alternating red/green  →  color_mode: alternating

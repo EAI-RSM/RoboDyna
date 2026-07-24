@@ -191,6 +191,9 @@ class sort_apples_belt(Base_Task):
         self.belt_speed = float(np.random.uniform(s_min, s_max)) * float(cfg.get("belt_speed_scale", 1.0))
         self.advance_every = int(cfg.get("advance_every", self.ADVANCE_EVERY_DEFAULT))
         self.gate_default_left = bool(cfg.get("gate_default_left", self.GATE_DEFAULT_LEFT_DEFAULT))
+        # Gate / divert-plank hinge center along belt Y (class default BELT_Y_FORK).
+        self.BELT_Y_FORK = float(cfg.get(
+            "gate_center_y", cfg.get("belt_y_fork", self.BELT_Y_FORK)))
 
         self.color_mode = str(cfg.get("color_mode", self.COLOR_MODE_DEFAULT)).lower()
         if self.color_mode not in ("alternating", "random"):

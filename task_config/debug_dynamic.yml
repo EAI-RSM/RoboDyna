@@ -380,6 +380,7 @@ task_args:
     belt_speed_max: 0.0020      # upper = current (post-×2) speed
     belt_speed_scale: 1.0
     advance_every: 4
+    gate_center_y: -0.03        # divert plank hinge center along belt Y (m)
     gate_default_left: true
     # Default: alternating; Opt1 color_mode=random; Opt2 rotten_prob=0.3
     color_mode: alternating
