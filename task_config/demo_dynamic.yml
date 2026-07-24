@@ -638,8 +638,8 @@ task_args:
   sort_apples_belt:
     n_apples_min: 4             # RANDOM apple count low
     n_apples_max: 10            # high
-    belt_speed_min: 0.0010      # m per advance tick; per-ep uniform sample (was 0.0005)
-    belt_speed_max: 0.0020      # ~0.06–0.12 m/s surface with advance_every (was 0.0010)
+    belt_speed_min: 0.0014      # 30% below max; per-ep U[min, max]
+    belt_speed_max: 0.0020      # upper = current (post-×2) speed; ~0.12 m/s surface w/ advance_every
     belt_speed_scale: 1.0       # multiplier on sampled belt_speed
     advance_every: 4            # physics steps between belt ticks
     gate_default_left: true     # diverter aims left before first button press

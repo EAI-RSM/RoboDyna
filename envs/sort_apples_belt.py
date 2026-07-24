@@ -47,8 +47,9 @@ class sort_apples_belt(Base_Task):
     # ---- class-default task params (override via task_args.sort_apples_belt) ----
     N_APPLES_MIN_DEFAULT = 4
     N_APPLES_MAX_DEFAULT = 10
-    BELT_SPEED_MIN_DEFAULT = 0.0010    # m per "advance" tick; steady per episode, random in this range (was 0.0005)
-    BELT_SPEED_MAX_DEFAULT = 0.0020    # was 0.0010
+    # Upper = current (post-×2) belt speed; lower = 30% below upper. Sample U[lower, upper] per ep.
+    BELT_SPEED_MAX_DEFAULT = 0.0020    # m per advance tick; upper bound
+    BELT_SPEED_MIN_DEFAULT = BELT_SPEED_MAX_DEFAULT * 0.7  # 0.0014; 30% below upper
     ADVANCE_EVERY_DEFAULT = 4          # physics steps between belt advances
     GATE_DEFAULT_LEFT_DEFAULT = True   # gate direction before the first press
     OBSERVE_DIST = 0.10
@@ -181,8 +182,9 @@ class sort_apples_belt(Base_Task):
         n_min = int(cfg.get("n_apples_min", self.N_APPLES_MIN_DEFAULT))
         n_max = int(cfg.get("n_apples_max", self.N_APPLES_MAX_DEFAULT))
         self.n_apples = int(np.random.randint(n_min, n_max + 1))
-        s_min = float(cfg.get("belt_speed_min", self.BELT_SPEED_MIN_DEFAULT))
+        # Per-episode speed: uniform in [0.7×upper, upper] (lower is 30% below current/upper speed).
         s_max = float(cfg.get("belt_speed_max", self.BELT_SPEED_MAX_DEFAULT))
+        s_min = float(cfg.get("belt_speed_min", s_max * 0.7))
         self.belt_speed = float(np.random.uniform(s_min, s_max)) * float(cfg.get("belt_speed_scale", 1.0))
         self.advance_every = int(cfg.get("advance_every", self.ADVANCE_EVERY_DEFAULT))
         self.gate_default_left = bool(cfg.get("gate_default_left", self.GATE_DEFAULT_LEFT_DEFAULT))
@@ -1060,8 +1062,10 @@ class sort_apples_belt(Base_Task):
         - Hold BOTH (Opt 2) → dump hatch open (halves parted)
         - Release all     → plank returns to default horizontal (x-axis)
 
-        Expert hold (`_expert_hold`) overrides proximity while the scripted policy
-        is actively holding, so a brief EE jitter cannot snap the plank back to rest.
+        Expert hold (`_expert_hold`) reinforces the commanded mode while the
+        scripted policy is actively pressing; it must be cleared *before* the
+        arms lift. Release (no expert latch, no proximity) always returns the
+        plank to horizontal — never a free-running open/tilt animation.
         """
         if not hasattr(self, "robot"):
             return
@@ -1164,8 +1168,38 @@ class sort_apples_belt(Base_Task):
         if self._episode_timed_out():
             self._timed_out = True
 
+    def _freeze_arm_drives(self, arms=("left", "right")):
+        """Re-assert current arm drive targets so a hold pose does not drift."""
+        zero_v = None
+        for tag in arms:
+            try:
+                q = (self.robot.get_left_arm_jointState()
+                     if tag == "left" else self.robot.get_right_arm_jointState())
+                pos = list(q[:-1])
+                if zero_v is None:
+                    zero_v = [0.0] * len(pos)
+                self.robot.set_arm_joints(pos, zero_v, tag)
+            except Exception:
+                pass
+
+    def _step_record_holding(self, arms=("left", "right")):
+        """Physics step while keeping the expert EE pose on the button(s)."""
+        self._freeze_arm_drives(arms)
+        self._step_record()
+
+    def _release_gate_to_rest(self):
+        """Drop expert latch and command plank horizontal before arms leave buttons."""
+        self._expert_hold = None
+        self._dump_open = False
+        self._gate_mode = "rest"
+        self._set_gate_target()
+
     def _hold_both_buttons_until(self, apple_idx):
-        """Hold BOTH buttons until the dump apple is deposited, then release → rest."""
+        """Hold BOTH buttons until the dump apple is deposited, then release → rest.
+
+        Plank angle follows button/expert-hold state only. Rest targets are set
+        *before* the arms lift so the hatch cannot keep opening after release.
+        """
         if self._episode_timed_out():
             self._timed_out = True
             self.plan_success = False
@@ -1179,36 +1213,52 @@ class sort_apples_belt(Base_Task):
             self.grasp_actor(self.buttons["right"], arm_tag=right, pre_grasp_dis=0.09,
                              grasp_dis=0.09, contact_point_id=0, gripper_pos=0.0),
         )
+        if not self.plan_success or self._episode_timed_out():
+            self._awaiting_dump_press = False
+            self._release_gate_to_rest()
+            self.plan_success = False
+            return
         self.move(
             self.move_by_displacement(left, z=-0.07),
             self.move_by_displacement(right, z=-0.07),
         )
+        if not self.plan_success or self._episode_timed_out():
+            self._awaiting_dump_press = False
+            self._release_gate_to_rest()
+            self.plan_success = False
+            return
         self._awaiting_dump_press = False
         self._expert_hold = "dump"
+        if not self._dump_open:
+            self.dump_press_count += 1
+            self.press_count += 1
         self._dump_open = True
-        self.dump_press_count += 1
-        self.press_count += 1
         self._gate_mode = "dump"
         self._set_gate_target()
-        # Hold until dump apple deposits or leaves the belt (then play_once keeps
-        # stepping until catch). Cap wait so a stuck apple can reseat/retry.
+        # Stay pressed until dump deposit (or apple clear of belt after hatch opened).
         for _ in range(min(self.HOLD_WAIT_MAX, self._budget_left())):
-            self._step_record()
-            if (self._deposited[apple_idx]
-                    or not self._apple_on_belt(apple_idx)
-                    or self._belt_stream_cleared() or self._episode_timed_out()):
+            self._step_record_holding(("left", "right"))
+            if self._belt_stream_cleared() or self._episode_timed_out():
                 break
-        self._expert_hold = None
-        if not self._episode_timed_out():
+            if self._deposited[apple_idx]:
+                break
+            # Only treat off-belt as done once the hatch has actually parted —
+            # avoids press-and-release while the plank is still interpolating open.
+            if (not self._apple_on_belt(apple_idx)) and self._dump_gap_open():
+                break
+        # Rest first (suppress proximity re-latch), then lift — never animate dump
+        # after the arms leave the buttons.
+        self._awaiting_dump_press = True
+        self._release_gate_to_rest()
+        if not self._episode_timed_out() and self.plan_success:
             self.move(
                 self.move_by_displacement(left, z=0.08),
                 self.move_by_displacement(right, z=0.08),
             )
             for _ in range(min(20, self._budget_left())):
                 self._step_record()
-        self._dump_open = False
-        self._gate_mode = "rest"
-        self._set_gate_target()
+        self._awaiting_dump_press = False
+        self._release_gate_to_rest()
         self.plan_success = bool(self._deposited[apple_idx]) and not self._timed_out
 
     def _hold_side_button_until(self, side, apple_idx, batch=None):
@@ -1218,9 +1268,18 @@ class sort_apples_belt(Base_Task):
             self.plan_success = False
             return
         arm_tag = ArmTag("left" if side == "left" else "right")
+        hold_arm = "left" if side == "left" else "right"
         self.move(self.grasp_actor(self.buttons[side], arm_tag=arm_tag, pre_grasp_dis=0.08,
                                    grasp_dis=0.08, contact_point_id=0, gripper_pos=0.0))
+        if not self.plan_success or self._episode_timed_out():
+            self._release_gate_to_rest()
+            self.plan_success = False
+            return
         self.move(self.move_by_displacement(arm_tag, z=-0.07))
+        if not self.plan_success or self._episode_timed_out():
+            self._release_gate_to_rest()
+            self.plan_success = False
+            return
         want_left = (side == "left")
         self._expert_hold = "left" if want_left else "right"
         self._dump_open = False
@@ -1235,7 +1294,7 @@ class sort_apples_belt(Base_Task):
             self._decided[i] = True
         self._set_gate_target()
         for _ in range(min(self.HOLD_WAIT_MAX, self._budget_left())):
-            self._step_record()
+            self._step_record_holding((hold_arm,))
             if self._episode_timed_out() or self._belt_stream_cleared():
                 break
             # Release once every batch apple is deposited or has left the belt
@@ -1247,14 +1306,13 @@ class sort_apples_belt(Base_Task):
             if not self._divert_batch and (
                     self._deposited[apple_idx] or not self._apple_on_belt(apple_idx)):
                 break
-        self._expert_hold = None
         self._divert_batch = []
-        if not self._episode_timed_out():
+        self._release_gate_to_rest()
+        if not self._episode_timed_out() and self.plan_success:
             self.move(self.move_by_displacement(arm_tag, z=0.08))
             for _ in range(min(16, self._budget_left())):
                 self._step_record()
-        self._gate_mode = "rest"
-        self._set_gate_target()
+        self._release_gate_to_rest()
         self.plan_success = bool(self._deposited[apple_idx]) and not self._timed_out
 
     def _front_undeposited(self):
