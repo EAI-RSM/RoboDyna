@@ -459,13 +459,21 @@ task_args:
     latch_z_max: 0.015          # m; max ball height above bed to latch
     latch_settle_steps: 12      # consecutive near-floor frames before latch
   sort_apples_belt:
-    n_apples_min: 4          # RANDOM apple count per episode
-    n_apples_max: 10
-    belt_speed_min: 0.0005   # RANDOM steady belt speed per episode (~0.03-0.06 m/s, constant flow)
-    belt_speed_max: 0.0010
-    belt_speed_scale: 1.0
-    advance_every: 4
-    gate_default_left: true
+    n_apples_min: 4             # RANDOM apple count low
+    n_apples_max: 10            # high
+    belt_speed_min: 0.0010      # m per advance tick; per-ep uniform sample (was 0.0005)
+    belt_speed_max: 0.0020      # ~0.06–0.12 m/s surface with advance_every (was 0.0010)
+    belt_speed_scale: 1.0       # multiplier on sampled belt_speed
+    advance_every: 4            # physics steps between belt ticks
+    gate_default_left: true     # diverter aims left before first button press
+    # Options (independent toggles):
+    #   Default — alternating red/green  →  color_mode: alternating
+    #   Opt 1 — random red/green         →  color_mode: random   (--option 1)
+    #   Opt 2 — rotten apple + dump bin  →  rotten_prob: 0.3     (--option 2)
+    #     With P=rotten_prob, one random apple is brown; both buttons open the
+    #     two-piece wooden plank so it rides into the garbage bin at lowest y.
+    color_mode: alternating
+    rotten_prob: 0.0
   hit_target:
     # Options (independent toggles):
     #   Opt 1 — static blocker  →  blocker_enabled   (green disc, fixed at x=0)
