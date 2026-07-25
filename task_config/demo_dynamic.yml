@@ -168,18 +168,17 @@ task_args:
     #   Opt 2 — enable_distractor: black distractor on a separate straight lane
     #            (exit points ≥ one ball diameter apart; catching black fails)
     # Means below are episode-sampled at ±param_jitter (default ±10%).
-    # Left/right horizontal runs share one length so dimensions stay equal.
     # Mirror — random_mirror / mirrored: x→−x; left arm places catcher when mirrored.
-    param_jitter: 0.10          # ± fraction around each mean
+    param_jitter: 0.10          # ± fraction around non-length means
+    length_jitter: 0.05         # ± fraction around down_run / up_run
     ramp_half_width: 0.125      # m; valley track half-width (y extent of plates)
     ramp_thickness: 0.012       # m; plate thickness
     ramp_center_y: 0.08         # m; valley fixture y
-    ramp_valley_x: -0.14        # m; valley low-point (left) so equal runs stay reachable
+    ramp_valley_x: -0.14        # m; valley low-point (left)
     ramp_valley_height: 0.025   # m; valley floor height above table
-    ramp_run: 0.324             # m; shared left/right horizontal run length
-    down_run: 0.324             # m; alias / mean (matched to up_run)
+    down_run: 0.324             # m; entry-side horizontal run mean
     down_rise: 0.094            # m; downhill vertical rise
-    up_run: 0.324               # m; alias / mean (matched to down_run)
+    up_run: 0.2592              # m; catching-side run mean (20% shorter than 0.324)
     up_rise: 0.085              # m; exit lip rise
     curve_segments: 16          # segments approximating curved plates
     rail_height: 0.055          # m; side-rail height
@@ -209,13 +208,13 @@ task_args:
     idle_time_min: 1.0          # s; idle before grasp low
     idle_time_max: 2.0          # s; high
     settle_steps: 150           # post-catch settle steps
-    catcher_model: 062_plasticbox
-    bowl_id: 1                  # 062_plasticbox instance base1
-    bowl_scale_mult: 0.90       # catcher scale (~17 cm opening)
-    bowl_inner_radius: 0.080    # m; catch success half-width
-    bowl_outer_radius: 0.095    # m; outer rim reference
-    bowl_height: 0.060          # m; catcher height used in checks
-    bowl_mass: 0.35             # kg
+    catcher_model: 021_cup
+    bowl_id: 1                  # 021_cup instance base1
+    bowl_scale_mult: 1.0        # cup asset scale
+    bowl_inner_radius: 0.042    # m; catch success half-width
+    bowl_outer_radius: 0.052    # m; outer rim reference
+    bowl_height: 0.080          # m; catcher height used in checks
+    bowl_mass: 0.25             # kg
   stop_valley_ball:
     # Same valley ramp as catch_valley_ball, but grasp a ping-pong bat and hold
     # it mid-air so the red ball hits the red circular head (table catch unused).

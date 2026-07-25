@@ -40,16 +40,17 @@ class catch_valley_ball(Base_Task):
     RAMP_HALF_WIDTH_DEFAULT = 0.125
     RAMP_THICKNESS_DEFAULT = 0.012
     RAMP_CENTER_Y_DEFAULT = 0.08
-    # Valley shifted left so equal-length runs still exit near +0.18 (arm reach).
+    # Valley shifted left so the exit stays near arm reach on the catch side.
     RAMP_VALLEY_X_DEFAULT = -0.14
     RAMP_VALLEY_HEIGHT_DEFAULT = 0.025
-    # Equal left/right horizontal run lengths (means; episode samples ±param_jitter).
+    # Horizontal run means (episode samples ±length_jitter). Catching side is shorter.
     DOWN_RUN_DEFAULT = 0.324
     DOWN_RISE_DEFAULT = 0.094
-    UP_RUN_DEFAULT = 0.324
+    UP_RUN_DEFAULT = 0.2592  # catching-side run = 0.324 * 0.8
     UP_RISE_DEFAULT = 0.085
-    PARAM_JITTER_DEFAULT = 0.10  # ±10% around each mean
-    # Kept for config compat; length jitter is per-parameter ±10%, not a global scale.
+    PARAM_JITTER_DEFAULT = 0.10  # ±10% around non-length means
+    LENGTH_JITTER_DEFAULT = 0.05  # ±5% around down_run / up_run
+    # Kept for config compat; length uses length_jitter, not a global scale.
     PLATFORM_LENGTH_SCALE_MIN_DEFAULT = 1.0
     PLATFORM_LENGTH_SCALE_MAX_DEFAULT = 1.0
     CURVE_SEGMENTS_DEFAULT = 16
@@ -84,14 +85,14 @@ class catch_valley_ball(Base_Task):
     IDLE_TIME_MAX_DEFAULT = 2.0
     SETTLE_STEPS_DEFAULT = 150
 
-    CATCHER_MODEL_DEFAULT = "062_plasticbox"
-    BOWL_ID_DEFAULT = 1  # plasticbox instance base1
-    BOWL_SCALE_MULT_DEFAULT = 0.90
-    BOWL_INNER_RADIUS_DEFAULT = 0.080  # catch success half-width
-    BOWL_OUTER_RADIUS_DEFAULT = 0.095
-    BOWL_HEIGHT_DEFAULT = 0.060
+    CATCHER_MODEL_DEFAULT = "021_cup"
+    BOWL_ID_DEFAULT = 1  # 021_cup instance base1
+    BOWL_SCALE_MULT_DEFAULT = 1.0
+    BOWL_INNER_RADIUS_DEFAULT = 0.042  # catch success half-width
+    BOWL_OUTER_RADIUS_DEFAULT = 0.052
+    BOWL_HEIGHT_DEFAULT = 0.080
     BOWL_PLACE_Z_OFFSET = -0.010  # place height relative to table_top
-    BOWL_MASS_DEFAULT = 0.35
+    BOWL_MASS_DEFAULT = 0.25
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("catch_valley_ball", {})
@@ -247,20 +248,22 @@ class catch_valley_ball(Base_Task):
 
         jitter = float(c.get("param_jitter", self.PARAM_JITTER_DEFAULT))
         self.param_jitter = float(np.clip(jitter, 0.0, 0.5))
+        length_jitter = float(c.get("length_jitter", self.LENGTH_JITTER_DEFAULT))
+        self.length_jitter = float(np.clip(length_jitter, 0.0, 0.5))
         pm = lambda mean: self._sample_pm(mean, self.param_jitter)
+        pm_len = lambda mean: self._sample_pm(mean, self.length_jitter)
 
-        # Ramp shape / length / curve — each mean ±param_jitter (default ±10%).
+        # Ramp shape / curve — each mean ±param_jitter (default ±10%).
         self.ramp_half_width = pm(c.get("ramp_half_width", self.RAMP_HALF_WIDTH_DEFAULT))
         self.ramp_thickness = pm(c.get("ramp_thickness", self.RAMP_THICKNESS_DEFAULT))
         self.ramp_center_y = float(c.get("ramp_center_y", self.RAMP_CENTER_Y_DEFAULT))
         self.valley_x = pm(c.get("ramp_valley_x", self.RAMP_VALLEY_X_DEFAULT))
         self.valley_height = pm(c.get("ramp_valley_height", self.RAMP_VALLEY_HEIGHT_DEFAULT))
-        # Equal left/right horizontal run (one sample so both sides match).
-        run_mean = float(c.get(
-            "ramp_run",
-            c.get("down_run", c.get("up_run", self.DOWN_RUN_DEFAULT)),
-        ))
-        self.down_run = self.up_run = pm(run_mean)
+        # Entry vs catching-side run lengths: independent means ±length_jitter (±5%).
+        down_mean = float(c.get("down_run", c.get("ramp_run", self.DOWN_RUN_DEFAULT)))
+        up_mean = float(c.get("up_run", self.UP_RUN_DEFAULT))
+        self.down_run = pm_len(down_mean)
+        self.up_run = pm_len(up_mean)
         self.down_rise = pm(c.get("down_rise", self.DOWN_RISE_DEFAULT))
         self.up_rise = pm(c.get("up_rise", self.UP_RISE_DEFAULT))
         self.platform_length_scale = 1.0
