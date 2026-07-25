@@ -1,0 +1,867 @@
+{
+  "task": "catch_shelf_marble",
+  "n_per_condition": 5,
+  "summary": {
+    "default": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "marble_in_bowl_count": 5,
+      "success_seeds": [
+        1000,
+        1001,
+        1002,
+        1003,
+        1004
+      ],
+      "config": {
+        "reactive_marble": false,
+        "oscillating_shelf_enabled": false
+      }
+    },
+    "opt1": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "marble_in_bowl_count": 5,
+      "success_seeds": [
+        2000,
+        2001,
+        2002,
+        2003,
+        2004
+      ],
+      "config": {
+        "reactive_marble": true,
+        "oscillating_shelf_enabled": false
+      }
+    },
+    "opt2": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "marble_in_bowl_count": 5,
+      "success_seeds": [
+        3000,
+        3001,
+        3002,
+        3003,
+        3004
+      ],
+      "config": {
+        "reactive_marble": false,
+        "oscillating_shelf_enabled": true
+      }
+    },
+    "opt1+2": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "marble_in_bowl_count": 5,
+      "success_seeds": [
+        4000,
+        4001,
+        4002,
+        4003,
+        4004
+      ],
+      "config": {
+        "reactive_marble": true,
+        "oscillating_shelf_enabled": true
+      }
+    }
+  },
+  "conditions": {
+    "default": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "marble_in_bowl_count": 5,
+      "success_seeds": [
+        1000,
+        1001,
+        1002,
+        1003,
+        1004
+      ],
+      "config": {
+        "reactive_marble": false,
+        "oscillating_shelf_enabled": false
+      },
+      "episodes": [
+        {
+          "label": "default/ep0",
+          "seed": 1000,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "baseline",
+          "n_shelves": 4,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.051562792103362565,
+          "bowl_x": 0.05685289576649666,
+          "bowl_pose": [
+            0.05685289576649666,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.05685289576649666,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "default/ep1",
+          "seed": 1001,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "baseline",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.08955446760351372,
+          "bowl_x": 0.08407313376665115,
+          "bowl_pose": [
+            0.08407313376665115,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.08407313376665115,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "default/ep2",
+          "seed": 1002,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "baseline",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.0381574566431534,
+          "bowl_x": -0.032464709132909775,
+          "bowl_pose": [
+            -0.032464709132909775,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.032464709132909775,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "default/ep3",
+          "seed": 1003,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "baseline",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.005095604542527263,
+          "bowl_x": -0.005095604807138443,
+          "bowl_pose": [
+            -0.005095604807138443,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.005095604807138443,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "default/ep4",
+          "seed": 1004,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "baseline",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.23887903239955155,
+          "bowl_x": 0.23314832150936127,
+          "bowl_pose": [
+            0.23314832150936127,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.23314832150936127,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        }
+      ]
+    },
+    "opt1": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "marble_in_bowl_count": 5,
+      "success_seeds": [
+        2000,
+        2001,
+        2002,
+        2003,
+        2004
+      ],
+      "config": {
+        "reactive_marble": true,
+        "oscillating_shelf_enabled": false
+      },
+      "episodes": [
+        {
+          "label": "opt1/ep0",
+          "seed": 2000,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "option 1",
+          "n_shelves": 4,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.16615335037381526,
+          "bowl_x": -0.16039612889289856,
+          "bowl_pose": [
+            -0.16039612889289856,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.16039612889289856,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt1/ep1",
+          "seed": 2001,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "option 1",
+          "n_shelves": 4,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.3012779586181711,
+          "bowl_x": -0.2956170439720154,
+          "bowl_pose": [
+            -0.2956170439720154,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.2956170439720154,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt1/ep2",
+          "seed": 2002,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "option 1",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.08060405421586404,
+          "bowl_x": 0.08605701476335526,
+          "bowl_pose": [
+            0.08605701476335526,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.08605701476335526,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt1/ep3",
+          "seed": 2003,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "option 1",
+          "n_shelves": 5,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.1470615344473385,
+          "bowl_x": -0.14647291600704193,
+          "bowl_pose": [
+            -0.14647291600704193,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.14647291600704193,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt1/ep4",
+          "seed": 2004,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": false,
+          "oscillating_shelf_idx": -1,
+          "option_label": "option 1",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.509387818952233,
+          "bowl_x": -0.5038496255874634,
+          "bowl_pose": [
+            -0.5038496255874634,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.5038496255874634,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        }
+      ]
+    },
+    "opt2": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "marble_in_bowl_count": 5,
+      "success_seeds": [
+        3000,
+        3001,
+        3002,
+        3003,
+        3004
+      ],
+      "config": {
+        "reactive_marble": false,
+        "oscillating_shelf_enabled": true
+      },
+      "episodes": [
+        {
+          "label": "opt2/ep0",
+          "seed": 3000,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 3,
+          "option_label": "option 2",
+          "n_shelves": 7,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.2357355405851987,
+          "bowl_x": 0.2303914874792099,
+          "bowl_pose": [
+            0.2303914874792099,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.2303914874792099,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt2/ep1",
+          "seed": 3001,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 2,
+          "option_label": "option 2",
+          "n_shelves": 5,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.08076610473720285,
+          "bowl_x": 0.07498343288898468,
+          "bowl_pose": [
+            0.07498343288898468,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.07498343288898468,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt2/ep2",
+          "seed": 3002,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 3,
+          "option_label": "option 2",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.4084437630278836,
+          "bowl_x": 0.40295326709747314,
+          "bowl_pose": [
+            0.40295326709747314,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.40295326709747314,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt2/ep3",
+          "seed": 3003,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 3,
+          "option_label": "option 2",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.03409345130545395,
+          "bowl_x": 0.034093450754880905,
+          "bowl_pose": [
+            0.034093450754880905,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.034093450754880905,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt2/ep4",
+          "seed": 3004,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": false,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 1,
+          "option_label": "option 2",
+          "n_shelves": 5,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.450456898355063,
+          "bowl_x": -0.4450611174106598,
+          "bowl_pose": [
+            -0.4450611174106598,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.4450611174106598,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        }
+      ]
+    },
+    "opt1+2": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5,
+      "marble_in_bowl_count": 5,
+      "success_seeds": [
+        4000,
+        4001,
+        4002,
+        4003,
+        4004
+      ],
+      "config": {
+        "reactive_marble": true,
+        "oscillating_shelf_enabled": true
+      },
+      "episodes": [
+        {
+          "label": "opt1+2/ep0",
+          "seed": 4000,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 2,
+          "option_label": "option 1, option 2",
+          "n_shelves": 4,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.11566547920701312,
+          "bowl_x": -0.1156654804944992,
+          "bowl_pose": [
+            -0.1156654804944992,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.1156654804944992,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt1+2/ep1",
+          "seed": 4001,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 2,
+          "option_label": "option 1, option 2",
+          "n_shelves": 4,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.28487196051786917,
+          "bowl_x": 0.27908599376678467,
+          "bowl_pose": [
+            0.27908599376678467,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.27908599376678467,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt1+2/ep2",
+          "seed": 4002,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 4,
+          "option_label": "option 1, option 2",
+          "n_shelves": 7,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": 0.21243077937492022,
+          "bowl_x": 0.2125946581363678,
+          "bowl_pose": [
+            0.2125946581363678,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            0.2125946581363678,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt1+2/ep3",
+          "seed": 4003,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 4,
+          "option_label": "option 1, option 2",
+          "n_shelves": 7,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.41193047613405764,
+          "bowl_x": -0.40652143955230713,
+          "bowl_pose": [
+            -0.40652143955230713,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.40652143955230713,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        },
+        {
+          "label": "opt1+2/ep4",
+          "seed": 4004,
+          "success": true,
+          "plan_success": true,
+          "criteria_ok": true,
+          "check_success": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "error": null,
+          "reactive_marble": true,
+          "oscillating_shelf_enabled": true,
+          "oscillating_shelf_idx": 4,
+          "option_label": "option 1, option 2",
+          "n_shelves": 6,
+          "marble_state": "resolved",
+          "marble_result": "caught",
+          "target_catch_x": -0.3837840621222372,
+          "bowl_x": -0.37797167897224426,
+          "bowl_pose": [
+            -0.37797167897224426,
+            6.984919309616089e-10,
+            0.7549999952316284
+          ],
+          "marble_pose": [
+            -0.37797167897224426,
+            6.984919309616089e-10,
+            0.7789999842643738
+          ],
+          "marble_bowl_xy_err": 0.0,
+          "marble_bowl_z_err": 1.0967254659988157e-08,
+          "bowl_catch_xy_tol": 0.035,
+          "marble_in_bowl": true,
+          "bowl_under_landing": true
+        }
+      ]
+    }
+  },
+  "demos": {
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/catch_shelf_marble/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/catch_shelf_marble/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/catch_shelf_marble/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/catch_shelf_marble/opt1+2_sidebyside.mp4"
+  },
+  "success_criterion": "marble ends up in the bowl (XY within bowl_catch_xy_tol of bowl center; Z near bowl_z+ball_r; must agree with check_success())"
+}

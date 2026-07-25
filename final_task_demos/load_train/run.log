@@ -1,0 +1,418 @@
+/home/xuan/miniconda3/envs/robodyna/lib/python3.10/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.0.1)/charset_normalizer (3.4.5) doesn't match a supported version!
+  warnings.warn(
+
+=== default: need 5 successes | overrides=['target_wagon_mode=false', 'tunnel_enabled=false'] ===
+missing pytorch3d
+[33mTask seed: 7419[0m
+Warp DeprecationWarning: The symbol `warp.torch.device_from_torch` will soon be removed from the public API. Use `warp.device_from_torch` instead.
+/home/xuan/Desktop/RoboReal/robotwin_bench/customized_robotwin/envs/curobo/src/curobo/opt/opt_base.py:298: UserWarning: Sparse invariant checks are implicitly disabled. Memory errors (e.g. SEGFAULT) will occur when operating on a sparse tensor which violates the invariants, but checks incur performance overhead. To silence this warning, explicitly opt in or out. See `torch.sparse.check_sparse_tensor_invariants.__doc__` for guidance.  (Triggered internally at /pytorch/aten/src/ATen/Context.cpp:768.)
+  self.problem_kernel_ = torch.sparse_coo_tensor(
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=7419 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+  [gpu] waiting: free=1015 MiB < 4800
+  [gpu] waiting: free=787 MiB < 4800
+  [gpu] waiting: free=819 MiB < 4800
+  [gpu] waiting: free=31 MiB < 4800
+  [gpu] waiting: free=2080 MiB < 4800
+  [gpu] waiting: free=1583 MiB < 4800
+  [gpu] waiting: free=2675 MiB < 4800
+  [gpu] waiting: free=2197 MiB < 4800
+  [gpu] waiting: free=1243 MiB < 4800
+  [gpu] waiting: free=1401 MiB < 4800
+  [gpu] waiting: free=3304 MiB < 4800
+  [gpu] waiting: free=3304 MiB < 4800
+  [gpu] waiting: free=2534 MiB < 4800
+  [gpu] waiting: free=1404 MiB < 4800
+  [gpu] waiting: free=1438 MiB < 4800
+  [gpu] waiting: free=1644 MiB < 4800
+  [gpu] waiting: free=948 MiB < 4800
+  [gpu] waiting: free=1272 MiB < 4800
+  [gpu] waiting: free=1534 MiB < 4800
+  [gpu] waiting: free=4403 MiB < 4800
+  [gpu] waiting: free=4259 MiB < 4800
+  [gpu] waiting: free=3981 MiB < 4800
+  [gpu] waiting: free=4297 MiB < 4800
+[33mTask seed: 7420[0m
+  [OK] seed=7420 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=False side=right err=None
+  [gpu] waiting: free=4089 MiB < 4800
+[33mTask seed: 7421[0m
+  [FAIL] seed=7421 plan=False check=False setup=True consistent=True target=None latched=None tunnel=False side=left err=None
+[33mTask seed: 7422[0m
+  [FAIL] seed=7422 plan=False check=False setup=True consistent=True target=None latched=None tunnel=False side=left err=None
+[33mTask seed: 7423[0m
+  [FAIL] seed=7423 plan=False check=False setup=True consistent=True target=None latched=None tunnel=False side=left err=None
+  [gpu] waiting: free=4445 MiB < 4800
+[33mTask seed: 7424[0m
+  [OK] seed=7424 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=False side=right err=None
+[33mTask seed: 7425[0m
+  [OK] seed=7425 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=False side=right err=None
+[33mTask seed: 7426[0m
+  [FAIL] seed=7426 plan=False check=False setup=True consistent=True target=None latched=None tunnel=False side=left err=None
+[33mTask seed: 7427[0m
+  [FAIL] seed=7427 plan=True check=False setup=True consistent=True target=None latched=None tunnel=False side=right err=None
+[33mTask seed: 7428[0m
+  [OK] seed=7428 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=False side=right err=None
+[33mTask seed: 7429[0m
+  [OK] seed=7429 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=False side=right err=None
+=== default: 5/5 successes in 11 attempts ===
+
+=== opt1: need 5 successes | overrides=['target_wagon_mode=true', 'tunnel_enabled=false'] ===
+[33mTask seed: 7807[0m
+  [FAIL] seed=7807 plan=False check=False setup=True consistent=True target=1 latched=None tunnel=False side=left err=None
+  [gpu] waiting: free=3983 MiB < 4800
+  [gpu] waiting: free=3983 MiB < 4800
+  [gpu] waiting: free=4083 MiB < 4800
+  [gpu] waiting: free=3617 MiB < 4800
+  [gpu] waiting: free=4093 MiB < 4800
+  [gpu] waiting: free=2638 MiB < 4800
+  [gpu] waiting: free=1666 MiB < 4800
+  [gpu] waiting: free=1144 MiB < 4800
+  [gpu] waiting: free=688 MiB < 4800
+[33mTask seed: 7808[0m
+  [OK] seed=7808 plan=True check=True setup=True consistent=True target=1 latched=1 tunnel=False side=right err=None
+[33mTask seed: 7809[0m
+  [FAIL] seed=7809 plan=False check=False setup=True consistent=True target=3 latched=None tunnel=False side=left err=None
+[33mTask seed: 7810[0m
+  [OK] seed=7810 plan=True check=True setup=True consistent=True target=1 latched=1 tunnel=False side=right err=None
+[33mTask seed: 7811[0m
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=7811 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+[33mTask seed: 7812[0m
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=7812 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+[33mTask seed: 7813[0m
+  [OK] seed=7813 plan=True check=True setup=True consistent=True target=1 latched=1 tunnel=False side=right err=None
+[33mTask seed: 7814[0m
+  [FAIL] seed=7814 plan=True check=False setup=True consistent=True target=1 latched=None tunnel=False side=left err=None
+  [gpu] waiting: free=4751 MiB < 4800
+[33mTask seed: 7815[0m
+  [FAIL] seed=7815 plan=True check=False setup=True consistent=True target=3 latched=None tunnel=False side=right err=None
+[33mTask seed: 7816[0m
+  [FAIL] seed=7816 plan=False check=False setup=True consistent=True target=2 latched=None tunnel=False side=left err=None
+[33mTask seed: 7817[0m
+  [FAIL] seed=7817 plan=False check=False setup=True consistent=True target=2 latched=None tunnel=False side=left err=None
+[33mTask seed: 7818[0m
+  [FAIL] seed=7818 plan=False check=False setup=True consistent=True target=1 latched=None tunnel=False side=left err=None
+[33mTask seed: 7819[0m
+  [FAIL] seed=7819 plan=True check=False setup=True consistent=True target=3 latched=2 tunnel=False side=right err=None
+[33mTask seed: 7820[0m
+  [FAIL] seed=7820 plan=False check=False setup=True consistent=True target=2 latched=None tunnel=False side=left err=None
+[33mTask seed: 7821[0m
+  [OK] seed=7821 plan=True check=True setup=True consistent=True target=1 latched=1 tunnel=False side=right err=None
+[33mTask seed: 7822[0m
+  [FAIL] seed=7822 plan=False check=False setup=True consistent=True target=2 latched=None tunnel=False side=left err=None
+[33mTask seed: 7823[0m
+  [FAIL] seed=7823 plan=True check=False setup=True consistent=True target=1 latched=None tunnel=False side=right err=None
+[33mTask seed: 7824[0m
+  [OK] seed=7824 plan=True check=True setup=True consistent=True target=2 latched=2 tunnel=False side=right err=None
+=== opt1: 5/5 successes in 18 attempts ===
+
+=== opt2: need 5 successes | overrides=['target_wagon_mode=false', 'tunnel_enabled=true'] ===
+[33mTask seed: 2118[0m
+  [FAIL] seed=2118 plan=False check=False setup=True consistent=True target=None latched=None tunnel=True side=left err=None
+[33mTask seed: 2119[0m
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=2119 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+[33mTask seed: 2120[0m
+  [FAIL] seed=2120 plan=False check=False setup=True consistent=True target=None latched=None tunnel=True side=left err=None
+[33mTask seed: 2121[0m
+  [FAIL] seed=2121 plan=False check=False setup=True consistent=True target=None latched=None tunnel=True side=left err=None
+[33mTask seed: 2122[0m
+  [FAIL] seed=2122 plan=True check=False setup=True consistent=True target=None latched=None tunnel=True side=right err=None
+[33mTask seed: 2123[0m
+  [OK] seed=2123 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=True side=right err=None
+[33mTask seed: 2124[0m
+  [OK] seed=2124 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=True side=right err=None
+[33mTask seed: 2125[0m
+  [FAIL] seed=2125 plan=True check=False setup=True consistent=True target=None latched=None tunnel=True side=left err=None
+[33mTask seed: 2126[0m
+  [FAIL] seed=2126 plan=True check=False setup=True consistent=True target=None latched=None tunnel=True side=right err=None
+[33mTask seed: 2127[0m
+  [OK] seed=2127 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=True side=right err=None
+[33mTask seed: 2128[0m
+  [OK] seed=2128 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=True side=right err=None
+[33mTask seed: 2129[0m
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=2129 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+[33mTask seed: 2130[0m
+  [FAIL] seed=2130 plan=False check=False setup=True consistent=True target=None latched=None tunnel=True side=left err=None
+[33mTask seed: 2131[0m
+  [FAIL] seed=2131 plan=False check=False setup=True consistent=True target=None latched=None tunnel=True side=left err=None
+[33mTask seed: 2132[0m
+  [OK] seed=2132 plan=True check=True setup=True consistent=True target=None latched=1 tunnel=True side=right err=None
+=== opt2: 5/5 successes in 15 attempts ===
+
+=== opt1+2: need 5 successes | overrides=['target_wagon_mode=true', 'tunnel_enabled=true'] ===
+[33mTask seed: 9086[0m
+  [FAIL] seed=9086 plan=False check=False setup=True consistent=True target=1 latched=None tunnel=True side=left err=None
+[33mTask seed: 9087[0m
+  [FAIL] seed=9087 plan=False check=False setup=True consistent=True target=1 latched=None tunnel=True side=left err=None
+[33mTask seed: 9088[0m
+  [OK] seed=9088 plan=True check=True setup=True consistent=True target=2 latched=2 tunnel=True side=right err=None
+[33mTask seed: 9089[0m
+  [FAIL] seed=9089 plan=False check=False setup=True consistent=True target=1 latched=None tunnel=True side=left err=None
+[33mTask seed: 9090[0m
+  [FAIL] seed=9090 plan=False check=False setup=True consistent=True target=2 latched=None tunnel=True side=left err=None
+[33mTask seed: 9091[0m
+  [OK] seed=9091 plan=True check=True setup=True consistent=True target=1 latched=1 tunnel=True side=right err=None
+[33mTask seed: 9092[0m
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=9092 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+[33mTask seed: 9093[0m
+  [OK] seed=9093 plan=True check=True setup=True consistent=True target=1 latched=1 tunnel=True side=right err=None
+[33mTask seed: 9094[0m
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=9094 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+[33mTask seed: 9095[0m
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=9095 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+[33mTask seed: 9096[0m
+Traceback (most recent call last):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/script/bench_script/test_load_train.py", line 202, in _run_episode
+    env.play_once()
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1062, in play_once
+    if _try_grasp(alt_tag):
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/load_train.py", line 1047, in _try_grasp
+    self.move(self.grasp_actor(self.ball, arm_tag=tag, pre_grasp_dis=0.1))
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/_base_task.py", line 1721, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+  File "/home/xuan/Desktop/RoboReal/RoboDyna/./envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+AssertionError: target_pose cannot be None for move action.
+  [FAIL] seed=9096 plan=False check=False setup=None consistent=None target=None latched=None tunnel=None side=None err=AssertionError: target_pose cannot be None for move action.
+[33mTask seed: 9097[0m
+  [FAIL] seed=9097 plan=False check=False setup=True consistent=True target=3 latched=None tunnel=True side=left err=None
+[33mTask seed: 9098[0m
+  [FAIL] seed=9098 plan=False check=False setup=True consistent=True target=1 latched=None tunnel=True side=left err=None
+[33mTask seed: 9099[0m
+  [FAIL] seed=9099 plan=True check=False setup=True consistent=True target=2 latched=None tunnel=True side=right err=None
+[33mTask seed: 9100[0m
+  [OK] seed=9100 plan=True check=True setup=True consistent=True target=2 latched=2 tunnel=True side=right err=None
+[33mTask seed: 9101[0m
+  [OK] seed=9101 plan=True check=True setup=True consistent=True target=1 latched=1 tunnel=True side=right err=None
+=== opt1+2: 5/5 successes in 16 attempts ===
+
+========== SUMMARY ==========
+  default: 5/5 successes (11 attempts) | setup_ok 10/11 | criteria_consistent 10/11
+  opt1: 5/5 successes (18 attempts) | setup_ok 16/18 | criteria_consistent 16/18
+  opt2: 5/5 successes (15 attempts) | setup_ok 13/15 | criteria_consistent 13/15
+  opt1+2: 5/5 successes (16 attempts) | setup_ok 12/16 | criteria_consistent 12/16
+
+=== recording demo: default (tag=default) ===
+Task Name: [34mload_train[0m
+[93m[Start Seed and Pre Motion Data Collection][0m
+[33mTask seed: 0[0m
+simulate data episode 0 fail! (seed = 0)
+[33mTask seed: 1[0m
+simulate data episode 0 success! (seed = 1)
+
+Complete simulation, failed [91m1[0m times / 2 tries 
+
+[93m[Start Data Collection][0m
+[93m[Render Success Check: ENABLED][0m
+[34mTask name: load_train | Episode: 0 | Seed: 1 (traj: episode0)[0m
+[33mTask seed: 1[0m
+[Warning] No dynamic motion info found for episode 0
+saving: episode =  0  index =  0saving: episode =  0  index =  1saving: episode =  0  index =  2saving: episode =  0  index =  3saving: episode =  0  index =  4saving: episode =  0  index =  5saving: episode =  0  index =  6saving: episode =  0  index =  7saving: episode =  0  index =  8saving: episode =  0  index =  9saving: episode =  0  index =  10saving: episode =  0  index =  11saving: episode =  0  index =  12saving: episode =  0  index =  13saving: episode =  0  index =  14saving: episode =  0  index =  15saving: episode =  0  index =  16saving: episode =  0  index =  17saving: episode =  0  index =  18saving: episode =  0  index =  19saving: episode =  0  index =  20saving: episode =  0  index =  21saving: episode =  0  index =  22saving: episode =  0  index =  23saving: episode =  0  index =  24saving: episode =  0  index =  25saving: episode =  0  index =  26saving: episode =  0  index =  27saving: episode =  0  index =  28saving: episode =  0  index =  29saving: episode =  0  index =  30saving: episode =  0  index =  31saving: episode =  0  index =  32saving: episode =  0  index =  33saving: episode =  0  index =  34saving: episode =  0  index =  35saving: episode =  0  index =  36saving: episode =  0  index =  37saving: episode =  0  index =  38saving: episode =  0  index =  39saving: episode =  0  index =  40saving: episode =  0  index =  41saving: episode =  0  index =  42saving: episode =  0  index =  43saving: episode =  0  index =  44saving: episode =  0  index =  45saving: episode =  0  index =  46saving: episode =  0  index =  47saving: episode =  0  index =  48saving: episode =  0  index =  49saving: episode =  0  index =  50saving: episode =  0  index =  51saving: episode =  0  index =  52saving: episode =  0  index =  53saving: episode =  0  index =  54saving: episode =  0  index =  55saving: episode =  0  index =  56saving: episode =  0  index =  57saving: episode =  0  index =  58saving: episode =  0  index =  59saving: episode =  0  index =  60saving: episode =  0  index =  61saving: episode =  0  index =  62saving: episode =  0  index =  63saving: episode =  0  index =  64saving: episode =  0  index =  65saving: episode =  0  index =  66saving: episode =  0  index =  67saving: episode =  0  index =  68saving: episode =  0  index =  69saving: episode =  0  index =  70saving: episode =  0  index =  71saving: episode =  0  index =  72saving: episode =  0  index =  73saving: episode =  0  index =  74saving: episode =  0  index =  75saving: episode =  0  index =  76saving: episode =  0  index =  77saving: episode =  0  index =  78saving: episode =  0  index =  79saving: episode =  0  index =  80saving: episode =  0  index =  81saving: episode =  0  index =  82saving: episode =  0  index =  83saving: episode =  0  index =  84saving: episode =  0  index =  85saving: episode =  0  index =  86saving: episode =  0  index =  87saving: episode =  0  index =  88saving: episode =  0  index =  89saving: episode =  0  index =  90saving: episode =  0  index =  91saving: episode =  0  index =  92saving: episode =  0  index =  93saving: episode =  0  index =  94saving: episode =  0  index =  95saving: episode =  0  index =  96saving: episode =  0  index =  97saving: episode =  0  index =  98saving: episode =  0  index =  99saving: episode =  0  index =  100saving: episode =  0  index =  101saving: episode =  0  index =  102saving: episode =  0  index =  103saving: episode =  0  index =  104saving: episode =  0  index =  105saving: episode =  0  index =  106saving: episode =  0  index =  107saving: episode =  0  index =  108saving: episode =  0  index =  109saving: episode =  0  index =  110saving: episode =  0  index =  111saving: episode =  0  index =  112saving: episode =  0  index =  113saving: episode =  0  index =  114saving: episode =  0  index =  115saving: episode =  0  index =  116saving: episode =  0  index =  117saving: episode =  0  index =  118saving: episode =  0  index =  119saving: episode =  0  index =  120saving: episode =  0  index =  121saving: episode =  0  index =  122saving: episode =  0  index =  123saving: episode =  0  index =  124saving: episode =  0  index =  125saving: episode =  0  index =  126saving: episode =  0  index =  127saving: episode =  0  index =  128saving: episode =  0  index =  129saving: episode =  0  index =  130saving: episode =  0  index =  131saving: episode =  0  index =  132saving: episode =  0  index =  133saving: episode =  0  index =  134saving: episode =  0  index =  135saving: episode =  0  index =  136saving: episode =  0  index =  137saving: episode =  0  index =  138saving: episode =  0  index =  139saving: episode =  0  index =  140saving: episode =  0  index =  141saving: episode =  0  index =  142saving: episode =  0  index =  143saving: episode =  0  index =  144saving: episode =  0  index =  145saving: episode =  0  index =  146saving: episode =  0  index =  147saving: episode =  0  index =  148saving: episode =  0  index =  149saving: episode =  0  index =  150saving: episode =  0  index =  151saving: episode =  0  index =  152saving: episode =  0  index =  153saving: episode =  0  index =  154saving: episode =  0  index =  155saving: episode =  0  index =  156saving: episode =  0  index =  157saving: episode =  0  index =  158saving: episode =  0  index =  159saving: episode =  0  index =  160saving: episode =  0  index =  161saving: episode =  0  index =  162saving: episode =  0  index =  163saving: episode =  0  index =  164saving: episode =  0  index =  165saving: episode =  0  index =  166saving: episode =  0  index =  167saving: episode =  0  index =  168saving: episode =  0  index =  169saving: episode =  0  index =  170saving: episode =  0  index =  171saving: episode =  0  index =  172saving: episode =  0  index =  173saving: episode =  0  index =  174saving: episode =  0  index =  175saving: episode =  0  index =  176saving: episode =  0  index =  177saving: episode =  0  index =  178saving: episode =  0  index =  179saving: episode =  0  index =  180saving: episode =  0  index =  181saving: episode =  0  index =  182saving: episode =  0  index =  183saving: episode =  0  index =  184saving: episode =  0  index =  185saving: episode =  0  index =  186saving: episode =  0  index =  187saving: episode =  0  index =  188saving: episode =  0  index =  189saving: episode =  0  index =  190saving: episode =  0  index =  191saving: episode =  0  index =  192saving: episode =  0  index =  193saving: episode =  0  index =  194saving: episode =  0  index =  195saving: episode =  0  index =  196saving: episode =  0  index =  197saving: episode =  0  index =  198saving: episode =  0  index =  199saving: episode =  0  index =  200saving: episode =  0  index =  201saving: episode =  0  index =  202saving: episode =  0  index =  203saving: episode =  0  index =  204saving: episode =  0  index =  205saving: episode =  0  index =  206saving: episode =  0  index =  207saving: episode =  0  index =  208saving: episode =  0  index =  209saving: episode =  0  index =  210saving: episode =  0  index =  211saving: episode =  0  index =  212saving: episode =  0  index =  213saving: episode =  0  index =  214saving: episode =  0  index =  215saving: episode =  0  index =  216saving: episode =  0  index =  217saving: episode =  0  index =  218saving: episode =  0  index =  219saving: episode =  0  index =  220saving: episode =  0  index =  221saving: episode =  0  index =  222saving: episode =  0  index =  223saving: episode =  0  index =  224saving: episode =  0  index =  225saving: episode =  0  index =  226saving: episode =  0  index =  227saving: episode =  0  index =  228saving: episode =  0  index =  229saving: episode =  0  index =  230saving: episode =  0  index =  231saving: episode =  0  index =  232saving: episode =  0  index =  233saving: episode =  0  index =  234saving: episode =  0  index =  235saving: episode =  0  index =  236saving: episode =  0  index =  237saving: episode =  0  index =  238saving: episode =  0  index =  239saving: episode =  0  index =  240saving: episode =  0  index =  241saving: episode =  0  index =  242saving: episode =  0  index =  243saving: episode =  0  index =  244saving: episode =  0  index =  245saving: episode =  0  index =  246saving: episode =  0  index =  247saving: episode =  0  index =  248saving: episode =  0  index =  249saving: episode =  0  index =  250saving: episode =  0  index =  251saving: episode =  0  index =  252saving: episode =  0  index =  253saving: episode =  0  index =  254saving: episode =  0  index =  255saving: episode =  0  index =  256saving: episode =  0  index =  257saving: episode =  0  index =  258saving: episode =  0  index =  259saving: episode =  0  index =  260saving: episode =  0  index =  261saving: episode =  0  index =  262saving: episode =  0  index =  263saving: episode =  0  index =  264saving: episode =  0  index =  265saving: episode =  0  index =  266saving: episode =  0  index =  267saving: episode =  0  index =  268saving: episode =  0  index =  269saving: episode =  0  index =  270saving: episode =  0  index =  271saving: episode =  0  index =  272saving: episode =  0  index =  273saving: episode =  0  index =  274saving: episode =  0  index =  275saving: episode =  0  index =  276saving: episode =  0  index =  277saving: episode =  0  index =  278saving: episode =  0  index =  279saving: episode =  0  index =  280saving: episode =  0  index =  281saving: episode =  0  index =  282saving: episode =  0  index =  283saving: episode =  0  index =  284saving: episode =  0  index =  285saving: episode =  0  index =  286saving: episode =  0  index =  287saving: episode =  0  index =  288saving: episode =  0  index =  289saving: episode =  0  index =  290saving: episode =  0  index =  291saving: episode =  0  index =  292saving: episode =  0  index =  293saving: episode =  0  index =  294saving: episode =  0  index =  295saving: episode =  0  index =  296saving: episode =  0  index =  297saving: episode =  0  index =  298saving: episode =  0  index =  299saving: episode =  0  index =  300saving: episode =  0  index =  301saving: episode =  0  index =  302saving: episode =  0  index =  303saving: episode =  0  index =  304saving: episode =  0  index =  305saving: episode =  0  index =  306saving: episode =  0  index =  307saving: episode =  0  index =  308saving: episode =  0  index =  309saving: episode =  0  index =  310saving: episode =  0  index =  311saving: episode =  0  index =  312saving: episode =  0  index =  313saving: episode =  0  index =  314saving: episode =  0  index =  315saving: episode =  0  index =  316saving: episode =  0  index =  317saving: episode =  0  index =  318saving: episode =  0  index =  319saving: episode =  0  index =  320saving: episode =  0  index =  321saving: episode =  0  index =  322saving: episode =  0  index =  323saving: episode =  0  index =  324saving: episode =  0  index =  325saving: episode =  0  index =  326saving: episode =  0  index =  327saving: episode =  0  index =  328saving: episode =  0  index =  329saving: episode =  0  index =  330saving: episode =  0  index =  331saving: episode =  0  index =  332saving: episode =  0  index =  333saving: episode =  0  index =  334saving: episode =  0  index =  335saving: episode =  0  index =  336saving: episode =  0  index =  337saving: episode =  0  index =  338saving: episode =  0  index =  339saving: episode =  0  index =  340saving: episode =  0  index =  341saving: episode =  0  index =  342saving: episode =  0  index =  343saving: episode =  0  index =  344saving: episode =  0  index =  345saving: episode =  0  index =  346saving: episode =  0  index =  347saving: episode =  0  index =  348saving: episode =  0  index =  349saving: episode =  0  index =  350saving: episode =  0  index =  351saving: episode =  0  index =  352saving: episode =  0  index =  353saving: episode =  0  index =  354saving: episode =  0  index =  355saving: episode =  0  index =  356saving: episode =  0  index =  357saving: episode =  0  index =  358saving: episode =  0  index =  359saving: episode =  0  index =  360saving: episode =  0  index =  361saving: episode =  0  index =  362saving: episode =  0  index =  363saving: episode =  0  index =  364saving: episode =  0  index =  365saving: episode =  0  index =  366saving: episode =  0  index =  367saving: episode =  0  index =  368saving: episode =  0  index =  369saving: episode =  0  index =  370saving: episode =  0  index =  371saving: episode =  0  index =  372saving: episode =  0  index =  373saving: episode =  0  index =  374saving: episode =  0  index =  375saving: episode =  0  index =  376saving: episode =  0  index =  377saving: episode =  0  index =  378saving: episode =  0  index =  379saving: episode =  0  index =  380saving: episode =  0  index =  381saving: episode =  0  index =  382saving: episode =  0  index =  383saving: episode =  0  index =  384saving: episode =  0  index =  385saving: episode =  0  index =  386saving: episode =  0  index =  387saving: episode =  0  index =  388saving: episode =  0  index =  389saving: episode =  0  index =  390saving: episode =  0  index =  391saving: episode =  0  index =  392saving: episode =  0  index =  393Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v14_default_head.mp4 (394 frames at 640x480, crf=17)
+Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v14_default_topdown.mp4 (394 frames at 640x480, crf=17)
+Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v14_default_sidebyside.mp4 (394 frames at 1280x480, crf=17)
+[92mFolder /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/.cache/episode0/ deleted successfully.[0m
+[92mEpisode 0 render SUCCESS (seed=1)[0m
+
+[92mData collection complete: 1 episodes[0m
+[1mERROR: Scene info file '/home/xuan/Desktop/RoboReal/RoboDyna/description/utils/../.././data/load_train/demo_dynamic/scene_info.json' not found.[0m
+Demo ready:
+  tag      : default
+  head     : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v14_default_head.mp4
+  top-down : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v14_default_topdown.mp4
+  side-by-side: /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v14_default_sidebyside.mp4
+  copied -> /home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/default_sidebyside.mp4
+
+=== recording demo: opt1 (tag=opt1) ===
+Task Name: [34mload_train[0m
+[93m[Start Seed and Pre Motion Data Collection][0m
+[33mTask seed: 0[0m
+simulate data episode 0 fail! (seed = 0)
+[33mTask seed: 1[0m
+simulate data episode 0 success! (seed = 1)
+
+Complete simulation, failed [91m1[0m times / 2 tries 
+
+[93m[Start Data Collection][0m
+[93m[Render Success Check: ENABLED][0m
+[34mTask name: load_train | Episode: 0 | Seed: 1 (traj: episode0)[0m
+[33mTask seed: 1[0m
+[Warning] No dynamic motion info found for episode 0
+saving: episode =  0  index =  0saving: episode =  0  index =  1saving: episode =  0  index =  2saving: episode =  0  index =  3saving: episode =  0  index =  4saving: episode =  0  index =  5saving: episode =  0  index =  6saving: episode =  0  index =  7saving: episode =  0  index =  8saving: episode =  0  index =  9saving: episode =  0  index =  10saving: episode =  0  index =  11saving: episode =  0  index =  12saving: episode =  0  index =  13saving: episode =  0  index =  14saving: episode =  0  index =  15saving: episode =  0  index =  16saving: episode =  0  index =  17saving: episode =  0  index =  18saving: episode =  0  index =  19saving: episode =  0  index =  20saving: episode =  0  index =  21saving: episode =  0  index =  22saving: episode =  0  index =  23saving: episode =  0  index =  24saving: episode =  0  index =  25saving: episode =  0  index =  26saving: episode =  0  index =  27saving: episode =  0  index =  28saving: episode =  0  index =  29saving: episode =  0  index =  30saving: episode =  0  index =  31saving: episode =  0  index =  32saving: episode =  0  index =  33saving: episode =  0  index =  34saving: episode =  0  index =  35saving: episode =  0  index =  36saving: episode =  0  index =  37saving: episode =  0  index =  38saving: episode =  0  index =  39saving: episode =  0  index =  40saving: episode =  0  index =  41saving: episode =  0  index =  42saving: episode =  0  index =  43saving: episode =  0  index =  44saving: episode =  0  index =  45saving: episode =  0  index =  46saving: episode =  0  index =  47saving: episode =  0  index =  48saving: episode =  0  index =  49saving: episode =  0  index =  50saving: episode =  0  index =  51saving: episode =  0  index =  52saving: episode =  0  index =  53saving: episode =  0  index =  54saving: episode =  0  index =  55saving: episode =  0  index =  56saving: episode =  0  index =  57saving: episode =  0  index =  58saving: episode =  0  index =  59saving: episode =  0  index =  60saving: episode =  0  index =  61saving: episode =  0  index =  62saving: episode =  0  index =  63saving: episode =  0  index =  64saving: episode =  0  index =  65saving: episode =  0  index =  66saving: episode =  0  index =  67saving: episode =  0  index =  68saving: episode =  0  index =  69saving: episode =  0  index =  70saving: episode =  0  index =  71saving: episode =  0  index =  72saving: episode =  0  index =  73saving: episode =  0  index =  74saving: episode =  0  index =  75saving: episode =  0  index =  76saving: episode =  0  index =  77saving: episode =  0  index =  78saving: episode =  0  index =  79saving: episode =  0  index =  80saving: episode =  0  index =  81saving: episode =  0  index =  82saving: episode =  0  index =  83saving: episode =  0  index =  84saving: episode =  0  index =  85saving: episode =  0  index =  86saving: episode =  0  index =  87saving: episode =  0  index =  88saving: episode =  0  index =  89saving: episode =  0  index =  90saving: episode =  0  index =  91saving: episode =  0  index =  92saving: episode =  0  index =  93saving: episode =  0  index =  94saving: episode =  0  index =  95saving: episode =  0  index =  96saving: episode =  0  index =  97saving: episode =  0  index =  98saving: episode =  0  index =  99saving: episode =  0  index =  100saving: episode =  0  index =  101saving: episode =  0  index =  102saving: episode =  0  index =  103saving: episode =  0  index =  104saving: episode =  0  index =  105saving: episode =  0  index =  106saving: episode =  0  index =  107saving: episode =  0  index =  108saving: episode =  0  index =  109saving: episode =  0  index =  110saving: episode =  0  index =  111saving: episode =  0  index =  112saving: episode =  0  index =  113saving: episode =  0  index =  114saving: episode =  0  index =  115saving: episode =  0  index =  116saving: episode =  0  index =  117saving: episode =  0  index =  118saving: episode =  0  index =  119saving: episode =  0  index =  120saving: episode =  0  index =  121saving: episode =  0  index =  122saving: episode =  0  index =  123saving: episode =  0  index =  124saving: episode =  0  index =  125saving: episode =  0  index =  126saving: episode =  0  index =  127saving: episode =  0  index =  128saving: episode =  0  index =  129saving: episode =  0  index =  130saving: episode =  0  index =  131saving: episode =  0  index =  132saving: episode =  0  index =  133saving: episode =  0  index =  134saving: episode =  0  index =  135saving: episode =  0  index =  136saving: episode =  0  index =  137saving: episode =  0  index =  138saving: episode =  0  index =  139saving: episode =  0  index =  140saving: episode =  0  index =  141saving: episode =  0  index =  142saving: episode =  0  index =  143saving: episode =  0  index =  144saving: episode =  0  index =  145saving: episode =  0  index =  146saving: episode =  0  index =  147saving: episode =  0  index =  148saving: episode =  0  index =  149saving: episode =  0  index =  150saving: episode =  0  index =  151saving: episode =  0  index =  152saving: episode =  0  index =  153saving: episode =  0  index =  154saving: episode =  0  index =  155saving: episode =  0  index =  156saving: episode =  0  index =  157saving: episode =  0  index =  158saving: episode =  0  index =  159saving: episode =  0  index =  160saving: episode =  0  index =  161saving: episode =  0  index =  162saving: episode =  0  index =  163saving: episode =  0  index =  164saving: episode =  0  index =  165saving: episode =  0  index =  166saving: episode =  0  index =  167saving: episode =  0  index =  168saving: episode =  0  index =  169saving: episode =  0  index =  170saving: episode =  0  index =  171saving: episode =  0  index =  172saving: episode =  0  index =  173saving: episode =  0  index =  174saving: episode =  0  index =  175saving: episode =  0  index =  176saving: episode =  0  index =  177saving: episode =  0  index =  178saving: episode =  0  index =  179saving: episode =  0  index =  180saving: episode =  0  index =  181saving: episode =  0  index =  182saving: episode =  0  index =  183saving: episode =  0  index =  184saving: episode =  0  index =  185saving: episode =  0  index =  186saving: episode =  0  index =  187saving: episode =  0  index =  188saving: episode =  0  index =  189saving: episode =  0  index =  190saving: episode =  0  index =  191saving: episode =  0  index =  192saving: episode =  0  index =  193saving: episode =  0  index =  194saving: episode =  0  index =  195saving: episode =  0  index =  196saving: episode =  0  index =  197saving: episode =  0  index =  198saving: episode =  0  index =  199saving: episode =  0  index =  200saving: episode =  0  index =  201saving: episode =  0  index =  202saving: episode =  0  index =  203saving: episode =  0  index =  204saving: episode =  0  index =  205saving: episode =  0  index =  206saving: episode =  0  index =  207saving: episode =  0  index =  208saving: episode =  0  index =  209saving: episode =  0  index =  210saving: episode =  0  index =  211saving: episode =  0  index =  212saving: episode =  0  index =  213saving: episode =  0  index =  214saving: episode =  0  index =  215saving: episode =  0  index =  216saving: episode =  0  index =  217saving: episode =  0  index =  218saving: episode =  0  index =  219saving: episode =  0  index =  220saving: episode =  0  index =  221saving: episode =  0  index =  222saving: episode =  0  index =  223saving: episode =  0  index =  224saving: episode =  0  index =  225saving: episode =  0  index =  226saving: episode =  0  index =  227saving: episode =  0  index =  228saving: episode =  0  index =  229saving: episode =  0  index =  230saving: episode =  0  index =  231saving: episode =  0  index =  232saving: episode =  0  index =  233saving: episode =  0  index =  234saving: episode =  0  index =  235saving: episode =  0  index =  236saving: episode =  0  index =  237saving: episode =  0  index =  238saving: episode =  0  index =  239saving: episode =  0  index =  240saving: episode =  0  index =  241saving: episode =  0  index =  242saving: episode =  0  index =  243saving: episode =  0  index =  244saving: episode =  0  index =  245saving: episode =  0  index =  246saving: episode =  0  index =  247saving: episode =  0  index =  248saving: episode =  0  index =  249saving: episode =  0  index =  250saving: episode =  0  index =  251saving: episode =  0  index =  252saving: episode =  0  index =  253saving: episode =  0  index =  254saving: episode =  0  index =  255saving: episode =  0  index =  256saving: episode =  0  index =  257saving: episode =  0  index =  258saving: episode =  0  index =  259saving: episode =  0  index =  260saving: episode =  0  index =  261saving: episode =  0  index =  262saving: episode =  0  index =  263saving: episode =  0  index =  264saving: episode =  0  index =  265saving: episode =  0  index =  266saving: episode =  0  index =  267saving: episode =  0  index =  268saving: episode =  0  index =  269saving: episode =  0  index =  270saving: episode =  0  index =  271saving: episode =  0  index =  272saving: episode =  0  index =  273saving: episode =  0  index =  274saving: episode =  0  index =  275saving: episode =  0  index =  276saving: episode =  0  index =  277saving: episode =  0  index =  278saving: episode =  0  index =  279saving: episode =  0  index =  280saving: episode =  0  index =  281saving: episode =  0  index =  282saving: episode =  0  index =  283saving: episode =  0  index =  284saving: episode =  0  index =  285saving: episode =  0  index =  286saving: episode =  0  index =  287saving: episode =  0  index =  288saving: episode =  0  index =  289saving: episode =  0  index =  290saving: episode =  0  index =  291saving: episode =  0  index =  292saving: episode =  0  index =  293saving: episode =  0  index =  294saving: episode =  0  index =  295saving: episode =  0  index =  296saving: episode =  0  index =  297saving: episode =  0  index =  298saving: episode =  0  index =  299saving: episode =  0  index =  300saving: episode =  0  index =  301saving: episode =  0  index =  302saving: episode =  0  index =  303saving: episode =  0  index =  304saving: episode =  0  index =  305saving: episode =  0  index =  306saving: episode =  0  index =  307saving: episode =  0  index =  308saving: episode =  0  index =  309saving: episode =  0  index =  310saving: episode =  0  index =  311saving: episode =  0  index =  312saving: episode =  0  index =  313saving: episode =  0  index =  314saving: episode =  0  index =  315saving: episode =  0  index =  316saving: episode =  0  index =  317saving: episode =  0  index =  318saving: episode =  0  index =  319saving: episode =  0  index =  320saving: episode =  0  index =  321saving: episode =  0  index =  322saving: episode =  0  index =  323saving: episode =  0  index =  324saving: episode =  0  index =  325saving: episode =  0  index =  326saving: episode =  0  index =  327saving: episode =  0  index =  328saving: episode =  0  index =  329saving: episode =  0  index =  330saving: episode =  0  index =  331saving: episode =  0  index =  332saving: episode =  0  index =  333saving: episode =  0  index =  334saving: episode =  0  index =  335saving: episode =  0  index =  336saving: episode =  0  index =  337saving: episode =  0  index =  338saving: episode =  0  index =  339saving: episode =  0  index =  340saving: episode =  0  index =  341saving: episode =  0  index =  342saving: episode =  0  index =  343saving: episode =  0  index =  344saving: episode =  0  index =  345saving: episode =  0  index =  346saving: episode =  0  index =  347saving: episode =  0  index =  348saving: episode =  0  index =  349saving: episode =  0  index =  350saving: episode =  0  index =  351saving: episode =  0  index =  352saving: episode =  0  index =  353saving: episode =  0  index =  354saving: episode =  0  index =  355saving: episode =  0  index =  356saving: episode =  0  index =  357saving: episode =  0  index =  358saving: episode =  0  index =  359saving: episode =  0  index =  360saving: episode =  0  index =  361saving: episode =  0  index =  362saving: episode =  0  index =  363saving: episode =  0  index =  364saving: episode =  0  index =  365saving: episode =  0  index =  366saving: episode =  0  index =  367saving: episode =  0  index =  368saving: episode =  0  index =  369saving: episode =  0  index =  370saving: episode =  0  index =  371saving: episode =  0  index =  372saving: episode =  0  index =  373saving: episode =  0  index =  374saving: episode =  0  index =  375saving: episode =  0  index =  376saving: episode =  0  index =  377saving: episode =  0  index =  378saving: episode =  0  index =  379saving: episode =  0  index =  380saving: episode =  0  index =  381saving: episode =  0  index =  382saving: episode =  0  index =  383saving: episode =  0  index =  384saving: episode =  0  index =  385saving: episode =  0  index =  386saving: episode =  0  index =  387saving: episode =  0  index =  388saving: episode =  0  index =  389saving: episode =  0  index =  390saving: episode =  0  index =  391saving: episode =  0  index =  392saving: episode =  0  index =  393saving: episode =  0  index =  394saving: episode =  0  index =  395saving: episode =  0  index =  396saving: episode =  0  index =  397saving: episode =  0  index =  398saving: episode =  0  index =  399saving: episode =  0  index =  400saving: episode =  0  index =  401saving: episode =  0  index =  402saving: episode =  0  index =  403saving: episode =  0  index =  404saving: episode =  0  index =  405saving: episode =  0  index =  406saving: episode =  0  index =  407saving: episode =  0  index =  408saving: episode =  0  index =  409saving: episode =  0  index =  410saving: episode =  0  index =  411saving: episode =  0  index =  412saving: episode =  0  index =  413saving: episode =  0  index =  414saving: episode =  0  index =  415Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v15_opt1_head.mp4 (416 frames at 640x480, crf=17)
+Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v15_opt1_topdown.mp4 (416 frames at 640x480, crf=17)
+Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v15_opt1_sidebyside.mp4 (416 frames at 1280x480, crf=17)
+[92mFolder /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/.cache/episode0/ deleted successfully.[0m
+[92mEpisode 0 render SUCCESS (seed=1)[0m
+
+[92mData collection complete: 1 episodes[0m
+[1mERROR: Scene info file '/home/xuan/Desktop/RoboReal/RoboDyna/description/utils/../.././data/load_train/demo_dynamic/scene_info.json' not found.[0m
+Demo ready:
+  tag      : opt1
+  head     : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v15_opt1_head.mp4
+  top-down : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v15_opt1_topdown.mp4
+  side-by-side: /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v15_opt1_sidebyside.mp4
+  copied -> /home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/opt1_sidebyside.mp4
+  [gpu] waiting: free=2852 MiB < 5200
+  [gpu] waiting: free=2852 MiB < 5200
+
+=== recording demo: opt2 (tag=opt2) ===
+Task Name: [34mload_train[0m
+[93m[Start Seed and Pre Motion Data Collection][0m
+[33mTask seed: 0[0m
+simulate data episode 0 fail! (seed = 0)
+[33mTask seed: 1[0m
+simulate data episode 0 success! (seed = 1)
+
+Complete simulation, failed [91m1[0m times / 2 tries 
+
+[93m[Start Data Collection][0m
+[93m[Render Success Check: ENABLED][0m
+[34mTask name: load_train | Episode: 0 | Seed: 1 (traj: episode0)[0m
+[33mTask seed: 1[0m
+[Warning] No dynamic motion info found for episode 0
+saving: episode =  0  index =  0saving: episode =  0  index =  1saving: episode =  0  index =  2saving: episode =  0  index =  3saving: episode =  0  index =  4saving: episode =  0  index =  5saving: episode =  0  index =  6saving: episode =  0  index =  7saving: episode =  0  index =  8saving: episode =  0  index =  9saving: episode =  0  index =  10saving: episode =  0  index =  11saving: episode =  0  index =  12saving: episode =  0  index =  13saving: episode =  0  index =  14saving: episode =  0  index =  15saving: episode =  0  index =  16saving: episode =  0  index =  17saving: episode =  0  index =  18saving: episode =  0  index =  19saving: episode =  0  index =  20saving: episode =  0  index =  21saving: episode =  0  index =  22saving: episode =  0  index =  23saving: episode =  0  index =  24saving: episode =  0  index =  25saving: episode =  0  index =  26saving: episode =  0  index =  27saving: episode =  0  index =  28saving: episode =  0  index =  29saving: episode =  0  index =  30saving: episode =  0  index =  31saving: episode =  0  index =  32saving: episode =  0  index =  33saving: episode =  0  index =  34saving: episode =  0  index =  35saving: episode =  0  index =  36saving: episode =  0  index =  37saving: episode =  0  index =  38saving: episode =  0  index =  39saving: episode =  0  index =  40saving: episode =  0  index =  41saving: episode =  0  index =  42saving: episode =  0  index =  43saving: episode =  0  index =  44saving: episode =  0  index =  45saving: episode =  0  index =  46saving: episode =  0  index =  47saving: episode =  0  index =  48saving: episode =  0  index =  49saving: episode =  0  index =  50saving: episode =  0  index =  51saving: episode =  0  index =  52saving: episode =  0  index =  53saving: episode =  0  index =  54saving: episode =  0  index =  55saving: episode =  0  index =  56saving: episode =  0  index =  57saving: episode =  0  index =  58saving: episode =  0  index =  59saving: episode =  0  index =  60saving: episode =  0  index =  61saving: episode =  0  index =  62saving: episode =  0  index =  63saving: episode =  0  index =  64saving: episode =  0  index =  65saving: episode =  0  index =  66saving: episode =  0  index =  67saving: episode =  0  index =  68saving: episode =  0  index =  69saving: episode =  0  index =  70saving: episode =  0  index =  71saving: episode =  0  index =  72saving: episode =  0  index =  73saving: episode =  0  index =  74saving: episode =  0  index =  75saving: episode =  0  index =  76saving: episode =  0  index =  77saving: episode =  0  index =  78saving: episode =  0  index =  79saving: episode =  0  index =  80saving: episode =  0  index =  81saving: episode =  0  index =  82saving: episode =  0  index =  83saving: episode =  0  index =  84saving: episode =  0  index =  85saving: episode =  0  index =  86saving: episode =  0  index =  87saving: episode =  0  index =  88saving: episode =  0  index =  89saving: episode =  0  index =  90saving: episode =  0  index =  91saving: episode =  0  index =  92saving: episode =  0  index =  93saving: episode =  0  index =  94saving: episode =  0  index =  95saving: episode =  0  index =  96saving: episode =  0  index =  97saving: episode =  0  index =  98saving: episode =  0  index =  99saving: episode =  0  index =  100saving: episode =  0  index =  101saving: episode =  0  index =  102saving: episode =  0  index =  103saving: episode =  0  index =  104saving: episode =  0  index =  105saving: episode =  0  index =  106saving: episode =  0  index =  107saving: episode =  0  index =  108saving: episode =  0  index =  109saving: episode =  0  index =  110saving: episode =  0  index =  111saving: episode =  0  index =  112saving: episode =  0  index =  113saving: episode =  0  index =  114saving: episode =  0  index =  115saving: episode =  0  index =  116saving: episode =  0  index =  117saving: episode =  0  index =  118saving: episode =  0  index =  119saving: episode =  0  index =  120saving: episode =  0  index =  121saving: episode =  0  index =  122saving: episode =  0  index =  123saving: episode =  0  index =  124saving: episode =  0  index =  125saving: episode =  0  index =  126saving: episode =  0  index =  127saving: episode =  0  index =  128saving: episode =  0  index =  129saving: episode =  0  index =  130saving: episode =  0  index =  131saving: episode =  0  index =  132saving: episode =  0  index =  133saving: episode =  0  index =  134saving: episode =  0  index =  135saving: episode =  0  index =  136saving: episode =  0  index =  137saving: episode =  0  index =  138saving: episode =  0  index =  139saving: episode =  0  index =  140saving: episode =  0  index =  141saving: episode =  0  index =  142saving: episode =  0  index =  143saving: episode =  0  index =  144saving: episode =  0  index =  145saving: episode =  0  index =  146saving: episode =  0  index =  147saving: episode =  0  index =  148saving: episode =  0  index =  149saving: episode =  0  index =  150saving: episode =  0  index =  151saving: episode =  0  index =  152saving: episode =  0  index =  153saving: episode =  0  index =  154saving: episode =  0  index =  155saving: episode =  0  index =  156saving: episode =  0  index =  157saving: episode =  0  index =  158saving: episode =  0  index =  159saving: episode =  0  index =  160saving: episode =  0  index =  161saving: episode =  0  index =  162saving: episode =  0  index =  163saving: episode =  0  index =  164saving: episode =  0  index =  165saving: episode =  0  index =  166saving: episode =  0  index =  167saving: episode =  0  index =  168saving: episode =  0  index =  169saving: episode =  0  index =  170saving: episode =  0  index =  171saving: episode =  0  index =  172saving: episode =  0  index =  173saving: episode =  0  index =  174saving: episode =  0  index =  175saving: episode =  0  index =  176saving: episode =  0  index =  177saving: episode =  0  index =  178saving: episode =  0  index =  179saving: episode =  0  index =  180saving: episode =  0  index =  181saving: episode =  0  index =  182saving: episode =  0  index =  183saving: episode =  0  index =  184saving: episode =  0  index =  185saving: episode =  0  index =  186saving: episode =  0  index =  187saving: episode =  0  index =  188saving: episode =  0  index =  189saving: episode =  0  index =  190saving: episode =  0  index =  191saving: episode =  0  index =  192saving: episode =  0  index =  193saving: episode =  0  index =  194saving: episode =  0  index =  195saving: episode =  0  index =  196saving: episode =  0  index =  197saving: episode =  0  index =  198saving: episode =  0  index =  199saving: episode =  0  index =  200saving: episode =  0  index =  201saving: episode =  0  index =  202saving: episode =  0  index =  203saving: episode =  0  index =  204saving: episode =  0  index =  205saving: episode =  0  index =  206saving: episode =  0  index =  207saving: episode =  0  index =  208saving: episode =  0  index =  209saving: episode =  0  index =  210saving: episode =  0  index =  211saving: episode =  0  index =  212saving: episode =  0  index =  213saving: episode =  0  index =  214saving: episode =  0  index =  215saving: episode =  0  index =  216saving: episode =  0  index =  217saving: episode =  0  index =  218saving: episode =  0  index =  219saving: episode =  0  index =  220saving: episode =  0  index =  221saving: episode =  0  index =  222saving: episode =  0  index =  223saving: episode =  0  index =  224saving: episode =  0  index =  225saving: episode =  0  index =  226saving: episode =  0  index =  227saving: episode =  0  index =  228saving: episode =  0  index =  229saving: episode =  0  index =  230saving: episode =  0  index =  231saving: episode =  0  index =  232saving: episode =  0  index =  233saving: episode =  0  index =  234saving: episode =  0  index =  235saving: episode =  0  index =  236saving: episode =  0  index =  237saving: episode =  0  index =  238saving: episode =  0  index =  239saving: episode =  0  index =  240saving: episode =  0  index =  241saving: episode =  0  index =  242saving: episode =  0  index =  243saving: episode =  0  index =  244saving: episode =  0  index =  245saving: episode =  0  index =  246saving: episode =  0  index =  247saving: episode =  0  index =  248saving: episode =  0  index =  249saving: episode =  0  index =  250saving: episode =  0  index =  251saving: episode =  0  index =  252saving: episode =  0  index =  253saving: episode =  0  index =  254saving: episode =  0  index =  255saving: episode =  0  index =  256saving: episode =  0  index =  257saving: episode =  0  index =  258saving: episode =  0  index =  259saving: episode =  0  index =  260saving: episode =  0  index =  261saving: episode =  0  index =  262saving: episode =  0  index =  263saving: episode =  0  index =  264saving: episode =  0  index =  265saving: episode =  0  index =  266saving: episode =  0  index =  267saving: episode =  0  index =  268saving: episode =  0  index =  269saving: episode =  0  index =  270saving: episode =  0  index =  271saving: episode =  0  index =  272saving: episode =  0  index =  273saving: episode =  0  index =  274saving: episode =  0  index =  275saving: episode =  0  index =  276saving: episode =  0  index =  277saving: episode =  0  index =  278saving: episode =  0  index =  279saving: episode =  0  index =  280saving: episode =  0  index =  281saving: episode =  0  index =  282saving: episode =  0  index =  283saving: episode =  0  index =  284saving: episode =  0  index =  285saving: episode =  0  index =  286saving: episode =  0  index =  287saving: episode =  0  index =  288saving: episode =  0  index =  289saving: episode =  0  index =  290saving: episode =  0  index =  291saving: episode =  0  index =  292saving: episode =  0  index =  293saving: episode =  0  index =  294saving: episode =  0  index =  295saving: episode =  0  index =  296saving: episode =  0  index =  297saving: episode =  0  index =  298saving: episode =  0  index =  299saving: episode =  0  index =  300saving: episode =  0  index =  301saving: episode =  0  index =  302saving: episode =  0  index =  303saving: episode =  0  index =  304saving: episode =  0  index =  305saving: episode =  0  index =  306saving: episode =  0  index =  307saving: episode =  0  index =  308saving: episode =  0  index =  309saving: episode =  0  index =  310saving: episode =  0  index =  311saving: episode =  0  index =  312saving: episode =  0  index =  313saving: episode =  0  index =  314saving: episode =  0  index =  315saving: episode =  0  index =  316saving: episode =  0  index =  317saving: episode =  0  index =  318saving: episode =  0  index =  319saving: episode =  0  index =  320saving: episode =  0  index =  321saving: episode =  0  index =  322saving: episode =  0  index =  323saving: episode =  0  index =  324saving: episode =  0  index =  325saving: episode =  0  index =  326saving: episode =  0  index =  327saving: episode =  0  index =  328saving: episode =  0  index =  329saving: episode =  0  index =  330saving: episode =  0  index =  331saving: episode =  0  index =  332saving: episode =  0  index =  333saving: episode =  0  index =  334saving: episode =  0  index =  335saving: episode =  0  index =  336saving: episode =  0  index =  337saving: episode =  0  index =  338saving: episode =  0  index =  339saving: episode =  0  index =  340saving: episode =  0  index =  341saving: episode =  0  index =  342saving: episode =  0  index =  343saving: episode =  0  index =  344saving: episode =  0  index =  345saving: episode =  0  index =  346saving: episode =  0  index =  347saving: episode =  0  index =  348saving: episode =  0  index =  349saving: episode =  0  index =  350saving: episode =  0  index =  351saving: episode =  0  index =  352saving: episode =  0  index =  353saving: episode =  0  index =  354saving: episode =  0  index =  355saving: episode =  0  index =  356saving: episode =  0  index =  357saving: episode =  0  index =  358saving: episode =  0  index =  359saving: episode =  0  index =  360saving: episode =  0  index =  361saving: episode =  0  index =  362saving: episode =  0  index =  363saving: episode =  0  index =  364saving: episode =  0  index =  365saving: episode =  0  index =  366saving: episode =  0  index =  367saving: episode =  0  index =  368saving: episode =  0  index =  369saving: episode =  0  index =  370saving: episode =  0  index =  371saving: episode =  0  index =  372saving: episode =  0  index =  373saving: episode =  0  index =  374saving: episode =  0  index =  375saving: episode =  0  index =  376saving: episode =  0  index =  377saving: episode =  0  index =  378saving: episode =  0  index =  379saving: episode =  0  index =  380saving: episode =  0  index =  381saving: episode =  0  index =  382saving: episode =  0  index =  383saving: episode =  0  index =  384saving: episode =  0  index =  385saving: episode =  0  index =  386saving: episode =  0  index =  387saving: episode =  0  index =  388saving: episode =  0  index =  389saving: episode =  0  index =  390saving: episode =  0  index =  391saving: episode =  0  index =  392saving: episode =  0  index =  393saving: episode =  0  index =  394Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v16_opt2_head.mp4 (395 frames at 640x480, crf=17)
+Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v16_opt2_topdown.mp4 (395 frames at 640x480, crf=17)
+Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v16_opt2_sidebyside.mp4 (395 frames at 1280x480, crf=17)
+[92mFolder /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/.cache/episode0/ deleted successfully.[0m
+[92mEpisode 0 render SUCCESS (seed=1)[0m
+
+[92mData collection complete: 1 episodes[0m
+[1mERROR: Scene info file '/home/xuan/Desktop/RoboReal/RoboDyna/description/utils/../.././data/load_train/demo_dynamic/scene_info.json' not found.[0m
+Demo ready:
+  tag      : opt2
+  head     : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v16_opt2_head.mp4
+  top-down : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v16_opt2_topdown.mp4
+  side-by-side: /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v16_opt2_sidebyside.mp4
+  copied -> /home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/opt2_sidebyside.mp4
+
+=== recording demo: opt1+2 (tag=opt1+2) ===
+Task Name: [34mload_train[0m
+[93m[Start Seed and Pre Motion Data Collection][0m
+[33mTask seed: 0[0m
+ -------------
+simulate data episode 0 fail! (seed = 0)
+Error:  target_pose cannot be None for move action.
+ -------------
+[33mTask seed: 1[0m
+simulate data episode 0 success! (seed = 1)
+
+Complete simulation, failed [91m1[0m times / 2 tries 
+
+[93m[Start Data Collection][0m
+[93m[Render Success Check: ENABLED][0m
+[34mTask name: load_train | Episode: 0 | Seed: 1 (traj: episode0)[0m
+[33mTask seed: 1[0m
+[Warning] No dynamic motion info found for episode 0
+saving: episode =  0  index =  0saving: episode =  0  index =  1saving: episode =  0  index =  2saving: episode =  0  index =  3saving: episode =  0  index =  4saving: episode =  0  index =  5saving: episode =  0  index =  6saving: episode =  0  index =  7saving: episode =  0  index =  8saving: episode =  0  index =  9saving: episode =  0  index =  10saving: episode =  0  index =  11saving: episode =  0  index =  12saving: episode =  0  index =  13saving: episode =  0  index =  14saving: episode =  0  index =  15saving: episode =  0  index =  16saving: episode =  0  index =  17saving: episode =  0  index =  18saving: episode =  0  index =  19saving: episode =  0  index =  20saving: episode =  0  index =  21saving: episode =  0  index =  22saving: episode =  0  index =  23saving: episode =  0  index =  24saving: episode =  0  index =  25saving: episode =  0  index =  26saving: episode =  0  index =  27saving: episode =  0  index =  28saving: episode =  0  index =  29saving: episode =  0  index =  30saving: episode =  0  index =  31saving: episode =  0  index =  32saving: episode =  0  index =  33saving: episode =  0  index =  34saving: episode =  0  index =  35saving: episode =  0  index =  36saving: episode =  0  index =  37saving: episode =  0  index =  38saving: episode =  0  index =  39saving: episode =  0  index =  40saving: episode =  0  index =  41saving: episode =  0  index =  42saving: episode =  0  index =  43saving: episode =  0  index =  44saving: episode =  0  index =  45saving: episode =  0  index =  46saving: episode =  0  index =  47saving: episode =  0  index =  48saving: episode =  0  index =  49saving: episode =  0  index =  50saving: episode =  0  index =  51saving: episode =  0  index =  52saving: episode =  0  index =  53saving: episode =  0  index =  54saving: episode =  0  index =  55saving: episode =  0  index =  56saving: episode =  0  index =  57saving: episode =  0  index =  58saving: episode =  0  index =  59saving: episode =  0  index =  60saving: episode =  0  index =  61saving: episode =  0  index =  62saving: episode =  0  index =  63saving: episode =  0  index =  64saving: episode =  0  index =  65saving: episode =  0  index =  66saving: episode =  0  index =  67saving: episode =  0  index =  68saving: episode =  0  index =  69saving: episode =  0  index =  70saving: episode =  0  index =  71saving: episode =  0  index =  72saving: episode =  0  index =  73saving: episode =  0  index =  74saving: episode =  0  index =  75saving: episode =  0  index =  76saving: episode =  0  index =  77saving: episode =  0  index =  78saving: episode =  0  index =  79saving: episode =  0  index =  80saving: episode =  0  index =  81saving: episode =  0  index =  82saving: episode =  0  index =  83saving: episode =  0  index =  84saving: episode =  0  index =  85saving: episode =  0  index =  86saving: episode =  0  index =  87saving: episode =  0  index =  88saving: episode =  0  index =  89saving: episode =  0  index =  90saving: episode =  0  index =  91saving: episode =  0  index =  92saving: episode =  0  index =  93saving: episode =  0  index =  94saving: episode =  0  index =  95saving: episode =  0  index =  96saving: episode =  0  index =  97saving: episode =  0  index =  98saving: episode =  0  index =  99saving: episode =  0  index =  100saving: episode =  0  index =  101saving: episode =  0  index =  102saving: episode =  0  index =  103saving: episode =  0  index =  104saving: episode =  0  index =  105saving: episode =  0  index =  106saving: episode =  0  index =  107saving: episode =  0  index =  108saving: episode =  0  index =  109saving: episode =  0  index =  110saving: episode =  0  index =  111saving: episode =  0  index =  112saving: episode =  0  index =  113saving: episode =  0  index =  114saving: episode =  0  index =  115saving: episode =  0  index =  116saving: episode =  0  index =  117saving: episode =  0  index =  118saving: episode =  0  index =  119saving: episode =  0  index =  120saving: episode =  0  index =  121saving: episode =  0  index =  122saving: episode =  0  index =  123saving: episode =  0  index =  124saving: episode =  0  index =  125saving: episode =  0  index =  126saving: episode =  0  index =  127saving: episode =  0  index =  128saving: episode =  0  index =  129saving: episode =  0  index =  130saving: episode =  0  index =  131saving: episode =  0  index =  132saving: episode =  0  index =  133saving: episode =  0  index =  134saving: episode =  0  index =  135saving: episode =  0  index =  136saving: episode =  0  index =  137saving: episode =  0  index =  138saving: episode =  0  index =  139saving: episode =  0  index =  140saving: episode =  0  index =  141saving: episode =  0  index =  142saving: episode =  0  index =  143saving: episode =  0  index =  144saving: episode =  0  index =  145saving: episode =  0  index =  146saving: episode =  0  index =  147saving: episode =  0  index =  148saving: episode =  0  index =  149saving: episode =  0  index =  150saving: episode =  0  index =  151saving: episode =  0  index =  152saving: episode =  0  index =  153saving: episode =  0  index =  154saving: episode =  0  index =  155saving: episode =  0  index =  156saving: episode =  0  index =  157saving: episode =  0  index =  158saving: episode =  0  index =  159saving: episode =  0  index =  160saving: episode =  0  index =  161saving: episode =  0  index =  162saving: episode =  0  index =  163saving: episode =  0  index =  164saving: episode =  0  index =  165saving: episode =  0  index =  166saving: episode =  0  index =  167saving: episode =  0  index =  168saving: episode =  0  index =  169saving: episode =  0  index =  170saving: episode =  0  index =  171saving: episode =  0  index =  172saving: episode =  0  index =  173saving: episode =  0  index =  174saving: episode =  0  index =  175saving: episode =  0  index =  176saving: episode =  0  index =  177saving: episode =  0  index =  178saving: episode =  0  index =  179saving: episode =  0  index =  180saving: episode =  0  index =  181saving: episode =  0  index =  182saving: episode =  0  index =  183saving: episode =  0  index =  184saving: episode =  0  index =  185saving: episode =  0  index =  186saving: episode =  0  index =  187saving: episode =  0  index =  188saving: episode =  0  index =  189saving: episode =  0  index =  190saving: episode =  0  index =  191saving: episode =  0  index =  192saving: episode =  0  index =  193saving: episode =  0  index =  194saving: episode =  0  index =  195saving: episode =  0  index =  196saving: episode =  0  index =  197saving: episode =  0  index =  198saving: episode =  0  index =  199saving: episode =  0  index =  200saving: episode =  0  index =  201saving: episode =  0  index =  202saving: episode =  0  index =  203saving: episode =  0  index =  204saving: episode =  0  index =  205saving: episode =  0  index =  206saving: episode =  0  index =  207saving: episode =  0  index =  208saving: episode =  0  index =  209saving: episode =  0  index =  210saving: episode =  0  index =  211saving: episode =  0  index =  212saving: episode =  0  index =  213saving: episode =  0  index =  214saving: episode =  0  index =  215saving: episode =  0  index =  216saving: episode =  0  index =  217saving: episode =  0  index =  218saving: episode =  0  index =  219saving: episode =  0  index =  220saving: episode =  0  index =  221saving: episode =  0  index =  222saving: episode =  0  index =  223saving: episode =  0  index =  224saving: episode =  0  index =  225saving: episode =  0  index =  226saving: episode =  0  index =  227saving: episode =  0  index =  228saving: episode =  0  index =  229saving: episode =  0  index =  230saving: episode =  0  index =  231saving: episode =  0  index =  232saving: episode =  0  index =  233saving: episode =  0  index =  234saving: episode =  0  index =  235saving: episode =  0  index =  236saving: episode =  0  index =  237saving: episode =  0  index =  238saving: episode =  0  index =  239saving: episode =  0  index =  240saving: episode =  0  index =  241saving: episode =  0  index =  242saving: episode =  0  index =  243saving: episode =  0  index =  244saving: episode =  0  index =  245saving: episode =  0  index =  246saving: episode =  0  index =  247saving: episode =  0  index =  248saving: episode =  0  index =  249saving: episode =  0  index =  250saving: episode =  0  index =  251saving: episode =  0  index =  252saving: episode =  0  index =  253saving: episode =  0  index =  254saving: episode =  0  index =  255saving: episode =  0  index =  256saving: episode =  0  index =  257saving: episode =  0  index =  258saving: episode =  0  index =  259saving: episode =  0  index =  260saving: episode =  0  index =  261saving: episode =  0  index =  262saving: episode =  0  index =  263saving: episode =  0  index =  264saving: episode =  0  index =  265saving: episode =  0  index =  266saving: episode =  0  index =  267saving: episode =  0  index =  268saving: episode =  0  index =  269saving: episode =  0  index =  270saving: episode =  0  index =  271saving: episode =  0  index =  272saving: episode =  0  index =  273saving: episode =  0  index =  274saving: episode =  0  index =  275saving: episode =  0  index =  276saving: episode =  0  index =  277saving: episode =  0  index =  278saving: episode =  0  index =  279saving: episode =  0  index =  280saving: episode =  0  index =  281saving: episode =  0  index =  282saving: episode =  0  index =  283saving: episode =  0  index =  284saving: episode =  0  index =  285saving: episode =  0  index =  286saving: episode =  0  index =  287saving: episode =  0  index =  288saving: episode =  0  index =  289saving: episode =  0  index =  290saving: episode =  0  index =  291saving: episode =  0  index =  292saving: episode =  0  index =  293saving: episode =  0  index =  294saving: episode =  0  index =  295saving: episode =  0  index =  296saving: episode =  0  index =  297saving: episode =  0  index =  298saving: episode =  0  index =  299saving: episode =  0  index =  300saving: episode =  0  index =  301saving: episode =  0  index =  302saving: episode =  0  index =  303saving: episode =  0  index =  304saving: episode =  0  index =  305saving: episode =  0  index =  306saving: episode =  0  index =  307saving: episode =  0  index =  308saving: episode =  0  index =  309saving: episode =  0  index =  310saving: episode =  0  index =  311saving: episode =  0  index =  312saving: episode =  0  index =  313saving: episode =  0  index =  314saving: episode =  0  index =  315saving: episode =  0  index =  316saving: episode =  0  index =  317saving: episode =  0  index =  318saving: episode =  0  index =  319saving: episode =  0  index =  320saving: episode =  0  index =  321saving: episode =  0  index =  322saving: episode =  0  index =  323saving: episode =  0  index =  324saving: episode =  0  index =  325saving: episode =  0  index =  326saving: episode =  0  index =  327saving: episode =  0  index =  328saving: episode =  0  index =  329saving: episode =  0  index =  330saving: episode =  0  index =  331saving: episode =  0  index =  332saving: episode =  0  index =  333saving: episode =  0  index =  334saving: episode =  0  index =  335saving: episode =  0  index =  336saving: episode =  0  index =  337saving: episode =  0  index =  338saving: episode =  0  index =  339saving: episode =  0  index =  340saving: episode =  0  index =  341saving: episode =  0  index =  342saving: episode =  0  index =  343saving: episode =  0  index =  344saving: episode =  0  index =  345saving: episode =  0  index =  346saving: episode =  0  index =  347saving: episode =  0  index =  348saving: episode =  0  index =  349saving: episode =  0  index =  350saving: episode =  0  index =  351saving: episode =  0  index =  352saving: episode =  0  index =  353saving: episode =  0  index =  354saving: episode =  0  index =  355saving: episode =  0  index =  356saving: episode =  0  index =  357saving: episode =  0  index =  358saving: episode =  0  index =  359saving: episode =  0  index =  360saving: episode =  0  index =  361saving: episode =  0  index =  362saving: episode =  0  index =  363saving: episode =  0  index =  364saving: episode =  0  index =  365saving: episode =  0  index =  366saving: episode =  0  index =  367saving: episode =  0  index =  368saving: episode =  0  index =  369saving: episode =  0  index =  370saving: episode =  0  index =  371saving: episode =  0  index =  372saving: episode =  0  index =  373saving: episode =  0  index =  374saving: episode =  0  index =  375saving: episode =  0  index =  376saving: episode =  0  index =  377saving: episode =  0  index =  378saving: episode =  0  index =  379saving: episode =  0  index =  380saving: episode =  0  index =  381saving: episode =  0  index =  382saving: episode =  0  index =  383saving: episode =  0  index =  384saving: episode =  0  index =  385saving: episode =  0  index =  386saving: episode =  0  index =  387saving: episode =  0  index =  388saving: episode =  0  index =  389saving: episode =  0  index =  390saving: episode =  0  index =  391saving: episode =  0  index =  392saving: episode =  0  index =  393saving: episode =  0  index =  394saving: episode =  0  index =  395saving: episode =  0  index =  396saving: episode =  0  index =  397saving: episode =  0  index =  398saving: episode =  0  index =  399saving: episode =  0  index =  400saving: episode =  0  index =  401saving: episode =  0  index =  402saving: episode =  0  index =  403saving: episode =  0  index =  404saving: episode =  0  index =  405saving: episode =  0  index =  406saving: episode =  0  index =  407saving: episode =  0  index =  408saving: episode =  0  index =  409saving: episode =  0  index =  410saving: episode =  0  index =  411saving: episode =  0  index =  412saving: episode =  0  index =  413saving: episode =  0  index =  414saving: episode =  0  index =  415saving: episode =  0  index =  416Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v17_opt1+2_head.mp4 (417 frames at 640x480, crf=17)
+Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v17_opt1+2_topdown.mp4 (417 frames at 640x480, crf=17)
+Wrote /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v17_opt1+2_sidebyside.mp4 (417 frames at 1280x480, crf=17)
+[92mFolder /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/.cache/episode0/ deleted successfully.[0m
+[92mEpisode 0 render SUCCESS (seed=1)[0m
+
+[92mData collection complete: 1 episodes[0m
+[1mERROR: Scene info file '/home/xuan/Desktop/RoboReal/RoboDyna/description/utils/../.././data/load_train/demo_dynamic/scene_info.json' not found.[0m
+Demo ready:
+  tag      : opt1+2
+  head     : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v17_opt1+2_head.mp4
+  top-down : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v17_opt1+2_topdown.mp4
+  side-by-side: /home/xuan/Desktop/RoboReal/RoboDyna/tmp_load_train/video/v17_opt1+2_sidebyside.mp4
+  copied -> /home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/opt1+2_sidebyside.mp4
+
+Wrote report: /home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/test_report.json
+
+TEST SUITE: PASSED
+
+All conditions 5/5 successes.

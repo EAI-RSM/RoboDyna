@@ -1,0 +1,364 @@
+{
+  "summary": {
+    "default": {
+      "successes": 5,
+      "attempts": 5,
+      "criteria_consistent": 5,
+      "setup_ok": 5
+    },
+    "opt1": {
+      "successes": 5,
+      "attempts": 5,
+      "criteria_consistent": 5,
+      "setup_ok": 5
+    },
+    "opt2": {
+      "successes": 5,
+      "attempts": 5,
+      "criteria_consistent": 5,
+      "setup_ok": 5
+    },
+    "opt1+2": {
+      "successes": 5,
+      "attempts": 5,
+      "criteria_consistent": 5,
+      "setup_ok": 5
+    }
+  },
+  "results": {
+    "default": [
+      {
+        "seed": 914,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "default"
+      },
+      {
+        "seed": 915,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "default"
+      },
+      {
+        "seed": 916,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "default"
+      },
+      {
+        "seed": 917,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "default"
+      },
+      {
+        "seed": 918,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "default"
+      }
+    ],
+    "opt1": [
+      {
+        "seed": 8736,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1"
+      },
+      {
+        "seed": 8737,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1"
+      },
+      {
+        "seed": 8738,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1"
+      },
+      {
+        "seed": 8739,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1"
+      },
+      {
+        "seed": 8740,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1"
+      }
+    ],
+    "opt2": [
+      {
+        "seed": 6181,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt2"
+      },
+      {
+        "seed": 6182,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt2"
+      },
+      {
+        "seed": 6183,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt2"
+      },
+      {
+        "seed": 6184,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt2"
+      },
+      {
+        "seed": 6185,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt2"
+      }
+    ],
+    "opt1+2": [
+      {
+        "seed": 5525,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1+2"
+      },
+      {
+        "seed": 5526,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1+2"
+      },
+      {
+        "seed": 5527,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1+2"
+      },
+      {
+        "seed": 5528,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1+2"
+      },
+      {
+        "seed": 5529,
+        "success": true,
+        "plan_success": true,
+        "check_success": true,
+        "crit_criteria_success": true,
+        "crit_setup_ok": true,
+        "crit_touched": [
+          true,
+          true,
+          true
+        ],
+        "crit_distractor_hit": false,
+        "criteria_consistent": true,
+        "condition": "opt1+2"
+      }
+    ]
+  },
+  "demos": {
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/whack_a_mole/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/whack_a_mole/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/whack_a_mole/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/whack_a_mole/opt1+2_sidebyside.mp4"
+  }
+}

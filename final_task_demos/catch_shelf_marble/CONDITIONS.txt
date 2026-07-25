@@ -1,0 +1,23 @@
+catch_shelf_marble — expert controller demos
+
+default  : reactive_marble=false, oscillating_shelf_enabled=false
+           marble pauses on the top shelf until a bowl key is pressed
+opt1     : reactive_marble=true,  oscillating_shelf_enabled=false
+           marble starts moving/falling from episode start
+opt2     : reactive_marble=false, oscillating_shelf_enabled=true
+           one random non-top shelf sweeps -x..+x
+opt1+2   : reactive_marble=true,  oscillating_shelf_enabled=true
+           Opt 1 + Opt 2 combined
+
+Success: the marble ends up in the bowl
+         (bowl under planned landing → marble ridden in bowl).
+
+Files (side-by-side is the primary deliverable):
+  default_sidebyside.mp4   opt1_sidebyside.mp4
+  opt2_sidebyside.mp4      opt1+2_sidebyside.mp4
+Also: <tag>_head.mp4, <tag>_topdown.mp4
+Tags: default | opt1 | opt2 | opt1+2
+
+Appearance (current):
+  shelves : very light blue glass, transmission=0.8
+  bowl    : solid yellow (texture cleared)

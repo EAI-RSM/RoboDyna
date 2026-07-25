@@ -1,0 +1,1011 @@
+{
+  "task": "sort_apples_belt",
+  "seed0": 100,
+  "n_per_condition": 5,
+  "summary": {
+    "default": {
+      "successes": 5,
+      "attempts": 5,
+      "plan_ok": 5,
+      "label": "default (alternating, no rotten)",
+      "args": {
+        "color_mode": "alternating",
+        "rotten_prob": 0.0,
+        "n_apples_min": 4,
+        "n_apples_max": 5
+      }
+    },
+    "opt1": {
+      "successes": 4,
+      "attempts": 5,
+      "plan_ok": 4,
+      "label": "Opt 1 \u2014 random colors",
+      "args": {
+        "color_mode": "random",
+        "rotten_prob": 0.0,
+        "n_apples_min": 4,
+        "n_apples_max": 5
+      }
+    },
+    "opt2": {
+      "successes": 5,
+      "attempts": 5,
+      "plan_ok": 5,
+      "label": "Opt 2 \u2014 always one rotten (dump)",
+      "args": {
+        "color_mode": "alternating",
+        "rotten_prob": 1.0,
+        "n_apples_min": 4,
+        "n_apples_max": 5
+      }
+    },
+    "opt1+2": {
+      "successes": 5,
+      "attempts": 5,
+      "plan_ok": 5,
+      "label": "Opt 1+2 \u2014 random colors + always rotten",
+      "args": {
+        "color_mode": "random",
+        "rotten_prob": 1.0,
+        "n_apples_min": 4,
+        "n_apples_max": 5
+      }
+    }
+  },
+  "results": {
+    "default": [
+      {
+        "seed": 100,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": true,
+        "red_bin": "right",
+        "green_bin": "left",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 101,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 102,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 103,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": true,
+        "red_bin": "right",
+        "green_bin": "left",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 104,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": true,
+        "red_bin": "right",
+        "green_bin": "left",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          }
+        ]
+      }
+    ],
+    "opt1": [
+      {
+        "seed": 100,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 101,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 102,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": true,
+        "red_bin": "right",
+        "green_bin": "left",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 103,
+        "plan": false,
+        "check_success": false,
+        "success": false,
+        "color_mode": "random",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 0.5,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "left",
+            "got": null,
+            "ok": false
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "right",
+            "got": null,
+            "ok": false
+          }
+        ]
+      },
+      {
+        "seed": 104,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 0.0,
+        "n_apples": 4,
+        "has_rotten": false,
+        "rotten_idx": null,
+        "green_on_left": true,
+        "red_bin": "right",
+        "green_bin": "left",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          }
+        ]
+      }
+    ],
+    "opt2": [
+      {
+        "seed": 100,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 0,
+        "green_on_left": true,
+        "red_bin": "right",
+        "green_bin": "left",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 101,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 0,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 102,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 3,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 103,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 2,
+        "green_on_left": true,
+        "red_bin": "right",
+        "green_bin": "left",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 104,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "alternating",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 2,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          }
+        ]
+      }
+    ],
+    "opt1+2": [
+      {
+        "seed": 100,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 3,
+        "green_on_left": true,
+        "red_bin": "right",
+        "green_bin": "left",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 101,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 3,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 102,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 3,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 103,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 3,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          }
+        ]
+      },
+      {
+        "seed": 104,
+        "plan": true,
+        "check_success": true,
+        "success": true,
+        "color_mode": "random",
+        "rotten_prob": 1.0,
+        "n_apples": 4,
+        "has_rotten": true,
+        "rotten_idx": 3,
+        "green_on_left": false,
+        "red_bin": "left",
+        "green_bin": "right",
+        "rotten_in_basket": false,
+        "sorting_accuracy": 1.0,
+        "landings": [
+          {
+            "idx": 0,
+            "color": "red",
+            "want": "left",
+            "got": "left",
+            "ok": true
+          },
+          {
+            "idx": 1,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 2,
+            "color": "green",
+            "want": "right",
+            "got": "right",
+            "ok": true
+          },
+          {
+            "idx": 3,
+            "color": "rotten",
+            "want": "dump",
+            "got": "dump",
+            "ok": true
+          }
+        ]
+      }
+    ]
+  },
+  "demos": {
+    "default": {
+      "head": "final_task_demos/sort_apples_belt/default_head.mp4",
+      "topdown": "final_task_demos/sort_apples_belt/default_topdown.mp4",
+      "sidebyside": "final_task_demos/sort_apples_belt/default_sidebyside.mp4",
+      "sidebyside_gif": "final_task_demos/sort_apples_belt/default_sidebyside.gif"
+    },
+    "opt1": {
+      "head": "final_task_demos/sort_apples_belt/opt1_head.mp4",
+      "topdown": "final_task_demos/sort_apples_belt/opt1_topdown.mp4",
+      "sidebyside": "final_task_demos/sort_apples_belt/opt1_sidebyside.mp4",
+      "sidebyside_gif": "final_task_demos/sort_apples_belt/opt1_sidebyside.gif"
+    },
+    "opt2": {
+      "head": "final_task_demos/sort_apples_belt/opt2_head.mp4",
+      "topdown": "final_task_demos/sort_apples_belt/opt2_topdown.mp4",
+      "sidebyside": "final_task_demos/sort_apples_belt/opt2_sidebyside.mp4",
+      "sidebyside_gif": "final_task_demos/sort_apples_belt/opt2_sidebyside.gif"
+    },
+    "opt1+2": {
+      "head": "final_task_demos/sort_apples_belt/opt1+2_head.mp4",
+      "topdown": "final_task_demos/sort_apples_belt/opt1+2_topdown.mp4",
+      "sidebyside": "final_task_demos/sort_apples_belt/opt1+2_sidebyside.mp4",
+      "sidebyside_gif": "final_task_demos/sort_apples_belt/opt1+2_sidebyside.gif"
+    }
+  }
+}
