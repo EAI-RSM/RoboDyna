@@ -481,20 +481,21 @@ task_args:
     cup_fwd_clearance: 0.025
   catch_valley_ball:
     # Default: straight exit. Opt1 wall_bounce_enabled. Opt2 enable_distractor.
-    # Platform length samples ±20% via platform_length_scale_min/max.
+    # Means sampled ±param_jitter; equal left/right run length.
+    param_jitter: 0.10
     ramp_half_width: 0.125
     ramp_thickness: 0.012
     ramp_center_y: 0.08
-    ramp_valley_x: -0.02
+    ramp_valley_x: -0.14
     ramp_valley_height: 0.025
-    down_run: 0.3888
+    ramp_run: 0.324
+    down_run: 0.324
     down_rise: 0.094
-    up_run: 0.288
-    up_rise: 0.085              # higher exit lip so ball falls near red line
-    platform_length_scale_min: 0.8
-    platform_length_scale_max: 1.2
+    up_run: 0.324
+    up_rise: 0.085
     curve_segments: 16
     rail_height: 0.055
+    rail_thickness: 0.006
     ball_radius: 0.018
     ball_mass: 0.50
     drop_height: 0.14
@@ -508,23 +509,24 @@ task_args:
     angled_path_max_deg: 25.0
     drop_forward_angle_min_deg: -8.0
     drop_forward_angle_max_deg: 12.0
-    # On-ramp roll is kinematic: average speed = initial_forward_speed
-    initial_forward_speed_min: 0.10
-    initial_forward_speed_max: 0.20
+    initial_forward_speed: 0.15
     physics_max_steps: 1200
-    red_line_gap: 0.10
-    roll_time_min: 4.0   # unused (speed-based roll)
-    roll_time_max: 7.0   # unused (speed-based roll)
-    roll_acceleration: 0.35
-    launch_speed: 0.72
+    red_line_gap: 0.05
+    landing_gap: 0.15
+    roll_time_min: 4.0
+    roll_time_max: 7.0
+    roll_acceleration: 0.25
+    launch_speed: 0.55
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
-    bowl_id: 3
-    bowl_scale_mult: 0.65
-    bowl_inner_radius: 0.034
-    bowl_outer_radius: 0.037
-    bowl_height: 0.040
+    catcher_model: 062_plasticbox
+    bowl_id: 1
+    bowl_scale_mult: 0.90
+    bowl_inner_radius: 0.080
+    bowl_outer_radius: 0.095
+    bowl_height: 0.060
+    bowl_mass: 0.35
   stop_valley_ball:
     # Mid-air ping-pong bat stop (based on catch_valley_ball).
     # Wider track (+30% y), faster ball. Success: red head contact before table.

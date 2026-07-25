@@ -40,15 +40,18 @@ class catch_valley_ball(Base_Task):
     RAMP_HALF_WIDTH_DEFAULT = 0.125
     RAMP_THICKNESS_DEFAULT = 0.012
     RAMP_CENTER_Y_DEFAULT = 0.08
-    RAMP_VALLEY_X_DEFAULT = -0.02
+    # Valley shifted left so equal-length runs still exit near +0.18 (arm reach).
+    RAMP_VALLEY_X_DEFAULT = -0.14
     RAMP_VALLEY_HEIGHT_DEFAULT = 0.025
-    DOWN_RUN_DEFAULT = 0.3888  # +20% x-length again (was 0.324)
-    DOWN_RISE_DEFAULT = 0.094  # gentler downhill again
-    UP_RUN_DEFAULT = 0.288  # +20% x-length again (was 0.24)
-    UP_RISE_DEFAULT = 0.085  # higher exit lip so ball falls near red line
-    # Platform length (down_run + up_run) is scaled per episode within this range.
-    PLATFORM_LENGTH_SCALE_MIN_DEFAULT = 0.8
-    PLATFORM_LENGTH_SCALE_MAX_DEFAULT = 1.2
+    # Equal left/right horizontal run lengths (means; episode samples ±param_jitter).
+    DOWN_RUN_DEFAULT = 0.324
+    DOWN_RISE_DEFAULT = 0.094
+    UP_RUN_DEFAULT = 0.324
+    UP_RISE_DEFAULT = 0.085
+    PARAM_JITTER_DEFAULT = 0.10  # ±10% around each mean
+    # Kept for config compat; length jitter is per-parameter ±10%, not a global scale.
+    PLATFORM_LENGTH_SCALE_MIN_DEFAULT = 1.0
+    PLATFORM_LENGTH_SCALE_MAX_DEFAULT = 1.0
     CURVE_SEGMENTS_DEFAULT = 16
     RAIL_HEIGHT_DEFAULT = 0.055
     RAIL_THICKNESS_DEFAULT = 0.006
@@ -69,24 +72,26 @@ class catch_valley_ball(Base_Task):
     BALL_PATH_MODE_DEFAULT = "straight"
     DROP_FORWARD_ANGLE_MIN_DEFAULT = -8.0
     DROP_FORWARD_ANGLE_MAX_DEFAULT = 12.0
-    INITIAL_FORWARD_SPEED_MIN_DEFAULT = 0.10
-    INITIAL_FORWARD_SPEED_MAX_DEFAULT = 0.20
+    INITIAL_FORWARD_SPEED_DEFAULT = 0.15
     ROLL_TIME_MIN_DEFAULT = 4.0
     ROLL_TIME_MAX_DEFAULT = 7.0
-    LAUNCH_SPEED_DEFAULT = 0.72
-    ROLL_ACCELERATION_DEFAULT = 0.35
+    LAUNCH_SPEED_DEFAULT = 0.55
+    ROLL_ACCELERATION_DEFAULT = 0.25
     PHYSICS_MAX_STEPS_DEFAULT = 1200
-    RED_LINE_GAP_DEFAULT = 0.10
+    RED_LINE_GAP_DEFAULT = 0.05
+    LANDING_GAP_DEFAULT = 0.15  # ~15 cm past red line
     IDLE_TIME_MIN_DEFAULT = 1.0
     IDLE_TIME_MAX_DEFAULT = 2.0
     SETTLE_STEPS_DEFAULT = 150
 
-    BOWL_ID_DEFAULT = 3  # 002_bowl instance (was base1; blue/brown ceramic)
-    BOWL_SCALE_MULT_DEFAULT = 0.65
-    BOWL_INNER_RADIUS_DEFAULT = 0.034  # slightly forgiving catch radius
-    BOWL_OUTER_RADIUS_DEFAULT = 0.037
-    BOWL_HEIGHT_DEFAULT = 0.040
-    BOWL_PLACE_Z_OFFSET = -0.020  # place height relative to table_top
+    CATCHER_MODEL_DEFAULT = "062_plasticbox"
+    BOWL_ID_DEFAULT = 1  # plasticbox instance base1
+    BOWL_SCALE_MULT_DEFAULT = 0.90
+    BOWL_INNER_RADIUS_DEFAULT = 0.080  # catch success half-width
+    BOWL_OUTER_RADIUS_DEFAULT = 0.095
+    BOWL_HEIGHT_DEFAULT = 0.060
+    BOWL_PLACE_Z_OFFSET = -0.010  # place height relative to table_top
+    BOWL_MASS_DEFAULT = 0.35
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("catch_valley_ball", {})
@@ -113,6 +118,19 @@ class catch_valley_ball(Base_Task):
         self._start_ball_motion(expert_demo=False)
 
     # ---------------------------------------------------------------- helpers
+    @staticmethod
+    def _sample_pm(mean, jitter=0.10):
+        """Sample uniformly in ``[mean*(1-jitter), mean*(1+jitter)]``."""
+        mean = float(mean)
+        jitter = float(max(jitter, 0.0))
+        lo = mean * (1.0 - jitter)
+        hi = mean * (1.0 + jitter)
+        if lo > hi:
+            lo, hi = hi, lo
+        if abs(hi - lo) < 1e-12:
+            return mean
+        return float(np.random.uniform(lo, hi))
+
     @staticmethod
     def _as_bool(value, default: bool) -> bool:
         if value is None:
@@ -227,40 +245,34 @@ class catch_valley_ball(Base_Task):
         self.mirrored = self._parse_mirrored(c)
         self.side = -1.0 if self.mirrored else 1.0
 
-        self.ramp_half_width = float(c.get("ramp_half_width", self.RAMP_HALF_WIDTH_DEFAULT))
-        self.ramp_thickness = float(c.get("ramp_thickness", self.RAMP_THICKNESS_DEFAULT))
+        jitter = float(c.get("param_jitter", self.PARAM_JITTER_DEFAULT))
+        self.param_jitter = float(np.clip(jitter, 0.0, 0.5))
+        pm = lambda mean: self._sample_pm(mean, self.param_jitter)
+
+        # Ramp shape / length / curve — each mean ±param_jitter (default ±10%).
+        self.ramp_half_width = pm(c.get("ramp_half_width", self.RAMP_HALF_WIDTH_DEFAULT))
+        self.ramp_thickness = pm(c.get("ramp_thickness", self.RAMP_THICKNESS_DEFAULT))
         self.ramp_center_y = float(c.get("ramp_center_y", self.RAMP_CENTER_Y_DEFAULT))
-        self.valley_x = float(c.get("ramp_valley_x", self.RAMP_VALLEY_X_DEFAULT))
-        self.valley_height = float(c.get("ramp_valley_height", self.RAMP_VALLEY_HEIGHT_DEFAULT))
-        down_run_nom = float(c.get("down_run", self.DOWN_RUN_DEFAULT))
-        down_rise_nom = float(c.get("down_rise", self.DOWN_RISE_DEFAULT))
-        up_run_nom = float(c.get("up_run", self.UP_RUN_DEFAULT))
-        up_rise_nom = float(c.get("up_rise", self.UP_RISE_DEFAULT))
-        length_scale_min = float(c.get(
-            "platform_length_scale_min",
-            self.PLATFORM_LENGTH_SCALE_MIN_DEFAULT,
+        self.valley_x = pm(c.get("ramp_valley_x", self.RAMP_VALLEY_X_DEFAULT))
+        self.valley_height = pm(c.get("ramp_valley_height", self.RAMP_VALLEY_HEIGHT_DEFAULT))
+        # Equal left/right horizontal run (one sample so both sides match).
+        run_mean = float(c.get(
+            "ramp_run",
+            c.get("down_run", c.get("up_run", self.DOWN_RUN_DEFAULT)),
         ))
-        length_scale_max = float(c.get(
-            "platform_length_scale_max",
-            self.PLATFORM_LENGTH_SCALE_MAX_DEFAULT,
-        ))
-        self.platform_length_scale = float(np.random.uniform(
-            min(length_scale_min, length_scale_max),
-            max(length_scale_min, length_scale_max),
-        ))
-        self.down_run = down_run_nom * self.platform_length_scale
-        self.up_run = up_run_nom * self.platform_length_scale
-        # Keep the valley profile proportional when the platform stretches.
-        self.down_rise = down_rise_nom * self.platform_length_scale
-        self.up_rise = up_rise_nom * self.platform_length_scale
-        self.curve_segments = int(c.get("curve_segments", self.CURVE_SEGMENTS_DEFAULT))
-        self.rail_height = float(c.get("rail_height", self.RAIL_HEIGHT_DEFAULT))
-        self.rail_thickness = float(c.get("rail_thickness", self.RAIL_THICKNESS_DEFAULT))
+        self.down_run = self.up_run = pm(run_mean)
+        self.down_rise = pm(c.get("down_rise", self.DOWN_RISE_DEFAULT))
+        self.up_rise = pm(c.get("up_rise", self.UP_RISE_DEFAULT))
+        self.platform_length_scale = 1.0
+        curve_mean = float(c.get("curve_segments", self.CURVE_SEGMENTS_DEFAULT))
+        self.curve_segments = int(round(pm(curve_mean)))
+        self.rail_height = pm(c.get("rail_height", self.RAIL_HEIGHT_DEFAULT))
+        self.rail_thickness = pm(c.get("rail_thickness", self.RAIL_THICKNESS_DEFAULT))
 
         self.ball_radius = float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT))
         self.ball_mass = float(c.get("ball_mass", self.BALL_MASS_DEFAULT))
-        self.drop_height = float(c.get("drop_height", self.DROP_HEIGHT_DEFAULT))
-        self.drop_time = float(c.get("drop_time", self.DROP_TIME_DEFAULT))
+        self.drop_height = pm(c.get("drop_height", self.DROP_HEIGHT_DEFAULT))
+        self.drop_time = pm(c.get("drop_time", self.DROP_TIME_DEFAULT))
         self.wall_bounce_enabled = self._parse_wall_bounce_enabled(c)
         self.enable_distractor = self._parse_enable_distractor(c)
         self.distractor_color = list(c.get("distractor_color", self.DISTRACTOR_COLOR_DEFAULT))
@@ -275,36 +287,48 @@ class catch_valley_ball(Base_Task):
         ))
         forward_angle_min = float(c.get("drop_forward_angle_min_deg", self.DROP_FORWARD_ANGLE_MIN_DEFAULT))
         forward_angle_max = float(c.get("drop_forward_angle_max_deg", self.DROP_FORWARD_ANGLE_MAX_DEFAULT))
-        initial_speed_min = float(c.get(
-            "initial_forward_speed_min",
-            self.INITIAL_FORWARD_SPEED_MIN_DEFAULT,
-        ))
-        initial_speed_max = float(c.get(
-            "initial_forward_speed_max",
-            self.INITIAL_FORWARD_SPEED_MAX_DEFAULT,
-        ))
+        # Speed / accel means ±jitter. Compat: mid of old min/max if only those exist.
+        if "initial_forward_speed" in c:
+            speed_mean = float(c["initial_forward_speed"])
+        elif "initial_forward_speed_min" in c or "initial_forward_speed_max" in c:
+            speed_mean = 0.5 * (
+                float(c.get("initial_forward_speed_min", self.INITIAL_FORWARD_SPEED_DEFAULT))
+                + float(c.get("initial_forward_speed_max", self.INITIAL_FORWARD_SPEED_DEFAULT))
+            )
+        else:
+            speed_mean = float(self.INITIAL_FORWARD_SPEED_DEFAULT)
+        self.initial_forward_speed = pm(speed_mean)
         self.roll_time = float(np.random.uniform(
             c.get("roll_time_min", self.ROLL_TIME_MIN_DEFAULT),
             c.get("roll_time_max", self.ROLL_TIME_MAX_DEFAULT),
         ))
-        self.launch_speed = float(c.get("launch_speed", self.LAUNCH_SPEED_DEFAULT))
-        self.roll_acceleration = float(c.get(
-            "roll_acceleration",
-            self.ROLL_ACCELERATION_DEFAULT,
-        ))
+        self.launch_speed = pm(c.get("launch_speed", self.LAUNCH_SPEED_DEFAULT))
+        self.roll_acceleration = pm(c.get("roll_acceleration", self.ROLL_ACCELERATION_DEFAULT))
         self.physics_max_steps = int(c.get("physics_max_steps", self.PHYSICS_MAX_STEPS_DEFAULT))
-        self.red_line_gap = float(c.get("red_line_gap", self.RED_LINE_GAP_DEFAULT))
+        self.red_line_gap = pm(c.get("red_line_gap", self.RED_LINE_GAP_DEFAULT))
+        if "landing_gap" in c:
+            landing_mean = float(c["landing_gap"])
+        elif "landing_gap_min" in c or "landing_gap_max" in c:
+            landing_mean = 0.5 * (
+                float(c.get("landing_gap_min", self.LANDING_GAP_DEFAULT))
+                + float(c.get("landing_gap_max", self.LANDING_GAP_DEFAULT))
+            )
+        else:
+            landing_mean = float(self.LANDING_GAP_DEFAULT)
+        self.landing_gap = pm(landing_mean)
         self.idle_time = float(np.random.uniform(
             c.get("idle_time_min", self.IDLE_TIME_MIN_DEFAULT),
             c.get("idle_time_max", self.IDLE_TIME_MAX_DEFAULT),
         ))
         self.settle_steps = int(c.get("settle_steps", self.SETTLE_STEPS_DEFAULT))
 
+        self.catcher_model = str(c.get("catcher_model", self.CATCHER_MODEL_DEFAULT))
         self.bowl_id = int(c.get("bowl_id", self.BOWL_ID_DEFAULT))
         self.bowl_scale_mult = float(c.get("bowl_scale_mult", self.BOWL_SCALE_MULT_DEFAULT))
         self.bowl_inner_radius = float(c.get("bowl_inner_radius", self.BOWL_INNER_RADIUS_DEFAULT))
         self.bowl_outer_radius = float(c.get("bowl_outer_radius", self.BOWL_OUTER_RADIUS_DEFAULT))
         self.bowl_height = float(c.get("bowl_height", self.BOWL_HEIGHT_DEFAULT))
+        self.bowl_mass = float(c.get("bowl_mass", self.BOWL_MASS_DEFAULT))
 
         # Keep malformed parameter sweeps from creating inverted or degenerate
         # collision geometry.
@@ -320,10 +344,13 @@ class catch_valley_ball(Base_Task):
         self.drop_time = max(self.drop_time, 0.05)
         self.roll_time = max(self.roll_time, 0.2)
         self.launch_speed = max(self.launch_speed, 0.05)
+        self.initial_forward_speed = max(self.initial_forward_speed, 0.02)
         self.roll_acceleration = float(np.clip(self.roll_acceleration, 0.0, 0.8))
         self.physics_max_steps = max(self.physics_max_steps, 100)
         self.red_line_gap = max(self.red_line_gap, 0.0)
+        self.landing_gap = max(self.landing_gap, 0.02)
         self.bowl_scale_mult = max(self.bowl_scale_mult, 0.25)
+        self.bowl_mass = max(float(self.bowl_mass), 0.05)
 
         # Default: straight to the edge. Opt 1: reflected lateral path that
         # rebounds from one or both rails mid-run.
@@ -341,10 +368,7 @@ class catch_valley_ball(Base_Task):
             min(forward_angle_min, forward_angle_max),
             max(forward_angle_min, forward_angle_max),
         ))
-        self.initial_forward_speed = float(np.random.uniform(
-            min(initial_speed_min, initial_speed_max),
-            max(initial_speed_min, initial_speed_max),
-        ))
+        # initial_forward_speed already sampled ±jitter above.
         self.initial_lateral_speed = float(
             self.initial_forward_speed * np.tan(np.deg2rad(self.drop_wall_angle_deg))
         )
@@ -488,14 +512,14 @@ class catch_valley_ball(Base_Task):
         if self.enable_distractor:
             self._spawn_distractor()
 
-        # Spawn bowl on the catch side, already past the red-line x so the
+        # Spawn catcher on the catch side, already past the red-line x so the
         # subsequent place mainly adjusts y toward the predicted landing.
         bowl_x = float(self.side * np.random.uniform(0.30, 0.34))
         if self.mirrored:
             bowl_x += float(self.MIRROR_X_SHIFT)
         bowl_pose = rand_pose(
             xlim=[bowl_x, bowl_x],
-            ylim=[-0.20, -0.16],
+            ylim=[-0.22, -0.16],
             zlim=[self.table_top],
             qpos=[0.5, 0.5, 0.5, 0.5],
             rotate_rand=False,
@@ -503,13 +527,13 @@ class catch_valley_ball(Base_Task):
         self.bowl = create_actor(
             self,
             pose=bowl_pose,
-            modelname="002_bowl",
+            modelname=self.catcher_model,
             model_id=self.bowl_id,
             convex=True,
             is_static=False,
             scale_mult=self.bowl_scale_mult,
         )
-        self.bowl.set_mass(0.30)
+        self.bowl.set_mass(self.bowl_mass)
         bowl_rigid = self._get_rigid(self.bowl)
         if bowl_rigid is not None:
             bowl_material = sapien.physx.PhysxMaterial(
@@ -520,24 +544,24 @@ class catch_valley_ball(Base_Task):
             for shape in bowl_rigid.get_collision_shapes():
                 shape.set_physical_material(bowl_material)
 
-        self._update_release_velocity()
-        self._compute_landing()
+        # Aim PhysX exit so the ball lands ~landing_gap past the red line
+        # (default band centers near 15 cm), varying with exit lip / speed.
+        # Clamp to arm reach on the catch half (~0.36 m from center).
+        reach_lim = 0.36
+        target_landing_x = float(self.red_line_x + self.side * self.landing_gap)
+        if float(self.side) > 0.0:
+            target_landing_x = min(target_landing_x, reach_lim)
+        else:
+            target_landing_x = max(target_landing_x, -reach_lim)
+        self._tune_launch_to_landing(target_landing_x)
         if self.enable_distractor:
             self._update_distractor_release_velocity()
             self._compute_distractor_landing()
-        required_landing_x = self.red_line_x + self.side * (self.bowl_outer_radius + 0.025)
-        while self.side * self.landing[0] < self.side * required_landing_x:
-            self.launch_speed *= 1.05
-            self._update_release_velocity()
-            self._compute_landing()
-            if self.enable_distractor:
-                self._update_distractor_release_velocity()
-                self._compute_distractor_landing()
         self.physics_run_steps = self.physics_max_steps
 
         for part in self.ramp_parts:
             self.add_prohibit_area(part, padding=0.015)
-        self.add_prohibit_area(self.bowl, padding=0.04)
+        self.add_prohibit_area(self.bowl, padding=0.05)
 
         self.drop_steps = max(1, int(round(self.drop_time * self.SIM_HZ)))
         self.roll_steps = max(1, int(round(self.roll_time * self.SIM_HZ)))
@@ -976,6 +1000,23 @@ class catch_valley_ball(Base_Task):
         self.flight_time = (vz + np.sqrt(discriminant)) / self.GRAVITY
         self.landing = self.ball_exit[:2] + self.release_velocity[:2] * self.flight_time
 
+    def _tune_launch_to_landing(self, target_x, tol=0.012, max_iters=45):
+        """Nudge ``launch_speed`` so predicted landing x matches ``target_x``."""
+        target_x = float(target_x)
+        for _ in range(int(max_iters)):
+            self._update_release_velocity()
+            self._compute_landing()
+            err = float(self.side) * (float(self.landing[0]) - target_x)
+            if abs(err) <= float(tol):
+                break
+            if err < 0.0:
+                self.launch_speed *= 1.06
+            else:
+                self.launch_speed *= 0.94
+            self.launch_speed = float(np.clip(self.launch_speed, 0.12, 2.8))
+        self._update_release_velocity()
+        self._compute_landing()
+
     def _compute_distractor_landing(self):
         if not self.enable_distractor or self.distractor_exit is None:
             return
@@ -1330,7 +1371,7 @@ class catch_valley_ball(Base_Task):
 
         self.info["info"] = {
             "{A}": "valley ball",
-            "{B}": f"002_bowl/base{self.bowl_id}",
+            "{B}": f"{self.catcher_model}/base{self.bowl_id}",
             "{a}": str(arm_tag),
             "{opt}": self._option_label(),
             "{flip}": "mirrored" if self.mirrored else "default",
@@ -1425,6 +1466,8 @@ class catch_valley_ball(Base_Task):
                 "ball_position": list(map(float, ball_position)),
                 "bowl_position": list(map(float, bowl_position)),
                 "predicted_landing": list(map(float, self.landing)),
+                "landing_gap": float(getattr(self, "landing_gap", 0.0)),
+                "param_jitter": float(getattr(self, "param_jitter", 0.0)),
                 "horizontal_offset": float(offset),
                 "in_bowl": float(in_bowl),
                 "bowl_behind_line": float(behind_line),
@@ -1450,7 +1493,9 @@ class catch_valley_ball(Base_Task):
                 ),
                 "roll_time": float(self.roll_time),
                 "launch_speed": float(self.launch_speed),
+                "initial_forward_speed": float(self.initial_forward_speed),
                 "curve_segments": int(self.curve_segments),
+                "catcher_model": str(getattr(self, "catcher_model", "002_bowl")),
                 "bowl_scale_mult": float(self.bowl_scale_mult),
                 "distractor_position": distractor_position,
                 "distractor_in_bowl": float(distractor_in_bowl),
