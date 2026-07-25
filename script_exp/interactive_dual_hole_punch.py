@@ -30,13 +30,11 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
+    print_mode_controls,
 )
 
 
-CONTROLS = """
-============================================================
- dual_hole_punch — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   A                 punch LEFT belt
   D                 punch RIGHT belt
   S                 punch BOTH belts
@@ -44,10 +42,19 @@ CONTROLS = """
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
-  --control keyboard  direct _fire_punch (default)
-  --control robot     arms tap the side buttons, then fire punch
-  --robot-motion planner|interpolate  (robot mode; interpolate is faster test)
-============================================================
+  Punches via direct _fire_punch (no arm motion).
+"""
+
+CONTROLS_ROBOT = """
+  A                 punch LEFT belt
+  D                 punch RIGHT belt
+  S                 punch BOTH belts
+  Press when a card is under the stamp head
+  V                 toggle view: top-down ↔ head_camera
+  Q / Escape         quit
+------------------------------------------------------------
+  Arms tap the side buttons, then fire punch.
+  --robot-motion planner|interpolate
 """
 
 
@@ -157,7 +164,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("dual_hole_punch", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = dual_hole_punch()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))

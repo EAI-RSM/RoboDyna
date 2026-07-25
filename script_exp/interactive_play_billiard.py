@@ -27,26 +27,30 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
 
-CONTROLS = """
-============================================================
- play_billiard — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   Left / Right      rotate aim direction
   Up / Down         slide tip along aim (approach / retreat)
-  Space             keyboard: fire strike impulse along aim
-                    robot: pick up cue, then planned strike
+  Space             fire strike impulse along aim
   A                 aim at the nominated / nearest top pocket
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
   Success: red ball in an allowed pocket; no distractor sink
-  --control keyboard  aim + impulse strike (default)
-  --control robot     planned cue strike on Space
+"""
+
+CONTROLS_ROBOT = """
+  Left / Right      rotate aim direction
+  Up / Down         slide tip along aim (approach / retreat)
+  Space             pick up cue, then planned strike
+  A                 aim at the nominated / nearest top pocket
+  V                 toggle view: top-down ↔ head_camera
+  Q / Escape         quit
+------------------------------------------------------------
+  Success: red ball in an allowed pocket; no distractor sink
   --robot-motion planner|interpolate
-============================================================
 """
 
 
@@ -348,7 +352,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("play_billiard", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "

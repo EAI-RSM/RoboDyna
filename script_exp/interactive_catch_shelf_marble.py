@@ -31,23 +31,29 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
+    print_mode_controls,
 )
 
 
-CONTROLS = """
-============================================================
-  catch_shelf_marble — interactive controls
-============================================================
-  Hold Left Arrow / A  →  slide bowl LEFT
-  Hold Right Arrow / D →  slide bowl RIGHT
+CONTROLS_KEYBOARD = """
+  Hold Left Arrow   →  slide bowl LEFT
+  Hold Right Arrow  →  slide bowl RIGHT
   First key press also releases the marble (default mode).
 
-  --control keyboard : latch keys directly (no arm motion)
-  --control robot    : matching arm presses the bowl key
-  --robot-motion planner|interpolate  (robot mode; interpolate is faster test)
+  Keys latch the bowl motion directly (no arm motion).
   V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
-============================================================
+"""
+
+CONTROLS_ROBOT = """
+  Hold Left Arrow   →  slide bowl LEFT
+  Hold Right Arrow  →  slide bowl RIGHT
+  First key press also releases the marble (default mode).
+
+  Matching arm presses the bowl key.
+  --robot-motion planner|interpolate
+  V                 toggle view: top-down ↔ head_camera
+  Close the viewer window to quit.
 """
 
 
@@ -92,8 +98,9 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
 
 
 def _requested_side(window):
-    left = window.key_down("left") or window.key_down("a")
-    right = window.key_down("right") or window.key_down("d")
+    # Arrows only — A/D also orbit the SAPIEN viewer camera.
+    left = window.key_down("left")
+    right = window.key_down("right")
     if left and not right:
         return "left"
     if right and not left:
@@ -147,7 +154,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("catch_shelf_marble", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = catch_shelf_marble()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
@@ -166,7 +173,7 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     motion = f", robot-motion={args.robot_motion}" if args.control == "robot" else ""
-    print(f"Control={args.control}{motion}. Hold Left/A or Right/D.")
+    print(f"Control={args.control}{motion}. Hold Left/Right arrows.")
 
     try:
         while not viewer.closed:

@@ -26,26 +26,29 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
 
-CONTROLS = """
-============================================================
- whack_a_mole — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   Q / E             select previous / next unhit mole
   1 .. N            select mole index directly
-  Space             keyboard: jab selected mole (cube press)
-                    robot: approach selected mole, then jab
-  R                 robot: (re)approach selected mole
+  Space             jab selected mole (cube press)
   V                 toggle view: top-down ↔ head_camera
   Escape            quit
 ------------------------------------------------------------
   Success: all moles hit (green), no rabbit touched
-  --control keyboard  teleop mallet cube over hole (default)
-  --control robot     approach + jab on Space
+"""
+
+CONTROLS_ROBOT = """
+  Q / E             select previous / next unhit mole
+  1 .. N            select mole index directly
+  Space             approach selected mole, then jab
+  R                 (re)approach selected mole
+  V                 toggle view: top-down ↔ head_camera
+  Escape            quit
+------------------------------------------------------------
+  Success: all moles hit (green), no rabbit touched
   --robot-motion planner|interpolate
-============================================================
 """
 
 
@@ -346,7 +349,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("whack_a_mole", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "

@@ -25,26 +25,29 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
 
-CONTROLS = """
-============================================================
- goalkeeper — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
-  Space             keyboard: deploy / freeze keeper in place
-                    robot: grasp, then release (or G for planned place)
-  G                 robot: planned place at intercept target
+  Space             deploy / freeze keeper in place
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
   Success: keeper in green zone, front-face save, grippers open
   Place BEFORE the ball crosses the red line
-  --control keyboard  direct keeper teleop (default)
-  --control robot     arm grasps / planned place
+"""
+
+CONTROLS_ROBOT = """
+  Arrow keys        nudge keeper XY (stay inside the green zone)
+  Space             grasp, then release
+  G                 planned place at intercept target
+  V                 toggle view: top-down ↔ head_camera
+  Q / Escape         quit
+------------------------------------------------------------
+  Success: keeper in green zone, front-face save, grippers open
+  Place BEFORE the ball crosses the red line
   --robot-motion planner|interpolate
-============================================================
 """
 
 
@@ -299,7 +302,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("goalkeeper", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "

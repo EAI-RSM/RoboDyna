@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
 # ur5-wsg gripper visual links (recolored to show Q/E selection).
 _GRIPPER_LINK_NAMES = (
@@ -41,25 +41,28 @@ _ARM_HIGHLIGHT = {
 }
 
 
-CONTROLS = """
-============================================================
- catch_rat — interactive controls
-============================================================
-  Mouse left-click  robot: move selected arm above click XY
+CONTROLS_KEYBOARD = """
   Space             close gripper(s) when the rat is rising
-                    robot: first press approaches hole(s) if needed
   Q / E             dual (Opt1): select left / right arm
                     (selected gripper is recolored: yellow=left, cyan=right)
-  A                 dual (keyboard): close BOTH grippers
-  R                 robot: (re)approach hole(s)
+  A                 dual: close BOTH grippers
   V                 toggle view: top-down ↔ head_camera
   Escape            quit
 ------------------------------------------------------------
   Success: rat held in gripper (both if catch_two_mice)
-  --control keyboard  direct gripper close (default)
-  --control robot     click-to-go / approach hole + Space close
+"""
+
+CONTROLS_ROBOT = """
+  Mouse left-click  move selected arm above click XY
+  Space             close gripper(s); first press approaches hole(s) if needed
+  Q / E             dual (Opt1): select left / right arm
+                    (selected gripper is recolored: yellow=left, cyan=right)
+  R                 (re)approach hole(s)
+  V                 toggle view: top-down ↔ head_camera
+  Escape            quit
+------------------------------------------------------------
+  Success: rat held in gripper (both if catch_two_mice)
   --robot-motion planner|interpolate
-============================================================
 """
 
 
@@ -531,7 +534,7 @@ def main():
     except Exception:
         pass
 
-    print(CONTROLS)
+    print_mode_controls("catch_rat", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "

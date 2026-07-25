@@ -453,6 +453,13 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
     return parser
 
 
+def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str) -> None:
+    """Print only the help block for the selected ``--control`` mode."""
+    body = (robot if mode == "robot" else keyboard).strip("\n")
+    bar = "=" * 60
+    print(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
+
+
 def default_arms_for_mode(mode):
     """``left`` / ``right`` / ``dump`` → arm side names (sort_apples style)."""
     if mode == "dump":

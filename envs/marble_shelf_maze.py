@@ -1095,6 +1095,17 @@ class marble_shelf_maze(Base_Task):
             self._mark_ball_missed()
         # If already missed (table), leave the marble where it is.
 
+    def _press_tilt_direct(self, direction: str) -> bool:
+        """Tilt the active shelf without arm motion (keyboard / sandbox)."""
+        if self.active_shelf_idx < 0 or not self.plan_success:
+            return False
+        if str(getattr(self, "_ball_mode", "")) in ("missed", "sliding", "falling", "done"):
+            return False
+        if direction not in ("left", "right"):
+            return False
+        self._tilt_active_shelf_and_wait(direction)
+        return str(getattr(self, "_ball_mode", "")) != "missed"
+
     def _locate_landed_shelf(self, from_idx: int):
         """After a fall from shelf `from_idx`, accept a landing only on the immediate next shelf.
 

@@ -31,23 +31,29 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
+    print_mode_controls,
 )
 
 
-CONTROLS = """
-============================================================
- quality_control — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   R or Left Arrow   stamp RED   (left key)
   G or Right Arrow  stamp GREEN (right key)
   Skip BLACK tiles — do not press while they are under the stamp
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
-  --control keyboard  direct stamp via _press_key (default)
-  --control robot     arm taps the matching colored key
-  --robot-motion planner|interpolate  (robot mode; interpolate is faster test)
-============================================================
+  Stamps via direct _press_key (no arm motion).
+"""
+
+CONTROLS_ROBOT = """
+  R or Left Arrow   stamp RED   (left key)
+  G or Right Arrow  stamp GREEN (right key)
+  Skip BLACK tiles — do not press while they are under the stamp
+  V                 toggle view: top-down ↔ head_camera
+  Q / Escape         quit
+------------------------------------------------------------
+  Arm taps the matching colored key.
+  --robot-motion planner|interpolate
 """
 
 
@@ -159,7 +165,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("quality_control", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = quality_control()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))

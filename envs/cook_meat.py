@@ -783,6 +783,7 @@ class cook_meat(Base_Task):
             "cooking_active": False,
             "awaiting_return_grasp": False,
             "cook_phase_done": False,
+            "_expert_key_held": False,  # interactive / scripted cook-key latch
         }
         self._set_station_meat_color(station, 0.0)
         # Sibling dual station only needs bowl↔bowl ≥10 cm. Board/key sit outward

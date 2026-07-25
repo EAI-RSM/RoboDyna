@@ -31,13 +31,11 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
+    print_mode_controls,
 )
 
 
-CONTROLS = """
-============================================================
-  marble_shelf_maze — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   Left Arrow / A   →  tilt active shelf LEFT  (red / left button)
   Right Arrow / D  →  tilt active shelf RIGHT (right button)
 
@@ -45,12 +43,23 @@ CONTROLS = """
   waits for the fall/settle before accepting another press.
   Hint: correct_dir for each shelf is printed at startup.
 
-  --control keyboard : tilt API without arm motion
-  --control robot    : matching arm taps the side button, then tilts
-  --robot-motion planner|interpolate  (robot mode; interpolate is faster test)
+  Keys call the tilt API directly (no arm motion).
   V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
-============================================================
+"""
+
+CONTROLS_ROBOT = """
+  Left Arrow / A   →  tilt active shelf LEFT  (red / left button)
+  Right Arrow / D  →  tilt active shelf RIGHT (right button)
+
+  One press tilts the current shelf, rolls the marble off, and
+  waits for the fall/settle before accepting another press.
+  Hint: correct_dir for each shelf is printed at startup.
+
+  Matching arm taps the side button, then tilts.
+  --robot-motion planner|interpolate
+  V                 toggle view: top-down ↔ head_camera
+  Close the viewer window to quit.
 """
 
 
@@ -144,7 +153,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("marble_shelf_maze", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = marble_shelf_maze()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))

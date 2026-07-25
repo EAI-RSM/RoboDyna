@@ -105,6 +105,9 @@ class dispense_gummy(Base_Task):
         self._dispense_key_latched = False
         self._belt_key_depression = {"left": 0.0, "right": 0.0}
         self._dispense_key_depression = 0.0
+        # Interactive latch: None | "left" | "right"; dispense pulse via _expert_dispense.
+        self._expert_belt_hold = None
+        self._expert_dispense = False
         self._bowl_force_stop = False
         self._bowl_drive_clamp = None
         self.belt_keys = {}
@@ -299,6 +302,19 @@ class dispense_gummy(Base_Task):
                 if pressed and not self._belt_key_latched[side]:
                     self._request_bowl_station(-1 if side == "left" else 1)
                 self._belt_key_latched[side] = pressed
+        expert = getattr(self, "_expert_belt_hold", None)
+        if expert in ("left", "right"):
+            self._belt_key_pressed[expert] = True
+            if self.belt_continuous_motion:
+                self._belt_key_latched[expert] = True
+            else:
+                # Discrete hop: edge once per expert latch transition (script clears hold).
+                if not self._belt_key_latched.get(f"_expert_{expert}", False):
+                    self._request_bowl_station(-1 if expert == "left" else 1)
+                    self._belt_key_latched[f"_expert_{expert}"] = True
+        else:
+            self._belt_key_latched["_expert_left"] = False
+            self._belt_key_latched["_expert_right"] = False
 
     def _detect_dispense_key_press(self):
         if getattr(self, "dispense_key", None) is None or not hasattr(self, "robot"):
@@ -312,6 +328,9 @@ class dispense_gummy(Base_Task):
             and abs(ee[1] - self.key_y) <= self.belt_key_press_xy
             and ee[2] <= self.dispense_key_top_z + self.belt_key_press_dz
         )
+        if getattr(self, "_expert_dispense", False):
+            pressed = True
+            self._expert_dispense = False
         if pressed and not self._dispense_key_latched:
             self._request_dispense()
         self._dispense_key_latched = pressed

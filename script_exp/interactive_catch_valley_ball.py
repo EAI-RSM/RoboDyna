@@ -25,28 +25,32 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
 
-CONTROLS = """
-============================================================
- catch_valley_ball — interactive controls
-============================================================
-  Mouse left-click  set bowl XY on the table
-  Space             keyboard: freeze/place bowl at current XY
-                    robot: pick up bowl (grasp); place uses click
+CONTROLS_KEYBOARD = """
+  Mouse left-click  set catcher XY on the table
+  Space             freeze/place catcher at current XY
   Arrow keys        fine nudge (optional)
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
-  Flow (robot): Space to pick up → click table to place
-  Flow (keyboard): click to aim → Space to freeze/place
+  Flow: click to aim → Space to freeze/place
   Place snaps past the red line (success requires that).
-  Success: red ball in bowl, bowl fully past red line (on the line = fail)
-  --control keyboard  direct bowl teleop (default)
-  --control robot     arm grasps / places the bowl
+  Success: red ball in catcher, catcher fully past red line
+"""
+
+CONTROLS_ROBOT = """
+  Mouse left-click  set catcher place XY on the table
+  Space             pick up catcher (grasp); place uses click
+  Arrow keys        fine nudge (optional)
+  V                 toggle view: top-down ↔ head_camera
+  Q / Escape         quit
+------------------------------------------------------------
+  Flow: Space to pick up → click table to place
+  Place snaps past the red line (success requires that).
+  Success: red ball in catcher, catcher fully past red line
   --robot-motion planner|interpolate
-============================================================
 """
 
 
@@ -390,7 +394,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("catch_valley_ball", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "

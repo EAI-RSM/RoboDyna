@@ -25,28 +25,30 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
 
-CONTROLS = """
-============================================================
- catch_ramp_ball — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   Mouse left-click  set cup XY on the table
-  Space             keyboard: freeze/place cup at current XY
-                    robot: pick up cup (grasp); place uses click
+  Space             freeze/place cup at current XY
   Arrow keys        fine nudge (optional)
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
-  Flow (robot): Space to pick up → click table to place
-  Flow (keyboard): click to aim → Space to freeze/place
+  Flow: click to aim → Space to freeze/place
   Success: red ball lands in the cup (not the distractor)
-  --control keyboard  direct cup teleop (default)
-  --control robot     arm grasps / places the cup
-  --robot-motion planner|interpolate
+"""
 
-============================================================
+CONTROLS_ROBOT = """
+  Mouse left-click  set cup place XY on the table
+  Space             pick up cup (grasp); place uses click
+  Arrow keys        fine nudge (optional)
+  V                 toggle view: top-down ↔ head_camera
+  Q / Escape         quit
+------------------------------------------------------------
+  Flow: Space to pick up → click table to place
+  Success: red ball lands in the cup (not the distractor)
+  --robot-motion planner|interpolate
 """
 
 
@@ -378,7 +380,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("catch_ramp_ball", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "

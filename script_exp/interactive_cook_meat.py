@@ -32,26 +32,33 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
+    print_mode_controls,
 )
 
 
-CONTROLS = """
-============================================================
-  cook_meat — interactive controls (cook button Opt1)
-============================================================
+CONTROLS_KEYBOARD = """
   Hold Space       →  cook (all stations / primary)
   Hold Q           →  cook LEFT station only (dual)
   Hold E           →  cook RIGHT station only (dual)
-  P                →  snap steak(s) onto pan(s) (keyboard helper)
-  B                →  snap steak(s) back to board(s) (keyboard helper)
+  P                →  snap steak(s) onto pan(s)
+  B                →  snap steak(s) back to board(s)
 
   Cooking advances only while the steak is on the pan and the key is held.
-  --control keyboard : latch station["_expert_key_held"]
-  --control robot    : arm presses the cook key (hold Space / Q / E)
-  --robot-motion planner|interpolate  (robot key-press routine)
+  Latches station["_expert_key_held"] directly (no arm).
   V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
-============================================================
+"""
+
+CONTROLS_ROBOT = """
+  Hold Space       →  cook (all stations / primary)
+  Hold Q           →  cook LEFT station only (dual)
+  Hold E           →  cook RIGHT station only (dual)
+
+  Cooking advances only while the steak is on the pan and the key is held.
+  Arm presses the cook key (hold Space / Q / E).
+  --robot-motion planner|interpolate
+  V                 toggle view: top-down ↔ head_camera
+  Close the viewer window to quit.
 """
 
 
@@ -307,7 +314,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("cook_meat", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = cook_meat()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))

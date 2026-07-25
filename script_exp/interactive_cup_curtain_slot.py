@@ -27,25 +27,28 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
 
-CONTROLS = """
-============================================================
- cup_curtain_slot — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   Arrow keys        track gap: nudge cup XY (L/R = x, U/D = y)
-  Space             keyboard: place/release cup at current pose
-                    robot: grasp cup, then place/release
+  Space             place/release cup at current pose
   T                 snap cup X to current yellow-gap center
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
   Success: cup seated between yellow sticks; no curtain touch
-  --control keyboard  direct cup teleop (default)
-  --control robot     arm track-and-place helpers
+"""
+
+CONTROLS_ROBOT = """
+  Arrow keys        track gap: nudge cup XY (L/R = x, U/D = y)
+  Space             grasp cup, then place/release
+  T                 snap cup X to current yellow-gap center
+  V                 toggle view: top-down ↔ head_camera
+  Q / Escape         quit
+------------------------------------------------------------
+  Success: cup seated between yellow sticks; no curtain touch
   --robot-motion planner|interpolate
-============================================================
 """
 
 
@@ -283,7 +286,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("cup_curtain_slot", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "

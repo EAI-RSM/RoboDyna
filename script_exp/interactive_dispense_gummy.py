@@ -31,13 +31,11 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
+    print_mode_controls,
 )
 
 
-CONTROLS = """
-============================================================
-  dispense_gummy — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   Left Arrow / A   →  move bowl LEFT  (right-arm belt key)
   Right Arrow / D  →  move bowl RIGHT (right-arm belt key)
   Space            →  dispense (left-arm key)
@@ -45,12 +43,23 @@ CONTROLS = """
   Continuous belt (Opt 2): hold A/D to slide.
   Discrete belt (default): tap A/D to hop one station.
 
-  --control keyboard : force key presses / dispense request
-  --control robot    : arms physically press the keys
-  --robot-motion planner|interpolate  (robot key-press routine)
+  Forces key presses / dispense request directly (no arm).
   V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
-============================================================
+"""
+
+CONTROLS_ROBOT = """
+  Left Arrow / A   →  move bowl LEFT  (right-arm belt key)
+  Right Arrow / D  →  move bowl RIGHT (right-arm belt key)
+  Space            →  dispense (left-arm key)
+
+  Continuous belt (Opt 2): hold A/D to slide.
+  Discrete belt (default): tap A/D to hop one station.
+
+  Arms physically press the keys.
+  --robot-motion planner|interpolate
+  V                 toggle view: top-down ↔ head_camera
+  Close the viewer window to quit.
 """
 
 
@@ -238,7 +247,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("dispense_gummy", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = dispense_gummy()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))

@@ -27,25 +27,28 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
 
-CONTROLS = """
-============================================================
- hit_target — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   Arrow keys        aim dart tip (L/R = x, U/D = y / depth)
-  Space             keyboard: thrust tip at yellow center
-                    robot: grasp dart, then jab / thrust
+  Space             thrust tip at yellow center
   T                 snap tip X to live bullseye
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
   Success: tip sticks in yellow center; never hit a blocker
-  --control keyboard  direct dart tip teleop (default)
-  --control robot     grasp dart + jab helpers
+"""
+
+CONTROLS_ROBOT = """
+  Arrow keys        aim dart tip (L/R = x, U/D = y / depth)
+  Space             grasp dart, then jab / thrust
+  T                 snap tip X to live bullseye
+  V                 toggle view: top-down ↔ head_camera
+  Q / Escape         quit
+------------------------------------------------------------
+  Success: tip sticks in yellow center; never hit a blocker
   --robot-motion planner|interpolate
-============================================================
 """
 
 
@@ -288,7 +291,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("hit_target", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "

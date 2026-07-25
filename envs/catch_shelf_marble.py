@@ -176,6 +176,8 @@ class catch_shelf_marble(Base_Task):
         self.keys = {}
         self._key_pressed = {"left": False, "right": False}
         self._key_depression = {"left": 0.0, "right": 0.0}
+        # Interactive / scripted latch: None | "left" | "right" (ORed into EE detect).
+        self._expert_hold = None
         self._bowl_force_stop = False
         self._bowl_drive_clamp = None
         super()._init_task_env_(**kwags)
@@ -947,6 +949,11 @@ class catch_shelf_marble(Base_Task):
                     flush=True,
                 )
             self._key_pressed[side] = pressed
+        expert = getattr(self, "_expert_hold", None)
+        if expert == "left":
+            self._key_pressed["left"] = True
+        elif expert == "right":
+            self._key_pressed["right"] = True
 
     def _spring_key(self, actor, depression, pressed, rest_xyz):
         target = self.key_travel if pressed else 0.0

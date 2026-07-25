@@ -32,13 +32,11 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
+    print_mode_controls,
 )
 
 
-CONTROLS = """
-============================================================
-  catch_marbles_trapdoors — interactive controls
-============================================================
+CONTROLS_KEYBOARD = """
   1 / Q  →  open button/trapdoor index 0
   2 / W  →  open button/trapdoor index 1
   3 / E  →  open button/trapdoor index 2
@@ -46,13 +44,25 @@ CONTROLS = """
 
   Colors are printed at startup (left→right order may shuffle).
   Press the button whose color matches the moving marble.
+  Opens via _open_door_direct (no arm).
 
-  --control keyboard : open door via _open_door_direct (no arm)
-  --control robot    : matching arm taps buttons[i]
-  --robot-motion planner|interpolate  (robot mode; interpolate is faster test)
   V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
-============================================================
+"""
+
+CONTROLS_ROBOT = """
+  1 / Q  →  open button/trapdoor index 0
+  2 / W  →  open button/trapdoor index 1
+  3 / E  →  open button/trapdoor index 2
+  4 / R  →  open button/trapdoor index 3
+
+  Colors are printed at startup (left→right order may shuffle).
+  Press the button whose color matches the moving marble.
+  Matching arm taps buttons[i].
+
+  --robot-motion planner|interpolate
+  V                 toggle view: top-down ↔ head_camera
+  Close the viewer window to quit.
 """
 
 
@@ -507,7 +517,7 @@ def main():
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print(CONTROLS)
+    print_mode_controls("catch_marbles_trapdoors", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = catch_marbles_trapdoors()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
