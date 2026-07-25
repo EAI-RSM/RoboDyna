@@ -969,6 +969,26 @@ class catch_marbles_trapdoors(Base_Task):
                 break
         return False
 
+    def _open_door_direct(self, btn_idx: int) -> bool:
+        """Open trapdoor ``btn_idx`` without arm motion (keyboard / sandbox latch)."""
+        if btn_idx < 0 or btn_idx >= self.n_buttons:
+            return False
+        if self._door_locked_closed[btn_idx]:
+            return False
+        if self._door_open[btn_idx] and self._door_angle_deg[btn_idx] > 5.0:
+            return False
+        if self.door_open_once and self._button_pressed[btn_idx]:
+            return False
+        opened_on_time = self._ball_over_door(btn_idx)
+        self._button_pressed[btn_idx] = True
+        self._door_open[btn_idx] = True
+        self._door_open_with_ball_over[btn_idx] = (
+            self._door_open_with_ball_over[btn_idx] or opened_on_time
+        )
+        self._door_open_time_left[btn_idx] = max(0.0, float(self.door_open_duration_sec))
+        self._door_target_angle_deg[btn_idx] = self.door_open_angle_deg
+        return True
+
     def _press_button(self, arm_tag: ArmTag, btn_idx: int):
         if not self.plan_success:
             return
@@ -995,14 +1015,9 @@ class catch_marbles_trapdoors(Base_Task):
             return
         self._buttons_held.add(btn_idx)
         self.move(self.move_by_displacement(arm_tag, z=-self.button_press_depth))
-        opened_on_time = self._ball_over_door(btn_idx)
-        self._button_pressed[btn_idx] = True
-        self._door_open[btn_idx] = True
-        self._door_open_with_ball_over[btn_idx] = (
-            self._door_open_with_ball_over[btn_idx] or opened_on_time
-        )
-        self._door_open_time_left[btn_idx] = max(0.0, float(self.door_open_duration_sec))
-        self._door_target_angle_deg[btn_idx] = self.door_open_angle_deg
+        if not self._open_door_direct(btn_idx):
+            # Door may already be open / locked; still finish the press motion.
+            pass
         self._dwell(self.press_hold_steps)
         self._buttons_held.discard(btn_idx)
         self.move(self.move_by_displacement(arm_tag, z=self.button_press_depth + 0.01))
