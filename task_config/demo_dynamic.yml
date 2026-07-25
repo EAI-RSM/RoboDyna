@@ -226,12 +226,12 @@ task_args:
     #   cook_button_enabled  ← Opt 1 (default false = contact cook, no key)
     #   dual_setup_enabled   ← Opt 2; dual stations, both arms; ≥10 cm clearance
     #   cook_steps           ← nominal cook duration (steps for doneness 0→1)
-    #   cook_speed_jitter    ← per-ep ± fraction on cook_steps (default 0.20)
+    #   cook_speed_jitter    ← per-ep ± fraction on cook_steps
     #   key_offset_x         ← |lateral| key offset from pan (same side as station)
     #   key_y_bias           ← key y relative to pan
     #   key_press_depth      ← EE press depth onto keycap
-    #   target_doneness_*    ← success / expert cook band
-    #   cook_doneness_tol    ← |grasp_doneness − target|; dual needs BOTH steaks in band
+    #   target_doneness_range ← base inclusive success interval; expert aims at midpoint
+    #   target_doneness_range_jitter ← uniform per-episode shift applied to both limits
     # Combinations:
     #   Default            : single + contact cook (no key)
     #   Opt1               : single + red key hold-to-cook
@@ -240,7 +240,7 @@ task_args:
     # CLI: --task-arg cook_button_enabled=... / dual_setup_enabled=...
     #      --option 1 | --option 2
     cook_steps: 5000            # CHANGE: nominal steps for doneness 0→1.0 (~10 s to medium@0.5, 250Hz)
-    cook_speed_jitter: 0.20     # CHANGE: per-ep cook_steps ~ U(nom×(1±jitter))
+    cook_speed_jitter: 0.0      # exact cooking rate; variation comes from target-range shift
     cook_button_enabled: false  # CHANGE: Opt 1; true = hold red key to cook
     dual_setup_enabled: false   # CHANGE: Opt 2; true = dual stations (both arms)
     key_offset_x: 0.14          # CHANGE: m; |lateral| distance of key from pan center
@@ -248,9 +248,8 @@ task_args:
     key_press_depth: 0.055      # CHANGE: m; EE press depth onto keycap
     place_jitter_xy: 0.01       # CHANGE: ±m XY jitter on pan/board (small diversity)
     place_yaw_lim: 0.175        # CHANGE: ±rad Z yaw on pan/board (~10 deg)
-    target_doneness_min: 0.45 # CHANGE: tight band around medium
-    target_doneness_max: 0.55
-    cook_doneness_tol: 0.08   # CHANGE: |grasp_doneness − target| per steak (dual: both)
+    target_doneness_range: [0.45, 0.55]  # CHANGE: inclusive success range per steak
+    target_doneness_range_jitter: 0.05   # sample one shift U(-0.05,+0.05) per episode
     place_dx: 0.010           # center the steak in the bowl (+x)
     place_dy: -0.015          # center the steak in the bowl (-y)
     board_scale_mult: 0.075 # cutting board size (steak starts and finishes here)
