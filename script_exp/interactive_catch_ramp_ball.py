@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
 
 
 CONTROLS = """
@@ -36,6 +36,7 @@ CONTROLS = """
   Space             keyboard: freeze/place cup at current XY
                     robot: pick up cup (grasp); place uses click
   Arrow keys        fine nudge (optional)
+  V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
   Flow (robot): Space to pick up → click table to place
@@ -399,6 +400,7 @@ def main():
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     viewer.set_camera_xyz(0.0, 0.05, 1.9)
     viewer.set_camera_rpy(0.0, -np.pi / 2.2, -np.pi / 2.0)
+    views = make_viewer_view_toggle(env, viewer)
 
     def _handle_table_click(viewer_, pixel_x, pixel_y):
         table_z = float(env.table_top)
@@ -414,6 +416,7 @@ def main():
     settle_after = None
     try:
         while not viewer.closed:
+            views.update(viewer.window)
             frame_start = time.perf_counter()
             controller.update(viewer.window)
 

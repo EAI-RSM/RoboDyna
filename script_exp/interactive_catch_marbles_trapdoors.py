@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    make_viewer_view_toggle,
     RobotButtonController,
     add_robot_motion_arg,
     make_button_controller,
@@ -49,6 +50,7 @@ CONTROLS = """
   --control keyboard : open door via _open_door_direct (no arm)
   --control robot    : matching arm taps buttons[i]
   --robot-motion planner|interpolate  (robot mode; interpolate is faster test)
+  V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
 ============================================================
 """
@@ -589,6 +591,7 @@ def main():
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     viewer.set_camera_xyz(0.0, 0.0, 2.0)
     viewer.set_camera_rpy(0.0, -np.pi / 2.0, -np.pi / 2.0)
+    views = make_viewer_view_toggle(env, viewer)
 
     motion = f", robot-motion={args.robot_motion}" if args.control == "robot" else ""
     print(f"Control={args.control}{motion}. Tap 1–4 / QWER to open a trapdoor.")
@@ -597,6 +600,7 @@ def main():
     settle_s = 0.6
     try:
         while not viewer.closed:
+            views.update(viewer.window)
             frame_start = time.perf_counter()
             for idx in edges.pressed_indices(viewer.window):
                 if args.control == "keyboard":

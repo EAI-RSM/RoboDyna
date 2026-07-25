@@ -166,6 +166,152 @@ def report_task_result(env, detail: str | None = None) -> bool:
     return ok
 
 
+def resolve_head_camera(env=None, viewer=None):
+    """Find the sapien ``head_camera`` render camera on ``env`` or ``viewer``."""
+    if env is not None:
+        cams = getattr(env, "cameras", None)
+        if cams is not None:
+            names = list(getattr(cams, "static_camera_name", []) or [])
+            clist = list(getattr(cams, "static_camera_list", []) or [])
+            if "head_camera" in names:
+                return clist[names.index("head_camera")]
+    if viewer is None and env is not None:
+        viewer = getattr(env, "viewer", None)
+    if viewer is not None:
+        for cam in getattr(viewer, "cameras", []) or []:
+            if getattr(cam, "name", None) == "head_camera":
+                return cam
+    return None
+
+
+class ViewerViewToggle:
+    """Press V to switch the interactive viewer between top-down and head cam.
+
+    sapien's ``focus_camera`` follow-path is disabled in this build
+    (``_handle_focused_camera`` commented out), so we copy the head camera
+    pose onto the free-fly viewer each frame instead.
+    """
+
+    DEFAULT_TOPDOWN_XYZ = (0.0, 0.0, 2.1)
+    DEFAULT_TOPDOWN_RPY = (0.0, -np.pi / 2.0, -np.pi / 2.0)
+
+    def __init__(
+        self,
+        viewer,
+        head_camera=None,
+        topdown_xyz=None,
+        topdown_rpy=None,
+        capture_current_as_topdown: bool = True,
+        warn_missing_head: bool = False,
+    ):
+        self.viewer = viewer
+        self._prev_v = False
+        self.mode = "topdown"
+        self._head = head_camera
+        if self._head is None:
+            self._head = resolve_head_camera(viewer=viewer)
+        if self._head is None and warn_missing_head:
+            print("Warning: head_camera not found; V toggle will stay on top-down.")
+
+        self._topdown_pose = None
+        self._topdown_xyz = None
+        self._topdown_rpy = None
+        if topdown_xyz is not None:
+            self._topdown_xyz = tuple(topdown_xyz)
+            self._topdown_rpy = tuple(
+                topdown_rpy if topdown_rpy is not None else self.DEFAULT_TOPDOWN_RPY
+            )
+            self.apply(announce=False)
+        elif capture_current_as_topdown:
+            try:
+                self._topdown_pose = viewer.window.get_camera_pose()
+            except Exception:
+                self._topdown_xyz = self.DEFAULT_TOPDOWN_XYZ
+                self._topdown_rpy = self.DEFAULT_TOPDOWN_RPY
+                self.apply(announce=False)
+        else:
+            self._topdown_xyz = self.DEFAULT_TOPDOWN_XYZ
+            self._topdown_rpy = self.DEFAULT_TOPDOWN_RPY
+            self.apply(announce=False)
+
+    def _control_window(self):
+        for plugin in getattr(self.viewer, "plugins", []) or []:
+            if hasattr(plugin, "fps_camera_controller") and hasattr(plugin, "set_camera_xyz"):
+                return plugin
+        return getattr(self.viewer, "control_window", None)
+
+    def _set_viewer_pose(self, pose):
+        """Snap free-fly camera to ``pose`` and keep the FPS controller in sync."""
+        try:
+            self.viewer.focus_camera(None)
+        except Exception:
+            pass
+        self.viewer.set_camera_pose(pose)
+        cw = self._control_window()
+        if cw is not None and hasattr(cw, "_sync_fps_camera_controller"):
+            cw._sync_fps_camera_controller()
+
+    def apply(self, announce=True):
+        if self.mode == "head" and self._head is not None:
+            self._set_viewer_pose(self._head.global_pose)
+            if announce:
+                print("View: head_camera")
+            return
+        try:
+            self.viewer.focus_camera(None)
+        except Exception:
+            pass
+        if self._topdown_pose is not None:
+            self._set_viewer_pose(self._topdown_pose)
+        else:
+            xyz = self._topdown_xyz or self.DEFAULT_TOPDOWN_XYZ
+            rpy = self._topdown_rpy or self.DEFAULT_TOPDOWN_RPY
+            self.viewer.set_camera_xyz(*xyz)
+            self.viewer.set_camera_rpy(*rpy)
+        if announce:
+            print("View: top-down")
+
+    def _v_pressed(self, window) -> bool:
+        down = bool(window.key_down("v"))
+        edge = down and not self._prev_v
+        self._prev_v = down
+        if edge:
+            return True
+        try:
+            return bool(window.key_press("v"))
+        except Exception:
+            return False
+
+    def update(self, window):
+        if self._v_pressed(window):
+            if self.mode == "topdown":
+                if self._head is None:
+                    print("head_camera not available; staying on top-down.")
+                else:
+                    self.mode = "head"
+                    self.apply(announce=True)
+            else:
+                self.mode = "topdown"
+                self.apply(announce=True)
+            return
+        # Keep head view locked to the moving head_camera.
+        if self.mode == "head" and self._head is not None:
+            self._set_viewer_pose(self._head.global_pose)
+
+
+def make_viewer_view_toggle(env, viewer=None, **kwargs) -> ViewerViewToggle:
+    """Build a V-key top-down ↔ head_camera toggle for an interactive env."""
+    if viewer is None:
+        viewer = getattr(env, "viewer", None)
+    if viewer is None:
+        raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+    return ViewerViewToggle(
+        viewer,
+        head_camera=resolve_head_camera(env, viewer),
+        **kwargs,
+    )
+
+
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
                     overhead: bool = True, is_done=None):
     """Standard interactive loop: callback → kinematics → step → render.
@@ -173,6 +319,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     ``is_done(step)`` may return ``True`` / ``False``, or ``(done, detail)``.
     When done, prints SUCCESS/FAILURE via ``report_task_result`` and exits.
     ``should_stop`` remains a raw break (no auto print) for backward compatibility.
+    Press V to toggle top-down ↔ head_camera.
     """
     viewer = env.viewer
     if viewer is None:
@@ -181,10 +328,12 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
         # Robot at bottom of the frame (matches interactive_sort_apples).
         viewer.set_camera_xyz(0.0, 0.0, 2.1)
         viewer.set_camera_rpy(0.0, -np.pi / 2.0, -np.pi / 2.0)
+    views = make_viewer_view_toggle(env, viewer)
     step = 0
     try:
         while not viewer.closed:
             frame_start = time.perf_counter()
+            views.update(viewer.window)
             if on_step is not None:
                 on_step(viewer.window, step)
             env._update_kinematic_tasks()
@@ -220,7 +369,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
 # ---------------------------------------------------------------------------
 
 
-def add_robot_motion_arg(parser):
+def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
     """Add ``--control`` + ``--robot-motion`` flags used by every interactive script."""
     parser.add_argument(
         "--control",
@@ -231,8 +380,11 @@ def add_robot_motion_arg(parser):
     parser.add_argument(
         "--robot-motion",
         choices=("planner", "interpolate"),
-        default="planner",
-        help="Robot key-press implementation; interpolate is a faster test mode (default: planner)",
+        default=robot_motion_default,
+        help=(
+            "Robot key-press implementation; interpolate is a faster test mode "
+            f"(default: {robot_motion_default})"
+        ),
     )
     return parser
 

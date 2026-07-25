@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import report_task_result  # noqa: E402
+from _interactive_common import make_viewer_view_toggle, report_task_result  # noqa: E402
 
 # ur5-wsg gripper visual links (recolored to show Q/E selection).
 _GRIPPER_LINK_NAMES = (
@@ -111,88 +111,6 @@ class EdgeKey:
         edge = bool(down) and not self._prev
         self._prev = bool(down)
         return edge
-
-
-class ViewerViewToggle:
-    """Press V to switch the interactive viewer between top-down and head cam.
-
-    sapien's ``focus_camera`` follow-path is disabled in this build
-    (``_handle_focused_camera`` commented out), so we copy the head camera
-    pose onto the free-fly viewer each frame instead.
-    """
-
-    TOPDOWN_XYZ = (0.0, 0.10, 1.85)
-    TOPDOWN_RPY = (0.0, -np.pi / 2.2, -np.pi / 2.0)
-
-    def __init__(self, viewer, head_camera=None):
-        self.viewer = viewer
-        self._v = EdgeKey()
-        self.mode = "topdown"
-        self._head = head_camera
-        if self._head is None:
-            for cam in getattr(viewer, "cameras", []) or []:
-                if getattr(cam, "name", None) == "head_camera":
-                    self._head = cam
-                    break
-        if self._head is None:
-            print("Warning: head_camera not found; V toggle will stay on top-down.")
-        self.apply(announce=False)
-
-    def _control_window(self):
-        for p in getattr(self.viewer, "plugins", []) or []:
-            if hasattr(p, "fps_camera_controller") and hasattr(p, "set_camera_xyz"):
-                return p
-        return getattr(self.viewer, "control_window", None)
-
-    def _set_viewer_pose(self, pose):
-        """Snap free-fly camera to ``pose`` and keep the FPS controller in sync."""
-        try:
-            self.viewer.focus_camera(None)
-        except Exception:
-            pass
-        self.viewer.set_camera_pose(pose)
-        cw = self._control_window()
-        if cw is not None and hasattr(cw, "_sync_fps_camera_controller"):
-            cw._sync_fps_camera_controller()
-
-    def apply(self, announce=True):
-        if self.mode == "head" and self._head is not None:
-            self._set_viewer_pose(self._head.global_pose)
-            if announce:
-                print("View: head_camera")
-            return
-        try:
-            self.viewer.focus_camera(None)
-        except Exception:
-            pass
-        self.viewer.set_camera_xyz(*self.TOPDOWN_XYZ)
-        self.viewer.set_camera_rpy(*self.TOPDOWN_RPY)
-        if announce:
-            print("View: top-down")
-
-    def update(self, window):
-        pressed = False
-        if self._v.poll(window.key_down("v")):
-            pressed = True
-        else:
-            try:
-                pressed = bool(window.key_press("v"))
-            except Exception:
-                pressed = False
-        if pressed:
-            if self.mode == "topdown":
-                if self._head is None:
-                    print("head_camera not available; staying on top-down.")
-                else:
-                    self.mode = "head"
-                    self.apply(announce=True)
-            else:
-                self.mode = "topdown"
-                self.apply(announce=True)
-            return
-        # Keep head view locked to the moving head_camera.
-        if self.mode == "head" and self._head is not None:
-            self._set_viewer_pose(self._head.global_pose)
 
 
 class ArmGripperHighlight:
@@ -644,15 +562,7 @@ def main():
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
-    head_cam = None
-    cams = getattr(env, "cameras", None)
-    if cams is not None:
-        names = list(getattr(cams, "static_camera_name", []) or [])
-        clist = list(getattr(cams, "static_camera_list", []) or [])
-        if "head_camera" in names:
-            head_cam = clist[names.index("head_camera")]
-    views = ViewerViewToggle(viewer, head_camera=head_cam)
-    print("Press V to toggle top-down / head_camera view.")
+    views = make_viewer_view_toggle(env, viewer)
 
     if args.control == "robot":
         def _handle_board_click(viewer_, pixel_x, pixel_y):
