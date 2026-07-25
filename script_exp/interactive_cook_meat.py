@@ -1,5 +1,5 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``cook_meat`` (Opt1 cook-button sandbox).
+"""Interactive viewer for ``cook_meat``.
 
 Run from any directory:
 
@@ -7,8 +7,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat.py --control robot
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat.py --control robot --robot-motion interpolate
 
-Forces ``cook_button_enabled=true``. Keyboard latches ``station["_expert_key_held"]``.
-Robot mode presses the cook key with the matching arm. Sandbox only.
+Respects ``cook_button_enabled`` from the selected config. When enabled, keyboard
+latches ``station["_expert_key_held"]`` and robot mode presses the matching key.
 """
 
 import argparse
@@ -40,6 +40,7 @@ CONTROLS_KEYBOARD = """
   Hold Space       →  cook (all stations / primary)
   Hold Q           →  cook LEFT station only (dual)
   Hold E           →  cook RIGHT station only (dual)
+  G                →  toggle steak(s): board ↔ pan
   P                →  snap steak(s) onto pan(s)
   B                →  snap steak(s) back to board(s)
 
@@ -53,6 +54,7 @@ CONTROLS_ROBOT = """
   Hold Space       →  cook (all stations / primary)
   Hold Q           →  cook LEFT station only (dual)
   Hold E           →  cook RIGHT station only (dual)
+  G                →  robot toggles steak(s): board → pan, then pan → board
 
   Cooking advances only while the steak is on the pan and the key is held.
   Arm presses the cook key (hold Space / Q / E).
@@ -73,9 +75,6 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
         raise SystemExit(f"Config not found: {config_path}")
     with open(config_path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
-
-    task_args = config.setdefault("task_args", {}).setdefault("cook_meat", {})
-    task_args["cook_button_enabled"] = True
 
     config.update(
         task_name="cook_meat",
@@ -161,7 +160,12 @@ def _snap_steaks_to_pans(env):
                 rigid.set_angular_velocity([0, 0, 0])
         except Exception:
             pass
-    print("Snapped steak(s) onto pan(s). Hold Space/Q/E to cook.")
+        if not env.use_cook_button:
+            st["cooking_active"] = True
+    if env.use_cook_button:
+        print("Snapped steak(s) onto pan(s). Hold Space/Q/E to cook.")
+    else:
+        print("Snapped steak(s) onto pan(s); contact cooking is active.")
 
 
 def _snap_steaks_to_boards(env):
@@ -174,10 +178,61 @@ def _snap_steaks_to_boards(env):
     print("Snapped steak(s) to board(s); doneness latched.")
 
 
+def _steaks_on_pans(env):
+    """Return whether every interactive station currently has its steak on its pan."""
+
+    return bool(env.stations) and all(env._steak_on_pan_station(st) for st in env.stations)
+
+
+def _toggle_steak_transfer(env, *, robot: bool):
+    """Move all steaks between boards and pans using one toggle action."""
+
+    _clear_cook_latches(env)
+    on_pans = _steaks_on_pans(env)
+    if not robot:
+        if on_pans:
+            _snap_steaks_to_boards(env)
+        else:
+            _snap_steaks_to_pans(env)
+        return
+
+    if on_pans:
+        env._return_steaks_to_boards()
+        print("Robot returned steak(s) from pan(s) to board(s).")
+        return
+
+    # The task's placement helper expects each steak to be held first.
+    stations = sorted(env.stations, key=lambda st: str(st["arm"]))
+    open_actions = [env.open_gripper(st["arm"]) for st in stations]
+    if len(open_actions) == 1:
+        env.move(open_actions[0])
+    else:
+        env.move(open_actions[0], open_actions[1])
+    grasp_actions = [
+        env._safe_grasp_actor(st["steak"], arm_tag=st["arm"], pre_grasp_dis=0.10)
+        for st in stations
+    ]
+    if len(grasp_actions) == 1:
+        env.move(grasp_actions[0])
+        env.move(env.move_by_displacement(stations[0]["arm"], z=0.10, move_axis="arm"))
+    else:
+        env.move(grasp_actions[0], grasp_actions[1])
+        env.move(
+            env.move_by_displacement(stations[0]["arm"], z=0.10, move_axis="arm"),
+            env.move_by_displacement(stations[1]["arm"], z=0.10, move_axis="arm"),
+        )
+    env._place_steaks_on_pans()
+    if not env.use_cook_button:
+        for st in env.stations:
+            st["cooking_active"] = True
+    print("Robot moved steak(s) from board(s) to pan(s).")
+
+
 class KeyboardState:
     def __init__(self):
         self.prev_p = False
         self.prev_b = False
+        self.prev_g = False
 
     def update(self, env, window):
         left_st, right_st = _stations_by_arm(env)
@@ -205,6 +260,10 @@ class KeyboardState:
         if b and not self.prev_b:
             _snap_steaks_to_boards(env)
         self.prev_b = b
+        g = window.key_down("g")
+        if g and not self.prev_g:
+            _toggle_steak_transfer(env, robot=False)
+        self.prev_g = g
 
 
 def _requested_cook_mode(window):
@@ -221,12 +280,11 @@ def _requested_cook_mode(window):
 
 def _station_cook_finished(env, st):
     """True when this station's cook window is definitively over."""
-    tol = float(getattr(env, "cook_doneness_tol", 0.08))
-    target = float(env.target_doneness)
+    target_min, target_max = getattr(env, "target_doneness_range", (0.45, 0.55))
     doneness = float(st.get("doneness", 0.0))
     grasp = st.get("grasp_doneness")
-    # Overcooked past tolerance (or fully maxed) → episode can end.
-    if doneness > target + tol or doneness >= 0.999:
+    # Overcooked past the configured interval (or fully maxed) → episode can end.
+    if doneness > float(target_max) or doneness >= 0.999:
         return True
     # Cooking stopped / latched (B snap or grasp); prefer steak off pan if detectable.
     if grasp is not None:
@@ -239,7 +297,7 @@ def _station_cook_finished(env, st):
         # Still on pan after latch — cooking is frozen; count as finished.
         return True
     # Reached target and cook key released (window closed without board return).
-    if doneness >= target and not bool(st.get("_expert_key_held")):
+    if doneness >= float(target_min) and not bool(st.get("_expert_key_held")):
         return True
     return False
 
@@ -258,9 +316,148 @@ def _episode_done(env):
     ]
     detail = (
         f"doneness={doneness} grasp={grasps} "
-        f"target={float(env.target_doneness):.2f}±{float(getattr(env, 'cook_doneness_tol', 0.08)):.2f}"
+        f"target={float(env.target_doneness_range[0]):.2f}-"
+        f"{float(env.target_doneness_range[1]):.2f}"
     )
     return True, detail
+
+
+class CookKeyController:
+    """Responsive fixed-pose press with planner-validated cached targets."""
+
+    TRANSITION_SECONDS = 0.12
+    RELEASE_CLEARANCE = 0.04
+
+    def __init__(self, env, arm_tag):
+        self.env = env
+        self.arm_tag = arm_tag
+        self.mode = None
+        self.hover_qpos = {}
+        self.press_qpos = {}
+        self._starts = {}
+        self._targets = {}
+        self._started_at = None
+        self.prepare()
+
+    def _drive_qpos(self, side):
+        joints = (
+            self.env.robot.left_arm_joints
+            if side == "left"
+            else self.env.robot.right_arm_joints
+        )
+        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
+
+    def _move_for_stations(self, stations, action_fn):
+        actions = [action_fn(st) for st in stations]
+        if not actions:
+            return
+        self.env.plan_success = True
+        self.env._last_plan_fail = None
+        self.env.move(*actions)
+
+    def prepare(self):
+        """Move to hover once and cache a validated press target for each arm."""
+
+        _clear_cook_latches(self.env)
+        self.mode = None
+        self._started_at = None
+        stations = [st for st in self.env.stations if st.get("cook_key") is not None]
+        configured_hover = float(
+            getattr(self.env, "key_hover_dis", self.env.KEY_HOVER_DIS_DEFAULT)
+        )
+        depth = float(getattr(self.env, "key_press_depth", self.env.KEY_PRESS_DEPTH_DEFAULT))
+        # cook_meat detects presses from EE height, while key_hover_dis is a TCP
+        # clearance. The configured 6 cm TCP hover leaves the EE just inside the
+        # default 20 cm active band, so explicitly clear that band on release.
+        hover = max(
+            configured_hover,
+            float(self.env.key_press_dz) - float(self.env.EE_TO_TCP) + self.RELEASE_CLEARANCE,
+        )
+        press_above = max(0.0, configured_hover - depth)
+        self._move_for_stations(
+            stations, lambda st: self.env.close_gripper(self.arm_tag(str(st["arm"])))
+        )
+        if not self.env.plan_success:
+            return
+        self._move_for_stations(
+            stations,
+            lambda st: self.env.move_to_pose(
+                self.arm_tag(str(st["arm"])), self.env._cook_key_tip_pose(st, hover)
+            ),
+        )
+        if not self.env.plan_success:
+            return
+
+        self.hover_qpos.clear()
+        self.press_qpos.clear()
+        for st in stations:
+            side = str(st["arm"])
+            hover_q = self._drive_qpos(side)
+            press_pose = self.env._cook_key_tip_pose(st, press_above)
+            planner = (
+                self.env.robot.left_plan_path
+                if side == "left"
+                else self.env.robot.right_plan_path
+            )
+            result = planner(press_pose, last_qpos=np.asarray(hover_q, dtype=np.float32))
+            if result is None or result.get("status") != "Success":
+                reason = "no result" if result is None else result.get("reason", "unknown")
+                raise RuntimeError(f"Could not prepare {side} cook-key press: {reason}")
+            self.hover_qpos[side] = hover_q
+            self.press_qpos[side] = np.asarray(result["position"][-1], dtype=np.float64)
+        print(
+            f"Cook-key arms ready {hover * 100:.1f} cm above key; "
+            "press/release transitions are non-blocking."
+        )
+
+    def _begin_transition(self, requested_mode):
+        _clear_cook_latches(self.env)
+        active = {str(st["arm"]) for st in _active_stations(self.env, requested_mode)}
+        previous = {str(st["arm"]) for st in _active_stations(self.env, self.mode)}
+        moving = (active | previous) & self.hover_qpos.keys()
+        self._starts = {side: self._drive_qpos(side) for side in moving}
+        self._targets = {
+            side: self.press_qpos[side] if side in active else self.hover_qpos[side]
+            for side in moving
+        }
+        self._started_at = time.perf_counter() if moving else None
+        self.mode = requested_mode
+
+    def _advance(self):
+        if self._started_at is None:
+            return
+        progress = min(
+            1.0,
+            (time.perf_counter() - self._started_at) / self.TRANSITION_SECONDS,
+        )
+        smooth = progress * progress * (3.0 - 2.0 * progress)
+        for side, target in self._targets.items():
+            start = self._starts[side]
+            position = start + (target - start) * smooth
+            velocity = (
+                (target - start) / self.TRANSITION_SECONDS
+                if progress < 1.0
+                else np.zeros_like(target)
+            )
+            self.env.robot.set_arm_joints(position, velocity, side)
+        if progress >= 1.0:
+            self._started_at = None
+
+    def update(self, requested_mode):
+        if requested_mode != self.mode:
+            # A release immediately reverses any incomplete downward transition.
+            self._begin_transition(requested_mode)
+        self._advance()
+        if requested_mode is not None and self._started_at is None:
+            for st in _active_stations(self.env, requested_mode):
+                st["_expert_key_held"] = True
+        else:
+            _clear_cook_latches(self.env)
+
+    def release(self):
+        _clear_cook_latches(self.env)
+        self.mode = None
+        self._started_at = None
 
 
 def _make_robot_controller(env, arm_tag, robot_motion):
@@ -286,6 +483,9 @@ def _make_robot_controller(env, arm_tag, robot_motion):
         for st in env.stations
         if st.get("cook_key") is not None
     ) or ("left", "right")
+
+    if robot_motion == "planner":
+        return CookKeyController(env, arm_tag)
 
     return make_button_controller(
         env,
@@ -318,10 +518,11 @@ def main():
 
     env = cook_meat()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
-    env.together_close_gripper(save_freq=None)
+    # Match the main cook_meat rollout: open fingers before approaching steak.
+    env.together_open_gripper(save_freq=None)
     _clear_cook_latches(env)
     if not env.use_cook_button:
-        raise SystemExit("cook_button_enabled did not activate; check task_args.")
+        print("cook_button_enabled=false: no cook button; meat cooks by pan contact.")
 
     # Keyboard sandbox starts with steaks on pans so Space can cook immediately.
     if args.control == "keyboard":
@@ -330,7 +531,7 @@ def main():
     keyboard = KeyboardState()
     robot_controller = (
         _make_robot_controller(env, ArmTag, args.robot_motion)
-        if args.control == "robot"
+        if args.control == "robot" and env.use_cook_button
         else None
     )
 
@@ -352,14 +553,25 @@ def main():
             frame_start = time.perf_counter()
             if args.control == "keyboard":
                 keyboard.update(env, viewer.window)
-            elif robot_controller is not None:
-                robot_controller.update(_requested_cook_mode(viewer.window))
+            else:
+                if robot_controller is not None:
+                    robot_controller.update(_requested_cook_mode(viewer.window))
+                if viewer.window.key_press("g"):
+                    if robot_controller is not None:
+                        robot_controller.release()
+                    _toggle_steak_transfer(env, robot=True)
+                    if robot_controller is not None and hasattr(robot_controller, "prepare"):
+                        robot_controller.prepare()
             env._update_kinematic_tasks()
             env.scene.step()
             env.scene.update_render()
             viewer.render()
             doneness = [round(float(st["doneness"]), 2) for st in env.stations]
-            status = f"doneness={doneness} target={env.target_doneness:.2f}"
+            target_range = env.target_doneness_range
+            status = (
+                f"doneness={doneness} "
+                f"target={float(target_range[0]):.2f}-{float(target_range[1]):.2f}"
+            )
             if status != last_status and any(d > 0 for d in doneness):
                 print(status)
                 last_status = status
