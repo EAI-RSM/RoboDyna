@@ -358,12 +358,16 @@ class catch_valley_ball(Base_Task):
             surface_points = surface_points.copy()
             surface_points[:, 0] *= -1.0
         tangents = np.gradient(surface_points, axis=0)
+        # Rotate tangent 90° in the XZ plane; keep the branch that points upward.
+        # (A plain x-mirror makes tangent_x flip sign, which would otherwise put
+        # the "up" normal into the table and build an upside-down ramp.)
         normals = np.column_stack([
             -tangents[:, 2],
             np.zeros(len(tangents)),
             tangents[:, 0],
         ])
-        normals /= np.linalg.norm(normals, axis=1, keepdims=True)
+        normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-9)
+        normals[normals[:, 2] < 0.0] *= -1.0
         # Centerline surface offset by radius; lateral Y is baked below so
         # wall / ball-ball bounces are deterministic across plan+render passes.
         self._surface_ball_path = surface_points + self.ball_radius * normals
@@ -747,12 +751,46 @@ class catch_valley_ball(Base_Task):
             ])
         return np.asarray(points, dtype=np.float64)
 
+    def _ramp_segment_quat(self, point_a, point_b):
+        """Board pose: local +X along the segment, local +Z outward/up."""
+        delta = np.asarray(point_b, dtype=np.float64) - np.asarray(point_a, dtype=np.float64)
+        length = float(np.linalg.norm(delta))
+        if length < 1e-9:
+            return t3d.euler.euler2quat(0.0, 0.0, 0.0)
+        tangent = delta / length
+        # 90° XZ rotation of the tangent; keep the upward branch so a mirrored
+        # (−x) layout does not invert the board/rails into the table.
+        normal = np.array([-tangent[2], 0.0, tangent[0]], dtype=np.float64)
+        if normal[2] < 0.0:
+            normal = -normal
+        nlen = float(np.linalg.norm(normal))
+        normal = (
+            np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            if nlen < 1e-9
+            else normal / nlen
+        )
+        binormal = np.cross(normal, tangent)
+        blen = float(np.linalg.norm(binormal))
+        binormal = (
+            np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            if blen < 1e-9
+            else binormal / blen
+        )
+        # Prefer width along +Y without flipping the upward normal: reverse
+        # tangent+binormal together (keeps a right-handed frame).
+        if binormal[1] < 0.0:
+            tangent = -tangent
+            binormal = -binormal
+        rot = np.column_stack([tangent, binormal, normal])
+        if float(np.linalg.det(rot)) < 0.0:
+            binormal = -binormal
+            rot = np.column_stack([tangent, binormal, normal])
+        return t3d.quaternions.mat2quat(rot)
+
     def _build_ramp_segment(self, name, point_a, point_b):
-        center = 0.5 * (point_a + point_b)
-        length = float(np.linalg.norm(point_b - point_a))
-        delta = point_b - point_a
-        angle = -float(np.arctan2(delta[2], delta[0]))
-        quat = t3d.euler.euler2quat(0.0, angle, 0.0)
+        center = 0.5 * (np.asarray(point_a, dtype=np.float64) + np.asarray(point_b, dtype=np.float64))
+        length = float(np.linalg.norm(np.asarray(point_b) - np.asarray(point_a)))
+        quat = self._ramp_segment_quat(point_a, point_b)
         board = create_box(
             self.scene,
             sapien.Pose(center.tolist(), quat.tolist()),
