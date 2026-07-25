@@ -372,9 +372,9 @@ def create_hollow_box_with_holes(
     entity = builder.build(name=name)
 
     if top_transparent and top_strip_specs:
-        # Window glass (RT): nearly-white light-blue tint + full transmission.
-        # (v11 demo look — preferred glass appearance)
-        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 1.0])
+        # Window glass (RT demos): light-blue tint + full transmission.
+        # Default raster GUI ignores transmission (may look opaque).
+        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.25])
         glass.set_transmission(1.0)
         glass.set_transmission_roughness(0.0)
         glass.set_roughness(0.02)
