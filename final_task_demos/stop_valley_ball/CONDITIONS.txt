@@ -20,7 +20,7 @@ Sources (existing recorded demos, right-arm / +x where available):
   default  <- tmp_stop_valley_ball/video/v22_*.mp4
   opt1     <- v14_opt1_right_s0_seed0_*.mp4
   opt2     <- v18_opt2_right_s0_seed0_*.mp4
-  opt1+2   <- v5_opt1+2_*.mp4
+  opt1+2   <- v24_opt1+2_*.mp4 (bat-era re-record)
 
 Files (side-by-side GIF is the README deliverable):
   default_sidebyside.gif / .mp4
