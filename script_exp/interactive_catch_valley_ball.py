@@ -42,7 +42,7 @@ CONTROLS = """
   Flow (robot): Space to pick up → click table to place
   Flow (keyboard): click to aim → Space to freeze/place
   Place snaps past the red line (success requires that).
-  Success: red ball in bowl, bowl behind red line
+  Success: red ball in bowl, bowl fully past red line (on the line = fail)
   --control keyboard  direct bowl teleop (default)
   --control robot     arm grasps / places the bowl
   --robot-motion planner|interpolate
@@ -96,7 +96,8 @@ def _target_xy(env):
 
 
 def _bowl_place_z(env):
-    return float(env.table_top - 0.020)  # release ~2 cm higher than prior place height
+    offset = float(getattr(env, "BOWL_PLACE_Z_OFFSET", -0.020))
+    return float(env.table_top + offset)
 
 
 def _get_rigid(actor):
@@ -293,7 +294,7 @@ class RobotBowlController:
         self.env.move(self.env.grasp_actor(self.env.bowl, arm_tag=self.arm, pre_grasp_dis=0.10))
         if self.env.plan_success:
             self.env._weld_bowl_to_end_effector(self.arm)
-            self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
+            self.env.move(self.env.move_by_displacement(self.arm, z=0.05, move_axis="arm"))
             self.holding = True
             print(f"Picked up bowl with {self.arm} arm. Left-click the table to place.")
             if self._pending_xy is not None:
@@ -327,7 +328,10 @@ class RobotBowlController:
         self.env._unweld_bowl()
         self.env.move(self.env.open_gripper(self.arm))
         self.env._fix_bowl_at_placed_pose()
-        self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
+        # Lift clear of the cup, then retreat the arm to the home pose.
+        self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="world"))
+        if self.env.plan_success:
+            self.env.move(self.env.back_to_origin(self.arm))
         self.env._bowl_ready = True
         self.holding = False
         self.placed = True

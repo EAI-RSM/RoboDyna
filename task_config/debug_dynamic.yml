@@ -487,15 +487,16 @@ task_args:
     ramp_center_y: 0.08
     ramp_valley_x: -0.02
     ramp_valley_height: 0.025
-    down_run: 0.27
-    down_rise: 0.13
-    up_run: 0.20
-    up_rise: 0.055
+    down_run: 0.3888
+    down_rise: 0.094
+    up_run: 0.288
+    up_rise: 0.085              # higher exit lip so ball falls near red line
     platform_length_scale_min: 0.8
     platform_length_scale_max: 1.2
     curve_segments: 16
     rail_height: 0.055
     ball_radius: 0.018
+    ball_mass: 0.50
     drop_height: 0.14
     drop_time: 0.60
     wall_bounce_enabled: false
@@ -507,20 +508,21 @@ task_args:
     angled_path_max_deg: 25.0
     drop_forward_angle_min_deg: -8.0
     drop_forward_angle_max_deg: 12.0
-    initial_forward_speed_min: 0.90
-    initial_forward_speed_max: 1.10
+    # On-ramp roll is kinematic: average speed = initial_forward_speed
+    initial_forward_speed_min: 0.10
+    initial_forward_speed_max: 0.20
     physics_max_steps: 1200
     red_line_gap: 0.10
-    roll_time_min: 4.0
-    roll_time_max: 7.0
+    roll_time_min: 4.0   # unused (speed-based roll)
+    roll_time_max: 7.0   # unused (speed-based roll)
     roll_acceleration: 0.35
     launch_speed: 0.72
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
-    bowl_id: 1
+    bowl_id: 3
     bowl_scale_mult: 0.65
-    bowl_inner_radius: 0.028
+    bowl_inner_radius: 0.034
     bowl_outer_radius: 0.037
     bowl_height: 0.040
   play_billiard:

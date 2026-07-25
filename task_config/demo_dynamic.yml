@@ -174,15 +174,16 @@ task_args:
     ramp_center_y: 0.08         # m; valley fixture y
     ramp_valley_x: -0.02        # m; valley low-point x
     ramp_valley_height: 0.025   # m; valley floor height above table
-    down_run: 0.27              # m; downhill segment horizontal run (nominal)
-    down_rise: 0.13             # m; downhill vertical rise (nominal)
-    up_run: 0.20                # m; uphill run (nominal)
-    up_rise: 0.055              # m; uphill rise (nominal)
+    down_run: 0.3888            # m; downhill segment horizontal run (nominal, +20% x)
+    down_rise: 0.094            # m; downhill vertical rise (gentler)
+    up_run: 0.288               # m; uphill run (nominal, +20% x)
+    up_rise: 0.085              # m; higher exit lip so ball falls near red line
     platform_length_scale_min: 0.8   # × nominal platform length (default −20%)
     platform_length_scale_max: 1.2   # × nominal platform length (default +20%)
     curve_segments: 16          # segments approximating curved plates
     rail_height: 0.055          # m; side-rail height
     ball_radius: 0.018          # m; ball radius
+    ball_mass: 0.50             # kg; 500 g
     drop_height: 0.14           # m; release height above valley entry
     drop_time: 0.60             # s; kinematic drop onto track
     wall_bounce_enabled: false  # Opt 1
@@ -194,20 +195,22 @@ task_args:
     angled_path_max_deg: 25.0   # deg; high
     drop_forward_angle_min_deg: -8.0  # deg; forward aim jitter low
     drop_forward_angle_max_deg: 12.0  # high
-    initial_forward_speed_min: 0.90   # m/s; entry speed low
-    initial_forward_speed_max: 1.10   # high
+    # On-ramp roll is kinematic: average speed = initial_forward_speed
+    # (roll_time = path_length / speed). Mass does not affect the roll.
+    initial_forward_speed_min: 0.10   # m/s; along-track roll speed low (half)
+    initial_forward_speed_max: 0.20   # m/s; along-track roll speed high (half)
     physics_max_steps: 1200     # cap on physics-driven track phase
     red_line_gap: 0.10          # m; deadline line offset for place timing
-    roll_time_min: 4.0          # s; scripted roll duration low
-    roll_time_max: 7.0          # s; high
-    roll_acceleration: 0.35     # along-track accel factor [0, 0.8]
-    launch_speed: 0.72          # m/s; exit/launch speed off track
+    roll_time_min: 4.0          # unused when speed-based roll is on (kept for compat)
+    roll_time_max: 7.0          # unused when speed-based roll is on (kept for compat)
+    roll_acceleration: 0.15     # along-track accel factor [0, 0.8] (ease-in)
+    launch_speed: 0.42          # m/s; PhysX exit speed after leaving the ramp
     idle_time_min: 1.0          # s; idle before grasp low
     idle_time_max: 2.0          # s; high
     settle_steps: 150           # post-catch settle steps
-    bowl_id: 1                  # 002_bowl model_id
+    bowl_id: 3                  # 002_bowl model_id (blue/brown; was base1)
     bowl_scale_mult: 0.65       # bowl asset scale
-    bowl_inner_radius: 0.028    # m; catch success inner radius
+    bowl_inner_radius: 0.034    # m; catch success inner radius
     bowl_outer_radius: 0.037    # m; outer rim reference
     bowl_height: 0.040          # m; bowl height used in checks
   collect_falling_bowl:

@@ -161,6 +161,8 @@ def report_task_result(env, detail: str | None = None) -> bool:
     except Exception as exc:
         print(f"Task complete: FAILURE (check_success error: {exc})")
         return False
+    if detail is None and not ok:
+        detail = getattr(env, "_last_fail_reason", None) or None
     status = "SUCCESS" if ok else "FAILURE"
     print(f"Task complete: {status}" + (f" ({detail})" if detail else ""))
     return ok

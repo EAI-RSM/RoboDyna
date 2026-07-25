@@ -42,10 +42,10 @@ class catch_valley_ball(Base_Task):
     RAMP_CENTER_Y_DEFAULT = 0.08
     RAMP_VALLEY_X_DEFAULT = -0.02
     RAMP_VALLEY_HEIGHT_DEFAULT = 0.025
-    DOWN_RUN_DEFAULT = 0.27
-    DOWN_RISE_DEFAULT = 0.13
-    UP_RUN_DEFAULT = 0.20
-    UP_RISE_DEFAULT = 0.055
+    DOWN_RUN_DEFAULT = 0.3888  # +20% x-length again (was 0.324)
+    DOWN_RISE_DEFAULT = 0.094  # gentler downhill again
+    UP_RUN_DEFAULT = 0.288  # +20% x-length again (was 0.24)
+    UP_RISE_DEFAULT = 0.085  # higher exit lip so ball falls near red line
     # Platform length (down_run + up_run) is scaled per episode within this range.
     PLATFORM_LENGTH_SCALE_MIN_DEFAULT = 0.8
     PLATFORM_LENGTH_SCALE_MAX_DEFAULT = 1.2
@@ -58,6 +58,7 @@ class catch_valley_ball(Base_Task):
     MIRROR_X_SHIFT = 0.05
 
     BALL_RADIUS_DEFAULT = 0.018
+    BALL_MASS_DEFAULT = 0.50  # kg (500 g)
     DROP_HEIGHT_DEFAULT = 0.14
     DROP_TIME_DEFAULT = 0.60
     DROP_WALL_ANGLE_MIN_DEFAULT = 15.0
@@ -68,8 +69,8 @@ class catch_valley_ball(Base_Task):
     BALL_PATH_MODE_DEFAULT = "straight"
     DROP_FORWARD_ANGLE_MIN_DEFAULT = -8.0
     DROP_FORWARD_ANGLE_MAX_DEFAULT = 12.0
-    INITIAL_FORWARD_SPEED_MIN_DEFAULT = 0.90
-    INITIAL_FORWARD_SPEED_MAX_DEFAULT = 1.10
+    INITIAL_FORWARD_SPEED_MIN_DEFAULT = 0.10
+    INITIAL_FORWARD_SPEED_MAX_DEFAULT = 0.20
     ROLL_TIME_MIN_DEFAULT = 4.0
     ROLL_TIME_MAX_DEFAULT = 7.0
     LAUNCH_SPEED_DEFAULT = 0.72
@@ -80,11 +81,12 @@ class catch_valley_ball(Base_Task):
     IDLE_TIME_MAX_DEFAULT = 2.0
     SETTLE_STEPS_DEFAULT = 150
 
-    BOWL_ID_DEFAULT = 1
+    BOWL_ID_DEFAULT = 3  # 002_bowl instance (was base1; blue/brown ceramic)
     BOWL_SCALE_MULT_DEFAULT = 0.65
-    BOWL_INNER_RADIUS_DEFAULT = 0.028
+    BOWL_INNER_RADIUS_DEFAULT = 0.034  # slightly forgiving catch radius
     BOWL_OUTER_RADIUS_DEFAULT = 0.037
     BOWL_HEIGHT_DEFAULT = 0.040
+    BOWL_PLACE_Z_OFFSET = -0.020  # place height relative to table_top
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("catch_valley_ball", {})
@@ -189,14 +191,31 @@ class catch_valley_ball(Base_Task):
         return ", ".join(parts) if parts else "baseline"
 
     def _past_red_line_x(self, x, margin=0.0):
-        """True if world-x is on the catch side of the red line (travel direction)."""
-        return bool(self.side * float(x) - float(margin) >= self.side * self.red_line_x)
+        """True if ``x`` is strictly on the catch side of the red line.
+
+        - Right layout (``side > 0``): need ``x > red_line_x + margin`` (+x catch).
+        - Left / mirrored (``side < 0``): need ``x < red_line_x - margin`` (−x catch).
+
+        Bowl on or overlapping the line fails when ``margin`` includes the outer
+        radius (near rim must clear the line).
+        """
+        x = float(x)
+        margin = float(margin)
+        red = float(self.red_line_x)
+        if float(self.side) < 0.0:
+            return bool(x < red - margin)
+        return bool(x > red + margin)
 
     def _catch_target_x(self, landing_x):
         """Bowl place-x: past the red line in the travel direction, at/beyond landing."""
         # Extra margin so the rim clears the line even with placement slip.
-        required = self.red_line_x + self.side * (self.bowl_outer_radius + 0.025)
-        return float(self.side * max(self.side * float(landing_x), self.side * required))
+        # Mirrored (−x): required is more negative than the line; else more positive.
+        clearance = self.bowl_outer_radius + 0.025
+        if float(self.side) < 0.0:
+            required = float(self.red_line_x) - clearance
+            return float(min(float(landing_x), required))
+        required = float(self.red_line_x) + clearance
+        return float(max(float(landing_x), required))
 
     # ---------------------------------------------------------------- actors
     def load_actors(self):
@@ -239,6 +258,7 @@ class catch_valley_ball(Base_Task):
         self.rail_thickness = float(c.get("rail_thickness", self.RAIL_THICKNESS_DEFAULT))
 
         self.ball_radius = float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT))
+        self.ball_mass = float(c.get("ball_mass", self.BALL_MASS_DEFAULT))
         self.drop_height = float(c.get("drop_height", self.DROP_HEIGHT_DEFAULT))
         self.drop_time = float(c.get("drop_time", self.DROP_TIME_DEFAULT))
         self.wall_bounce_enabled = self._parse_wall_bounce_enabled(c)
@@ -296,6 +316,7 @@ class catch_valley_ball(Base_Task):
         self.up_rise = max(self.up_rise, 0.01)
         self.curve_segments = max(3, self.curve_segments)
         self.ball_radius = float(np.clip(self.ball_radius, 0.008, 0.03))
+        self.ball_mass = max(float(self.ball_mass), 0.001)
         self.drop_time = max(self.drop_time, 0.05)
         self.roll_time = max(self.roll_time, 0.2)
         self.launch_speed = max(self.launch_speed, 0.05)
@@ -384,6 +405,12 @@ class catch_valley_ball(Base_Task):
         path_steps = np.linalg.norm(np.diff(self.ball_path, axis=0), axis=1)
         self.ball_path_cumulative = np.concatenate([[0.0], np.cumsum(path_steps)])
         self.ball_path_length = float(self.ball_path_cumulative[-1])
+        # On-ramp roll is kinematic (posed along the path), so mass has no effect.
+        # Average along-track speed is ``initial_forward_speed``:
+        #   roll_time = path_length / speed
+        self.roll_time = float(
+            self.ball_path_length / max(float(self.initial_forward_speed), 1e-3)
+        )
         self.ball_start = self.ball_path[0].copy()
         self.ball_valley = self.ball_path[self.curve_segments].copy()
         self.ball_exit = self.ball_path[-1].copy()
@@ -440,6 +467,7 @@ class catch_valley_ball(Base_Task):
         )
         self._ball_rigid = self._get_rigid(self.ball)
         if self._ball_rigid is not None:
+            self._ball_rigid.set_mass(self.ball_mass)
             self._ball_rigid.set_disable_gravity(True)
             self._ball_rigid.set_kinematic(True)
             self._ball_rigid.set_kinematic_target(sapien.Pose(self.ball_drop.tolist()))
@@ -463,19 +491,13 @@ class catch_valley_ball(Base_Task):
         # Spawn bowl on the catch side, already past the red-line x so the
         # subsequent place mainly adjusts y toward the predicted landing.
         bowl_x = float(self.side * np.random.uniform(0.30, 0.34))
-        bowl_q = [0.5, 0.5, 0.5, 0.5]
         if self.mirrored:
             bowl_x += float(self.MIRROR_X_SHIFT)
-            # Left-side layout: yaw 180° about world Z so the bowl faces the exit.
-            bowl_q = t3d.quaternions.qmult(
-                t3d.euler.euler2quat(0.0, 0.0, np.pi),
-                np.asarray(bowl_q, dtype=float),
-            ).tolist()
         bowl_pose = rand_pose(
             xlim=[bowl_x, bowl_x],
             ylim=[-0.20, -0.16],
             zlim=[self.table_top],
-            qpos=bowl_q,
+            qpos=[0.5, 0.5, 0.5, 0.5],
             rotate_rand=False,
         )
         self.bowl = create_actor(
@@ -719,6 +741,7 @@ class catch_valley_ball(Base_Task):
         )
         self._distractor_rigid = self._get_rigid(self.distractor)
         if self._distractor_rigid is not None:
+            self._distractor_rigid.set_mass(self.ball_mass)
             self._distractor_rigid.set_disable_gravity(True)
             self._distractor_rigid.set_kinematic(True)
             self._distractor_rigid.set_kinematic_target(
@@ -1229,6 +1252,10 @@ class catch_valley_ball(Base_Task):
     def _check_arm_ball_contact(self):
         if self._arm_ball_contact or not getattr(self, "_loaded", False):
             return
+        # After the bowl is placed, arm retreat can brush the vessel/ball and
+        # must not count as an illegal arm catch.
+        if getattr(self, "_bowl_ready", False):
+            return
         ball_name = self.ball.get_name()
         for contact in self.scene.get_contacts():
             name0 = contact.bodies[0].entity.name
@@ -1272,7 +1299,7 @@ class catch_valley_ball(Base_Task):
         target = np.array([
             self._catch_target_x(self.landing[0]),
             self.landing[1],
-            self.table_top - 0.020,  # release ~2 cm higher than prior place height
+            self.table_top + self.BOWL_PLACE_Z_OFFSET,
         ])
         displacement = target - bowl_now
         self.move(self.move_by_displacement(
@@ -1334,11 +1361,11 @@ class catch_valley_ball(Base_Task):
             <= bowl_position[2] + self.bowl_height + 2.0 * self.ball_radius
         )
         in_bowl = bool(horizontal_offset < self.bowl_inner_radius and in_height)
-        # Allow the full ramp y-span (randomized lanes can exit near a rail).
+        # X-only: fully clear of the red line on the catch side of this layout.
+        # Left/mirrored → further −x; right → further +x. On the line = fail.
+        line_clearance = self.bowl_outer_radius + 0.008
         behind_line = bool(
-            self._past_red_line_x(bowl_position[0], margin=self.bowl_outer_radius)
-            and abs(bowl_position[1] - self.ramp_center_y)
-            <= self.ramp_half_width
+            self._past_red_line_x(bowl_position[0], margin=line_clearance)
         )
         distractor_in_bowl = bool(
             self.enable_distractor and self._ball_in_bowl(self.distractor)
@@ -1354,13 +1381,29 @@ class catch_valley_ball(Base_Task):
 
     def check_success(self):
         if not getattr(self, "_loaded", False) or self._ball_phase != "released":
+            self._last_fail_reason = "ball_not_released"
             return False
         self._check_arm_ball_contact()
-        _, in_bowl, behind_line, _, _, distractor_in_bowl = self._catch_state()
+        _, in_bowl, behind_line, _, bowl_position, distractor_in_bowl = self._catch_state()
         # Catching the black distractor is an explicit failure.
         if distractor_in_bowl:
+            self._last_fail_reason = "distractor_in_bowl"
             return False
-        return bool(in_bowl and behind_line and not self._arm_ball_contact)
+        if self._arm_ball_contact:
+            self._last_fail_reason = "arm_ball_contact"
+            return False
+        if not in_bowl:
+            self._last_fail_reason = "ball_not_in_bowl"
+            return False
+        if not behind_line:
+            side = "left/−x" if float(self.side) < 0.0 else "right/+x"
+            self._last_fail_reason = (
+                f"bowl_not_past_red_line({side}: bowl_x={float(bowl_position[0]):.3f}, "
+                f"red_line_x={float(self.red_line_x):.3f})"
+            )
+            return False
+        self._last_fail_reason = ""
+        return True
 
     def get_obs(self):
         obs = super().get_obs()
