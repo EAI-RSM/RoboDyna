@@ -369,8 +369,6 @@ def main():
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
-    viewer.set_camera_xyz(0.0, 0.05, 1.95)
-    viewer.set_camera_rpy(0.0, -np.pi / 2.15, -np.pi / 2.0)
     views = make_viewer_view_toggle(env, viewer)
 
     # For keyboard teleop, prevent EE weld from yanking cubes every step.

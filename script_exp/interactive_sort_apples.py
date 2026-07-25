@@ -213,7 +213,7 @@ def _add_second_view(env, primary_viewer):
     def render_both(*args, **kwargs):
         # Re-apply both poses because the viewer control plugin can otherwise
         # synchronize camera state after a window receives focus.
-        primary_viewer.set_camera_xyz(0.0, 0.0, 2.1)
+        primary_viewer.set_camera_xyz(0.08, 0.0, 1.68)
         primary_viewer.set_camera_rpy(0.0, -np.pi / 2.0, -np.pi / 2.0)
         result = original_render(*args, **kwargs)
         if not secondary.closed:
@@ -261,7 +261,7 @@ class CompositeView:
         self.overhead.entity.set_pose(_camera_pose(
             # Reverse the up axis so the overhead image is rotated 180 degrees:
             # the robot is at the bottom, matching the interactive GUI view.
-            sapien, [0.0, 0.0, 2.1], [0.0, 0.0, 0.75], [0.0, -1.0, 0.0],
+            sapien, [0.08, 0.0, 1.68], [0.0, 0.0, 0.75], [0.0, -1.0, 0.0],
         ))
         self.head = next(
             (camera for camera, name in zip(env.cameras.static_camera_list, env.cameras.static_camera_name)
@@ -408,8 +408,6 @@ def main():
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
 
     # A fixed overhead camera with the robot at the bottom keeps its controls in view.
-    viewer.set_camera_xyz(0.0, 0.0, 2.1)
-    viewer.set_camera_rpy(0.0, -np.pi / 2.0, -np.pi / 2.0)
     views = make_viewer_view_toggle(env, viewer)
     composite_view = None
     restore_composite_motion_renderer = lambda: None

@@ -184,6 +184,22 @@ def resolve_head_camera(env=None, viewer=None):
     return None
 
 
+# Nadir viewer: +X camera offset shifts the table left in the frame.
+_TOPDOWN_VIEW_X_OFFSET = 0.08
+
+
+def default_topdown_xyz(env=None) -> tuple[float, float, float]:
+    """Overhead pose: table near image center, zoomed to table + dual arms."""
+    bias = getattr(env, "table_xy_bias", None) if env is not None else None
+    if bias is None:
+        bx = by = 0.0
+    else:
+        bx = float(bias[0])
+        by = float(bias[1])
+    # Z ≈ 1.68 with ~65° fovy keeps both arm bases (x≈±embodiment_dis/2) in frame.
+    return (bx + _TOPDOWN_VIEW_X_OFFSET, by, 1.68)
+
+
 class ViewerViewToggle:
     """Press V to switch the interactive viewer between top-down and head cam.
 
@@ -192,8 +208,13 @@ class ViewerViewToggle:
     pose onto the free-fly viewer each frame instead.
     """
 
-    DEFAULT_TOPDOWN_XYZ = (0.0, 0.0, 2.1)
+    # Table near center (slight +X so the table sits a bit left of frame center).
+    DEFAULT_TOPDOWN_XYZ = (_TOPDOWN_VIEW_X_OFFSET, 0.0, 1.68)
     DEFAULT_TOPDOWN_RPY = (0.0, -np.pi / 2.0, -np.pi / 2.0)
+    # Viewer default is 90°; narrow this so the table fills the frame
+    # while still showing both arms.
+    DEFAULT_TOPDOWN_FOVY = float(np.deg2rad(65.0))
+    DEFAULT_HEAD_FOVY = float(np.pi / 2.0)
 
     def __init__(
         self,
@@ -201,12 +222,13 @@ class ViewerViewToggle:
         head_camera=None,
         topdown_xyz=None,
         topdown_rpy=None,
-        capture_current_as_topdown: bool = True,
+        topdown_fovy=None,
+        capture_current_as_topdown: bool = False,
         warn_missing_head: bool = False,
     ):
         self.viewer = viewer
         self._prev_v = False
-        self.mode = "topdown"
+        self.mode = "topdown"  # always start overhead; V switches to head_camera
         self._head = head_camera
         if self._head is None:
             self._head = resolve_head_camera(viewer=viewer)
@@ -216,6 +238,9 @@ class ViewerViewToggle:
         self._topdown_pose = None
         self._topdown_xyz = None
         self._topdown_rpy = None
+        self._topdown_fovy = float(
+            self.DEFAULT_TOPDOWN_FOVY if topdown_fovy is None else topdown_fovy
+        )
         if topdown_xyz is not None:
             self._topdown_xyz = tuple(topdown_xyz)
             self._topdown_rpy = tuple(
@@ -240,6 +265,22 @@ class ViewerViewToggle:
                 return plugin
         return getattr(self.viewer, "control_window", None)
 
+    def _set_fovy(self, fovy: float):
+        window = getattr(self.viewer, "window", None)
+        if window is None:
+            return
+        try:
+            near = float(getattr(window, "near", 0.1))
+            far = float(getattr(window, "far", 1000.0))
+            window.set_camera_parameters(near, far, float(fovy))
+        except Exception:
+            try:
+                cw = self._control_window()
+                if cw is not None:
+                    cw.fovy = float(fovy)
+            except Exception:
+                pass
+
     def _set_viewer_pose(self, pose):
         """Snap free-fly camera to ``pose`` and keep the FPS controller in sync."""
         try:
@@ -253,6 +294,7 @@ class ViewerViewToggle:
 
     def apply(self, announce=True):
         if self.mode == "head" and self._head is not None:
+            self._set_fovy(self.DEFAULT_HEAD_FOVY)
             self._set_viewer_pose(self._head.global_pose)
             if announce:
                 print("View: head_camera")
@@ -261,6 +303,7 @@ class ViewerViewToggle:
             self.viewer.focus_camera(None)
         except Exception:
             pass
+        self._set_fovy(self._topdown_fovy)
         if self._topdown_pose is not None:
             self._set_viewer_pose(self._topdown_pose)
         else:
@@ -299,15 +342,33 @@ class ViewerViewToggle:
             self._set_viewer_pose(self._head.global_pose)
 
 
-def make_viewer_view_toggle(env, viewer=None, **kwargs) -> ViewerViewToggle:
-    """Build a V-key top-down ↔ head_camera toggle for an interactive env."""
+def make_viewer_view_toggle(
+    env,
+    viewer=None,
+    topdown_xyz=None,
+    topdown_rpy=None,
+    capture_current_as_topdown: bool = False,
+    **kwargs,
+) -> ViewerViewToggle:
+    """Build a V-key top-down ↔ head_camera toggle for an interactive env.
+
+    Always starts on a zoomed, table-centered top-down view.
+    Pass ``topdown_xyz`` / ``topdown_rpy`` only to override that framing.
+    """
     if viewer is None:
         viewer = getattr(env, "viewer", None)
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+    if topdown_xyz is None and not capture_current_as_topdown:
+        topdown_xyz = default_topdown_xyz(env)
+        if topdown_rpy is None:
+            topdown_rpy = ViewerViewToggle.DEFAULT_TOPDOWN_RPY
     return ViewerViewToggle(
         viewer,
         head_camera=resolve_head_camera(env, viewer),
+        topdown_xyz=topdown_xyz,
+        topdown_rpy=topdown_rpy,
+        capture_current_as_topdown=capture_current_as_topdown,
         **kwargs,
     )
 
@@ -319,15 +380,16 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     ``is_done(step)`` may return ``True`` / ``False``, or ``(done, detail)``.
     When done, prints SUCCESS/FAILURE via ``report_task_result`` and exits.
     ``should_stop`` remains a raw break (no auto print) for backward compatibility.
-    Press V to toggle top-down ↔ head_camera.
+    Starts top-down; press V to toggle top-down ↔ head_camera.
     """
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+    # Top-down is applied by make_viewer_view_toggle; keep optional pre-set for
+    # callers that pass capture_current_as_topdown via a custom loop.
     if overhead:
-        # Robot at bottom of the frame (matches interactive_sort_apples).
-        viewer.set_camera_xyz(0.0, 0.0, 2.1)
-        viewer.set_camera_rpy(0.0, -np.pi / 2.0, -np.pi / 2.0)
+        viewer.set_camera_xyz(*ViewerViewToggle.DEFAULT_TOPDOWN_XYZ)
+        viewer.set_camera_rpy(*ViewerViewToggle.DEFAULT_TOPDOWN_RPY)
     views = make_viewer_view_toggle(env, viewer)
     step = 0
     try:
