@@ -481,21 +481,23 @@ task_args:
     cup_fwd_clearance: 0.025
   catch_valley_ball:
     # Default: straight exit. Opt1 wall_bounce_enabled. Opt2 enable_distractor.
-    # Platform length samples ±20% via platform_length_scale_min/max.
+    # Means sampled ±param_jitter; run lengths ±length_jitter; up_run −20%.
+    param_jitter: 0.10
+    length_jitter: 0.05
     ramp_half_width: 0.125
     ramp_thickness: 0.012
     ramp_center_y: 0.08
-    ramp_valley_x: -0.02
+    ramp_valley_x: -0.14
     ramp_valley_height: 0.025
-    down_run: 0.27
-    down_rise: 0.13
-    up_run: 0.20
-    up_rise: 0.055
-    platform_length_scale_min: 0.8
-    platform_length_scale_max: 1.2
+    down_run: 0.324
+    down_rise: 0.094
+    up_run: 0.2592
+    up_rise: 0.085
     curve_segments: 16
     rail_height: 0.055
+    rail_thickness: 0.006
     ball_radius: 0.018
+    ball_mass: 0.50
     drop_height: 0.14
     drop_time: 0.60
     wall_bounce_enabled: false
@@ -507,22 +509,24 @@ task_args:
     angled_path_max_deg: 25.0
     drop_forward_angle_min_deg: -8.0
     drop_forward_angle_max_deg: 12.0
-    initial_forward_speed_min: 0.90
-    initial_forward_speed_max: 1.10
+    initial_forward_speed: 0.15
     physics_max_steps: 1200
-    red_line_gap: 0.10
+    red_line_gap: 0.05
+    landing_gap: 0.15
     roll_time_min: 4.0
     roll_time_max: 7.0
-    roll_acceleration: 0.35
-    launch_speed: 0.72
+    roll_acceleration: 0.25
+    launch_speed: 0.55
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
+    catcher_model: 021_cup
     bowl_id: 1
-    bowl_scale_mult: 0.65
-    bowl_inner_radius: 0.028
-    bowl_outer_radius: 0.037
-    bowl_height: 0.040
+    bowl_scale_mult: 1.0
+    bowl_inner_radius: 0.042
+    bowl_outer_radius: 0.052
+    bowl_height: 0.080
+    bowl_mass: 0.25
   play_billiard:
     # Default | Opt1 specific_hole | Opt2 enable_distractors | Opt1+2 both
     specific_hole: false

@@ -167,22 +167,24 @@ task_args:
     #   Opt 1 — wall_bounce_enabled: red ball rebounds off a side rail mid-run
     #   Opt 2 — enable_distractor: black distractor on a separate straight lane
     #            (exit points ≥ one ball diameter apart; catching black fails)
-    # Platform length (down_run+up_run) samples ±20% via platform_length_scale_* .
-    # Mirror — random_mirror / mirrored: x→−x; left arm places bowl when mirrored.
+    # Means below are episode-sampled at ±param_jitter (default ±10%).
+    # Mirror — random_mirror / mirrored: x→−x; left arm places catcher when mirrored.
+    param_jitter: 0.10          # ± fraction around non-length means
+    length_jitter: 0.05         # ± fraction around down_run / up_run
     ramp_half_width: 0.125      # m; valley track half-width (y extent of plates)
     ramp_thickness: 0.012       # m; plate thickness
     ramp_center_y: 0.08         # m; valley fixture y
-    ramp_valley_x: -0.02        # m; valley low-point x
+    ramp_valley_x: -0.14        # m; valley low-point (left)
     ramp_valley_height: 0.025   # m; valley floor height above table
-    down_run: 0.27              # m; downhill segment horizontal run (nominal)
-    down_rise: 0.13             # m; downhill vertical rise (nominal)
-    up_run: 0.20                # m; uphill run (nominal)
-    up_rise: 0.055              # m; uphill rise (nominal)
-    platform_length_scale_min: 0.8   # × nominal platform length (default −20%)
-    platform_length_scale_max: 1.2   # × nominal platform length (default +20%)
+    down_run: 0.324             # m; entry-side horizontal run mean
+    down_rise: 0.094            # m; downhill vertical rise
+    up_run: 0.2592              # m; catching-side run mean (20% shorter than 0.324)
+    up_rise: 0.085              # m; exit lip rise
     curve_segments: 16          # segments approximating curved plates
     rail_height: 0.055          # m; side-rail height
-    ball_radius: 0.018          # m; ball radius
+    rail_thickness: 0.006       # m; side-rail thickness
+    ball_radius: 0.018          # m; ball radius (fixed)
+    ball_mass: 0.50             # kg; 500 g (fixed)
     drop_height: 0.14           # m; release height above valley entry
     drop_time: 0.60             # s; kinematic drop onto track
     wall_bounce_enabled: false  # Opt 1
@@ -194,22 +196,25 @@ task_args:
     angled_path_max_deg: 25.0   # deg; high
     drop_forward_angle_min_deg: -8.0  # deg; forward aim jitter low
     drop_forward_angle_max_deg: 12.0  # high
-    initial_forward_speed_min: 0.90   # m/s; entry speed low
-    initial_forward_speed_max: 1.10   # high
+    # On-ramp roll is kinematic: average speed = initial_forward_speed
+    initial_forward_speed: 0.15 # m/s; along-track roll speed mean
     physics_max_steps: 1200     # cap on physics-driven track phase
-    red_line_gap: 0.10          # m; deadline line offset for place timing
-    roll_time_min: 4.0          # s; scripted roll duration low
-    roll_time_max: 7.0          # s; high
-    roll_acceleration: 0.35     # along-track accel factor [0, 0.8]
-    launch_speed: 0.72          # m/s; exit/launch speed off track
+    red_line_gap: 0.05          # m; red line just past ramp exit
+    landing_gap: 0.15           # m; ball landing past red line (~15 cm)
+    roll_time_min: 4.0          # unused when speed-based roll is on (kept for compat)
+    roll_time_max: 7.0          # unused when speed-based roll is on (kept for compat)
+    roll_acceleration: 0.25     # along-track accel factor mean
+    launch_speed: 0.55          # m/s; exit-speed seed mean (retuned to landing_gap)
     idle_time_min: 1.0          # s; idle before grasp low
     idle_time_max: 2.0          # s; high
     settle_steps: 150           # post-catch settle steps
-    bowl_id: 1                  # 002_bowl model_id
-    bowl_scale_mult: 0.65       # bowl asset scale
-    bowl_inner_radius: 0.028    # m; catch success inner radius
-    bowl_outer_radius: 0.037    # m; outer rim reference
-    bowl_height: 0.040          # m; bowl height used in checks
+    catcher_model: 021_cup
+    bowl_id: 1                  # 021_cup instance base1
+    bowl_scale_mult: 1.0        # cup asset scale
+    bowl_inner_radius: 0.042    # m; catch success half-width
+    bowl_outer_radius: 0.052    # m; outer rim reference
+    bowl_height: 0.080          # m; catcher height used in checks
+    bowl_mass: 0.25             # kg
   collect_falling_bowl:
     num_objects: 4              # spheres emitted this episode
     emit_interval: 40           # physics steps between emissions
