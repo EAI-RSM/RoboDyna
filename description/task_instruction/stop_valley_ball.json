@@ -1,0 +1,26 @@
+{
+  "full_description": "a red ball drops onto a curved valley ramp, rolls, then flies off; pick up the ping-pong bat from its holder and hold it in the air so the red ball hits the bat head; ignore any black distractor ball",
+  "schema": "{A} denotes the red ball, {B} denotes the ping-pong bat, {a} denotes the arm that holds the bat",
+  "preference": "num of words should not exceed 16. Degree of detail avg is 6",
+  "seen": [
+    "Hold {B} so {A} hits it in mid-air",
+    "Use {a} to stop {A} with {B}",
+    "Pick up {B} and raise it into {A}'s path",
+    "Stop {A} with the ping-pong bat after the ramp",
+    "Position {B} where {A} flies off the valley",
+    "Intercept the red ball with {B} in the air",
+    "Hold {B} past the red line and stop {A}",
+    "Use {B} to block {A} mid-flight",
+    "Put {B} on {A}'s aerial trajectory",
+    "Stop {A} as it leaves the valley ramp",
+    "Hold {B} so the red ball strikes the bat head",
+    "Raise the bat and stop the flying red ball",
+    "Anticipate {A}'s path and hold {B} there",
+    "Stop only the red ball, not the black distractor"
+  ],
+  "unseen": [
+    "Keep {B} aloft in the red ball's exit path",
+    "Stop the red ball after both valley slopes",
+    "Hold the ping-pong bat mid-air and stop the red ball"
+  ]
+}

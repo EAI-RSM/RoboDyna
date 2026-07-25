@@ -213,6 +213,74 @@ task_args:
     bowl_inner_radius: 0.034    # m; catch success inner radius
     bowl_outer_radius: 0.037    # m; outer rim reference
     bowl_height: 0.040          # m; bowl height used in checks
+  stop_valley_ball:
+    # Same valley ramp as catch_valley_ball, but grasp a ping-pong bat and hold
+    # it mid-air so the red ball hits the red circular head (table catch unused).
+    # Wider track (+30% y), faster ball. Success: head contact before table.
+    # Opt 1 wall_bounce_enabled / Opt 2 enable_distractor / mirror — same as parent.
+    param_jitter: 0.10
+    ramp_half_width: 0.1625      # 0.125 * 1.3
+    ramp_thickness: 0.012
+    ramp_center_y: 0.08
+    ramp_valley_x: -0.14
+    ramp_valley_height: 0.025
+    ramp_run: 0.324
+    down_run: 0.324
+    down_rise: 0.094
+    up_run: 0.324
+    up_rise: 0.085
+    curve_segments: 16
+    rail_height: 0.055
+    rail_thickness: 0.006
+    ball_radius: 0.018
+    ball_mass: 0.50
+    drop_height: 0.14
+    drop_time: 0.40            # faster drop
+    wall_bounce_enabled: false
+    enable_distractor: false
+    mirrored: null
+    random_mirror: true
+    ball_path_mode: straight
+    angled_path_min_deg: 15.0
+    angled_path_max_deg: 25.0
+    drop_forward_angle_min_deg: -8.0
+    drop_forward_angle_max_deg: 12.0
+    initial_forward_speed: 0.22 # faster on-ramp roll
+    initial_forward_speed_min: 0.22
+    initial_forward_speed_max: 0.22
+    platform_length_scale_min: 1.0
+    platform_length_scale_max: 1.0
+    physics_max_steps: 1200
+    red_line_gap: 0.05
+    landing_gap: 0.15
+    roll_time_min: 4.0
+    roll_time_max: 7.0
+    roll_acceleration: 0.25
+    launch_speed: 0.80          # faster exit flight
+    idle_time_min: 1.0
+    idle_time_max: 2.0
+    settle_steps: 150
+    # Small ping-pong bat (circular head + −Y handle) on a facing-ramp holder
+    panel_radius: 0.055         # bat head radius
+    panel_half_thick: 0.006
+    panel_mass: 0.12
+    panel_color: [0.88, 0.20, 0.16]
+    handle_color: [0.62, 0.42, 0.22]
+    handle_half_len: 0.050
+    handle_half_w: 0.010
+    handle_half_t: 0.007
+    holder_height: 0.022
+    panel_spawn_y_min: -0.20   # clear of ramp (ramp y≈[-0.08,+0.24])
+    panel_spawn_y_max: -0.14
+    intercept_flight_frac: 0.42
+    # Parent bowl keys kept so inherited load_actors can construct then hide it
+    catcher_model: 062_plasticbox
+    bowl_id: 1
+    bowl_scale_mult: 0.90
+    bowl_inner_radius: 0.080
+    bowl_outer_radius: 0.095
+    bowl_height: 0.060
+    bowl_mass: 0.35
   collect_falling_bowl:
     num_objects: 4              # spheres emitted this episode
     emit_interval: 40           # physics steps between emissions

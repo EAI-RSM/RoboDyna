@@ -1,0 +1,30 @@
+stop_valley_ball — expert controller demos
+
+default  : wall_bounce_enabled=false, enable_distractor=false
+           red ball rolls straight; bat held mid-air to stop it
+opt1     : wall_bounce_enabled=true,  enable_distractor=false
+           red ball rebounds off a side rail mid-run
+opt2     : wall_bounce_enabled=false, enable_distractor=true
+           black distractor on a separate lane (hitting it fails)
+opt1+2   : wall_bounce_enabled=true,  enable_distractor=true
+           wall rebound + black distractor
+
+Success:
+  - red ball contacts the red circular bat head (handle does not count), AND
+  - ball does not land on the table before that head contact, AND
+  - arm never touches the red ball, AND
+  - black distractor (if present) does not hit the bat head, AND
+  - bat remains held in the air.
+
+Sources (existing recorded demos, right-arm / +x where available):
+  default  <- tmp_stop_valley_ball/video/v22_*.mp4
+  opt1     <- v14_opt1_right_s0_seed0_*.mp4
+  opt2     <- v18_opt2_right_s0_seed0_*.mp4
+  opt1+2   <- v5_opt1+2_*.mp4
+
+Files (side-by-side GIF is the README deliverable):
+  default_sidebyside.gif / .mp4
+  opt1_sidebyside.gif / .mp4
+  opt2_sidebyside.gif / .mp4
+  opt1+2_sidebyside.gif / .mp4
+Also: <tag>_head.mp4, <tag>_topdown.mp4
