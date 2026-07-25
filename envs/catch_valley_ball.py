@@ -54,6 +54,8 @@ class catch_valley_ball(Base_Task):
     RAIL_THICKNESS_DEFAULT = 0.006
     RANDOM_MIRROR_DEFAULT = True
     MIRRORED_DEFAULT = None  # None → sample when random_mirror, else use explicit bool
+    # When mirrored (exit toward −x / left), nudge the whole fixture toward +x.
+    MIRROR_X_SHIFT = 0.05
 
     BALL_RADIUS_DEFAULT = 0.018
     DROP_HEIGHT_DEFAULT = 0.14
@@ -357,6 +359,7 @@ class catch_valley_ball(Base_Task):
         if self.mirrored:
             surface_points = surface_points.copy()
             surface_points[:, 0] *= -1.0
+            surface_points[:, 0] += float(self.MIRROR_X_SHIFT)
         tangents = np.gradient(surface_points, axis=0)
         # Rotate tangent 90° in the XZ plane; keep the branch that points upward.
         # (A plain x-mirror makes tangent_x flip sign, which would otherwise put
@@ -460,11 +463,19 @@ class catch_valley_ball(Base_Task):
         # Spawn bowl on the catch side, already past the red-line x so the
         # subsequent place mainly adjusts y toward the predicted landing.
         bowl_x = float(self.side * np.random.uniform(0.30, 0.34))
+        bowl_q = [0.5, 0.5, 0.5, 0.5]
+        if self.mirrored:
+            bowl_x += float(self.MIRROR_X_SHIFT)
+            # Left-side layout: yaw 180° about world Z so the bowl faces the exit.
+            bowl_q = t3d.quaternions.qmult(
+                t3d.euler.euler2quat(0.0, 0.0, np.pi),
+                np.asarray(bowl_q, dtype=float),
+            ).tolist()
         bowl_pose = rand_pose(
             xlim=[bowl_x, bowl_x],
             ylim=[-0.20, -0.16],
             zlim=[self.table_top],
-            qpos=[0.5, 0.5, 0.5, 0.5],
+            qpos=bowl_q,
             rotate_rand=False,
         )
         self.bowl = create_actor(
@@ -1261,7 +1272,7 @@ class catch_valley_ball(Base_Task):
         target = np.array([
             self._catch_target_x(self.landing[0]),
             self.landing[1],
-            self.table_top - 0.040,
+            self.table_top - 0.020,  # release ~2 cm higher than prior place height
         ])
         displacement = target - bowl_now
         self.move(self.move_by_displacement(
