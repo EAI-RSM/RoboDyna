@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball.py --control robot
 
-Place the bowl behind the red line under the valley exit. Keyboard nudges the
-bowl directly; robot mode grasps, nudges, and releases.
+Mixed keyboard + mouse: Space picks up / freezes the bowl; left-click sets the
+table XY. Robot mode grasps on Space, then places at the click location.
 """
 
 import argparse
@@ -32,13 +32,16 @@ CONTROLS = """
 ============================================================
  catch_valley_ball — interactive controls
 ============================================================
-  Arrow keys        nudge bowl XY
-  Space             keyboard: place/freeze bowl behind red line
-                    robot: grasp bowl, then release/place
-  G                 robot: guided place at predicted landing
+  Mouse left-click  set bowl XY on the table
+  Space             keyboard: freeze/place bowl at current XY
+                    robot: pick up bowl (grasp); place uses click
+  Arrow keys        fine nudge (optional)
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
+  Flow (robot): Space to pick up → click table to place
+  Flow (keyboard): click to aim → Space to freeze/place
+  Place snaps past the red line (success requires that).
   Success: red ball in bowl, bowl behind red line
   --control keyboard  direct bowl teleop (default)
   --control robot     arm grasps / places the bowl
@@ -92,6 +95,10 @@ def _target_xy(env):
     return float(env._catch_target_x(landing[0])), float(landing[1])
 
 
+def _bowl_place_z(env):
+    return float(env.table_top - 0.040)
+
+
 def _get_rigid(actor):
     import sapien
     for comp in actor.actor.get_components():
@@ -104,7 +111,7 @@ def _set_bowl_xy(env, x, y, z=None):
     import sapien
     pose = env.bowl.get_pose()
     if z is None:
-        z = float(env.table_top - 0.040)
+        z = _bowl_place_z(env)
     new_pose = sapien.Pose([float(x), float(y), float(z)], pose.q)
     env.bowl.set_pose(new_pose)
     rigid = _get_rigid(env.bowl)
@@ -132,6 +139,99 @@ def _nudge_from_keys(window, step=0.008):
     return dx, dy
 
 
+def _clamp_table_xy(env, x, y):
+    """Keep the bowl on a usable patch near the valley exit / red line."""
+    # Snap X past the red line (success requires this); keep Y on the table.
+    x = float(env._catch_target_x(x))
+    y = float(np.clip(y, -0.50, 0.25))
+    return x, y
+
+
+def _ray_hit_table_xy(origin, direction, table_z):
+    """Intersect a world-space ray with the horizontal table plane."""
+    origin = np.asarray(origin, dtype=np.float64).reshape(3)
+    direction = np.asarray(direction, dtype=np.float64).reshape(3)
+    norm = float(np.linalg.norm(direction))
+    if norm < 1e-12:
+        return None
+    direction = direction / norm
+    if abs(direction[2]) < 1e-12:
+        return None
+    t = (float(table_z) - float(origin[2])) / float(direction[2])
+    if t < 0.0:
+        return None
+    hit = origin + t * direction
+    return float(hit[0]), float(hit[1])
+
+
+def _click_to_table_xy(viewer, pixel_x, pixel_y, table_z):
+    """Map a viewer click to XY on the table surface (``z=table_z``)."""
+    window = viewer.window
+    px = int(pixel_x)
+    py = int(pixel_y)
+
+    try:
+        model = np.asarray(window.get_camera_model_matrix(), dtype=np.float64)
+    except Exception:
+        return None
+    origin = model[:3, 3]
+    rot = model[:3, :3]
+
+    try:
+        pos = np.asarray(window.get_picture_pixel("Position", px, py), dtype=np.float64)
+        if pos.shape[0] >= 3 and np.all(np.isfinite(pos[:3])):
+            depth_ok = True
+            if pos.shape[0] >= 4:
+                depth_ok = float(pos[3]) < 0.999
+            if depth_ok and float(np.linalg.norm(pos[:3])) > 1e-6:
+                world = rot @ pos[:3] + origin
+                if abs(float(world[2]) - float(table_z)) <= 0.04:
+                    return float(world[0]), float(world[1])
+                hit = _ray_hit_table_xy(origin, world - origin, table_z)
+                if hit is not None:
+                    return hit
+    except Exception:
+        pass
+
+    try:
+        tw, th = window.get_picture_size("Color")
+    except Exception:
+        try:
+            tw, th = window.get_picture_size("Segmentation")
+        except Exception:
+            tw, th = window.size
+    if tw <= 0 or th <= 0:
+        return None
+
+    try:
+        sw, sh = window.get_picture_size("Segmentation")
+        if sw > 0 and sh > 0 and (sw != tw or sh != th):
+            px = int(px * tw / sw)
+            py = int(py * th / sh)
+    except Exception:
+        pass
+
+    ndc_x = (float(px) + 0.5) / float(tw) * 2.0 - 1.0
+    ndc_y = 1.0 - (float(py) + 0.5) / float(th) * 2.0
+
+    if getattr(window, "camera_mode", "perspective") == "orthographic":
+        top = float(getattr(window, "ortho_top", 1.0))
+        aspect = float(tw) / float(th)
+        right = top * aspect
+        origin_o = origin + rot @ np.array(
+            [ndc_x * right, ndc_y * top, 0.0], dtype=np.float64
+        )
+        direction = rot @ np.array([0.0, 0.0, -1.0], dtype=np.float64)
+        return _ray_hit_table_xy(origin_o, direction, table_z)
+
+    fovy = float(window.fovy)
+    aspect = float(tw) / float(th)
+    tan_y = float(np.tan(0.5 * fovy))
+    tan_x = tan_y * aspect
+    dir_cam = np.array([ndc_x * tan_x, ndc_y * tan_y, -1.0], dtype=np.float64)
+    return _ray_hit_table_xy(origin, rot @ dir_cam, table_z)
+
+
 class EdgeKey:
     def __init__(self):
         self._prev = False
@@ -148,21 +248,29 @@ class KeyboardBowlController:
         self.placed = False
         self._space = EdgeKey()
 
+    def on_table_click(self, x, y):
+        if self.placed:
+            return False
+        x, y = _clamp_table_xy(self.env, x, y)
+        _set_bowl_xy(self.env, x, y)
+        print(f"Bowl aimed at click ({x:.3f}, {y:.3f}). Press Space to place.")
+        return True
+
     def update(self, window):
         if not self.placed:
             dx, dy = _nudge_from_keys(window)
             if dx or dy:
                 p = np.asarray(self.env.bowl.get_pose().p, dtype=float)
-                _set_bowl_xy(self.env, p[0] + dx, p[1] + dy)
+                x, y = _clamp_table_xy(self.env, p[0] + dx, p[1] + dy)
+                _set_bowl_xy(self.env, x, y)
         if self._space.poll(window.key_down("space")):
             p = np.asarray(self.env.bowl.get_pose().p, dtype=float)
-            # Snap just past the red line if the user is still short.
-            x = float(self.env._catch_target_x(p[0]))
-            _set_bowl_xy(self.env, x, p[1], self.env.table_top - 0.040)
+            x, y = _clamp_table_xy(self.env, p[0], p[1])
+            _set_bowl_xy(self.env, x, y, _bowl_place_z(self.env))
             self.env._fix_bowl_at_placed_pose()
             self.env._bowl_ready = True
             self.placed = True
-            print(f"Bowl placed at ({x:.3f}, {p[1]:.3f}) behind red line.")
+            print(f"Bowl placed at ({x:.3f}, {y:.3f}) behind red line.")
 
 
 class RobotBowlController:
@@ -173,8 +281,8 @@ class RobotBowlController:
         self.holding = False
         self.placed = False
         self.busy = False
+        self._pending_xy = None
         self._space = EdgeKey()
-        self._g = EdgeKey()
 
     def _choose_arm(self):
         return self.ArmTag("left" if self.env.mirrored else "right")
@@ -187,20 +295,31 @@ class RobotBowlController:
             self.env._weld_bowl_to_end_effector(self.arm)
             self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
             self.holding = True
-            print(f"Grasped bowl with {self.arm} arm. Arrows nudge; Space releases; G guided-places.")
+            print(f"Picked up bowl with {self.arm} arm. Left-click the table to place.")
+            if self._pending_xy is not None:
+                x, y = self._pending_xy
+                self._pending_xy = None
+                self.busy = False
+                self.place_at(x, y)
+                return
         else:
             print("Grasp failed; planner disabled further robot actions.")
         self.busy = False
 
-    def guided_place(self):
-        if not self.holding:
-            self.grasp()
-        if not self.holding:
+    def place_at(self, x, y):
+        if self.placed:
+            return
+        if not self.holding or self.arm is None:
+            self._pending_xy = (float(x), float(y))
+            print(
+                f"Place target ({x:.3f}, {y:.3f}) saved — press Space to pick up, "
+                "then it will place."
+            )
             return
         self.busy = True
-        x, y = _target_xy(self.env)
+        x, y = _clamp_table_xy(self.env, x, y)
         bowl_now = np.asarray(self.env.bowl.get_pose().p, dtype=float)
-        target = np.array([x, y, self.env.table_top - 0.040])
+        target = np.array([x, y, _bowl_place_z(self.env)], dtype=float)
         d = target - bowl_now
         self.env.move(self.env.move_by_displacement(
             arm_tag=self.arm, x=float(d[0]), y=float(d[1]), z=float(d[2]), move_axis="world",
@@ -208,27 +327,22 @@ class RobotBowlController:
         self.env._unweld_bowl()
         self.env.move(self.env.open_gripper(self.arm))
         self.env._fix_bowl_at_placed_pose()
+        self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
         self.env._bowl_ready = True
         self.holding = False
         self.placed = True
-        print(f"Guided place at ({x:.3f}, {y:.3f}).")
+        print(f"Placed bowl at click ({x:.3f}, {y:.3f}) behind red line.")
         self.busy = False
 
-    def release(self):
-        if not self.holding:
-            return
-        self.busy = True
-        self.env._unweld_bowl()
-        self.env.move(self.env.open_gripper(self.arm))
-        self.env._fix_bowl_at_placed_pose()
-        self.env._bowl_ready = True
-        self.holding = False
-        self.placed = True
-        print("Bowl released.")
-        self.busy = False
+    def on_table_click(self, x, y):
+        if self.busy or self.placed:
+            return False
+        x, y = _clamp_table_xy(self.env, x, y)
+        self.place_at(x, y)
+        return True
 
     def nudge(self, window):
-        if self.busy or not self.holding:
+        if self.busy or not self.holding or self.arm is None or self.placed:
             return
         dx, dy = _nudge_from_keys(window, step=0.02)
         if not (dx or dy):
@@ -242,14 +356,9 @@ class RobotBowlController:
     def update(self, window):
         if self.busy:
             return
-        if self._g.poll(window.key_down("g")):
-            self.guided_place()
-            return
         if self._space.poll(window.key_down("space")):
-            if not self.holding:
+            if not self.holding and not self.placed:
                 self.grasp()
-            else:
-                self.release()
             return
         self.nudge(window)
 
@@ -301,6 +410,17 @@ def main():
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+
+    def _handle_table_click(viewer_, pixel_x, pixel_y):
+        table_z = float(env.table_top)
+        xy = _click_to_table_xy(viewer_, pixel_x, pixel_y, table_z)
+        if xy is None:
+            print("Click did not hit the table plane.")
+            return False
+        return bool(controller.on_table_click(xy[0], xy[1]))
+
+    viewer.register_click_handler(_handle_table_click)
+    print("Left-click the table to set the bowl location; Space picks up / places.")
 
     settle_after = None
     try:
