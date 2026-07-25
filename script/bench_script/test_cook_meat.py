@@ -11,7 +11,7 @@ Conditions (5 episodes each):
   opt1+2  : cook_button_enabled=true,  dual_setup_enabled=true
             dual stations; each side has its own cook key (hold to cook)
 Success: every station's steak returned to its cutting board off the pan with
-         |grasp_doneness − target_doneness| ≤ cook_doneness_tol
+         grasp_doneness inside target_doneness_range (inclusive)
          (not under-cooked and not over-cooked).
          Dual (opt2 / opt1+2): **both** steaks must be cooked properly —
          one bad doneness fails the episode.
@@ -41,7 +41,7 @@ N_PER_CONDITION = 5
 # Short cook for suite speed; still exercises doneness gating.
 COOK_STEPS = 800
 COOK_SPEED_JITTER = 0.0
-COOK_DONENESS_TOL = 0.08
+TARGET_DONENESS_RANGE = (0.45, 0.55)
 # Abort early rather than grinding for hours on broken layouts / experts.
 MIN_SUCCESSES_TO_CONTINUE = 2  # per condition; below this → stop before demos
 MAX_CONSECUTIVE_SKIPS = 25
@@ -84,14 +84,19 @@ def _overrides(condition: str) -> list[str]:
             out.append(f"{k}={v}")
     out.append(f"cook_steps={COOK_STEPS}")
     out.append(f"cook_speed_jitter={COOK_SPEED_JITTER}")
-    out.append(f"cook_doneness_tol={COOK_DONENESS_TOL}")
+    out.append(
+        "target_doneness_range="
+        f"[{TARGET_DONENESS_RANGE[0]},{TARGET_DONENESS_RANGE[1]}]"
+    )
     return out
 
 
 def _snapshot(env) -> dict:
     stations = list(getattr(env, "stations", None) or [])
     target = float(getattr(env, "target_doneness", 0.5))
-    tol = float(getattr(env, "cook_doneness_tol", COOK_DONENESS_TOL))
+    target_range = tuple(
+        map(float, getattr(env, "target_doneness_range", TARGET_DONENESS_RANGE))
+    )
     station_rows = []
     for st in stations:
         steak_p = st["steak"].get_pose().p
@@ -119,7 +124,7 @@ def _snapshot(env) -> dict:
                 "in_band": (
                     False
                     if grasp is None
-                    else abs(float(grasp) - target) <= tol
+                    else target_range[0] <= float(grasp) <= target_range[1]
                 ),
                 "on_board": d_board < 0.12 and d_board < d_pan and float(steak_p[2]) > (board_top - 0.02),
             }
@@ -129,7 +134,7 @@ def _snapshot(env) -> dict:
         "dual_setup_enabled": bool(getattr(env, "dual_setup_enabled", False)),
         "use_cook_button": bool(getattr(env, "use_cook_button", False)),
         "target_doneness": target,
-        "cook_doneness_tol": tol,
+        "target_doneness_range": list(target_range),
         "cook_steps": int(getattr(env, "cook_steps", COOK_STEPS)),
         "n_stations": int(len(stations)),
         "stations": station_rows,
@@ -150,13 +155,12 @@ def _criteria_ok(snap: dict) -> bool:
     expected_n = 2 if snap["dual_setup_enabled"] else 1
     if snap["n_stations"] != expected_n:
         return False
-    tol = float(snap["cook_doneness_tol"])
-    target = float(snap["target_doneness"])
+    target_min, target_max = map(float, snap["target_doneness_range"])
     for st in snap["stations"]:
         g = st["grasp_doneness"]
         if g is None:
             return False
-        if abs(float(g) - target) > tol:
+        if not target_min <= float(g) <= target_max:
             return False
         if not st["on_board"]:
             return False
@@ -377,7 +381,8 @@ def record_and_export_demos():
             "opt1+2   : cook_button_enabled=true,  dual_setup_enabled=true\n"
             "           dual stations; each side has its own cook key (hold to cook)\n\n"
             "Success: every station steak returned to its cutting board off the pan with\n"
-            f"         |grasp_doneness − target| ≤ {COOK_DONENESS_TOL}\n"
+            f"         {TARGET_DONENESS_RANGE[0]} ≤ grasp_doneness ≤ "
+            f"{TARGET_DONENESS_RANGE[1]}\n"
             "         (rejects under-cooked and over-cooked meat).\n"
             "         Dual (opt2 / opt1+2): both steaks must be cooked properly;\n"
             "         one under-/over-cooked steak fails the episode.\n\n"
@@ -448,7 +453,8 @@ def main():
         },
         "demos": exported,
         "success_criterion": (
-            f"|grasp_doneness − target_doneness| ≤ {COOK_DONENESS_TOL} for every steak; "
+            f"{TARGET_DONENESS_RANGE[0]} ≤ grasp_doneness ≤ "
+            f"{TARGET_DONENESS_RANGE[1]} for every steak; "
             "each steak returned to its cutting board off the pan; "
             "dual (2 steaks) requires both cooked properly"
         ),

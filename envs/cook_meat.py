@@ -27,7 +27,7 @@ AABB: TypeAlias = tuple[float, float, float, float]
 
 
 class cook_meat(Base_Task):
-    """Cook a steak to a sampled doneness and return it to the cutting board.
+    """Cook a steak into a configured doneness range and return it to the board.
 
     Default: place steak on the pan; it cooks on contact while waiting, then
     return it to the cutting board. Cook speed samples around nominal
@@ -42,11 +42,11 @@ class cook_meat(Base_Task):
       Opt 2 — dual setup  →  ``dual_setup_enabled`` (**default: false**)
           Mirror a second station (pan, board, steak) with ≥10 cm clearance
           between setups; both arms place and pick up meats together.
-          Success requires **both** steaks cooked to target doneness.
+          Success requires **both** steaks cooked within the target range.
           CLI: ``--task-arg dual_setup_enabled=true`` or ``--option 2``.
       Opt 1+2 — dual stations each with their own cook key; color advances
           only while that station's key is pressed and its steak is on the pan.
-          Success still requires both steaks cooked properly.
+          Success still requires both steaks cooked within the target range.
     """
 
     COOK_STEPS_DEFAULT: ClassVar[int] = 1000
@@ -54,7 +54,9 @@ class cook_meat(Base_Task):
     TARGET_DONENESS_DEFAULT: ClassVar[float] = 0.5
     COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = False  # default = contact cook
     DUAL_SETUP_ENABLED_DEFAULT: ClassVar[bool] = False  # Opt 2
-    # Allowed |grasp_doneness − target| for success (not under- or over-cooked).
+    TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.45, 0.55)
+    TARGET_DONENESS_RANGE_JITTER_DEFAULT: ClassVar[float] = 0.0
+    # Legacy fallback when target_doneness_range is absent.
     COOK_DONENESS_TOL_DEFAULT: ClassVar[float] = 0.08
     # Colored keycap + thin black base (marble / dual_hole_punch styling).
     KEY_HALF: ClassVar[tuple[float, float, float]] = (0.020, 0.020, 0.014)
@@ -806,12 +808,36 @@ class cook_meat(Base_Task):
         """Create the randomized task layout and reset cooking state."""
         config = self._cook_cfg
         self.cook_steps = self._sample_cook_steps(config)
-        self.target_doneness = float(
-            np.random.uniform(
-                config.get("target_doneness_min", 0.45),
-                config.get("target_doneness_max", 0.55),
-            )
+        configured_range = config.get("target_doneness_range")
+        if configured_range is not None:
+            if not isinstance(configured_range, (list, tuple)) or len(configured_range) != 2:
+                raise ValueError("cook_meat.target_doneness_range must be [minimum, maximum]")
+            range_min, range_max = map(float, configured_range)
+        else:
+            range_min = float(config.get("target_doneness_min", 0.45))
+            range_max = float(config.get("target_doneness_max", 0.55))
+        if not 0.0 <= range_min <= range_max <= 1.0:
+            raise ValueError("cook_meat target doneness range must satisfy 0 <= min <= max <= 1")
+        range_jitter = float(config.get(
+            "target_doneness_range_jitter",
+            self.TARGET_DONENESS_RANGE_JITTER_DEFAULT,
+        ))
+        if range_jitter < 0.0:
+            raise ValueError("cook_meat.target_doneness_range_jitter must be non-negative")
+        # Shift the complete interval together, preserving its width and keeping
+        # both endpoints inside [0, 1].
+        shift_min = max(-range_jitter, -range_min)
+        shift_max = min(range_jitter, 1.0 - range_max)
+        range_shift = float(np.random.uniform(shift_min, shift_max))
+        self.target_doneness_base_range = (range_min, range_max)
+        self.target_doneness_range_jitter = range_jitter
+        self.target_doneness_range_shift = range_shift
+        self.target_doneness_range = (
+            range_min + range_shift,
+            range_max + range_shift,
         )
+        # The expert stops at the center; success accepts the full configured interval.
+        self.target_doneness = sum(self.target_doneness_range) / 2.0
         self.cook_doneness_tol = float(
             config.get("cook_doneness_tol", self.COOK_DONENESS_TOL_DEFAULT)
         )
@@ -1434,18 +1460,28 @@ class cook_meat(Base_Task):
         return self.info
 
     # ------------------------------------------------------------- success
-    def _station_success(self, station: dict[str, Any]) -> bool:
-        """Return whether one station's steak is back on the board at target doneness.
+    def _doneness_in_target_range(self, doneness: float) -> bool:
+        """Return whether doneness is inside the configured inclusive success range."""
 
-        Cook quality uses ``grasp_doneness`` (value when cooking stopped) within
-        ``target_doneness ± cook_doneness_tol`` so under- and over-cooked meat fail.
-        Dual episodes call this once per steak — both must pass.
+        target_range = getattr(self, "target_doneness_range", None)
+        if target_range is not None:
+            low, high = map(float, target_range)
+            return low <= float(doneness) <= high
+        # Backward compatibility for old configs and lightweight unit-test tasks.
+        tol = float(getattr(self, "cook_doneness_tol", self.COOK_DONENESS_TOL_DEFAULT))
+        return abs(float(doneness) - float(self.target_doneness)) <= tol
+
+    def _station_success(self, station: dict[str, Any]) -> bool:
+        """Return whether one steak is on its board within the doneness range.
+
+        Cook quality uses ``grasp_doneness`` (value when cooking stopped) and
+        the inclusive ``target_doneness_range``. Dual episodes call this once
+        per steak, and both must pass.
         """
         if station.get("grasp_doneness") is None:
             return False
-        tol = float(getattr(self, "cook_doneness_tol", self.COOK_DONENESS_TOL_DEFAULT))
         g = float(station["grasp_doneness"])
-        cooked_ok = abs(g - float(self.target_doneness)) <= tol
+        cooked_ok = self._doneness_in_target_range(g)
         steak_p = station["steak"].get_pose().p
         steak_z = float(steak_p[2])
         steak_xy = np.array(steak_p[:2])
@@ -1463,17 +1499,15 @@ class cook_meat(Base_Task):
         """Return whether every steak is correctly cooked and back on its board.
 
         Single station: one steak in the doneness band, on the board, off the pan.
-        Dual (Opt 2 / Opt 1+2): **both** steaks must be cooked properly (each
-        ``grasp_doneness`` within ``cook_doneness_tol`` of ``target_doneness``)
-        and returned to their own boards — one under-/over-cooked steak fails.
+        Dual (Opt 2 / Opt 1+2): **both** steaks must have ``grasp_doneness``
+        inside ``target_doneness_range`` and be returned to their own boards.
         """
         stations = getattr(self, "stations", None)
         if not stations:
             # Unit-test path that builds a bare task without load_actors.
             if self._grasp_doneness is None:
                 return False
-            tol = float(getattr(self, "cook_doneness_tol", self.COOK_DONENESS_TOL_DEFAULT))
-            cooked_ok = abs(float(self._grasp_doneness) - float(self.target_doneness)) <= tol
+            cooked_ok = self._doneness_in_target_range(float(self._grasp_doneness))
             steak_p = self.steak.get_pose().p
             steak_z = float(steak_p[2])
             steak_xy = np.array(steak_p[:2])
@@ -1499,6 +1533,12 @@ class cook_meat(Base_Task):
             "doneness": float(getattr(self, "doneness", 0.0)),
             "target_doneness": float(
                 getattr(self, "target_doneness", self.TARGET_DONENESS_DEFAULT)
+            ),
+            "target_doneness_range": list(
+                getattr(self, "target_doneness_range", self.TARGET_DONENESS_RANGE_DEFAULT)
+            ),
+            "target_doneness_range_shift": float(
+                getattr(self, "target_doneness_range_shift", 0.0)
             ),
             "cook_steps": float(getattr(self, "cook_steps", self.COOK_STEPS_DEFAULT)),
             "cook_button_enabled": bool(getattr(self, "cook_button_enabled", False)),
