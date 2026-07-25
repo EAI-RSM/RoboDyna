@@ -96,7 +96,7 @@ def _target_xy(env):
 
 
 def _bowl_place_z(env):
-    return float(env.table_top - 0.040)
+    return float(env.table_top - 0.020)  # release ~2 cm higher than prior place height
 
 
 def _get_rigid(actor):
