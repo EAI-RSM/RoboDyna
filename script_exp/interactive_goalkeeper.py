@@ -41,7 +41,6 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
   Space             grasp, then release
-  G                 planned place at intercept target
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
@@ -198,7 +197,6 @@ class RobotKeeperController:
         self.deployed = False
         self.busy = False
         self._space = EdgeKey()
-        self._g = EdgeKey()
 
     def _choose_arm(self):
         return self.ArmTag("left" if self.env.mirrored else "right")
@@ -217,23 +215,9 @@ class RobotKeeperController:
         if self.env.plan_success:
             self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
             self.holding = True
-            print(f"Grasped keeper with {self.arm} arm. Arrows nudge; Space releases; G planned-places.")
+            print(f"Grasped keeper with {self.arm} arm. Arrows nudge; Space releases.")
         else:
             print("Grasp failed; planner disabled further robot actions.")
-        self.busy = False
-
-    def planned_place(self):
-        if not self.holding:
-            self.grasp()
-        if not self.holding:
-            return
-        self.busy = True
-        self.env._place_keeper_from_top(self.arm)
-        self.env.move(self.env.move_by_displacement(self.arm, z=0.08, move_axis="arm"))
-        self.env._hold_keeper_kinematic()
-        self.holding = False
-        self.deployed = True
-        print(f"Planned place done; in_zone={self.env._keeper_in_zone()}.")
         self.busy = False
 
     def release(self):
@@ -266,9 +250,6 @@ class RobotKeeperController:
 
     def update(self, window):
         if self.busy:
-            return
-        if self._g.poll(window.key_down("g")):
-            self.planned_place()
             return
         if self._space.poll(window.key_down("space")):
             if not self.holding:
