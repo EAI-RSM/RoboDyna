@@ -185,7 +185,7 @@ def main():
     parser = argparse.ArgumentParser(description="Interactive load_train viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0)
-    add_robot_motion_arg(parser)
+    add_robot_motion_arg(parser, robot_motion_default="interpolate")
     args = parser.parse_args()
 
     from envs.load_train import load_train
