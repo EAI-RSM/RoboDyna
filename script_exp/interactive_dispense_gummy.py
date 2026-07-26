@@ -29,19 +29,18 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     add_robot_motion_arg,
-    make_button_controller,
     report_task_result,
     print_mode_controls,
 )
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow / A   →  move bowl LEFT  (right-arm belt key)
-  Right Arrow / D  →  move bowl RIGHT (right-arm belt key)
+  Left Arrow       →  move bowl LEFT  (right-arm belt key)
+  Right Arrow      →  move bowl RIGHT (right-arm belt key)
   Space            →  dispense (left-arm key)
 
-  Continuous belt (Opt 2): hold A/D to slide.
-  Discrete belt (default): tap A/D to hop one station.
+  Continuous belt (Opt 2): hold an arrow key to slide.
+  Discrete belt (default): tap an arrow key to hop one station.
 
   Forces key presses / dispense request directly (no arm).
   V                 toggle view: top-down ↔ head_camera
@@ -49,12 +48,12 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left Arrow / A   →  move bowl LEFT  (right-arm belt key)
-  Right Arrow / D  →  move bowl RIGHT (right-arm belt key)
+  Left Arrow       →  move bowl LEFT  (right-arm belt key)
+  Right Arrow      →  move bowl RIGHT (right-arm belt key)
   Space            →  dispense (left-arm key)
 
-  Continuous belt (Opt 2): hold A/D to slide.
-  Discrete belt (default): tap A/D to hop one station.
+  Continuous belt (Opt 2): hold an arrow key to slide.
+  Discrete belt (default): tap an arrow key to hop one station.
 
   Arms physically press the keys.
   --robot-motion planner|interpolate
@@ -104,8 +103,8 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
 
 
 def _belt_side(window):
-    left = window.key_down("left") or window.key_down("a")
-    right = window.key_down("right") or window.key_down("d")
+    left = window.key_down("left")
+    right = window.key_down("right")
     if left and not right:
         return "left"
     if right and not left:
@@ -154,85 +153,233 @@ class KeyboardState:
 
 
 class RobotGummyController:
-    """Right-arm belt hold/tap + left-arm dispense tap via shared button controllers.
+    """Cook-meat-style hover -> vertical press -> hover button controller."""
 
-    Belt left/right keys both use the right arm, so each key gets its own
-    controller instance (needed for correct interpolate precompute targets).
-    """
+    TRANSITION_SECONDS = 0.12
+    PRESS_HOLD_SECONDS = 0.10
+    RELEASE_CLEARANCE = 0.04
 
     def __init__(self, env, arm_tag, robot_motion):
         self.env = env
+        self.arm_tag = arm_tag
+        self.robot_motion = robot_motion  # Kept for CLI compatibility.
         self.continuous = bool(getattr(env, "belt_continuous_motion", False))
         self.prev_space = False
         self._prev_belt = None
-        self._active_belt = None
-        active_dz = float(getattr(env, "belt_key_press_dz", 0.17))
+        self._continuous_belt = None
+        self._starts = {}
+        self._targets = {}
+        self._started_at = {}
+        self._holding_until = {}
+        self._phase = {"left": "idle", "right": "idle"}
+        self._queued_taps = {"left": [], "right": []}
+        self._active_tap = {"left": None, "right": None}
+        self.hover_qpos = {}
+        self.press_qpos = {}
+        self.prepare()
 
-        def set_belt_latch(e, mode):
-            e._expert_belt_hold = mode
-            e._bowl_force_stop = False
+    def _drive_qpos(self, side):
+        joints = self.env.robot.left_arm_joints if side == "left" else self.env.robot.right_arm_joints
+        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
 
-        def clear_belt_latch(e):
-            e._expert_belt_hold = None
+    def _plan(self, side, pose, last_qpos=None):
+        planner = self.env.robot.left_plan_path if side == "left" else self.env.robot.right_plan_path
+        result = planner(pose, last_qpos=None if last_qpos is None else np.asarray(last_qpos, dtype=np.float32))
+        if result is None or result.get("status") != "Success":
+            reason = "no result" if result is None else result.get("reason", "unknown reason")
+            raise RuntimeError(f"Could not prepare {side} gummy-key press: {reason}")
+        return np.asarray(result["position"][-1], dtype=np.float64)
 
-        self.belt = {}
-        for belt_side in ("left", "right"):
-            self.belt[belt_side] = make_button_controller(
-                env,
-                arm_tag,
-                robot_motion,
-                get_button=lambda e, _s, bs=belt_side: e.belt_keys[bs],
-                get_top_z=lambda e, _s: e.belt_key_top_z,
-                set_latch=set_belt_latch,
-                clear_latch=clear_belt_latch,
-                arms_for_mode=lambda m, bs=belt_side: ("right",) if m == bs else (),
-                hold=self.continuous,
-                active_dz=active_dz,
-                sides=("right",),
+    @staticmethod
+    def _arm_for_button(name):
+        return "left" if name == "dispense" else "right"
+
+    def _tip_pose(self, name, above):
+        if name == "dispense":
+            return self.env._key_tip_pose(above)
+        return self.env._belt_key_tip_pose(name, above)
+
+    def prepare(self):
+        """Move to hover and cache planner-validated hover/press targets."""
+        configured_hover = float(self.env.key_hover_dis)
+        depth = float(self.env.key_press_depth)
+        # Identical clearance calculation to CookKeyController: gummy also
+        # detects presses from EE height while these helpers take TCP clearance.
+        hover = max(
+            configured_hover,
+            float(self.env.belt_key_press_dz)
+            - float(self.env.EE_TO_TCP)
+            + self.RELEASE_CLEARANCE,
+        )
+        press_above = max(0.0, configured_hover - depth)
+
+        for name in ("left", "right", "dispense"):
+            side = self._arm_for_button(name)
+            hover_q = self._plan(side, self._tip_pose(name, hover))
+            self.hover_qpos[name] = hover_q
+            self.press_qpos[name] = self._plan(
+                side, self._tip_pose(name, press_above), last_qpos=hover_q
             )
-        self.dispense = make_button_controller(
-            env,
-            arm_tag,
-            robot_motion,
-            get_button=lambda e, _s: e.dispense_key,
-            get_top_z=lambda e, _s: e.dispense_key_top_z,
-            set_latch=lambda e, _m: None,
-            clear_latch=lambda e: None,
-            arms_for_mode=lambda m: ("left",) if m == "dispense" else (),
-            on_press=lambda e, _m: setattr(e, "_expert_dispense", True),
-            hold=False,
-            active_dz=active_dz,
-            sides=("left",),
+
+        # CookKeyController closes the fingers and physically moves to hover
+        # before enabling its cached non-blocking transitions. Do the same for
+        # the right belt arm and left dispense arm.
+        self.env.plan_success = True
+        self.env._last_plan_fail = None
+        self.env.move(
+            self.env.close_gripper(self.arm_tag("right")),
+            self.env.close_gripper(self.arm_tag("left")),
+        )
+        if self.env.plan_success:
+            self.env.move(
+                self.env.move_to_pose(self.arm_tag("right"), self._tip_pose("left", hover)),
+                self.env.move_to_pose(self.arm_tag("left"), self._tip_pose("dispense", hover)),
+            )
+        if not self.env.plan_success:
+            detail = getattr(self.env, "_last_plan_fail", None) or "unknown planner failure"
+            raise RuntimeError(f"Could not prepare gummy-key hover poses: {detail}")
+
+        # Capture the executed hover targets exactly, as cook_meat does.
+        self.hover_qpos["left"] = self._drive_qpos("right")
+        self.hover_qpos["dispense"] = self._drive_qpos("left")
+        print(
+            f"Gummy-key arms ready {hover * 100:.1f} cm above keys; "
+            "each tap moves over the key, presses vertically, then raises."
         )
 
-    def _update_belt(self, requested):
-        if self.continuous:
-            if requested != self._active_belt:
-                if self._active_belt is not None:
-                    self.belt[self._active_belt].update(None)
-                self._active_belt = requested
-                if requested is not None:
-                    self.belt[requested].update(requested)
-            elif requested is not None:
-                self.belt[requested].update(requested)
+    def _begin_transition(self, side, phase, target):
+        self._starts[side] = self._drive_qpos(side)
+        self._targets[side] = np.asarray(target, dtype=np.float64)
+        self._started_at[side] = time.perf_counter()
+        self._phase[side] = phase
+
+    def _tap(self, name):
+        side = self._arm_for_button(name)
+        self._queued_taps[side].append(name)
+        self._start_next_tap(side)
+
+    def _start_next_tap(self, side):
+        if self._phase[side] != "idle" or not self._queued_taps[side]:
             return
-        # Discrete: edge-triggered shared tap (hold=False).
-        if requested is not None and requested != self._prev_belt:
-            self.belt[requested].update(requested)
-        self._prev_belt = requested
+        name = self._queued_taps[side].pop(0)
+        self._active_tap[side] = name
+        # Always go to the selected button's clear hover first. This is the
+        # missing step that previously sent the arm diagonally toward press.
+        self._begin_transition(side, "to_hover", self.hover_qpos[name])
+
+    def _finish_transition(self, side, now):
+        name = self._active_tap[side]
+        phase = self._phase[side]
+        if name is None:
+            self._phase[side] = "idle"
+            return
+        if phase == "to_hover":
+            self._begin_transition(side, "pressing", self.press_qpos[name])
+        elif phase == "pressing":
+            self._phase[side] = "holding"
+            if not (
+                self.continuous
+                and side == "right"
+                and name == self._continuous_belt
+            ):
+                self._holding_until[side] = now + self.PRESS_HOLD_SECONDS
+        elif phase == "raising":
+            self._phase[side] = "idle"
+            self._active_tap[side] = None
+            self._start_next_tap(side)
+
+    def _advance(self):
+        now = time.perf_counter()
+        # Opt 2 matches cook_meat's held-key behavior: once the downward
+        # transition finishes, keep commanding the press target until the
+        # user releases the arrow key.
+        if (
+            self.continuous
+            and self._phase["right"] == "holding"
+            and "right" not in self._holding_until
+            and self._active_tap["right"] is not None
+        ):
+            target = self.press_qpos[self._active_tap["right"]]
+            self.env.robot.set_arm_joints(target, np.zeros_like(target), "right")
+
+        for side in tuple(self._holding_until):
+            self.env.robot.set_arm_joints(
+                self.press_qpos[self._active_tap[side]],
+                np.zeros_like(self.press_qpos[self._active_tap[side]]),
+                side,
+            )
+            if now < self._holding_until[side]:
+                continue
+            del self._holding_until[side]
+            name = self._active_tap[side]
+            self._begin_transition(side, "raising", self.hover_qpos[name])
+
+        for side in tuple(self._started_at):
+            progress = min(
+                1.0,
+                (now - self._started_at[side]) / self.TRANSITION_SECONDS,
+            )
+            smooth = progress * progress * (3.0 - 2.0 * progress)
+            start = self._starts[side]
+            target = self._targets[side]
+            velocity = (
+                (target - start) / self.TRANSITION_SECONDS
+                if progress < 1.0
+                else np.zeros_like(target)
+            )
+            self.env.robot.set_arm_joints(
+                start + (target - start) * smooth, velocity, side
+            )
+            if progress >= 1.0:
+                del self._started_at[side]
+                self._finish_transition(side, now)
+
+    def _update_continuous_belt(self, requested):
+        if requested == self._continuous_belt:
+            return
+        self._continuous_belt = requested
+        side = "right"
+        active = self._active_tap[side]
+        self._queued_taps[side].clear()
+
+        if active is not None:
+            # Release the current key first, even when switching directly from
+            # left to right. This resets the physical edge latch in the task.
+            self._started_at.pop(side, None)
+            self._holding_until.pop(side, None)
+            if requested is not None:
+                self._queued_taps[side].append(requested)
+            self._begin_transition(side, "raising", self.hover_qpos[active])
+        elif requested is not None:
+            self._queued_taps[side].append(requested)
+            self._start_next_tap(side)
 
     def update(self, window):
-        self._update_belt(_belt_side(window))
+        requested = _belt_side(window)
+        self.env._bowl_force_stop = False
+        # Robot mode uses genuine EE contact; no expert latch is needed.
+        self.env._expert_belt_hold = None
+        if self.continuous:
+            self._update_continuous_belt(requested)
+        elif requested is not None and requested != self._prev_belt:
+            self._tap(requested)
+        self._prev_belt = requested
+
         space = window.key_down("space")
         if space and not self.prev_space:
-            self.dispense.update("dispense")
+            self._tap("dispense")
         self.prev_space = space
+        self._advance()
 
     def release(self):
-        for ctrl in self.belt.values():
-            ctrl.release()
-        self._active_belt = None
-        self.dispense.release()
+        self.env._expert_belt_hold = None
+        self.env._expert_dispense = False
+        self._started_at.clear()
+        self._holding_until.clear()
+        self._queued_taps = {"left": [], "right": []}
+        self._active_tap = {"left": None, "right": None}
+        self._phase = {"left": "idle", "right": "idle"}
+        self._continuous_belt = None
 
 
 def main():
