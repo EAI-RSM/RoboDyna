@@ -45,7 +45,6 @@ CONTROLS_KEYBOARD = """
   Space             close gripper(s) when the rat is rising
   Q / E             dual (Opt1): select left / right arm
                     (selected gripper is recolored: yellow=left, cyan=right)
-  A                 dual: close BOTH grippers
   V                 toggle view: top-down ↔ head_camera
   Escape            quit
 ------------------------------------------------------------
@@ -327,7 +326,6 @@ class KeyboardCatchController:
             hole = env._rat_holes[0]
             self.selected = "right" if env.holes[hole][0] > 0 else "left"
         self._space = EdgeKey()
-        self._both = EdgeKey()
         self._q = EdgeKey()
         self._e = EdgeKey()
         self.done = False
@@ -371,9 +369,6 @@ class KeyboardCatchController:
             if self._e.poll(window.key_down("e")):
                 self.selected = "right"
                 print("Selected RIGHT arm.")
-            if self._both.poll(window.key_down("a")):
-                self._begin_close(["left", "right"], [0, 1])
-                return
         if self._space.poll(window.key_down("space")):
             if self.dual:
                 idx = 0 if self.selected == "left" else 1

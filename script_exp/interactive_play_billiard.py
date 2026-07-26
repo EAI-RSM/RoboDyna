@@ -34,7 +34,6 @@ CONTROLS_KEYBOARD = """
   Left / Right      rotate aim direction
   Up / Down         slide tip along aim (approach / retreat)
   Space             fire strike impulse along aim
-  A                 aim at the nominated / nearest top pocket
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
@@ -45,7 +44,6 @@ CONTROLS_ROBOT = """
   Left / Right      rotate aim direction
   Up / Down         slide tip along aim (approach / retreat)
   Space             pick up cue, then planned strike
-  A                 aim at the nominated / nearest top pocket
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
@@ -191,7 +189,6 @@ class KeyboardCueController:
         self.struck = False
         self.gap = float(env.APPROACH_GAP)
         self._space = EdgeKey()
-        self._aim = EdgeKey()
         _default_aim(env)
         _place_cue_for_aim(env, gap=self.gap)
         print(f"Aim → {env._target_pocket_name}; tip parked behind the red ball.")
@@ -199,10 +196,6 @@ class KeyboardCueController:
     def update(self, window):
         if self.struck:
             return
-        if self._aim.poll(window.key_down("a")):
-            _default_aim(self.env)
-            _place_cue_for_aim(self.env, gap=self.gap)
-            print(f"Re-aimed at {self.env._target_pocket_name}.")
         # Rotate aim
         rot = 0.0
         if window.key_down("left"):

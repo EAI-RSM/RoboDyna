@@ -54,7 +54,7 @@ def _keyboard_pack_idx(env, idx: int):
 
 
 def _dispatch_side(env, side: str, use_robot: bool) -> bool:
-    """Mirror ``_dispatch_pack`` for one requested side (A=left, D=right)."""
+    """Mirror ``_dispatch_pack`` for one requested belt side."""
     if env._grasping_idxs:
         print("Arm busy — wait for the current pack to finish.")
         return False
@@ -115,8 +115,8 @@ def main():
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: apple → left basket, orange → right basket. Never pack black (Opt2).",
-            "A / Left  — pack the ready fruit on the LEFT belt",
-            "D / Right — pack the ready fruit on the RIGHT belt",
+            "Left Arrow  — pack the ready fruit on the LEFT belt",
+            "Right Arrow — pack the ready fruit on the RIGHT belt",
             "          (pairs pack together when both are ready / linked)",
             "V — toggle view: top-down ↔ head_camera",
             "Q / Esc   — close the viewer window to quit",
@@ -140,9 +140,9 @@ def main():
         # Start belts every step (safe if already True).
         env._belt_running = True
 
-        if edge_pressed(window, "a", keys_prev) or edge_pressed(window, "left", keys_prev):
+        if edge_pressed(window, "left", keys_prev):
             _dispatch_side(env, "left", use_robot)
-        if edge_pressed(window, "d", keys_prev) or edge_pressed(window, "right", keys_prev):
+        if edge_pressed(window, "right", keys_prev):
             _dispatch_side(env, "right", use_robot)
 
         if settle_after_done is None:

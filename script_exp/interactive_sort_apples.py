@@ -305,13 +305,13 @@ class CompositeView:
             os._exit(0)
         if key in (27, ord("q")):
             self.window_open = False
-        elif key in (81, ord("a")):
+        elif key == 81:
             # The displayed overhead view is rotated 180 degrees, so screen
             # left maps to the task's right-side actuator (and vice versa).
             self.action = None if self.action == "right" else "right"
-        elif key in (83, ord("d")):
+        elif key == 83:
             self.action = None if self.action == "left" else "left"
-        elif key in (84, ord("s")):
+        elif key == 84:
             self.action = None if self.action == "dump" else "dump"
         return self._last_frame
 
@@ -416,7 +416,7 @@ def main():
         viewer.window.hide()
         if robot_controller is not None:
             restore_composite_motion_renderer = _attach_composite_motion_renderer(viewer, composite_view)
-        print("Composite view ready at 20 FPS. Press A for left, D for right, S for both; press again to release; V toggles view; Q/Escape to quit cleanly; X to force-quit.")
+        print("Composite view ready at 20 FPS. Press Left/Right Arrow for one side or Down Arrow for both; press again to release; V toggles view; Q/Escape to quit cleanly; X to force-quit.")
     second_viewer = None
     restore_second_view = lambda: None
     if args.two_views:
@@ -429,7 +429,7 @@ def main():
         if composite_view is not None:
             print(
                 f"Composite robot mode ready ({args.robot_motion}).\n"
-                "  A / D / S  — hold to press left / right / both buttons (plank stays diverted while held)\n"
+                "  Left / Right / Down Arrow — hold to press left / right / both buttons (plank stays diverted while held)\n"
                 "  release    — lift and return plank to rest\n"
                 "  V          — toggle top-down / head_camera\n"
                 "  Q/Esc      — quit; X — force-quit\n"

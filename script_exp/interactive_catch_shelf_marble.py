@@ -98,7 +98,7 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
 
 
 def _requested_side(window):
-    # Arrows only — A/D also orbit the SAPIEN viewer camera.
+    # Arrows only — letter-key aliases also orbit the SAPIEN viewer camera.
     left = window.key_down("left")
     right = window.key_down("right")
     if left and not right:

@@ -55,10 +55,11 @@ def _prepare_keyboard_hold(env):
     env._interactive_hold_z = z
     env._interactive_holding = True
     env._interactive_released = False
+    return True
 
 
 def _prepare_robot_hold(env):
-    """Grasp the ball and carry it to the drop station (timing left to the user)."""
+    """Run load_train's standard grasp/carry sequence on the user's request."""
     from envs.utils.action import ArmTag
 
     arm_name = "left" if env.ball_side == "left" else "right"
@@ -75,6 +76,7 @@ def _prepare_robot_hold(env):
         return float(env.ball.get_pose().p[2]) >= z - 0.08
 
     if not _try_grasp(arm_tag):
+        # Keep the default controller's other-arm fallback for sphere grasps.
         try:
             env.move(env.back_to_origin(arm_tag))
         except Exception:
@@ -84,6 +86,11 @@ def _prepare_robot_hold(env):
         if _try_grasp(ArmTag(alt)):
             arm_name, arm_tag = alt, ArmTag(alt)
             env.selected_arm = arm_name
+
+    # Same authoritative hold check as load_train.play_once().
+    if float(env.ball.get_pose().p[2]) < z - 0.08:
+        env._interactive_holding = False
+        return False
 
     if env._ball_rigid is not None:
         try:
@@ -108,6 +115,52 @@ def _prepare_robot_hold(env):
     env._interactive_holding = True
     env._interactive_released = False
     env._ball_released = False
+    return True
+
+
+def _drive_qpos(env, arm_name: str) -> np.ndarray:
+    joints = env.robot.left_arm_joints if arm_name == "left" else env.robot.right_arm_joints
+    return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
+
+
+def _begin_interpolated_robot_nudge(env, arm_tag, dx: float, dy: float):
+    """Create a nearby joint-space nudge that the GUI loop advances per frame."""
+    arm_name = str(arm_tag)
+    ee_pose = np.asarray(
+        env.robot.get_left_ee_pose() if arm_name == "left" else env.robot.get_right_ee_pose(),
+        dtype=np.float64,
+    )
+    ee_pose[:3] += np.asarray([dx, dy, 0.0], dtype=np.float64)
+    plan = env.robot.left_plan_path if arm_name == "left" else env.robot.right_plan_path
+    result = plan(ee_pose.tolist(), constraint_pose=[1, 1, 1, 0, 0, 0])
+    if result is None or result.get("status") != "Success":
+        return None
+    positions = result.get("position")
+    if positions is None or len(positions) == 0:
+        return None
+    start = _drive_qpos(env, arm_name)
+    target = np.asarray(positions[-1], dtype=np.float64).reshape(-1)
+    if target.shape != start.shape or float(np.max(np.abs(target - start))) > 0.70:
+        return None
+    return {"arm": arm_name, "start": start, "target": target, "index": 0, "steps": 18}
+
+
+def _advance_interpolated_robot_nudge(env, motion) -> bool:
+    """Advance one eased joint target; ``run_viewer_loop`` performs the physics step."""
+    motion["index"] += 1
+    alpha = motion["index"] / float(motion["steps"])
+    smooth = alpha * alpha * (3.0 - 2.0 * alpha)
+    delta = motion["target"] - motion["start"]
+    position = motion["start"] + delta * smooth
+    velocity = delta / float(motion["steps"])
+    if motion["index"] >= motion["steps"]:
+        position = motion["target"]
+        velocity = np.zeros_like(delta)
+    env.robot.set_arm_joints(position, velocity, motion["arm"])
+    if motion["index"] >= motion["steps"]:
+        env.plan_success = True
+        return True
+    return False
 
 
 def _do_release(env, use_robot: bool):
@@ -123,12 +176,6 @@ def _do_release(env, use_robot: bool):
     release_dynamic(env._ball_rigid)
     if use_robot and getattr(env, "_interactive_arm", None) is not None:
         env.move(env.open_gripper(env._interactive_arm))
-        try:
-            env.move(env.move_by_displacement(
-                arm_tag=env._interactive_arm, z=0.12, move_axis="world",
-            ))
-        except Exception:
-            pass
     env._ball_released = True
     env._bed_contact_steps = 0
     print("Released ball — watch for wagon latch.")
@@ -154,47 +201,62 @@ def main():
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: drop the ball into an open wagon as it passes under the near rail.",
-            "Space  — release / open gripper when a wagon is aligned",
-            "Arrows — nudge hold XY (keyboard teleop, or robot displace)",
+            "Space  — first press picks up the ball; second press releases it",
+            "Arrows — nudge the held ball in XY (robot supports smooth interpolation)",
             "V — toggle view: top-down ↔ head_camera",
             "Q / Esc — close the viewer window to quit",
-            "Robot mode starts with grasp+hover already done; time Space for the drop.",
-            "Keyboard mode pins the ball over the rail; time Space for the drop.",
+            "The ball starts untouched; press Space to pick it up.",
             "--robot-motion planner|interpolate",
         ],
     )
-    if args.robot_motion == "interpolate":
-        print(
-            "Note: --robot-motion interpolate uses planner motions for this teleop task "
-            "(key-press sandboxes use joint interpolation)."
-        )
-
-    if use_robot:
-        print("Robot: grasping and carrying to the drop station…")
-        _prepare_robot_hold(env)
-        print("Ready over the rail. Press Space when an open wagon is underneath.")
-    else:
-        _prepare_keyboard_hold(env)
-        print("Ball pinned over the rail. Nudge with arrows; Space to release.")
+    env._interactive_holding = False
+    env._interactive_released = False
+    env._ball_released = False
+    print("Ball ready. Press Space to pick it up.")
 
     keys_prev: dict = {}
     post_release = 0
+    interpolate_motion = None
 
     def on_step(window, step):
-        nonlocal post_release
+        nonlocal post_release, interpolate_motion
         if edge_pressed(window, "space", keys_prev) and not env._interactive_released:
-            _do_release(env, use_robot)
+            if not env._interactive_holding:
+                if use_robot:
+                    print("Robot: picking up the ball and carrying it to the drop station…")
+                    if _prepare_robot_hold(env):
+                        print("Ball picked up. Press Space again when a wagon is aligned.")
+                    else:
+                        print("Ball pickup failed. Press Space to try again.")
+                else:
+                    _prepare_keyboard_hold(env)
+                    print("Ball picked up. Nudge with arrows; press Space again to release.")
+            else:
+                _do_release(env, use_robot)
+                interpolate_motion = None
+        if interpolate_motion is not None:
+            if _advance_interpolated_robot_nudge(env, interpolate_motion):
+                interpolate_motion = None
+
         nudge = arrow_nudge_xy(window, step=0.0025)
         if float(np.linalg.norm(nudge)) > 0 and env._interactive_holding and not env._interactive_released:
             if use_robot and getattr(env, "_interactive_arm", None) is not None:
-                # Edge-ish: only displace occasionally so the planner is not flooded.
-                if step % 8 == 0:
-                    env.move(env.move_by_displacement(
-                        arm_tag=env._interactive_arm,
-                        x=float(nudge[0]) * 4,
-                        y=float(nudge[1]) * 4,
-                    ))
-                    env._move_ball_to_height(arm_tag=env._interactive_arm, target_z=_release_z(env))
+                # Avoid sending a movement request every viewer frame.
+                if step % 8 == 0 and interpolate_motion is None:
+                    dx, dy = float(nudge[0]) * 4, float(nudge[1]) * 4
+                    if args.robot_motion == "interpolate":
+                        interpolate_motion = _begin_interpolated_robot_nudge(
+                            env, env._interactive_arm, dx, dy
+                        )
+                        if interpolate_motion is None:
+                            print("Ball nudge could not reach the requested pose.")
+                    else:
+                        env.move(env.move_by_displacement(
+                            arm_tag=env._interactive_arm, x=dx, y=dy,
+                        ))
+                        env._move_ball_to_height(
+                            arm_tag=env._interactive_arm, target_z=_release_z(env)
+                        )
             else:
                 env._interactive_hold_xy = env._interactive_hold_xy + nudge
                 hold_dynamic_at(

@@ -279,35 +279,14 @@ def _requested_cook_mode(window):
 
 
 def _station_cook_finished(env, st):
-    """True when this station's cook window is definitively over."""
-    target_min, target_max = getattr(env, "target_doneness_range", (0.45, 0.55))
-    doneness = float(st.get("doneness", 0.0))
-    grasp = st.get("grasp_doneness")
-    # Overcooked past the configured interval (or fully maxed) → episode can end.
-    if doneness > float(target_max) or doneness >= 0.999:
-        return True
-    # Cooking stopped / latched (B snap or grasp); prefer steak off pan if detectable.
-    if grasp is not None:
-        try:
-            on_pan = bool(env._steak_on_pan_station(st))
-        except Exception:
-            on_pan = None
-        if on_pan is False or on_pan is None:
-            return True
-        # Still on pan after latch — cooking is frozen; count as finished.
-        return True
-    # Reached target and cook key released (window closed without board return).
-    if doneness >= float(target_min) and not bool(st.get("_expert_key_held")):
-        return True
-    return False
+    """True once this station's steak has been grasped for its board return."""
+    return st.get("grasp_doneness") is not None
 
 
 def _episode_done(env):
-    """Return ``(done, detail)`` once every station has finished cooking."""
+    """Finish after all steaks return, or immediately on definite overcooking."""
     stations = getattr(env, "stations", None) or []
     if not stations:
-        return False, None
-    if not all(_station_cook_finished(env, st) for st in stations):
         return False, None
     doneness = [round(float(st["doneness"]), 2) for st in stations]
     grasps = [
@@ -319,7 +298,12 @@ def _episode_done(env):
         f"target={float(env.target_doneness_range[0]):.2f}-"
         f"{float(env.target_doneness_range[1]):.2f}"
     )
-    return True, detail
+    target_max = float(env.target_doneness_range[1])
+    if any(float(st.get("doneness", 0.0)) > target_max for st in stations):
+        return True, f"overcooked; {detail}"
+    if all(_station_cook_finished(env, st) for st in stations):
+        return True, detail
+    return False, None
 
 
 class CookKeyController:

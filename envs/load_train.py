@@ -60,7 +60,7 @@ class load_train(Base_Task):
     ENGINE_CAB_H_DEFAULT = 0.024
     ENGINE_BODY_H_DEFAULT = 0.036       # closed locomotive height (no cargo opening)
 
-    BALL_RADIUS_DEFAULT = 0.015
+    BALL_RADIUS_DEFAULT = 0.0195
     BALL_SIDE_CLEARANCE_DEFAULT = 0.11  # keep ball clear of passing wagons before the grasp
     BALL_LATERAL_DEFAULT = 0.11         # nominal |x| of ball spawn (same side as drop)
     BALL_LATERAL_MIN_DEFAULT = 0.07     # randomize |x| within the chosen arm's half

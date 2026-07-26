@@ -82,7 +82,7 @@ class hit_target(Base_Task):
     TARGET_CENTER_X_DEFAULT = 0.0
 
     # ----- contact / stick
-    STICK_DIST = 0.035
+    STICK_DIST = 0.035 / 3.0
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("hit_target", {})
@@ -297,7 +297,7 @@ class hit_target(Base_Task):
         builder.add_box_collision(pose=sapien.Pose([tip_cx, 0, 0]), half_size=tp,
                                   material=self.scene.default_physical_material)
         shaft_mat = sapien.render.RenderMaterial(base_color=[*self.DART_COLOR, 1.0])
-        tip_mat = sapien.render.RenderMaterial(base_color=[0.95, 0.95, 0.30, 1.0])
+        tip_mat = sapien.render.RenderMaterial(base_color=[0.0, 0.0, 0.0, 1.0])
         builder.add_box_visual(pose=sapien.Pose([0, 0, 0]), half_size=sh, material=shaft_mat)
         builder.add_box_visual(pose=sapien.Pose([tip_cx, 0, 0]), half_size=tp, material=tip_mat)
         builder.set_initial_pose(pose)

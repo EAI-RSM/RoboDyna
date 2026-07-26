@@ -309,8 +309,8 @@ task_args:
     #      --option 1 | --option 2
     cook_steps: 5000            # CHANGE: nominal steps for doneness 0→1.0 (~10 s to medium@0.5, 250Hz)
     cook_speed_jitter: 0.0      # exact cooking rate; variation comes from target-range shift
-    cook_button_enabled: false  # CHANGE: Opt 1; true = hold red key to cook
-    dual_setup_enabled: false   # CHANGE: Opt 2; true = dual stations (both arms)
+    cook_button_enabled: true  # CHANGE: Opt 1; true = hold red key to cook
+    dual_setup_enabled: True   # CHANGE: Opt 2; true = dual stations (both arms)
     key_offset_x: 0.14          # CHANGE: m; |lateral| distance of key from pan center
     key_y_bias: -0.04           # CHANGE: m; key y relative to pan (toward robot)
     key_press_depth: 0.055      # CHANGE: m; EE press depth onto keycap
@@ -333,7 +333,7 @@ task_args:
     gap_tol: 0.06               # m; curtain-gap vs corridor alignment for “open”
     reach_tol: 0.05             # m; yellow-gap vs corridor alignment for reach
     moving_component_spacing: 0.10  # m; yellow-stick center spacing (2cm tighter)
-    blue_curtains_enabled: false # opt1: spawn blue curtain strips
+    blue_curtains_enabled: true # opt1: spawn blue curtain strips
     blue_curtain_dynamic_enabled: false  # opt2: if true, curtains also sway (implies opt1)
     random_mirror: true         # randomly mirror across y-axis (x→−x); left arm when mirrored
     lift_off_only_after_place: false  # if true, only lift after successful place
@@ -350,8 +350,8 @@ task_args:
     #     Hold arrow key to slide the bowl; episode speed ~ U((1±jitter)*bowl_speed).
     #     CLI: --task-arg belt_continuous_motion=true   or   --option 2
     tube_capacity: 4            # slots / gummies per tube
-    layout_mode: alternating    # Default: alternating; Opt 1: random
-    belt_continuous_motion: false  # Opt 2: false = discrete hops; true = hold-to-slide
+    layout_mode: random    # Default: alternating; Opt 1: random
+    belt_continuous_motion: true  # Opt 2: false = discrete hops; true = hold-to-slide
     target_color: yellow        # yellow|blue — color to catch
     ball_diameter: 0.03         # m; gummy diameter
     ball_slot_gap: 0.003        # m; vertical gap between stacked gummies in tube
@@ -390,8 +390,8 @@ task_args:
     punch_tol: 0.035            # m; punch alignment tolerance
     belt_inward_reach: 0.13     # m; belt travel toward table center
     belt_outward_scale: 2.0     # outward_reach = inward_reach × scale
-    missing_tile_mode: false    # Opt 1: true = one random missing tile (1- vs 2-arm stops)
-    belt_continous_motion: false # Opt 2: false = discrete stop-per-tile (default); true = continuous
+    missing_tile_mode: true    # Opt 1: true = one random missing tile (1- vs 2-arm stops)
+    belt_continous_motion: true # Opt 2: false = discrete stop-per-tile (default); true = continuous
     tile_pause_s: 2.0           # Opt 2 discrete: seconds the tile holds under the stamp
     belt_speed: 0.0002          # m per physics step (discrete); continuous uses × scale below
     belt_continuous_speed_scale: 2.0  # Opt 2: multiply belt_speed when continuous
@@ -503,7 +503,7 @@ task_args:
     ball_lateral_min: 0.07      # m; |x| spawn range low
     ball_lateral_max: 0.12      # m; high
     ball_y_jitter: 0.02         # m; ±y around near-rail spawn
-    ball_radius: 0.015          # m; ball radius
+    ball_radius: 0.0195         # m; ball radius (30% larger for reliable pickup)
     car_floor_h: 0.014          # m; wagon bed thickness
     car_half_len: 0.045         # m; car half-length along rail
     car_half_wid: 0.040         # m; car half-width

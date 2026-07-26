@@ -339,6 +339,10 @@ class ViewerViewToggle:
                 self.mode = "topdown"
                 self.apply(announce=True)
             return
+        # Keep the overhead view fixed.  SAPIEN's FPS controller otherwise
+        # translates the viewer in response to WASD while the task is running.
+        if self.mode == "topdown":
+            self.apply(announce=False)
         # Keep head view locked to the moving head_camera.
         if self.mode == "head" and self._head is not None:
             self._set_viewer_pose(self._head.global_pose)

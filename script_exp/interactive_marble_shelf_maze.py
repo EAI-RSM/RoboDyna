@@ -36,8 +36,8 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow / A   →  tilt active shelf LEFT  (red / left button)
-  Right Arrow / D  →  tilt active shelf RIGHT (right button)
+  Left Arrow       →  tilt active shelf LEFT  (red / left button)
+  Right Arrow      →  tilt active shelf RIGHT (right button)
 
   One press tilts the current shelf, rolls the marble off, and
   waits for the fall/settle before accepting another press.
@@ -49,8 +49,8 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left Arrow / A   →  tilt active shelf LEFT  (red / left button)
-  Right Arrow / D  →  tilt active shelf RIGHT (right button)
+  Left Arrow       →  tilt active shelf LEFT  (red / left button)
+  Right Arrow      →  tilt active shelf RIGHT (right button)
 
   One press tilts the current shelf, rolls the marble off, and
   waits for the fall/settle before accepting another press.
@@ -104,8 +104,8 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
 
 
 def _requested_direction(window):
-    left = window.key_down("left") or window.key_down("a")
-    right = window.key_down("right") or window.key_down("d")
+    left = window.key_down("left")
+    right = window.key_down("right")
     if left and not right:
         return "left"
     if right and not left:
@@ -169,7 +169,7 @@ def main():
     dirs = list(getattr(env, "correct_dir", []) or [])
     print(f"Shelves={env.n_shelves}. Suggested directions top→bottom: {dirs}")
     motion = f", robot-motion={args.robot_motion}" if args.control == "robot" else ""
-    print(f"Control={args.control}{motion}. Tap Left/A or Right/D to tilt.")
+    print(f"Control={args.control}{motion}. Tap Left or Right Arrow to tilt.")
 
     edges = EdgeDirection()
     busy = False

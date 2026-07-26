@@ -38,7 +38,7 @@ from _interactive_common import (  # noqa: E402
 
 CONTROLS_KEYBOARD = """
   1 / Q  →  open button/trapdoor index 0
-  2 / W  →  open button/trapdoor index 1
+  2 / Up Arrow  →  open button/trapdoor index 1
   3 / E  →  open button/trapdoor index 2
   4 / R  →  open button/trapdoor index 3
 
@@ -52,7 +52,7 @@ CONTROLS_KEYBOARD = """
 
 CONTROLS_ROBOT = """
   1 / Q  →  open button/trapdoor index 0
-  2 / W  →  open button/trapdoor index 1
+  2 / Up Arrow  →  open button/trapdoor index 1
   3 / E  →  open button/trapdoor index 2
   4 / R  →  open button/trapdoor index 3
 
@@ -112,7 +112,7 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
 
 _KEY_TO_IDX = {
     "1": 0, "q": 0,
-    "2": 1, "w": 1,
+    "2": 1, "up": 1,
     "3": 2, "e": 2,
     "4": 3, "r": 3,
 }
