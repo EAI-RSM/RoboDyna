@@ -29,7 +29,6 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     add_robot_motion_arg,
-    make_button_controller,
     report_task_result,
     print_mode_controls,
 )
@@ -141,6 +140,126 @@ def _with_live_viewer(env, viewer, fn):
         env.scene.step = original_step
 
 
+class RobotShelfKeyController:
+    """Per-frame hover → press → tilt → hover controller for the shelf keys."""
+
+    TRANSITION_SECONDS = 0.14
+    PRESS_HOLD_SECONDS = 0.08
+
+    def __init__(self, env, arm_tag, viewer):
+        self.env = env
+        self.arm_tag = arm_tag
+        self.viewer = viewer
+        self.hover_qpos = {}
+        self.press_qpos = {}
+        self.active = None
+        self.phase = "idle"
+        self.start = None
+        self.target = None
+        self.started_at = None
+        self.hold_until = None
+        self._prepare()
+
+    @property
+    def busy(self):
+        return self.phase != "idle"
+
+    def _button(self, side):
+        return self.env.left_button if side == "left" else self.env.right_button
+
+    def _drive_qpos(self, side):
+        joints = self.env.robot.left_arm_joints if side == "left" else self.env.robot.right_arm_joints
+        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
+
+    def _plan(self, side, pose, last_qpos=None):
+        planner = self.env.robot.left_plan_path if side == "left" else self.env.robot.right_plan_path
+        result = planner(
+            np.asarray(pose, dtype=np.float64).tolist(),
+            last_qpos=None if last_qpos is None else np.asarray(last_qpos, dtype=np.float32),
+        )
+        if result is None or result.get("status") != "Success":
+            reason = "no result" if result is None else result.get("reason", "unknown reason")
+            raise RuntimeError(f"Could not prepare {side} shelf-key pose: {reason}")
+        return np.asarray(result["position"][-1], dtype=np.float64)
+
+    def _prepare(self):
+        """Use the task's normal button approach, then cache its press endpoint."""
+        for side in ("left", "right"):
+            self.env.plan_success = True
+            self.env.move(self.env.grasp_actor(
+                self._button(side), arm_tag=self.arm_tag(side),
+                pre_grasp_dis=0.09, grasp_dis=0.09,
+                contact_point_id=0, gripper_pos=0.5,
+            ))
+            if not self.env.plan_success:
+                detail = getattr(self.env, "_last_plan_fail", None) or "unknown planner failure"
+                raise RuntimeError(f"Could not approach {side} shelf key: {detail}")
+            hover = self._drive_qpos(side)
+            ee_pose = np.asarray(
+                self.env.robot.get_left_ee_pose() if side == "left" else self.env.robot.get_right_ee_pose(),
+                dtype=np.float64,
+            )
+            ee_pose[2] -= float(self.env.button_press_depth)
+            self.hover_qpos[side] = hover
+            self.press_qpos[side] = self._plan(side, ee_pose, last_qpos=hover)
+        print("Shelf-key arms ready; arrow taps descend, tilt, then return to hover.")
+
+    def _begin(self, phase, target):
+        side = self.active
+        self.start = self._drive_qpos(side)
+        self.target = np.asarray(target, dtype=np.float64)
+        self.started_at = time.perf_counter()
+        self.phase = phase
+
+    def tap(self, direction):
+        if self.busy:
+            return False
+        self.active = direction
+        self._begin("pressing", self.press_qpos[direction])
+        return True
+
+    def _finish_transition(self, now):
+        if self.phase == "pressing":
+            self.phase = "holding"
+            self.hold_until = now + self.PRESS_HOLD_SECONDS
+        elif self.phase == "raising":
+            self.phase = "idle"
+            self.active = None
+            self.start = self.target = self.started_at = self.hold_until = None
+
+    def update(self):
+        if self.phase == "idle":
+            return
+        now = time.perf_counter()
+        if self.phase == "holding":
+            self.env.robot.set_arm_joints(
+                self.press_qpos[self.active], np.zeros_like(self.press_qpos[self.active]), self.active,
+            )
+            if now < self.hold_until:
+                return
+            # The direct API is the task's key-actuation behavior; wrap it so
+            # the viewer stays live during the shelf tilt and marble landing.
+            ok = _with_live_viewer(
+                self.env, self.viewer,
+                lambda: self.env._press_tilt_direct(self.active),
+            )
+            print(f"Tilt done. ball_mode={self.env._ball_mode} ok={ok}")
+            self._begin("raising", self.hover_qpos[self.active])
+            return
+
+        progress = min(1.0, (now - self.started_at) / self.TRANSITION_SECONDS)
+        smooth = progress * progress * (3.0 - 2.0 * progress)
+        delta = self.target - self.start
+        velocity = delta / self.TRANSITION_SECONDS if progress < 1.0 else np.zeros_like(delta)
+        self.env.robot.set_arm_joints(self.start + delta * smooth, velocity, self.active)
+        if progress >= 1.0:
+            self._finish_transition(now)
+
+    def release(self):
+        self.phase = "idle"
+        self.active = None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Interactive marble_shelf_maze viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
@@ -172,29 +291,9 @@ def main():
     print(f"Control={args.control}{motion}. Tap Left or Right Arrow to tilt.")
 
     edges = EdgeDirection()
-    busy = False
     robot_controller = None
     if args.control == "robot":
-        def get_button(e, side):
-            return e.left_button if side == "left" else e.right_button
-
-        def get_top_z(e, side):
-            btn = e.left_button if side == "left" else e.right_button
-            return float(btn.get_pose().p[2]) + float(e.button_half[2])
-
-        def on_press(e, m):
-            ok = _with_live_viewer(e, viewer, lambda: e._press_tilt_direct(m))
-            print(f"Tilt done. ball_mode={e._ball_mode} ok={ok}")
-
-        robot_controller = make_button_controller(
-            env, ArmTag, args.robot_motion,
-            get_button=get_button,
-            get_top_z=get_top_z,
-            arms_for_mode=lambda m: (m,) if m else (),
-            on_press=on_press,
-            hold=False,
-            sides=("left", "right"),
-        )
+        robot_controller = RobotShelfKeyController(env, ArmTag, viewer)
 
     try:
         while not viewer.closed:
@@ -204,27 +303,21 @@ def main():
             mode = str(getattr(env, "_ball_mode", ""))
             can_tilt = (
                 direction is not None
-                and not busy
                 and env.active_shelf_idx >= 0
                 and mode not in ("sliding", "falling", "missed", "done")
+                and (robot_controller is None or not robot_controller.busy)
             )
             if can_tilt:
-                busy = True
                 idx = env.active_shelf_idx
-                try:
-                    if args.control == "keyboard":
-                        print(f"Tilting shelf {idx} {direction} (keyboard)...")
-                        ok = _with_live_viewer(env, viewer, lambda: env._press_tilt_direct(direction))
-                        print(f"Tilt done. ball_mode={env._ball_mode} ok={ok}")
-                    elif robot_controller is not None:
-                        print(f"Robot tapping {direction} button for shelf {idx}...")
-                        robot_controller.update(direction)
-                        print(
-                            f"Press done. ball_mode={env._ball_mode} "
-                            f"plan_success={env.plan_success}"
-                        )
-                finally:
-                    busy = False
+                if args.control == "keyboard":
+                    print(f"Tilting shelf {idx} {direction} (keyboard)...")
+                    ok = _with_live_viewer(env, viewer, lambda: env._press_tilt_direct(direction))
+                    print(f"Tilt done. ball_mode={env._ball_mode} ok={ok}")
+                elif robot_controller is not None:
+                    print(f"Robot tapping {direction} button for shelf {idx}...")
+                    robot_controller.tap(direction)
+            if robot_controller is not None:
+                robot_controller.update()
             env._update_kinematic_tasks()
             env.scene.step()
             env.scene.update_render()
