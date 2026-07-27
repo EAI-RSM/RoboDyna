@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_whack_a_mole.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_whack_a_mole.py --control robot
 
-Pre-gripped cubes jab moles mid-rise. Avoid rabbits (Opt1). Success = all moles
-hit and no rabbit touch.
+Pick up a side-staged mallet, then jab moles mid-rise. Avoid rabbits (Opt1).
+Success = all moles hit and no rabbit touch.
 """
 
 import argparse
@@ -43,7 +43,7 @@ CONTROLS_ROBOT = """
   Q / E             select left / right arm (highlighted yellow / cyan)
   Arrow keys        move selected arm in world XY
   T / R             raise / lower selected arm
-  Space             strike beneath the selected cube, then return to hover
+  Space             pick selected side's mallet, then strike and return to hover
   V                 toggle view: top-down ↔ head_camera
   Escape            quit
 ------------------------------------------------------------
@@ -143,20 +143,6 @@ class ArmGripperHighlight:
                         material.base_color = _ARM_HIGHLIGHT[side]
                     except Exception:
                         pass
-
-
-def _ensure_cubes(env):
-    """Spawn mallet cubes; temporarily enable planning for gripper seating."""
-    if getattr(env, "_cubes_ready", False):
-        return
-    prev = bool(env.need_plan)
-    env.need_plan = True
-    env.plan_success = True
-    try:
-        env._spawn_and_grip_cubes()
-    finally:
-        env.need_plan = prev
-    print("Mallet cubes gripped.")
 
 
 def _arm_for_mole(env, idx, ArmTag):
@@ -357,7 +343,12 @@ class RobotMoleController:
         self.busy = True
         arm = self._arm()
         self.env.plan_success = True
-        cube_p = np.asarray(self.env.hammer_cubes[self.selected_arm].get_pose().p, dtype=np.float64)
+        if self.selected_arm not in self.env.hammer_cubes:
+            self.env.pickup_mallet_to_ready(arm)
+            print(f"Picked up {self.selected_arm} mallet; it is ready at hover height.")
+            self.busy = False
+            return
+        cube_p = self.env._mallet_head_center(arm)
         idx = next(
             (i for i, hole_idx in enumerate(self.env.mole_holes)
              if not self.env.touched[i]
@@ -432,7 +423,6 @@ def main():
 
     env = whack_a_mole()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
-    _ensure_cubes(env)
     print(
         f"moles={env.num_moles}; distractors={env.num_distractors}; "
         f"relocating={env.relocating_moles}; difficulty={env.difficulty}."

@@ -78,6 +78,15 @@ class whack_a_mole(Base_Task):
     RABBIT_HEIGHT = 0.1047        # world height after scale_mult (match moles)
     # Drop the gripped cube below the finger-pad midpoint (world -Z).
     CUBE_GRASP_DROP_Z = 0.05
+    MALLET_HEAD_RADIUS = 0.041       # Match the mole / hole diameter.
+    MALLET_HEAD_HALF_X = 0.070       # Traditional crosswise cylindrical head.
+    MALLET_HANDLE_RADIUS = 0.012
+    MALLET_HANDLE_HALF_Y = 0.145
+    MALLET_HEAD_Y = -0.105         # Head sits at the forward end of the handle.
+    MALLET_HANDLE_CENTER_Y = -0.025  # Forward end passes through the head center.
+    MALLET_WOOD_COLOR = [0.48, 0.25, 0.10]
+    MALLET_REST_HEIGHT = 0.045
+    MALLET_REST_RAIL_HALF_Y = 0.012
     # Peak |dz/dt| upper bound (m/s). 20% below the original 0.08 so the expert
     # (and a policy) have more time to meet the crest.
     POP_SPEED = 0.064
@@ -286,6 +295,8 @@ class whack_a_mole(Base_Task):
         self._cube_comps = {}
         self._cube_weld = {}
         self._cubes_ready = False
+        self.staged_mallets = {}
+        self.mallet_rests = {}
 
         self.num_moles = int(self._cfg.get("num_moles", self.NUM_MOLES_DEFAULT))
         self.distractor_enabled = self._parse_distractor_enabled(self._cfg)
@@ -334,6 +345,7 @@ class whack_a_mole(Base_Task):
         self.cube_half = self.cube_side * 0.5
         self.cube_grasp_drop_z = float(
             self._cfg.get("cube_grasp_drop_z", self.CUBE_GRASP_DROP_Z))
+        self._create_staged_mallets()
         if self.num_moles > self.num_holes:
             raise ValueError(f"num_moles ({self.num_moles}) > hole_count ({self.num_holes})")
         max_distractors = min(
@@ -982,35 +994,106 @@ class whack_a_mole(Base_Task):
         pos = (target_joint - s0) / (s1 - s0)
         return float(np.clip(pos, 0.05, 0.95))
 
-    def _spawn_and_grip_cubes(self):
+    def _create_staged_mallets(self):
+        """Stage head-down mallets in two-post cradles for an easy top grasp."""
+
+        y = float(self.board_center[1] - self.BOARD_HALF[1] - 0.08)
+        # Rest top touches the horizontal handle underside.
+        rest_h = float(self.MALLET_REST_HEIGHT)
+        # Local X (the cylinder head axis) maps to world Z, while the local Y
+        # handle stays horizontal along world Y above the table.
+        # Same head-up pose, then rotate 180 degrees about world Z.
+        head_axis_up_q = [0.0, 0.70710678, 0.0, 0.70710678]
+        z = float(self.table_top + rest_h + self.MALLET_HANDLE_RADIUS)
+        for arm, x in (("left", -0.38), ("right", 0.38)):
+            rails = []
+            # Cue-style paired posts support the horizontal handle while its
+            # center stays unobstructed for a top-down grasp.
+            for post_idx, y_offset in enumerate((-0.070, 0.030)):
+                rails.append(create_box(
+                    self.scene,
+                    sapien.Pose([x, y + y_offset, self.table_top + 0.5 * rest_h]),
+                    half_size=[0.016, 0.010, 0.5 * rest_h],
+                    color=[0.32, 0.30, 0.28], is_static=True,
+                    name=f"mallet_rest_{arm}_{post_idx}",
+                ))
+            self.mallet_rests[arm] = rails
+            self.staged_mallets[arm] = self._build_mallet(
+                sapien.Pose([x, y, z], head_axis_up_q),
+                name=f"staged_mallet_{arm}", is_static=False,
+            )
+            rigid = self._get_rigid_dynamic_component(self.staged_mallets[arm])
+            if rigid is not None:
+                rigid.set_kinematic(True)
+                rigid.set_disable_gravity(True)
+
+    def _build_mallet(self, pose, name, is_static=False):
+        """Build a traditional T mallet: handle along Y, cylindrical head across X."""
+
+        builder = self.scene.create_actor_builder()
+        mat = self.scene.default_physical_material
+        wood = sapien.render.RenderMaterial(base_color=[*self.MALLET_WOOD_COLOR, 1.0])
+        builder.add_cylinder_collision(
+            pose=sapien.Pose([0.0, self.MALLET_HEAD_Y, 0.0]),
+            radius=self.MALLET_HEAD_RADIUS, half_length=self.MALLET_HEAD_HALF_X, material=mat,
+        )
+        builder.add_cylinder_visual(
+            pose=sapien.Pose([0.0, self.MALLET_HEAD_Y, 0.0]),
+            radius=self.MALLET_HEAD_RADIUS, half_length=self.MALLET_HEAD_HALF_X, material=wood,
+        )
+        handle_pose = sapien.Pose(
+            [0.0, self.MALLET_HANDLE_CENTER_Y, 0.0],
+            [0.70710678, 0.0, 0.0, 0.70710678],
+        )
+        builder.add_cylinder_collision(
+            pose=handle_pose, radius=self.MALLET_HANDLE_RADIUS,
+            half_length=self.MALLET_HANDLE_HALF_Y, material=mat,
+        )
+        builder.add_cylinder_visual(
+            pose=handle_pose, radius=self.MALLET_HANDLE_RADIUS,
+            half_length=self.MALLET_HANDLE_HALF_Y, material=wood,
+        )
+        builder.set_initial_pose(pose)
+        entity = builder.build_static(name=name) if is_static else builder.build(name=name)
+        data = {
+            "center": [0.0, 0.0, 0.0],
+            "extents": [self.MALLET_HEAD_HALF_X, self.MALLET_HANDLE_HALF_Y + self.MALLET_HEAD_Y, self.MALLET_HEAD_RADIUS],
+            "scale": [self.MALLET_HANDLE_RADIUS, self.MALLET_HANDLE_HALF_Y, self.MALLET_HANDLE_RADIUS],
+            "target_pose": [np.eye(4).tolist()],
+            # Handle-center grasp frame: the head remains beyond the fingers.
+            "contact_points_pose": [[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]],
+            "transform_matrix": np.eye(4).tolist(),
+            "functional_matrix": [],
+        }
+        return Actor(entity, data, mass=0.06)
+
+    def _spawn_and_grip_cubes(self, arms=None):
         """Seat a cube between each gripper's fingers and pinch to its sides.
 
         The cube lives in the grasp aperture (between fingers), not as an EE tip
         attachment. Collision stays on so the oversized face blocks hole entry.
         """
-        if self._cubes_ready:
+        arms = tuple(arms or ("left", "right"))
+        if all(arm in self.hammer_cubes for arm in arms):
             return
-        left, right = ArmTag("left"), ArmTag("right")
-        half = float(self.cube_half)
-
+        arm_tags = tuple(ArmTag(arm) for arm in arms if arm not in self.hammer_cubes)
+        if not arm_tags:
+            return
         prev_plan = self.plan_success
-        self.move(self.open_gripper(left, pos=1.0), self.open_gripper(right, pos=1.0))
+        self.move(*[self.open_gripper(arm, pos=1.0) for arm in arm_tags])
         if not self.plan_success:
             self.plan_success = prev_plan
 
-        for arm in (left, right):
+        for arm in arm_tags:
             local_T = self._grasp_local_T_for_arm(arm)
             ee = np.array(self.get_arm_pose(arm), dtype=float)
             pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
-            cube = create_box(
-                self.scene,
-                pose,
-                half_size=[half, half, half],
-                color=list(self.CUBE_COLOR),
-                is_static=False,
-                name=f"hammer_cube_{arm}",
-            )
-            cube.set_mass(0.03)
+            cube = self._build_mallet(pose, name=f"hammer_mallet_{arm}")
             self._paint_cube(cube)
             rigid = None
             for c in cube.actor.get_components():
@@ -1040,15 +1123,13 @@ class whack_a_mole(Base_Task):
         grip_pos = self._gripper_pos_for_cube()
         self._cube_grip_pos = grip_pos
         prev_plan = self.plan_success
-        self.move(
-            self.close_gripper(left, pos=grip_pos),
-            self.close_gripper(right, pos=grip_pos),
-        )
+        self.move(*[self.close_gripper(arm, pos=grip_pos) for arm in arm_tags])
         if not self.plan_success:
             self.plan_success = prev_plan
 
         # re-seat at the pinched-jaw finger midpoint and lock the weld
-        for arm in ("left", "right"):
+        for arm_tag in arm_tags:
+            arm = str(arm_tag)
             local_T = self._grasp_local_T_for_arm(ArmTag(arm))
             ee = np.array(self.get_arm_pose(ArmTag(arm)), dtype=float)
             pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
@@ -1062,12 +1143,68 @@ class whack_a_mole(Base_Task):
             self._cube_weld[arm] = local_T.copy()
         self._paint_inhand_cube()
         self._hide_wrist_camera_mounts()
-        self._cubes_ready = True
+        self._cubes_ready = bool(self.hammer_cubes)
         # Board spans both arms' reach; post-grasp cubes hang over it and below
         # the deck. Lift clear before any lateral motion or board_hit trips.
-        self._lift_mallets_clear()
+        self._lift_mallets_clear(arm_tags)
 
-    def _lift_mallets_clear(self):
+    def pickup_mallet_to_ready(self, arm_tag):
+        """Open, grasp the staged handle from above, weld, then lift to ready."""
+
+        arm = str(arm_tag)
+        if arm in self.hammer_cubes:
+            return True
+        staged = self.staged_mallets.get(arm)
+        if staged is None:
+            return False
+
+        self.plan_success = True
+        staged_p = np.asarray(staged.get_pose().p, dtype=np.float64)
+        _pre, grasp = self.choose_grasp_pose(
+            staged, arm_tag=arm_tag, pre_dis=0.10, target_dis=0.0,
+            contact_point_id=0,
+        )
+        if grasp is None:
+            return False
+        # Grasp the handle behind the head, using the planner-selected top-down orientation.
+        handle_local = np.array([0.0, self.MALLET_HANDLE_CENTER_Y - 0.035, 0.0])
+        handle_p = staged_p + staged.get_pose().to_transformation_matrix()[:3, :3] @ handle_local
+        handle_z = float(staged_p[2] + self.MALLET_HANDLE_RADIUS + 0.025)
+        pre_pose = [float(handle_p[0]), float(handle_p[1]), handle_z + 0.10, *grasp[3:7]]
+        grasp_pose = [float(handle_p[0]), float(handle_p[1]), handle_z, *grasp[3:7]]
+
+        self.move(self.open_gripper(arm_tag, pos=1.0))
+        if not self.plan_success:
+            return False
+        self.move(self.move_to_pose(arm_tag, pre_pose))
+        if not self.plan_success:
+            return False
+        self.move(self.move_to_pose(arm_tag, grasp_pose))
+        if not self.plan_success:
+            return False
+        self.move(self.close_gripper(arm_tag, pos=self._gripper_pos_for_cube()))
+        if not self.plan_success:
+            return False
+        self._dwell(20)
+
+        # Carry the actual staged mallet; no replacement actor or magnetic snap.
+        ee_T = self._pose7_to_mat(np.asarray(self.get_arm_pose(arm_tag), dtype=float))
+        mallet_T = staged.get_pose().to_transformation_matrix()
+        self.hammer_cubes[arm] = staged
+        self._cube_weld[arm] = np.linalg.inv(ee_T) @ mallet_T
+        rigid = self._get_rigid_dynamic_component(staged)
+        self._cube_comps[arm] = rigid
+        if rigid is not None:
+            try:
+                rigid.set_kinematic(True)
+                rigid.set_disable_gravity(True)
+            except Exception:
+                pass
+        self._cubes_ready = True
+        self._lift_mallets_clear((arm_tag,))
+        return True
+
+    def _lift_mallets_clear(self, arm_tags=None):
         """Raise both held cubes to hover height (escape post-grasp low pose).
 
         Target EE hover from ``_hover_ee_z`` so we don't overshoot into an
@@ -1076,7 +1213,7 @@ class whack_a_mole(Base_Task):
         self._suppress_board_hit = True
         prev_plan = self.plan_success
         try:
-            for arm in (ArmTag("left"), ArmTag("right")):
+            for arm in (arm_tags or (ArmTag("left"), ArmTag("right"))):
                 hover = float(self._hover_ee_z(arm))
                 cur = np.array(self.get_arm_pose(arm), dtype=float)
                 dz = float(hover - cur[2])
@@ -1385,13 +1522,14 @@ class whack_a_mole(Base_Task):
         sep_max = float(self._cfg.get("hit_separation_max", self.HIT_SEPARATION_MAX))
         geom_eps = float(self._cfg.get("hit_geom_eps", self.HIT_GEOM_EPS))
         actor_name = actors[idx].get_name()
-        half = float(self.cube_half)
-
         for arm, cube in getattr(self, "hammer_cubes", {}).items():
             p = np.array(cube.get_pose().p, dtype=float)
-            if float(np.linalg.norm(p[:2] - cp[:2])) > xy_tol:
+            mallet_T = cube.get_pose().to_transformation_matrix()
+            head_center = mallet_T @ np.array([0.0, self.MALLET_HEAD_Y, 0.0, 1.0])
+            bottom = mallet_T @ np.array([0.0, self.MALLET_HEAD_Y, -self.MALLET_HEAD_RADIUS, 1.0])
+            if float(np.linalg.norm(head_center[:2] - cp[:2])) > self.MALLET_HEAD_RADIUS + xy_tol:
                 continue
-            bottom_z = float(p[2] - half)
+            bottom_z = float(bottom[2])
             # Underside must be near/into the crown, not still hovering, and
             # not sunk past the mole midline (that would be a side crush).
             if bottom_z > top_z + band:
@@ -1401,7 +1539,7 @@ class whack_a_mole(Base_Task):
             # Geometric bottom-face press (robust when PhysX contacts are gone).
             if bottom_z <= top_z + geom_eps:
                 return True
-            cube_name = f"hammer_cube_{arm}"
+            cube_name = f"hammer_mallet_{arm}"
             for contact in self.scene.get_contacts():
                 name0 = contact.bodies[0].entity.name
                 name1 = contact.bodies[1].entity.name
@@ -1502,14 +1640,15 @@ class whack_a_mole(Base_Task):
         if cube is None or not hasattr(self, "board_center"):
             return False
         p = np.array(cube.get_pose().p, dtype=float)
-        half = float(self.cube_half)
+        half_x = float(self.MALLET_HEAD_RADIUS)
+        half_y = float(self.MALLET_HEAD_RADIUS)
         bx, by = float(self.board_center[0]), float(self.board_center[1])
         hx, hy = float(self.BOARD_HALF[0]), float(self.BOARD_HALF[1])
         return (
-            (p[0] + half) >= (bx - hx)
-            and (p[0] - half) <= (bx + hx)
-            and (p[1] + half) >= (by - hy)
-            and (p[1] - half) <= (by + hy)
+            (p[0] + half_x) >= (bx - hx)
+            and (p[0] - half_x) <= (bx + hx)
+            and (p[1] + half_y) >= (by - hy)
+            and (p[1] - half_y) <= (by + hy)
         )
 
     def _cube_board_contact(self):
@@ -1566,8 +1705,10 @@ class whack_a_mole(Base_Task):
         """World Z of the lowest point of the held cube."""
         arm = str(arm_tag)
         if arm in getattr(self, "hammer_cubes", {}):
-            cp = np.array(self.hammer_cubes[arm].get_pose().p, dtype=float)
-            return float(cp[2] - self.cube_half)
+            mallet_T = self.hammer_cubes[arm].get_pose().to_transformation_matrix()
+            return float((mallet_T @ np.array(
+                [0.0, self.MALLET_HEAD_Y, -self.MALLET_HEAD_RADIUS, 1.0]
+            ))[2])
         local_T = self._cube_weld.get(arm)
         if local_T is None:
             local_T = self._grasp_local_T_for_arm(arm_tag)
@@ -1575,15 +1716,25 @@ class whack_a_mole(Base_Task):
         cube_T = self._pose7_to_mat(ee) @ local_T
         return float(cube_T[2, 3] - self.cube_half)
 
+    def _mallet_head_center(self, arm_tag):
+        """World center of the striking head, not the handle-grasp origin."""
+
+        mallet = self.hammer_cubes.get(str(arm_tag))
+        if mallet is None:
+            return None
+        return (mallet.get_pose().to_transformation_matrix() @ np.array(
+            [0.0, self.MALLET_HEAD_Y, 0.0, 1.0]
+        ))[:3]
+
     def _ee_z_for_cube_bottom(self, arm_tag, cube_bottom_z):
         """EE world Z that places the held cube's underside at cube_bottom_z."""
         arm = str(arm_tag)
         local_T = self._cube_weld.get(arm)
         if local_T is None:
             local_T = self._grasp_local_T_for_arm(arm_tag)
-        # cube_z ≈ ee_z + R_ee @ local_t; for near-vertical EE use local z
+        # Head underside is below the handle center by its local head thickness.
         local_z = float(local_T[2, 3])
-        return float(cube_bottom_z + self.cube_half - local_z)
+        return float(cube_bottom_z + self.MALLET_HEAD_RADIUS - local_z)
 
     def _hover_ee_z(self, arm_tag):
         # Hover just above a fully raised mole so the smash is a short, fast jab
@@ -1596,8 +1747,8 @@ class whack_a_mole(Base_Task):
 
     def _cube_xy_err(self, idx, arm_tag):
         hole = self.holes[self.mole_holes[idx]]
-        cube_p = np.array(self.hammer_cubes[str(arm_tag)].get_pose().p, dtype=float)
-        return float(np.linalg.norm(cube_p[:2] - hole[:2]))
+        head_p = self._mallet_head_center(arm_tag)
+        return float(np.linalg.norm(head_p[:2] - hole[:2]))
 
     def _approach_hole(self, idx, arm_tag, quick=False):
         """Slide the mallet over ``idx``'s hole at a safe hover height.
@@ -1700,8 +1851,9 @@ class whack_a_mole(Base_Task):
 
     # ------------------------------------------------------------- policy
     def play_once(self):
-        # start with a cube gripped between each hand's fingers (blocks hole entry)
-        self._spawn_and_grip_cubes()
+        # Pick both side-staged mallets before running the scripted policy.
+        self.pickup_mallet_to_ready(ArmTag("left"))
+        self.pickup_mallet_to_ready(ArmTag("right"))
 
         for group in self.schedule:
             # Soft-recover from motion-plan blips so later moles still get pressed.
