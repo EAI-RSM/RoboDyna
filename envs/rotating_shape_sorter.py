@@ -46,6 +46,7 @@ class rotating_shape_sorter(Base_Task):
     HOLE_DROP_INSET_DEFAULT = 0.006
     HOLE_XY_JITTER_DEFAULT = 0.012        # m; ±x/±y randomization for target & dummy hole centers
     CONTAINER_SHAPE_DEFAULT = "cubic"     # cubic | cylinder
+    CYLINDER_DIAMETER_SCALE = 1.20
     CYLINDER_HOLE_INSET_DEFAULT = 0.025   # keep circular hole visibly inside the plate rim
     CYLINDER_HOLE_EDGE_CLEARANCE_DEFAULT = 0.008
     FORCE_PLATFORM_MISS_DEFAULT = False   # demo/eval: drop onto solid / dummy (failure demo)
@@ -231,7 +232,10 @@ class rotating_shape_sorter(Base_Task):
         wall_t = 0.010
         floor_z = z0
         bc = self.bucket_center
-        self.bucket_radius = self.bucket_half
+        self.bucket_radius = self.bucket_half * (
+            self.CYLINDER_DIAMETER_SCALE
+            if self.container_shape == "cylinder" else 1.0
+        )
         # A round tray uses a polygonal static wall so its interior is hollow.
         if self.container_shape == "cylinder":
             self.bucket_floor = create_cylinder(
@@ -312,7 +316,10 @@ class rotating_shape_sorter(Base_Task):
 
         # ---- rotating cap: square or circular collidable platform with a real hole ----
         self.cap_half_extent = self.bucket_half + 0.012
-        self.cap_radius = self.bucket_radius + 0.012
+        self.cap_radius = self.cap_half_extent * (
+            self.CYLINDER_DIAMETER_SCALE
+            if self.container_shape == "cylinder" else 1.0
+        )
         self.cap_hole_radius = float(np.clip(
             self.cap_hole_radius,
             0.02,

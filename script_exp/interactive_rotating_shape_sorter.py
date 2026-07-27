@@ -39,6 +39,10 @@ def _release_z(env) -> float:
     )
 
 
+INTERACTIVE_ROBOT_HOLD_CLEARANCE = 0.025
+INTERACTIVE_CYLINDER_SIDE_CLEARANCE = 0.035
+
+
 def _prepare_keyboard_hold(env):
     z = _release_z(env)
     xy = np.asarray(env._drop_target_xy, dtype=np.float64).copy()
@@ -72,18 +76,31 @@ def _prepare_robot_hold(env):
     env.selected_arm = arm_name
     env._cap_tracking = True
     env.move(env.grasp_actor(env.ball, arm_tag=arm_tag, pre_grasp_dis=0.08))
+    # Clear the container before translating, then stage just beside it. Do
+    # not pre-align to the moving hole: the user positions the ball with keys.
     transport_z = float(
         env.cap_z + env.cap_thickness + env.ball_radius + env.transport_clearance_z
     )
-    release_z = _release_z(env)
+    hold_z = float(
+        env.cap_z + env.cap_thickness + env.ball_radius
+        + INTERACTIVE_ROBOT_HOLD_CLEARANCE
+    )
     env._move_ball_to_height(arm_tag=arm_tag, target_z=transport_z)
-    ball_xy = np.array(env.ball.get_pose().p[:2], dtype=np.float64)
-    delta = env._drop_target_xy - ball_xy
+    side_sign = -1.0 if env.ball_side == "left" else 1.0
+    container_radius = float(getattr(env, "cap_radius", env.cap_half_extent))
+    side_xy = np.array([
+        float(env.bucket_center[0]) + side_sign * (
+            container_radius + float(env.ball_radius) + INTERACTIVE_CYLINDER_SIDE_CLEARANCE
+        ),
+        float(env.bucket_center[1]),
+    ])
+    ball_xy = np.asarray(env.ball.get_pose().p[:2], dtype=np.float64)
+    delta = side_xy - ball_xy
     if np.linalg.norm(delta) > 1e-4:
         env.move(env.move_by_displacement(
-            arm_tag=arm_tag, x=float(delta[0]), y=float(delta[1]),
+            arm_tag=arm_tag, x=float(delta[0]), y=float(delta[1]), move_axis="world",
         ))
-    env._move_ball_to_height(arm_tag=arm_tag, target_z=release_z)
+    env._move_ball_to_height(arm_tag=arm_tag, target_z=hold_z)
     env._interactive_arm = arm_tag
     env._interactive_holding = True
     env._interactive_released = False
