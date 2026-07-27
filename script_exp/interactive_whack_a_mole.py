@@ -40,10 +40,10 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Q / E             select previous / next unhit mole
-  1 .. N            select mole index directly
-  Space             approach selected mole, then jab
-  R                 (re)approach selected mole
+  Q / E             select left / right arm (highlighted yellow / cyan)
+  Arrow keys        move selected arm in world XY
+  T / R             raise / lower selected arm
+  Space             strike beneath the selected cube, then return to hover
   V                 toggle view: top-down ↔ head_camera
   Escape            quit
 ------------------------------------------------------------
@@ -100,6 +100,49 @@ class EdgeKey:
         edge = bool(down) and not self._prev
         self._prev = bool(down)
         return edge
+
+
+_GRIPPER_LINK_NAMES = (
+    "wsg_50_base_link", "gripper_left", "gripper_right", "finger_left", "finger_right",
+)
+_ARM_HIGHLIGHT = {
+    "left": [1.0, 0.85, 0.10, 1.0],
+    "right": [0.15, 0.75, 1.0, 1.0],
+}
+
+
+class ArmGripperHighlight:
+    """Recolor the selected gripper so Q/E selection is unambiguous."""
+
+    def __init__(self, env):
+        self._orig = {}
+        self._entities = {
+            side: [link.entity for link in articulation.get_links()
+                   if link.get_name() in _GRIPPER_LINK_NAMES]
+            for side, articulation in (("left", env.robot.left_entity), ("right", env.robot.right_entity))
+        }
+
+    def set_selected(self, side):
+        for material, color in self._orig.values():
+            try:
+                material.set_base_color(color)
+                material.base_color = color
+            except Exception:
+                pass
+        for entity in self._entities[side]:
+            for component in entity.get_components():
+                if not isinstance(component, sapien.render.RenderBodyComponent):
+                    continue
+                for shape in component.render_shapes:
+                    material = shape.material
+                    if id(material) not in self._orig:
+                        self._orig[id(material)] = (material, list(material.base_color))
+                    try:
+                        material.set_base_color_texture(None)
+                        material.set_base_color(_ARM_HIGHLIGHT[side])
+                        material.base_color = _ARM_HIGHLIGHT[side]
+                    except Exception:
+                        pass
 
 
 def _ensure_cubes(env):
@@ -236,92 +279,123 @@ class KeyboardMoleController:
 
 
 class RobotMoleController:
+    XY_STEP = 0.045
+    Z_STEP = 0.030
+    DURATION = 0.04
+    MAX_RAISE_ABOVE_HOVER = 0.12
+    MAX_JOINT_DELTA = 0.45
+
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
-        self.selected = 0
+        self.selected_arm = "left"
         self.busy = False
-        self.approached = False
         self._space = EdgeKey()
-        self._r = EdgeKey()
         self._q = EdgeKey()
         self._e = EdgeKey()
-        self._digit = {str(i): EdgeKey() for i in range(1, 10)}
+        self.highlight = ArmGripperHighlight(env)
+        self.highlight.set_selected(self.selected_arm)
+        self._start = None
+        self._target = None
+        self._started_at = None
+        self._moving_arm = None
 
-    def _unhit(self):
-        return [i for i in range(self.env.num_moles) if not self.env.touched[i]]
+    def _arm(self):
+        return self.ArmTag(self.selected_arm)
 
-    def _select_next(self, delta):
-        unhit = self._unhit()
-        if not unhit:
+    def _drive_qpos(self, side):
+        joints = self.env.robot.left_arm_joints if side == "left" else self.env.robot.right_arm_joints
+        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
+
+    def _ee_pose(self, side):
+        getter = self.env.robot.get_left_ee_pose if side == "left" else self.env.robot.get_right_ee_pose
+        return np.asarray(getter(), dtype=np.float64)
+
+    def _advance_motion(self):
+        if self._started_at is None:
             return
-        if self.selected not in unhit:
-            self.selected = unhit[0]
-        else:
-            k = unhit.index(self.selected)
-            self.selected = unhit[(k + delta) % len(unhit)]
-        self.approached = False
-        print(f"Selected mole {self.selected}.")
+        progress = min(1.0, (time.perf_counter() - self._started_at) / self.DURATION)
+        smooth = progress * progress * (3.0 - 2.0 * progress)
+        delta = self._target - self._start
+        position = self._start + delta * smooth
+        velocity = delta / self.DURATION if progress < 1.0 else np.zeros_like(delta)
+        self.env.robot.set_arm_joints(position, velocity, self._moving_arm)
+        if progress >= 1.0:
+            self._started_at = None
+            self._moving_arm = None
 
-    def approach(self):
-        if self.env.touched[self.selected]:
+    def _move_selected_arm(self, window):
+        if self._started_at is not None:
             return
-        self.busy = True
-        arm = _arm_for_mole(self.env, self.selected, self.ArmTag)
-        self.env.plan_success = True
-        self.env._approach_hole(self.selected, arm, quick=True)
-        self.approached = True
-        print(f"Approached mole {self.selected} with {arm}.")
-        self.busy = False
+        dx = self.XY_STEP * (window.key_down("right") - window.key_down("left"))
+        dy = self.XY_STEP * (window.key_down("up") - window.key_down("down"))
+        dz = self.Z_STEP * (window.key_down("t") - window.key_down("r"))
+        if not (dx or dy or dz):
+            return
+        side = self.selected_arm
+        pose = self._ee_pose(side).copy()
+        pose[:3] += np.asarray([dx, dy, dz], dtype=np.float64)
+        # The upper edge of reach can make IK switch to a radically different
+        # elbow configuration. Keep manual Z motion in the mallet's safe band.
+        hover_z = float(self.env._hover_ee_z(self._arm()))
+        pose[2] = np.clip(pose[2], hover_z, hover_z + self.MAX_RAISE_ABOVE_HOVER)
+        planner = self.env.robot.left_plan_path if side == "left" else self.env.robot.right_plan_path
+        start = self._drive_qpos(side)
+        result = planner(pose.tolist(), last_qpos=np.asarray(start, dtype=np.float32))
+        if result is None or result.get("status") != "Success":
+            return
+        target = np.asarray(result["position"][-1], dtype=np.float64)
+        if float(np.max(np.abs(target - start))) > self.MAX_JOINT_DELTA:
+            print("Requested arm move is outside the safe teleoperation range.")
+            return
+        self._start = start
+        self._target = target
+        self._moving_arm = side
+        self._started_at = time.perf_counter()
 
     def jab(self):
-        if self.env.touched[self.selected]:
-            return
         self.busy = True
-        arm = _arm_for_mole(self.env, self.selected, self.ArmTag)
+        arm = self._arm()
         self.env.plan_success = True
-        if not self.approached:
-            self.env._approach_hole(self.selected, arm, quick=True)
-        # Freeze bob briefly like the expert, then press.
-        idx = self.selected
-        if 0 <= idx < len(self.env._mole_state):
-            st = self.env._mole_state[idx]
-            st["freeze_bob"] = True
+        cube_p = np.asarray(self.env.hammer_cubes[self.selected_arm].get_pose().p, dtype=np.float64)
+        idx = next(
+            (i for i, hole_idx in enumerate(self.env.mole_holes)
+             if not self.env.touched[i]
+             and float(np.linalg.norm(cube_p[:2] - self.env.holes[hole_idx][:2])) < 0.07),
+            None,
+        )
+        if idx is None:
+            print("No unhit mole under the selected cube.")
+            self.busy = False
+            return
+        self.env._mole_state[idx]["freeze_bob"] = True
         self.env.move(self.env._press_down(arm, mole_idx=idx))
         self.env._dwell(10)
-        if 0 <= idx < len(self.env._mole_state):
-            self.env._mole_state[idx]["freeze_bob"] = False
+        self.env._mole_state[idx]["freeze_bob"] = False
         if not self.env.touched[idx] and self.env._mole_above_surface(idx):
             hole = self.env.holes[self.env.mole_holes[idx]]
             cube_p = np.array(self.env.hammer_cubes[str(arm)].get_pose().p, dtype=float)
             if float(np.linalg.norm(cube_p[:2] - hole[:2])) < 0.08:
                 self.env._mark_touched(idx)
         self.env.plan_success = True
+        # Every strike returns to the task's safe hover/rest height.
         self.env.move(self.env._press_up(arm))
         print(f"Robot jab mole {idx}: {'HIT' if self.env.touched[idx] else 'miss'}.")
-        self.approached = False
-        unhit = self._unhit()
-        if unhit and self.env.touched[idx]:
-            self.selected = unhit[0]
         self.busy = False
 
     def update(self, window):
         if self.busy or self.env.distractor_hit:
             return
+        self._advance_motion()
         if self._q.poll(window.key_down("q")):
-            self._select_next(-1)
+            self.selected_arm = "left"
+            self.highlight.set_selected(self.selected_arm)
+            print("Selected left arm.")
         if self._e.poll(window.key_down("e")):
-            self._select_next(+1)
-        for d, edge in self._digit.items():
-            if edge.poll(window.key_down(d)):
-                idx = int(d) - 1
-                if 0 <= idx < self.env.num_moles and not self.env.touched[idx]:
-                    self.selected = idx
-                    self.approached = False
-                    print(f"Selected mole {idx}.")
-        if self._r.poll(window.key_down("r")):
-            self.approach()
-            return
+            self.selected_arm = "right"
+            self.highlight.set_selected(self.selected_arm)
+            print("Selected right arm.")
+        self._move_selected_arm(window)
         if self._space.poll(window.key_down("space")):
             self.jab()
 

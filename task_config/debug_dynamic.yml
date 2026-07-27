@@ -118,7 +118,7 @@ task_args:
     rabbit_scale_mult: 1.00   # match enlarged mole world height
     rabbit_height: 0.1047
     table_height_bias: 0.05   # raise table (+board) 5 cm
-    board_z_lift: 0.12        # play surface ~12 cm above table; solid base sits on table
+    board_z_lift: 0.06        # play surface ~6 cm above table; compact base sits on table
     board_color: [0.98, 0.82, 0.05]  # yellow
   collect_falling_bowl:
     num_objects: 4

@@ -56,11 +56,11 @@ class whack_a_mole(Base_Task):
     # XY half-extents of the hole board (sized for 1.5x openings, still in reach).
     # Z half is computed so the board sits on the table while the play surface
     # stays raised (board_z_lift).
-    BOARD_HALF_XY = [0.33, 0.16]
-    BOARD_TOP_HALF_Z = 0.048          # original thin-deck half-height (for top lift math)
+    BOARD_HALF_XY = [0.245, 0.16]
+    BOARD_TOP_HALF_Z = 0.024          # Thin deck; total board height is half the prior default.
     BOARD_COLOR = [0.98, 0.82, 0.05]  # yellow box
     # Raise the play surface above the table; the solid base fills down to the tabletop.
-    BOARD_Z_LIFT_DEFAULT = 0.12
+    BOARD_Z_LIFT_DEFAULT = 0.06
     HIDE_DEPTH = 0.100
     MOLE_MODEL = "221_mole"       # Smackem Mole (original open-arm mesh)
     RABBIT_MODEL = "224_rabbit"    # compact loaf pose (replaces open-hand 222_rabbit)
@@ -211,7 +211,7 @@ class whack_a_mole(Base_Task):
         top_above_table = self.board_z_lift + 2.0 * float(self.BOARD_TOP_HALF_Z)
         board_half_z = 0.5 * top_above_table
         self.BOARD_HALF = [
-            float(self.BOARD_HALF_XY[0]),
+            float(self._cfg.get("board_half_x", self.BOARD_HALF_XY[0])),
             float(self.BOARD_HALF_XY[1]),
             float(board_half_z),
         ]

@@ -768,5 +768,5 @@ task_args:
     rabbit_scale_mult: 1.00     # 224_rabbit authored near mole height
     rabbit_height: 0.1047       # m; rabbit world height
     table_height_bias: 0.05     # m; raise table (+board) this much
-    board_z_lift: 0.12          # m; play surface above table; solid base sits on table
+    board_z_lift: 0.06          # m; half-height compact board above the table
     board_color: [0.98, 0.82, 0.05]  # RGB board color (yellow)
