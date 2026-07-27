@@ -161,7 +161,7 @@ def main():
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: place the tall block on the belt BEFORE the red place line;",
             "      match belt velocity, stay in the clear lane if a blocker is present.",
-            "Q — select left arm | E — select right arm (robot mode)",
+            "1 / 2 / 3 — select left / right / both arms (robot mode)",
             "Space  — (1) pick + lift above the belt  (2) match + release",
             "Arrows — nudge hold XY before release",
             "V — toggle view: top-down ↔ head_camera",
@@ -177,6 +177,7 @@ def main():
         )
 
     selected_arm = "right" if env.block.get_pose().p[0] > 0 else "left"
+    env._interactive_selected_arms = (selected_arm,)
     env._interactive_holding = False
     env._interactive_released = False
     env._released = False
@@ -193,13 +194,9 @@ def main():
 
     def on_step(window, step):
         nonlocal off_belt_since, selected_arm
-        if not env._interactive_holding and not env._interactive_released:
-            if edge_pressed(window, "q", keys_prev):
-                selected_arm = "left"
-                print("Selected left arm.")
-            if edge_pressed(window, "e", keys_prev):
-                selected_arm = "right"
-                print("Selected right arm.")
+        selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+        if not env._interactive_holding and selected:
+            selected_arm = selected[0]
 
         if edge_pressed(window, "space", keys_prev) and not env._interactive_released:
             if not env._interactive_holding:
@@ -214,7 +211,8 @@ def main():
             else:
                 _do_release(env, use_robot)
 
-        nudge = arrow_nudge_xy(window, step=0.0025)
+        nudge = (arrow_nudge_xy(window, step=0.0025) if not use_robot
+                 else np.zeros(2, dtype=np.float64))
         if float(np.linalg.norm(nudge)) > 0 and env._interactive_holding and not env._interactive_released:
             if use_robot and getattr(env, "_interactive_arm", None) is not None:
                 if step % 8 == 0:

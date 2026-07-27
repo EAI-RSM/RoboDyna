@@ -73,6 +73,13 @@ def configure_task(task_name: str, config_name: str, seed: int, use_robot: bool,
 
 
 def print_banner(title: str, lines: list[str]):
+    if any("Mode: robot" in line for line in lines):
+        lines = list(lines)
+        insert_at = 1 if lines else 0
+        lines[insert_at:insert_at] = [
+            "Arrows — move selected arm(s) in XY | E/Q — move in Z",
+            "1 / 2 / 3 — select left / right / both arms",
+        ]
     width = max(len(title), *(len(line) for line in lines), 40)
     bar = "=" * (width + 4)
     print(bar)
@@ -227,11 +234,13 @@ class ViewerViewToggle:
         topdown_fovy=None,
         capture_current_as_topdown: bool = False,
         warn_missing_head: bool = False,
+        robot_controls=None,
     ):
         self.viewer = viewer
         self._prev_v = False
         self.mode = "topdown"  # always start overhead; V switches to head_camera
         self._head = head_camera
+        self.robot_controls = robot_controls
         if self._head is None:
             self._head = resolve_head_camera(viewer=viewer)
         if self._head is None and warn_missing_head:
@@ -328,6 +337,8 @@ class ViewerViewToggle:
             return False
 
     def update(self, window):
+        if self.robot_controls is not None:
+            self.robot_controls.update(window)
         if self._v_pressed(window):
             if self.mode == "topdown":
                 if self._head is None:
@@ -369,14 +380,274 @@ def make_viewer_view_toggle(
         topdown_xyz = default_topdown_xyz(env)
         if topdown_rpy is None:
             topdown_rpy = ViewerViewToggle.DEFAULT_TOPDOWN_RPY
+    robot_controls = None
+    robot_mode = bool(getattr(env, "_interactive_robot_mode", False))
+    if not robot_mode:
+        for index, arg in enumerate(sys.argv):
+            if arg == "--control" and index + 1 < len(sys.argv):
+                robot_mode = sys.argv[index + 1] == "robot"
+                break
+            if arg.startswith("--control="):
+                robot_mode = arg.split("=", 1)[1] == "robot"
+                break
+    if robot_mode:
+        robot_controls = UniversalRobotControls(env)
     return ViewerViewToggle(
         viewer,
         head_camera=resolve_head_camera(env, viewer),
         topdown_xyz=topdown_xyz,
         topdown_rpy=topdown_rpy,
         capture_current_as_topdown=capture_current_as_topdown,
+        robot_controls=robot_controls,
         **kwargs,
     )
+
+
+class SeededArmIK:
+    """Local seeded IK for one arm via SAPIEN's pinocchio CLIK solver.
+
+    Curobo's ``solve_ik`` is unseeded: for a 2 mm nudge it happily returns an
+    elbow/wrist flip several radians away, which is useless for incremental
+    teleop or press animations. CLIK starts from the current configuration and
+    costs ~0.05 ms, so it can run every physics step.
+    """
+
+    def __init__(self, env, side):
+        robot = env.robot
+        self.env = env
+        self.side = side
+        self.entity = robot.left_entity if side == "left" else robot.right_entity
+        ee_joint = robot.left_ee if side == "left" else robot.right_ee
+        arm_names = set(robot.left_arm_joints_name if side == "left"
+                        else robot.right_arm_joints_name)
+        self.model = self.entity.create_pinocchio_model()
+        link_names = [link.get_name() for link in self.entity.get_links()]
+        self.link_index = link_names.index(ee_joint.get_child_link().get_name())
+        self.mask = np.zeros(self.entity.dof, dtype=np.int32)
+        dofs = []
+        cursor = 0
+        for joint in self.entity.get_active_joints():
+            width = joint.get_dof()
+            if joint.get_name() in arm_names:
+                self.mask[cursor:cursor + width] = 1
+                dofs.extend(range(cursor, cursor + width))
+            cursor += width
+        self.arm_dofs = np.asarray(dofs, dtype=int)
+        limits = np.asarray(self.entity.get_qlimits(), dtype=np.float64)
+        self.lower = limits[self.arm_dofs, 0]
+        self.upper = limits[self.arm_dofs, 1]
+
+    def full_qpos(self):
+        return np.asarray(self.entity.get_qpos(), dtype=np.float64)
+
+    def solve(self, gripper_pose, seed=None):
+        """Return ``(arm_joints, full_qpos)`` for a world gripper pose, or None."""
+        world_target = self.env.robot._trans_from_gripper_to_endlink(
+            list(np.asarray(gripper_pose, dtype=np.float64)), arm_tag=self.side)
+        target = self.entity.get_root_pose().inv() * world_target
+        seed = self.full_qpos() if seed is None else np.asarray(seed, dtype=np.float64)
+        qpos, success, _ = self.model.compute_inverse_kinematics(
+            self.link_index, target, initial_qpos=seed, active_qmask=self.mask,
+            eps=1e-4, max_iterations=60, dt=0.2, damp=1e-3)
+        if not success:
+            return None
+        full = np.asarray(qpos, dtype=np.float64)
+        arm = np.clip(full[self.arm_dofs], self.lower, self.upper)
+        full[self.arm_dofs] = arm
+        return arm, full
+
+
+def arm_ik(env, side):
+    """Per-env cached ``SeededArmIK``; ``None`` when the model cannot be built."""
+    cache = getattr(env, "_interactive_arm_ik", None)
+    if cache is None:
+        cache = {}
+        env._interactive_arm_ik = cache
+    if side not in cache:
+        try:
+            cache[side] = SeededArmIK(env, side)
+        except Exception as exc:
+            print(f"Arm IK unavailable ({exc}); robot motion is disabled.")
+            cache[side] = None
+    return cache[side]
+
+
+class UniversalRobotControls:
+    """Shared arm selection and Cartesian teleoperation for robot-mode tasks.
+
+    Teleop integrates a commanded gripper pose and tracks it with seeded local
+    IK (SAPIEN's pinocchio CLIK, ~0.05 ms per solve). Seeding on the previous
+    solution keeps the arm in one kinematic branch; Curobo's ``solve_ik`` is
+    unseeded and returns elbow/wrist flips that are unusable for teleop.
+    """
+
+    XY_SPEED = 0.20
+    Z_SPEED = 0.16
+    MAX_DT = 0.05
+    # How far the commanded pose may run ahead of the achieved pose, so a
+    # blocked or joint-limited arm cannot accumulate an unrecoverable lead.
+    MAX_LEAD = 0.03
+    # Near a singularity a millimetre of Cartesian travel costs radians of
+    # joint travel; slew at this cap instead of whipping the arm.
+    MAX_JOINT_SPEED = 3.0
+
+    def __init__(self, env):
+        self.env = env
+        initial = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+        self.selected = initial or ("left",)
+        self._previous = {key: False for key in ("1", "2", "3")}
+        self._last_update = None
+        self._command = {}
+        self._highlight_materials = {}
+        env._interactive_selected_arms = self.selected
+        env._interactive_universal_controls = True
+        self._highlight_selected()
+
+    def _highlight_selected(self):
+        for material, color in self._highlight_materials.values():
+            try:
+                material.set_base_color(color)
+                material.base_color = color
+            except Exception:
+                pass
+        colors = {
+            "left": [1.0, 0.85, 0.10, 1.0],
+            "right": [0.15, 0.75, 1.0, 1.0],
+        }
+        for side in self.selected:
+            articulation = (self.env.robot.left_entity if side == "left"
+                            else self.env.robot.right_entity)
+            for link in articulation.get_links():
+                if link.get_name() not in {
+                    "wsg_50_base_link", "gripper_left", "gripper_right",
+                    "finger_left", "finger_right",
+                }:
+                    continue
+                for component in link.entity.get_components():
+                    try:
+                        import sapien
+                        if not isinstance(component, sapien.render.RenderBodyComponent):
+                            continue
+                    except Exception:
+                        continue
+                    for shape in component.render_shapes:
+                        material = shape.material
+                        if id(material) not in self._highlight_materials:
+                            self._highlight_materials[id(material)] = (
+                                material, list(material.base_color))
+                        try:
+                            material.set_base_color_texture(None)
+                            material.set_base_color(colors[side])
+                            material.base_color = colors[side]
+                        except Exception:
+                            pass
+
+    def _edge(self, window, key):
+        down = bool(window.key_down(key))
+        edge = down and not self._previous[key]
+        self._previous[key] = down
+        return edge
+
+    def _select(self, window):
+        selected = None
+        if self._edge(window, "1"):
+            selected = ("left",)
+        elif self._edge(window, "2"):
+            selected = ("right",)
+        elif self._edge(window, "3"):
+            selected = ("left", "right")
+        if selected is not None:
+            self.selected = selected
+            self.env._interactive_selected_arms = selected
+            self._highlight_selected()
+            print("Selected arm(s): " + " + ".join(selected))
+
+    def _drive_qpos(self, side):
+        joints = (self.env.robot.left_arm_joints if side == "left"
+                  else self.env.robot.right_arm_joints)
+        return np.asarray(
+            [joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
+
+    def _ee_pose(self, side):
+        getter = (self.env.robot.get_left_ee_pose if side == "left"
+                  else self.env.robot.get_right_ee_pose)
+        return np.asarray(getter(), dtype=np.float64)
+
+    def _drive(self, side, step, dt):
+        """Advance this arm's commanded pose and track it with seeded IK."""
+        solver = arm_ik(self.env, side)
+        if solver is None:
+            return
+        achieved = self._ee_pose(side)
+        state = self._command.get(side)
+        if state is None:
+            # Anchor pose and joints on the measured state (not the drive
+            # targets): the two differ by the tracking error, and mixing them
+            # makes the first step look like a jump and get rate-limited away.
+            measured = solver.full_qpos()
+            state = {
+                "pose": achieved.copy(),
+                "seed": measured,
+                "joints": measured[solver.arm_dofs],
+            }
+            self._command[side] = state
+
+        pose = state["pose"].copy()
+        pose[:3] += step
+        # Keep the command within reach of the achieved pose: a blocked or
+        # joint-limited arm must not build up a lead it later snaps through.
+        lead = pose[:3] - achieved[:3]
+        distance = float(np.linalg.norm(lead))
+        if distance > self.MAX_LEAD:
+            pose[:3] = achieved[:3] + lead * (self.MAX_LEAD / distance)
+
+        solution = solver.solve(pose, seed=state["seed"])
+        if solution is None:
+            return
+        target, full = solution
+        delta = target - state["joints"]
+        budget = self.MAX_JOINT_SPEED * dt
+        peak = float(np.max(np.abs(delta)))
+        if peak > budget:
+            delta *= budget / peak
+            target = state["joints"] + delta
+            full = full.copy()
+            full[solver.arm_dofs] = target
+        self.env.robot.set_arm_joints(target, delta / max(dt, 1e-3), side)
+        state["pose"] = pose
+        state["seed"] = full
+        state["joints"] = target
+
+    def _stop(self):
+        """Zero the drive velocity targets, else the arms coast after release."""
+        for side, state in self._command.items():
+            joints = state["joints"]
+            self.env.robot.set_arm_joints(joints, np.zeros_like(joints), side)
+        self._command.clear()
+
+    def update(self, window):
+        self._select(window)
+        now = time.perf_counter()
+        dt = 0.0 if self._last_update is None else min(now - self._last_update, self.MAX_DT)
+        self._last_update = now
+        if bool(getattr(self.env, "_interactive_teleop_locked", False)):
+            self._stop()
+            return
+        x_dir = float(window.key_down("right")) - float(window.key_down("left"))
+        y_dir = float(window.key_down("up")) - float(window.key_down("down"))
+        z_dir = float(window.key_down("e")) - float(window.key_down("q"))
+        if not (x_dir or y_dir or z_dir):
+            self._stop()
+            return
+        if dt <= 0.0:
+            return
+        step = np.asarray([
+            x_dir * self.XY_SPEED * dt,
+            y_dir * self.XY_SPEED * dt,
+            z_dir * self.Z_SPEED * dt,
+        ], dtype=np.float64)
+        for side in self.selected:
+            self._drive(side, step, dt)
 
 
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
@@ -464,6 +735,13 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
 def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str) -> None:
     """Print only the help block for the selected ``--control`` mode."""
     body = (robot if mode == "robot" else keyboard).strip("\n")
+    if mode == "robot":
+        body = (
+            "  Arrow keys        move selected arm(s) in world XY\n"
+            "  E / Q             raise / lower selected arm(s)\n"
+            "  1 / 2 / 3         select left / right / both arms\n"
+            + body
+        )
     bar = "=" * 60
     print(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
 
@@ -473,6 +751,13 @@ def default_arms_for_mode(mode):
     if mode == "dump":
         return ("left", "right")
     return (mode,) if mode else ()
+
+
+def selected_robot_arms(env, fallback=("left",)):
+    """Return the arms selected by the universal 1/2/3 robot controls."""
+
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+    return selected or tuple(fallback)
 
 
 class RobotButtonController:

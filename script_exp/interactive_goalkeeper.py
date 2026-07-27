@@ -199,7 +199,9 @@ class RobotKeeperController:
         self._space = EdgeKey()
 
     def _choose_arm(self):
-        return self.ArmTag("left" if self.env.mirrored else "right")
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
+        side = selected[0] if selected else ("left" if self.env.mirrored else "right")
+        return self.ArmTag(side)
 
     def grasp(self):
         self.busy = True
@@ -257,7 +259,7 @@ class RobotKeeperController:
             else:
                 self.release()
             return
-        self.nudge(window)
+        # Universal viewer controls own arrow/E/Q motion.
 
 
 def main():
@@ -292,6 +294,9 @@ def main():
 
     env = goalkeeper()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_selected_arms = (
+        "left" if env.mirrored else "right",
+    )
     _start_shot(env)
     target = env.goalkeeper_target_pose.p if env.goalkeeper_target_pose is not None else [0, 0, 0]
     print(

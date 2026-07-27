@@ -42,8 +42,6 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Arrow keys        aim dart tip (L/R = x, U/D = y / depth)
-  Q / E             raise/lower held dart (world Z)
   Space             grasp dart, then jab / thrust
   V                 toggle view: top-down ↔ head_camera
   Escape            quit
@@ -203,6 +201,9 @@ class RobotDartController:
 
     def grasp(self):
         self.busy = True
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
+        if selected:
+            self.arm = self.ArmTag(selected[0])
         self.env.move(self.env.grasp_actor(
             self.env.dart, arm_tag=self.arm, pre_grasp_dis=0.08, contact_point_id=0,
         ))
@@ -220,7 +221,7 @@ class RobotDartController:
             ))
             self.env._go_to_standoff(self.arm)
             self.holding = True
-            print(f"Grasped dart with {self.arm}. Arrows/Q/E aim; Space jabs.")
+            print(f"Grasped dart with {self.arm}. Arrows/E/Q aim; Space jabs.")
         else:
             print("Dart grasp failed.")
         self.busy = False
@@ -322,13 +323,7 @@ class RobotDartController:
             else:
                 self.jab()
             return
-        if not self.holding:
-            return
-        dx, dy, dz = _nudge_from_keys(window, step=0.02)
-        if dx or dy or dz:
-            self.busy = True
-            self._nudge(dx, dy, dz)
-            self.busy = False
+        # Universal viewer controls own arrow/E/Q motion.
 
 
 def main():
@@ -357,6 +352,9 @@ def main():
     print_mode_controls("hit_target", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     env = hit_target()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_selected_arms = (
+        "right" if env.dart_side > 0 else "left",
+    )
     print(
         f"Arm={'right' if env.dart_side > 0 else 'left'}; "
         f"blocker_static={env.blocker_enabled}; blocker_dyn={env.blocker_dynamic}."

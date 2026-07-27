@@ -6,7 +6,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control robot
 
-Press Space to grasp the bat, then use arrow keys for world XY and T/R for
+Press Space to grasp the bat, then use arrow keys for world XY and E/Q for
 height while the gripper holds it.
 """
 
@@ -31,11 +31,11 @@ from _interactive_common import make_viewer_view_toggle, report_task_result, pri
 CONTROLS_KEYBOARD = """
   Space             place bat at the predicted intercept, then arm it
   Arrow keys        move bat in world XY
-  T / R             raise / lower bat height
+  E / Q             raise / lower bat height
   V                 toggle view: top-down ↔ head_camera
   Escape             quit
 ------------------------------------------------------------
-  Flow: Space → use arrows/T/R to aim
+  Flow: Space → use arrows/E/Q to aim
   Success: red ball hits the red circular bat head before
            falling to the table; handle contact does not count.
 """
@@ -43,11 +43,11 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Space             fast grasp and move bat to predicted intercept
   Arrow keys        move the held bat in world XY
-  T / R             raise / lower the held bat
+  E / Q             raise / lower the held bat
   V                 toggle view: top-down ↔ head_camera
   Escape             quit
 ------------------------------------------------------------
-  Flow: Space → use arrows/T/R to aim
+  Flow: Space → use arrows/E/Q to aim
   Success: red ball hits the red circular bat head before
            falling to the table; handle contact does not count.
   --robot-motion planner|interpolate
@@ -158,11 +158,11 @@ def _set_bat_xyz(env, x, y, z=None):
 
 
 def _nudge_from_keys(window, xy_step=0.045, z_step=0.030):
-    """Map arrows/T/R to world-frame held-bat movement."""
+    """Map arrows/E/Q to world-frame held-bat movement."""
 
     dx = xy_step * (window.key_down("right") - window.key_down("left"))
     dy = xy_step * (window.key_down("up") - window.key_down("down"))
-    dz = z_step * (window.key_down("t") - window.key_down("r"))
+    dz = z_step * (window.key_down("e") - window.key_down("q"))
     return float(dx), float(dy), float(dz)
 
 
@@ -266,7 +266,9 @@ class RobotBatController:
         self.motion = None
 
     def _choose_arm(self):
-        return self.ArmTag("left" if self.env.mirrored else "right")
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
+        side = selected[0] if selected else ("left" if self.env.mirrored else "right")
+        return self.ArmTag(side)
 
     def grasp(self):
         self.busy = True
@@ -284,7 +286,7 @@ class RobotBatController:
             panel = np.asarray(self.env.panel.get_pose().p, dtype=np.float64)
             # Clear the holder/table, then leave all lateral placement to teleop.
             self.motion.move_bat_to(panel[0], panel[1], panel[2] + 0.10)
-            print(f"Picked up bat with {self.arm} arm. Use arrows/T/R to adjust it.")
+            print(f"Picked up bat with {self.arm} arm. Use arrows/E/Q to adjust it.")
         else:
             print("Grasp failed; planner disabled further robot actions.")
         self.busy = False
@@ -307,7 +309,7 @@ class RobotBatController:
             if not self.holding:
                 self.grasp()
             return
-        self.nudge(window)
+        # Universal viewer controls own arrow/E/Q motion.
 
 
 def main():
@@ -359,6 +361,9 @@ def main():
 
     env = stop_valley_ball()
     env.setup_demo(**config)
+    env._interactive_selected_arms = (
+        "left" if env.mirrored else "right",
+    )
     # setup_demo already starts ball motion with expert_demo=False.
     ix, iy, iz = _intercept_xyz(env)
     print(
@@ -375,7 +380,7 @@ def main():
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
 
-    print("Press Space to grasp the bat; arrows move XY and T/R move height.")
+    print("Press Space to grasp the bat; arrows move XY and E/Q move height.")
 
     settle_after = None
     try:

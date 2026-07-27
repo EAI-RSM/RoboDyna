@@ -48,8 +48,8 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left Arrow       →  move bowl LEFT  (right-arm belt key)
-  Right Arrow      →  move bowl RIGHT (right-arm belt key)
+  Z                →  move bowl LEFT  (right-arm belt key)
+  C                →  move bowl RIGHT (right-arm belt key)
   Space            →  dispense (left-arm key)
 
   Continuous belt (Opt 2): hold an arrow key to slide.
@@ -355,7 +355,11 @@ class RobotGummyController:
             self._start_next_tap(side)
 
     def update(self, window):
-        requested = _belt_side(window)
+        requested = None
+        if window.key_down("z"):
+            requested = "left"
+        elif window.key_down("c"):
+            requested = "right"
         self.env._bowl_force_stop = False
         # Robot mode uses genuine EE contact; no expert latch is needed.
         self.env._expert_belt_hold = None

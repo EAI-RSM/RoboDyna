@@ -201,6 +201,7 @@ def main():
     env._interactive_phase = "wait"  # wait → hold → done
     env._ripen_started = True
     selected_arm = "left" if env.apple_side < 0 else "right"
+    env._interactive_selected_arms = (selected_arm,)
     highlight = ArmGripperHighlight(env)
     highlight.set_selected(selected_arm)
 
@@ -211,7 +212,7 @@ def main():
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: pinch the GOOD (red-path) apple near peak red; drop in the basket.",
             "      Do NOT pick the spoiled/yellow apple (Opt1).",
-            "Q — select left arm (yellow) | E — select right arm (cyan)",
+            "1 / 2 / 3 — select left / right / both arms",
             "Space — (1) grasp when red enough   (2) drop when over the basket",
             "Arrows — move the held apple/arm in world XY over the basket",
             "V — toggle view: top-down ↔ head_camera",
@@ -237,14 +238,10 @@ def main():
     def on_step(window, step):
         nonlocal done_since, selected_arm
         if env._interactive_phase == "wait":
-            if edge_pressed(window, "q", keys_prev):
-                selected_arm = "left"
+            selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+            if len(selected) == 1 and selected[0] != selected_arm:
+                selected_arm = selected[0]
                 highlight.set_selected(selected_arm)
-                print("Selected left arm (yellow).")
-            if edge_pressed(window, "e", keys_prev):
-                selected_arm = "right"
-                highlight.set_selected(selected_arm)
-                print("Selected right arm (cyan).")
 
         if edge_pressed(window, "space", keys_prev):
             if env._interactive_phase == "wait":
@@ -258,7 +255,8 @@ def main():
 
         # Carry at the frozen post-grasp height.  Throttle discrete plans so
         # holding an arrow does not enqueue a new planner call every frame.
-        nudge = arrow_nudge_xy(window, step=0.0025)
+        nudge = (np.zeros(2, dtype=np.float64) if args.control == "robot"
+                 else arrow_nudge_xy(window, step=0.0025))
         if (
             env._interactive_phase == "hold"
             and float(np.linalg.norm(nudge)) > 0.0

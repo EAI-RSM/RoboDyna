@@ -51,13 +51,11 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Hold Space       →  cook (all stations / primary)
-  Hold Q           →  cook LEFT station only (dual)
-  Hold E           →  cook RIGHT station only (dual)
+  Hold Space       →  cook with selected arm(s)
   G                →  robot toggles steak(s): board → pan, then pan → board
 
   Cooking advances only while the steak is on the pan and the key is held.
-  Arm presses the cook key (hold Space / Q / E).
+  Selected arm(s) press the cook key while Space is held.
   --robot-motion planner|interpolate
   V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
@@ -276,6 +274,15 @@ def _requested_cook_mode(window):
     if e and not q:
         return "right"
     return None
+
+
+def _selected_cook_mode(env, window):
+    if not window.key_down("space"):
+        return None
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+    if len(selected) == 2:
+        return "all"
+    return selected[0] if selected else None
 
 
 def _station_cook_finished(env, st):
@@ -539,7 +546,7 @@ def main():
                 keyboard.update(env, viewer.window)
             else:
                 if robot_controller is not None:
-                    robot_controller.update(_requested_cook_mode(viewer.window))
+                    robot_controller.update(_selected_cook_mode(env, viewer.window))
                 if viewer.window.key_press("g"):
                     if robot_controller is not None:
                         robot_controller.release()

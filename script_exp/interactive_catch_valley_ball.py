@@ -290,7 +290,9 @@ class RobotBowlController:
         self._space = EdgeKey()
 
     def _choose_arm(self):
-        return self.ArmTag("left" if self.env.mirrored else "right")
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
+        side = selected[0] if selected else ("left" if self.env.mirrored else "right")
+        return self.ArmTag(side)
 
     def grasp(self):
         self.busy = True
@@ -368,7 +370,7 @@ class RobotBowlController:
             if not self.holding and not self.placed:
                 self.grasp()
             return
-        self.nudge(window)
+        # Universal viewer controls own arrow/E/Q motion.
 
 
 def main():
@@ -403,6 +405,9 @@ def main():
 
     env = catch_valley_ball()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_selected_arms = (
+        "left" if env.mirrored else "right",
+    )
     # setup_demo already starts ball motion with expert_demo=False.
     x, y = _target_xy(env)
     print(

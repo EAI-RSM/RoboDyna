@@ -43,8 +43,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left Arrow     stamp RED   (left arm)
-  Right Arrow    stamp GREEN (right arm)
+  Space          stamp using the selected arm(s)
   Skip BLACK tiles — do not press while they are under the stamp
   V                 toggle view: top-down ↔ head_camera
   Escape             quit
@@ -311,7 +310,13 @@ def main():
         while not viewer.closed:
             views.update(viewer.window)
             frame_start = time.perf_counter()
-            arrow_presses.update(viewer.window, stamp_controller)
+            if args.control == "robot":
+                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+                requested = selected if viewer.window.key_press("space") else ()
+                for side in requested:
+                    stamp_controller.tap("red" if side == "left" else "green")
+            else:
+                arrow_presses.update(viewer.window, stamp_controller)
             stamp_controller.update()
 
             last_under = _finalize_departed_tiles(env, last_under)

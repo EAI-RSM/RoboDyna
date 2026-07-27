@@ -48,8 +48,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left Arrow       →  tilt active shelf LEFT  (red / left button)
-  Right Arrow      →  tilt active shelf RIGHT (right button)
+  Space            →  press the selected arm's shelf button
 
   One press tilts the current shelf, rolls the marble off, and
   waits for the fall/settle before accepting another press.
@@ -288,7 +287,11 @@ def main():
     dirs = list(getattr(env, "correct_dir", []) or [])
     print(f"Shelves={env.n_shelves}. Suggested directions top→bottom: {dirs}")
     motion = f", robot-motion={args.robot_motion}" if args.control == "robot" else ""
-    print(f"Control={args.control}{motion}. Tap Left or Right Arrow to tilt.")
+    print(
+        f"Control={args.control}{motion}. "
+        + ("Select an arm and press Space to tilt." if args.control == "robot"
+           else "Tap Left or Right Arrow to tilt.")
+    )
 
     edges = EdgeDirection()
     robot_controller = None
@@ -299,7 +302,13 @@ def main():
         while not viewer.closed:
             views.update(viewer.window)
             frame_start = time.perf_counter()
-            direction = edges.edge(viewer.window)
+            if args.control == "robot":
+                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+                requested = selected[0] if len(selected) == 1 and viewer.window.key_down("space") else None
+                direction = requested if requested is not None and requested != edges.prev else None
+                edges.prev = requested
+            else:
+                direction = edges.edge(viewer.window)
             mode = str(getattr(env, "_ball_mode", ""))
             can_tilt = (
                 direction is not None

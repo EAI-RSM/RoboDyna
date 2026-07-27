@@ -6,7 +6,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_rat.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_catch_rat.py --control robot
 
-Close the gripper while the kinematic rat is rising. Opt1 dual: Q/E select arm.
+Close the gripper while the kinematic rat is rising. Opt1 supports dual arms.
 """
 
 import argparse
@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
 
-# ur5-wsg gripper visual links (recolored to show Q/E selection).
+# ur5-wsg gripper visual links (recolored to show arm selection).
 _GRIPPER_LINK_NAMES = (
     "wsg_50_base_link",
     "gripper_left",
@@ -54,9 +54,6 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Mouse left-click  move selected arm above click XY
   Space             close gripper(s); first press approaches hole(s) if needed
-  Q / E             dual (Opt1): select left / right arm
-                    (selected gripper is recolored: yellow=left, cyan=right)
-  R                 (re)approach hole(s)
   V                 toggle view: top-down ↔ head_camera
   Escape            quit
 ------------------------------------------------------------
@@ -388,13 +385,10 @@ class RobotCatchController:
         self.busy = False
         self.done = False
         self._space = EdgeKey()
-        self._reapproach = EdgeKey()
         self.selected = "right"
         if not self.dual:
             hole = env._rat_holes[0]
             self.selected = "right" if env.holes[hole][0] > 0 else "left"
-        self._q = EdgeKey()
-        self._e = EdgeKey()
         self._highlight = ArmGripperHighlight(env)
         self._highlight.set_selected(self.selected)
 
@@ -424,7 +418,7 @@ class RobotCatchController:
         """Move the selected arm above ``(x, y)`` on the board (world frame)."""
         if self.busy or self.done:
             return False
-        # Prefer the arm on that side of the table; Q/E still overrides in dual.
+        # Prefer the arm on that side of the table; explicit selection overrides in dual.
         arm_name = self.selected
         if not self.dual:
             arm_name = "right" if float(x) > 0 else "left"
@@ -483,14 +477,9 @@ class RobotCatchController:
     def update(self, window):
         if self.busy or self.done:
             return
-        if self.dual:
-            if self._q.poll(window.key_down("q")):
-                self._select("left")
-            if self._e.poll(window.key_down("e")):
-                self._select("right")
-        if self._reapproach.poll(window.key_down("r")):
-            self.approach()
-            return
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", (self.selected,)))
+        if len(selected) == 1:
+            self._select(selected[0])
         if self._space.poll(window.key_down("space")):
             if not self.approached:
                 self.approach()
@@ -538,6 +527,13 @@ def main():
 
     env = catch_rat()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    if env.dual_catch:
+        env._interactive_selected_arms = ("left", "right")
+    else:
+        hole = env._rat_holes[0]
+        env._interactive_selected_arms = (
+            "right" if env.holes[hole][0] > 0 else "left",
+        )
     # Start with open grippers so Space has an effect.
     try:
         env.together_open_gripper(save_freq=None)

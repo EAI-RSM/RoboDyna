@@ -45,9 +45,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left Arrow        punch LEFT belt
-  Right Arrow       punch RIGHT belt
-  Up Arrow          punch BOTH belts
+  Space             punch with selected arm(s)
   Press when a card is under the stamp head
   V                 toggle view: front ↔ top-down
   Escape             quit
@@ -357,7 +355,7 @@ def main():
     if args.control == "robot":
         print(
             f"Robot mode ready (motion={args.robot_motion}). "
-            "Tap Left/Right/Up Arrow to press the side button(s)."
+            "Select arms with 1/2/3 and press Space to punch."
         )
     else:
         print("Keyboard mode ready. Tap Left/Right/Up Arrow when a card is under the stamp.")
@@ -366,7 +364,11 @@ def main():
         while not viewer.closed:
             views.update(viewer.window)
             frame_start = time.perf_counter()
-            sides = _requested_sides(viewer.window)
+            if args.control == "robot":
+                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+                sides = selected if viewer.window.key_down("space") else ()
+            else:
+                sides = _requested_sides(viewer.window)
             fired = edge.poll(sides)
             if args.control == "keyboard":
                 for side in fired:

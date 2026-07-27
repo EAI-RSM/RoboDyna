@@ -61,17 +61,17 @@ def _prepare_keyboard_hold(env):
 
 
 def _nudge_from_keys(window, xy_step=0.022, z_step=0.016):
-    """Map arrows to world XY and T/R to vertical hold movement."""
+    """Map arrows to world XY and E/Q to vertical hold movement."""
     dx = xy_step * (window.key_down("right") - window.key_down("left"))
     dy = xy_step * (window.key_down("up") - window.key_down("down"))
-    dz = z_step * (window.key_down("t") - window.key_down("r"))
+    dz = z_step * (window.key_down("e") - window.key_down("q"))
     return float(dx), float(dy), float(dz)
 
 
-def _prepare_robot_hold(env):
+def _prepare_robot_hold(env, selected_arm=None):
     from envs.utils.action import ArmTag
 
-    arm_name = "left" if env.ball_side == "left" else "right"
+    arm_name = selected_arm or ("left" if env.ball_side == "left" else "right")
     arm_tag = ArmTag(arm_name)
     env.selected_arm = arm_name
     env._cap_tracking = True
@@ -202,6 +202,9 @@ def main():
     env.setup_demo(**configure_task(
         "rotating_shape_sorter", args.config, args.seed, use_robot=use_robot,
     ))
+    env._interactive_selected_arms = (
+        "left" if env.ball_side == "left" else "right",
+    )
     # Space performs the initial pickup, so the idle state must exist before
     # the viewer loop evaluates release/hold conditions.
     env._interactive_holding = False
@@ -215,7 +218,7 @@ def main():
             "Goal: drop the ball through the rotating corner hole into the box.",
             "Space  — pick up the ball; press again to release",
             "Arrows — move the held ball in XY",
-            "T / R — move the held ball up / down",
+            "E / Q — move the held ball up / down",
             "V — toggle view: top-down ↔ head_camera",
             "Esc — close the viewer window to quit",
             "Watch the spinning platform; release only when the hole passes under.",
@@ -234,15 +237,16 @@ def main():
             if not getattr(env, "_interactive_holding", False):
                 if use_robot:
                     print("Robot: picking up the ball…")
-                    _prepare_robot_hold(env)
+                    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+                    _prepare_robot_hold(env, selected[0] if selected else None)
                     hold_motion = RobotHoldMotion(env, env._interactive_arm, args.robot_motion)
                 else:
                     _prepare_keyboard_hold(env)
-                print("Holding ball. Use arrows/T/R to position it; Space releases.")
+                print("Holding ball. Use arrows/E/Q to position it; Space releases.")
             elif not env._interactive_released:
                 _do_release(env, use_robot)
 
-        dx, dy, dz = _nudge_from_keys(window)
+        dx, dy, dz = _nudge_from_keys(window) if not use_robot else (0.0, 0.0, 0.0)
         if (dx or dy or dz) and getattr(env, "_interactive_holding", False) and not env._interactive_released:
             if use_robot and hold_motion is not None:
                 # Planner mode executes robust Cartesian moves; interpolate mode

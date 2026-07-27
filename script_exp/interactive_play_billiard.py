@@ -43,7 +43,7 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Left / Right      move the holding arm left / right
   Up / Down         move the holding arm forward / backward
-  T / R             raise / lower the gripper
+  E / Q             raise / lower the gripper
   G / F             rotate gripper clockwise / counter-clockwise
   Space             pick up cue, then strike in the cue's current direction
   V                 toggle view: top-down ↔ head_camera
@@ -236,6 +236,11 @@ class RobotCueController:
         self._space = EdgeKey()
         _default_aim(env)
 
+    def _sync_selected_arm(self):
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
+        if not self.ready and len(selected) == 1:
+            self.arm = self.ArmTag(selected[0])
+
     def pickup_and_aim(self):
         """Pick only; the user positions and orients the cue afterwards."""
         self.busy = True
@@ -253,7 +258,7 @@ class RobotCueController:
             self.busy = False
             return
         self.ready = True
-        print("Cue picked up. Position it with arrows/T/R and rotate it with G/F; Space strikes.")
+        print("Cue picked up. Position it with arrows/E/Q and rotate it with G/F; Space strikes.")
         self.busy = False
 
     def _move_gripper(self, x=0.0, y=0.0, z=0.0, quat=None):
@@ -298,6 +303,7 @@ class RobotCueController:
     def update(self, window):
         if self.busy or self.struck:
             return
+        self._sync_selected_arm()
         if self._space.poll(window.key_down("space")):
             if not self.ready:
                 self.pickup_and_aim()
@@ -306,25 +312,6 @@ class RobotCueController:
             return
         if not self.ready:
             return
-        step = 0.015
-        dx = dy = dz = 0.0
-        if window.key_down("left"):
-            dx -= step
-        if window.key_down("right"):
-            dx += step
-        if window.key_down("up"):
-            dy += step
-        if window.key_down("down"):
-            dy -= step
-        if window.key_down("t"):
-            dz += step
-        if window.key_down("r"):
-            dz -= step
-        if dx or dy or dz:
-            self.busy = True
-            self._move_gripper(x=dx, y=dy, z=dz)
-            self.busy = False
-
         # Clockwise is negative yaw when viewing the table from above.
         rot = 0.0
         if window.key_down("g"):
@@ -369,6 +356,7 @@ def main():
 
     env = play_billiard()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_selected_arms = (env._arm_side,)
     print(
         f"Arm={env._arm_side}; target pocket={env._target_pocket_name}; "
         f"specific_hole={env.specific_hole}; distractors={env.enable_distractors}."

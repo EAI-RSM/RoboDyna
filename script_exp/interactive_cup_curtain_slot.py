@@ -53,9 +53,6 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left / Right      move the held cup left/right (world X)
-  Up / Down         move the held cup forward/backward (world Y)
-  Q / E             raise/lower the held cup (world Z)
   Space             first press: grasp; second press: release at current pose
   V                 toggle view: top-down ↔ head_camera
   W / A / S / D     disabled while top-down view is active
@@ -379,6 +376,10 @@ class RobotCupController:
 
     def grasp(self):
         self.busy = True
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
+        if selected:
+            self.side = selected[0]
+            self.arm = self.ArmTag(self.side)
         contact_id, pre = self.env._find_cup_grasp(self.arm)
         if pre is None:
             print("No cup grasp pose found.")
@@ -396,7 +397,7 @@ class RobotCupController:
             self.holding = True
             self.env._attempt_active = True
             print(
-                f"Grasped cup with {self.arm}. Use arrows for X/Y, Q/E for Z; "
+                f"Grasped cup with {self.arm}. Use arrows for X/Y, E/Q for Z; "
                 "Space releases here."
             )
         else:
@@ -408,7 +409,7 @@ class RobotCupController:
             return
         self.busy = True
         # Do not reposition automatically: release at exactly the pose selected
-        # by the user with the arrow and Q/E controls.
+        # by the user with the universal Cartesian controls.
         released_pose = np.asarray(self.env.cup.get_pose().p, dtype=float)
         _mark_deposit(self.env)
         self.env.move(self.env.open_gripper(self.arm))
@@ -436,20 +437,7 @@ class RobotCupController:
             elif self.holding:
                 self.place()
             return
-        if not self.holding or self.placed:
-            return
-        dx, dy, dz = _nudge_from_keys(
-            window, lateral_step=0.03, longitudinal_step=0.03, vertical_step=0.03
-        )
-        if dx or dy or dz:
-            self.busy = True
-            if self.robot_motion == "interpolate":
-                self._interpolate_ee_nudge(dx, dy, dz)
-            else:
-                self.env.move(self.env.move_by_displacement(
-                    self.arm, x=dx, y=dy, z=dz, move_axis="world",
-                ))
-            self.busy = False
+        # Universal viewer controls own arrow/E/Q motion.
 
 
 def main():
@@ -484,6 +472,9 @@ def main():
 
     env = cup_curtain_slot()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_selected_arms = (
+        "left" if env.mirrored else "right",
+    )
     _place_cup_south_of_belt(env, hold_kinematic=args.control == "keyboard")
     print(
         f"Side={'left' if env.mirrored else 'right'}; "

@@ -7,8 +7,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_marbles_trapdoors.py --control robot
     /path/to/RoboDynaExp/script_exp/interactive_catch_marbles_trapdoors.py --control robot --robot-motion interpolate
 
-Keyboard mode opens trapdoors directly. Robot mode taps ``buttons[i]`` with
-the matching arm (TCP-limited press). Sandbox only.
+Keyboard mode opens trapdoors directly (cycle + Space). Robot mode: select an
+arm, move over the matching colored key, then Space to press. Sandbox only.
 """
 
 import argparse
@@ -27,38 +27,34 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    arm_ik,
     make_viewer_view_toggle,
     RobotButtonController,
     add_robot_motion_arg,
-    make_button_controller,
+    edge_pressed,
     report_task_result,
     print_mode_controls,
+    selected_robot_arms,
 )
 
 
 CONTROLS_KEYBOARD = """
-  1 / Q  →  open button/trapdoor index 0
-  2 / Up Arrow  →  open button/trapdoor index 1
-  3 / E  →  open button/trapdoor index 2
-  4 / R  →  open button/trapdoor index 3
+  Left / Right Arrow  cycle selected trapdoor button
+  Space               open the selected trapdoor (direct, no arm)
 
   Colors are printed at startup (left→right order may shuffle).
-  Press the button whose color matches the moving marble.
-  Opens via _open_door_direct (no arm).
+  Open the button whose color matches the moving marble.
 
   V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
 """
 
 CONTROLS_ROBOT = """
-  1 / Q  →  open button/trapdoor index 0
-  2 / Up Arrow  →  open button/trapdoor index 1
-  3 / E  →  open button/trapdoor index 2
-  4 / R  →  open button/trapdoor index 3
+  Space            →  press the key under the selected arm
 
-  Colors are printed at startup (left→right order may shuffle).
-  Press the button whose color matches the moving marble.
-  Matching arm taps buttons[i].
+  Select left (1) or right (2) arm, move over the matching colored key,
+  then press Space. Left arm covers left-half keys; right arm covers
+  right-half keys. Door opens on fingertip contact.
 
   --robot-motion planner|interpolate
   V                 toggle view: top-down ↔ head_camera
@@ -110,27 +106,53 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
     return config
 
 
-_KEY_TO_IDX = {
-    "1": 0, "q": 0,
-    "2": 1, "up": 1,
-    "3": 2, "e": 2,
-    "4": 3, "r": 3,
-}
+# Max TCP→key XY distance (m) to count as "over" a key (button half is ~2 cm).
+_KEY_XY_TOL = 0.055
 
 
-class EdgeButtons:
-    def __init__(self):
-        self.prev = {name: False for name in _KEY_TO_IDX}
+def _tcp_xy(env, side: str) -> np.ndarray:
+    getter = env.robot.get_left_tcp_pose if side == "left" else env.robot.get_right_tcp_pose
+    return np.asarray(getter()[:2], dtype=np.float64)
 
-    def pressed_indices(self, window):
-        fired = []
-        for name, idx in _KEY_TO_IDX.items():
-            down = window.key_down(name)
-            if down and not self.prev[name]:
-                fired.append(idx)
-            self.prev[name] = down
-        # De-dupe (1 and Q share index).
-        return list(dict.fromkeys(fired))
+
+def _nearest_button_for_arm(env, side: str, max_dist: float = _KEY_XY_TOL):
+    """Index of the nearest key under ``side``'s TCP, or None if too far."""
+    tcp = _tcp_xy(env, side)
+    best_i, best_d = None, float(max_dist)
+    for i in range(int(env.n_buttons)):
+        if str(env._arm_for_door(i)) != side:
+            continue
+        p = np.asarray(env.buttons[i].get_pose().p[:2], dtype=np.float64)
+        d = float(np.linalg.norm(p - tcp))
+        if d < best_d:
+            best_d, best_i = d, i
+    return best_i
+
+
+class KeyboardDoorSelect:
+    """Left/Right cycle a selected trapdoor; Space opens it directly."""
+
+    def __init__(self, n_buttons: int):
+        self.selected = 0
+        self.n = max(1, int(n_buttons))
+        self._prev = {}
+
+    def update(self, window, env):
+        if edge_pressed(window, "left", self._prev):
+            self.selected = (self.selected - 1) % self.n
+            color = env.button_color_names[self.selected]
+            print(f"Selected button {self.selected} ({color}).")
+        if edge_pressed(window, "right", self._prev):
+            self.selected = (self.selected + 1) % self.n
+            color = env.button_color_names[self.selected]
+            print(f"Selected button {self.selected} ({color}).")
+        if edge_pressed(window, "space", self._prev):
+            idx = self.selected
+            if env._open_door_direct(idx):
+                color = env.button_color_names[idx]
+                print(f"Opened trapdoor {idx} ({color}).")
+            else:
+                print(f"Could not open trapdoor {idx} (locked/already open).")
 
 
 class TrapdoorPlannerButtonController(RobotButtonController):
@@ -164,6 +186,31 @@ class TrapdoorPlannerButtonController(RobotButtonController):
         super().__init__(env, arm_tag, **kwargs)
         self.single_press_depth = max(float(single_press_depth), self.PRESS_DEPTH)
         self._opened_this_press = False
+
+    def press_in_place(self, mode):
+        """Descend from the current pose (no approach); open on fingertip contact."""
+        self._opened_this_press = False
+        sides = tuple(self.arms_for_mode(mode))
+        if not sides:
+            return
+        self._hover_qpos = {side: self._drive_qpos(side) for side in sides}
+        if not self._press_and_open(mode):
+            print("Could not reach key; returning to hover (door stays closed).")
+            self._interpolate_to_qpos(self._hover_qpos)
+            self.clear_latch(self.env)
+            return
+        viewer = getattr(self.env, "viewer", None)
+        for _ in range(self.PRESS_HOLD_STEPS):
+            self.set_latch(self.env, mode)
+            self.env._update_kinematic_tasks()
+            self.env.scene.step()
+            if viewer is not None:
+                self.env.scene.update_render()
+                viewer.render()
+        print(f"Robot tapped {mode}.")
+        self.clear_latch(self.env)
+        self._lift_from_buttons(mode)
+        self.mode = None
 
     def _tcp_near_key(self, mode, dz: float | None = None) -> bool:
         band = float(self.TOUCH_DZ if dz is None else dz)
@@ -496,13 +543,270 @@ class TrapdoorPlannerButtonController(RobotButtonController):
         print(f"Robot tapped {mode}.")
 
 
+class SmoothTrapdoorPressController:
+    """Non-blocking, gummy-style vertical key press from the current arm pose.
+
+    Timed on the simulation clock, not wall time: the viewer advances 4 ms of
+    physics per rendered frame, so a wall-timed ramp finishes while the arm is
+    still on its way down and the tap silently misses the key.
+    """
+
+    # Descend at a fixed speed so a press from 5 cm and one from 40 cm both
+    # look natural, then clamp the duration for very short / long reaches.
+    PRESS_SPEED = 0.70
+    RAISE_SPEED = 1.00
+    MIN_TRANSITION_SECONDS = 0.10
+    MAX_TRANSITION_SECONDS = 0.90
+    # Aim a little below the fingertip band and dwell on the key: the drive
+    # tracks with a few centimetres of lag on a tall press, and lifting off
+    # before it settles is what used to make the first tap do nothing.
+    MIN_HOLD_SECONDS = 0.05
+    MAX_HOLD_SECONDS = 0.40
+    TOUCH_DZ = 0.020
+    STALL_DZ = 0.040
+    # A descent that stalls this close above the keycap is fingertip contact:
+    # the aim point is below the key, so only the key can stop the arm.
+    CONTACT_DZ = 0.055
+    MIN_DESCENT = 0.010
+    MAX_DESCENT = 0.50
+    MAX_PRESS_JOINT_TRAVEL = 1.80
+
+    def __init__(self, env, on_press):
+        self.env = env
+        self.on_press = on_press
+        self.phase = "idle"
+        self.side = None
+        self.idx = None
+        self.start_qpos = None
+        self.hover_qpos = None
+        self.press_qpos = None
+        self.started_at = None
+        self.holding_from = None
+        self.holding_until = None
+        self.transition_seconds = self.MIN_TRANSITION_SECONDS
+        self.descent = 0.0
+        self.commanded_descent = 0.0
+        self._last_tcp_z = None
+        self._clock = 0.0
+        self.opened = False
+
+    @property
+    def busy(self):
+        return self.phase != "idle"
+
+    def _drive_qpos(self, side):
+        joints = (
+            self.env.robot.left_arm_joints
+            if side == "left"
+            else self.env.robot.right_arm_joints
+        )
+        return np.asarray(
+            [joint.get_drive_target()[0] for joint in joints],
+            dtype=np.float64,
+        )
+
+    def _tcp_z(self):
+        getter = (
+            self.env.robot.get_left_tcp_pose
+            if self.side == "left"
+            else self.env.robot.get_right_tcp_pose
+        )
+        return float(getter()[2])
+
+    def _button_top_z(self):
+        return (
+            float(self.env.buttons[self.idx].get_pose().p[2])
+            + float(self.env.button_half[2])
+        )
+
+    def _ik_joints(self, ee_pose7):
+        """Seeded local IK so the press stays in the arm's current branch."""
+        solver = arm_ik(self.env, self.side)
+        if solver is None:
+            return None
+        solution = solver.solve(ee_pose7)
+        return None if solution is None else solution[0]
+
+    def _plan_press_target(self):
+        get_ee = (
+            self.env.robot.get_left_ee_pose
+            if self.side == "left"
+            else self.env.robot.get_right_ee_pose
+        )
+        pose = np.asarray(get_ee(), dtype=np.float64).copy()
+        desired_tcp_z = self._button_top_z() + self.TOUCH_DZ
+        descent = float(
+            np.clip(
+                self._tcp_z() - desired_tcp_z,
+                self.MIN_DESCENT,
+                self.MAX_DESCENT,
+            )
+        )
+        pose[2] -= descent
+        q = self._ik_joints(pose)
+        if q is None:
+            return None, 0.0
+        start = self.hover_qpos
+        target = np.asarray(q[: len(start)], dtype=np.float64)
+        if float(np.max(np.abs(target - start))) > self.MAX_PRESS_JOINT_TRAVEL:
+            return None, 0.0
+        return target, descent
+
+    def request(self, idx):
+        if self.busy:
+            return False
+        self.idx = int(idx)
+        self.side = str(self.env._arm_for_door(self.idx))
+        self.hover_qpos = self._drive_qpos(self.side)
+        self.press_qpos, descent = self._plan_press_target()
+        if self.press_qpos is None:
+            print("Could not plan a smooth vertical key press.")
+            self._reset()
+            return False
+        self.descent = descent
+        self.env._interactive_teleop_locked = True
+        self.opened = False
+        self._begin_transition("pressing", self.press_qpos, self.PRESS_SPEED)
+        return True
+
+    def _begin_transition(self, phase, target, speed):
+        self.phase = phase
+        self.start_qpos = self._drive_qpos(self.side)
+        self.target_qpos = np.asarray(target, dtype=np.float64)
+        self.transition_seconds = float(np.clip(
+            self.descent / speed,
+            self.MIN_TRANSITION_SECONDS,
+            self.MAX_TRANSITION_SECONDS,
+        ))
+        self.started_at = self._clock
+
+    def _try_open(self):
+        if self.opened:
+            return
+        tcp_z = self._tcp_z()
+        previous, self._last_tcp_z = self._last_tcp_z, tcp_z
+        # Judge the press by how far it has been *commanded* down, not by how
+        # far the fingertip travelled: a tap that starts just above the keycap
+        # only has millimetres of travel before the key stops it.
+        if self.commanded_descent < min(self.MIN_DESCENT, self.descent):
+            return
+        above = tcp_z - self._button_top_z()
+        stalled = previous is not None and abs(previous - tcp_z) < 0.0004
+        if above <= self.STALL_DZ or (stalled and above <= self.CONTACT_DZ):
+            self.on_press(self.idx)
+            self.opened = True
+
+    def _finish_transition(self, now):
+        if self.phase == "pressing":
+            self.phase = "holding"
+            self.started_at = None
+            self.holding_from = now
+            self.holding_until = now + self.MAX_HOLD_SECONDS
+            self._try_open()
+        elif self.phase == "raising":
+            if not self.opened:
+                print("The fingertip did not reach the key; trapdoor stayed closed.")
+            self._reset()
+
+    def update(self):
+        if self.phase == "idle":
+            return
+        # One update per physics step, so the sim clock is the loop's clock.
+        self._clock += float(self.env.scene.get_timestep())
+        now = self._clock
+        if self.phase == "holding":
+            self.env.robot.set_arm_joints(
+                self.press_qpos,
+                np.zeros_like(self.press_qpos),
+                self.side,
+            )
+            self.commanded_descent = self.descent
+            self._try_open()
+            settled = self.opened or now >= self.holding_until
+            if settled and now - self.holding_from >= self.MIN_HOLD_SECONDS:
+                self._begin_transition("raising", self.hover_qpos, self.RAISE_SPEED)
+            return
+
+        progress = min(
+            1.0,
+            (now - self.started_at) / self.transition_seconds,
+        )
+        smooth = progress * progress * (3.0 - 2.0 * progress)
+        delta = self.target_qpos - self.start_qpos
+        velocity = (
+            delta / self.transition_seconds
+            if progress < 1.0
+            else np.zeros_like(delta)
+        )
+        self.env.robot.set_arm_joints(
+            self.start_qpos + delta * smooth,
+            velocity,
+            self.side,
+        )
+        if self.phase == "pressing":
+            self.commanded_descent = self.descent * smooth
+            self._try_open()
+        if progress >= 1.0:
+            self._finish_transition(now)
+
+    def _reset(self):
+        self.env._buttons_held.clear()
+        self.env._interactive_teleop_locked = False
+        self.phase = "idle"
+        self.side = None
+        self.idx = None
+        self.start_qpos = None
+        self.hover_qpos = None
+        self.press_qpos = None
+        self.started_at = None
+        self.holding_from = None
+        self.holding_until = None
+        self.commanded_descent = 0.0
+        self._last_tcp_z = None
+        self.opened = False
+
+    def release(self):
+        if self.busy and self.hover_qpos is not None:
+            self.env.robot.set_arm_joints(
+                self.hover_qpos,
+                np.zeros_like(self.hover_qpos),
+                self.side,
+            )
+        self._reset()
+
+
 def _print_color_map(env):
     names = list(getattr(env, "button_color_names", []) or [])
     target = int(getattr(env, "target_button_idx", -1))
     mapping = ", ".join(f"{i}:{c}" for i, c in enumerate(names))
     target_name = names[target] if 0 <= target < len(names) else "?"
+    left_keys = [f"{i}:{c}" for i, c in enumerate(names) if str(env._arm_for_door(i)) == "left"]
+    right_keys = [f"{i}:{c}" for i, c in enumerate(names) if str(env._arm_for_door(i)) == "right"]
     print(f"Buttons L→R: {mapping}")
+    print(f"Left-arm keys: {', '.join(left_keys) or '(none)'} | Right-arm keys: {', '.join(right_keys) or '(none)'}")
     print(f"Target marble color: {target_name} (index {target})")
+
+
+def _make_trapdoor_controller(env):
+    """Build the non-blocking smooth press controller."""
+
+    def on_press(idx):
+        idx = int(idx)
+        color = env.button_color_names[idx]
+        env._buttons_held.clear()
+        env._buttons_held.add(idx)
+        if env._open_door_direct(idx):
+            snap = min(55.0, float(env.door_open_angle_deg))
+            env._set_door_pose(idx, snap)
+            print(f"Opened trapdoor {idx} ({color}) on fingertip contact.")
+        else:
+            print(f"Could not open trapdoor {idx} ({color}; locked/already open).")
+        viewer = getattr(env, "viewer", None)
+        if viewer is not None:
+            env.scene.update_render()
+            viewer.render()
+
+    return SmoothTrapdoorPressController(env, on_press)
 
 
 def main():
@@ -524,77 +828,9 @@ def main():
     env.together_close_gripper(save_freq=None)
     _print_color_map(env)
 
-    edges = EdgeButtons()
-    pending = {"idx": None}
-    robot = None
-    if args.control == "robot":
-        def get_button(e, side):
-            return e.buttons[int(pending["idx"])]
-
-        def get_top_z(e, side):
-            i = int(pending["idx"])
-            return float(e.buttons[i].get_pose().p[2]) + float(e.button_half[2])
-
-        def arms_for_mode(m):
-            if m is None:
-                return ()
-            return (str(env._arm_for_door(int(m))),)
-
-        def set_latch(e, m):
-            # Hold flag only — does not open the door. Door opens in on_press
-            # after the shared controller confirms TCP contact on the key.
-            e._buttons_held.clear()
-            if m is not None:
-                e._buttons_held.add(int(m))
-
-        def clear_latch(e):
-            e._buttons_held.clear()
-
-        def on_press(e, m):
-            # Same physics frame as fingertip contact (TrapdoorPlannerButtonController).
-            idx = int(m)
-            color = e.button_color_names[idx]
-            if e._open_door_direct(idx):
-                # Visible reaction on the contact frame; swing finishes via _advance_doors.
-                snap = min(55.0, float(e.door_open_angle_deg))
-                e._set_door_pose(idx, snap)
-                print(f"Opened trapdoor {idx} ({color}) on fingertip contact.")
-            else:
-                print(f"Could not open trapdoor {idx} ({color}; locked/already open).")
-            viewer = getattr(e, "viewer", None)
-            if viewer is not None:
-                e.scene.update_render()
-                viewer.render()
-
-        def make_ctrl(for_mode):
-            pending["idx"] = for_mode
-            arm = str(env._arm_for_door(int(for_mode)))
-            # Interpolate precomputes per side; rebuild so targets match this button.
-            sides = (arm,) if args.robot_motion == "interpolate" else ("left", "right")
-            press_depth = float(getattr(env, "button_press_depth", 0.03))
-            shared_kwargs = dict(
-                get_button=get_button,
-                get_top_z=get_top_z,
-                set_latch=set_latch,
-                clear_latch=clear_latch,
-                arms_for_mode=arms_for_mode,
-                on_press=on_press,
-                hold=False,
-                sides=sides,
-            )
-            if args.robot_motion == "interpolate":
-                # Shared interpolate path — no trapdoors planner overrides.
-                return make_button_controller(
-                    env, ArmTag, "interpolate", **shared_kwargs
-                )
-            return TrapdoorPlannerButtonController(
-                env,
-                ArmTag,
-                single_press_depth=press_depth,
-                **shared_kwargs,
-            )
-
-        robot = {"ctrl": None, "make": make_ctrl}
+    keyboard = KeyboardDoorSelect(env.n_buttons) if args.control == "keyboard" else None
+    keys_prev = {}
+    robot = _make_trapdoor_controller(env) if args.control == "robot" else None
 
     viewer = env.viewer
     if viewer is None:
@@ -602,7 +838,10 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     motion = f", robot-motion={args.robot_motion}" if args.control == "robot" else ""
-    print(f"Control={args.control}{motion}. Tap 1–4 / QWER to open a trapdoor.")
+    if args.control == "robot":
+        print(f"Control=robot{motion}. Select an arm (1/2), move over a key, press Space.")
+    else:
+        print(f"Control=keyboard. Left/Right cycle buttons; Space opens.")
 
     left_track_since = None
     settle_s = 0.6
@@ -610,24 +849,24 @@ def main():
         while not viewer.closed:
             views.update(viewer.window)
             frame_start = time.perf_counter()
-            for idx in edges.pressed_indices(viewer.window):
-                if args.control == "keyboard":
-                    if env._open_door_direct(idx):
-                        color = env.button_color_names[idx]
-                        print(f"Opened trapdoor {idx} ({color}).")
+            if keyboard is not None:
+                keyboard.update(viewer.window, env)
+            elif robot is not None:
+                if edge_pressed(viewer.window, "space", keys_prev):
+                    selected = selected_robot_arms(env, fallback=())
+                    if len(selected) != 1:
+                        print("Select one arm first: 1 (left) or 2 (right).")
                     else:
-                        print(f"Could not open trapdoor {idx} (locked/already open).")
-                elif robot is not None:
-                    if idx < 0 or idx >= env.n_buttons:
-                        continue
-                    color = env.button_color_names[idx]
-                    arm = env._arm_for_door(idx)
-                    print(f"Robot tapping button {idx} ({color}) with {arm} arm...")
-                    if args.robot_motion == "interpolate" or robot["ctrl"] is None:
-                        robot["ctrl"] = robot["make"](idx)
-                    else:
-                        pending["idx"] = idx
-                    robot["ctrl"].update(idx)
+                        side = selected[0]
+                        idx = _nearest_button_for_arm(env, side)
+                        if idx is None:
+                            print(f"Move the {side} arm over a key first.")
+                        else:
+                            color = env.button_color_names[idx]
+                            arm = env._arm_for_door(idx)
+                            print(f"Robot tapping button {idx} ({color}) with {arm} arm...")
+                            robot.request(idx)
+                robot.update()
             env._update_kinematic_tasks()
             env.scene.step()
             env.scene.update_render()
@@ -648,8 +887,8 @@ def main():
                 time.sleep(remaining)
     finally:
         try:
-            if robot is not None and robot["ctrl"] is not None:
-                robot["ctrl"].release()
+            if robot is not None:
+                robot.release()
         finally:
             env.close_env()
 

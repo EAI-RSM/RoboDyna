@@ -58,11 +58,11 @@ def _prepare_keyboard_hold(env):
     return True
 
 
-def _prepare_robot_hold(env):
+def _prepare_robot_hold(env, selected_arm=None):
     """Run load_train's standard grasp/carry sequence on the user's request."""
     from envs.utils.action import ArmTag
 
-    arm_name = "left" if env.ball_side == "left" else "right"
+    arm_name = selected_arm or ("left" if env.ball_side == "left" else "right")
     arm_tag = ArmTag(arm_name)
     env.selected_arm = arm_name
     z = _release_z(env)
@@ -193,6 +193,9 @@ def main():
     use_robot = args.control == "robot"
     env = load_train()
     env.setup_demo(**configure_task("load_train", args.config, args.seed, use_robot=use_robot))
+    env._interactive_selected_arms = (
+        "left" if env.ball_side == "left" else "right",
+    )
     env._train_running = True
 
     print_banner(
@@ -224,7 +227,8 @@ def main():
             if not env._interactive_holding:
                 if use_robot:
                     print("Robot: picking up the ball and carrying it to the drop station…")
-                    if _prepare_robot_hold(env):
+                    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+                    if _prepare_robot_hold(env, selected[0] if selected else None):
                         print("Ball picked up. Press Space again when a wagon is aligned.")
                     else:
                         print("Ball pickup failed. Press Space to try again.")
@@ -238,7 +242,8 @@ def main():
             if _advance_interpolated_robot_nudge(env, interpolate_motion):
                 interpolate_motion = None
 
-        nudge = arrow_nudge_xy(window, step=0.0025)
+        nudge = (arrow_nudge_xy(window, step=0.0025) if not use_robot
+                 else np.zeros(2, dtype=np.float64))
         if float(np.linalg.norm(nudge)) > 0 and env._interactive_holding and not env._interactive_released:
             if use_robot and getattr(env, "_interactive_arm", None) is not None:
                 # Avoid sending a movement request every viewer frame.

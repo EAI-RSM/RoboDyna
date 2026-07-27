@@ -46,8 +46,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Hold Left Arrow   →  slide bowl LEFT
-  Hold Right Arrow  →  slide bowl RIGHT
+  Hold Space        →  press selected arm's bowl key
   First key press also releases the marble (default mode).
 
   Matching arm presses the bowl key.
@@ -173,7 +172,11 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     motion = f", robot-motion={args.robot_motion}" if args.control == "robot" else ""
-    print(f"Control={args.control}{motion}. Hold Left/Right arrows.")
+    print(
+        f"Control={args.control}{motion}. "
+        + ("Select an arm and hold Space." if args.control == "robot"
+           else "Hold Left/Right arrows.")
+    )
 
     try:
         while not viewer.closed:
@@ -182,7 +185,11 @@ def main():
             if args.control == "keyboard":
                 _update_keyboard(env, viewer.window)
             elif robot_controller is not None:
-                robot_controller.update(_requested_side(viewer.window))
+                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+                mode = None
+                if viewer.window.key_down("space"):
+                    mode = "dump" if len(selected) == 2 else (selected[0] if selected else None)
+                robot_controller.update(mode)
             env._update_kinematic_tasks()
             env.scene.step()
             env.scene.update_render()

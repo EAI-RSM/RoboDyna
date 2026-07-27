@@ -282,6 +282,9 @@ class RobotCupController:
         self._space = EdgeKey()
 
     def _choose_arm(self, x=None):
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
+        if selected:
+            return self.ArmTag(selected[0])
         if x is None:
             x, _ = _aim_xy(self.env)
         return self.ArmTag("right" if float(x) > 0 else "left")
@@ -354,7 +357,7 @@ class RobotCupController:
             if not self.holding and not self.placed:
                 self.grasp()
             return
-        self.nudge(window)
+        # Universal viewer controls own arrow/E/Q motion.
 
 
 def main():
@@ -389,6 +392,9 @@ def main():
 
     env = catch_ramp_ball()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_selected_arms = (
+        "right" if float(_aim_xy(env)[0]) > 0 else "left",
+    )
     env._start_ball_motion(expert_demo=False)
     x, y = _aim_xy(env)
     print(f"Predicted catch aim ≈ ({x:.3f}, {y:.3f}). Ball is rolling.")

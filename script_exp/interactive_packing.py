@@ -230,8 +230,7 @@ def main():
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: apple → left basket, orange → right basket. Never pack black (Opt2).",
-            "Q — select left arm (red apple) | E — select right arm (orange)",
-            "X — select both arms (apple + orange together)",
+            "1 / 2 / 3 — select left / right / both arms",
             "Space — first press picks up selected fruit(s); second press drops them",
             "V — toggle view: top-down ↔ head_camera",
             "Esc — close the viewer window to quit",
@@ -252,24 +251,16 @@ def main():
         env._belt_running = True
 
         if held is None:
-            if edge_pressed(window, "q", keys_prev):
-                selected = "left"
-                if highlight is not None:
-                    highlight.set_selected(selected)
-                print("Selected left arm: red apple.")
-            if edge_pressed(window, "e", keys_prev):
-                selected = "right"
-                if highlight is not None:
-                    highlight.set_selected(selected)
-                print("Selected right arm: orange.")
-            if edge_pressed(window, "x", keys_prev):
-                selected = "both"
-                if highlight is not None:
-                    highlight.set_selected(selected)
-                print("Selected both arms: red apple + orange.")
+            selected_arms = tuple(getattr(env, "_interactive_selected_arms", ()))
+            if use_robot and selected_arms:
+                new_selected = "both" if len(selected_arms) == 2 else selected_arms[0]
+                if new_selected != selected:
+                    selected = new_selected
+                    if highlight is not None:
+                        highlight.set_selected(selected)
             if edge_pressed(window, "space", keys_prev):
                 if selected is None:
-                    print("Select an arm first: Q (left), E (right), or X (both).")
+                    print("Select an arm first: 1 (left), 2 (right), or 3 (both).")
                 else:
                     pending_pick = True
                     print(f"Waiting to pick with {selected} selection…")

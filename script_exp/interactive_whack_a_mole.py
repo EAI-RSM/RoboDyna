@@ -40,9 +40,6 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Q / E             select left / right arm (highlighted yellow / cyan)
-  Arrow keys        move selected arm in world XY
-  T / R             raise / lower selected arm
   Space             pick selected side's mallet, then strike and return to hover
   V                 toggle view: top-down ↔ head_camera
   Escape            quit
@@ -112,7 +109,7 @@ _ARM_HIGHLIGHT = {
 
 
 class ArmGripperHighlight:
-    """Recolor the selected gripper so Q/E selection is unambiguous."""
+    """Recolor the selected gripper so arm selection is unambiguous."""
 
     def __init__(self, env):
         self._orig = {}
@@ -277,8 +274,6 @@ class RobotMoleController:
         self.selected_arm = "left"
         self.busy = False
         self._space = EdgeKey()
-        self._q = EdgeKey()
-        self._e = EdgeKey()
         self.highlight = ArmGripperHighlight(env)
         self.highlight.set_selected(self.selected_arm)
         self._start = None
@@ -315,7 +310,7 @@ class RobotMoleController:
             return
         dx = self.XY_STEP * (window.key_down("right") - window.key_down("left"))
         dy = self.XY_STEP * (window.key_down("up") - window.key_down("down"))
-        dz = self.Z_STEP * (window.key_down("t") - window.key_down("r"))
+        dz = self.Z_STEP * (window.key_down("e") - window.key_down("q"))
         if not (dx or dy or dz):
             return
         side = self.selected_arm
@@ -380,15 +375,11 @@ class RobotMoleController:
         if self.busy or self.env.distractor_hit:
             return
         self._advance_motion()
-        if self._q.poll(window.key_down("q")):
-            self.selected_arm = "left"
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", (self.selected_arm,)))
+        if len(selected) == 1 and selected[0] != self.selected_arm:
+            self.selected_arm = selected[0]
             self.highlight.set_selected(self.selected_arm)
-            print("Selected left arm.")
-        if self._e.poll(window.key_down("e")):
-            self.selected_arm = "right"
-            self.highlight.set_selected(self.selected_arm)
-            print("Selected right arm.")
-        self._move_selected_arm(window)
+        # Universal viewer controls own arrow/E/Q motion.
         if self._space.poll(window.key_down("space")):
             self.jab()
 
