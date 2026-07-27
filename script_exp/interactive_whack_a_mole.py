@@ -344,8 +344,10 @@ class RobotMoleController:
         arm = self._arm()
         self.env.plan_success = True
         if self.selected_arm not in self.env.hammer_cubes:
-            self.env.pickup_mallet_to_ready(arm)
-            print(f"Picked up {self.selected_arm} mallet; it is ready at hover height.")
+            if self.env.pickup_mallet_to_ready(arm):
+                print(f"Picked up {self.selected_arm} mallet; it is ready at hover height.")
+            else:
+                print(f"Could not pick up the {self.selected_arm} mallet.")
             self.busy = False
             return
         cube_p = self.env._mallet_head_center(arm)
@@ -365,8 +367,8 @@ class RobotMoleController:
         self.env._mole_state[idx]["freeze_bob"] = False
         if not self.env.touched[idx] and self.env._mole_above_surface(idx):
             hole = self.env.holes[self.env.mole_holes[idx]]
-            cube_p = np.array(self.env.hammer_cubes[str(arm)].get_pose().p, dtype=float)
-            if float(np.linalg.norm(cube_p[:2] - hole[:2])) < 0.08:
+            head_p = self.env._mallet_head_center(arm)
+            if float(np.linalg.norm(head_p[:2] - hole[:2])) < 0.08:
                 self.env._mark_touched(idx)
         self.env.plan_success = True
         # Every strike returns to the task's safe hover/rest height.
