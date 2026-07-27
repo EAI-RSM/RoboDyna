@@ -16,6 +16,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import sapien
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
@@ -27,6 +29,85 @@ from _interactive_common import (  # noqa: E402
 )
 
 bootstrap_repo()
+
+
+_GRIPPER_LINK_NAMES = (
+    "wsg_50_base_link",
+    "gripper_left",
+    "gripper_right",
+    "finger_left",
+    "finger_right",
+)
+_ARM_HIGHLIGHT = {
+    "left": [1.0, 0.85, 0.10, 1.0],   # yellow
+    "right": [0.15, 0.75, 1.0, 1.0],  # cyan
+}
+
+
+class ArmGripperHighlight:
+    """Recolor selected gripper meshes, matching interactive_catch_rat."""
+
+    def __init__(self, env):
+        self._orig = {}
+        robot = env.robot
+        self._entities = {
+            "left": self._gripper_entities(robot.left_entity),
+            "right": self._gripper_entities(robot.right_entity),
+        }
+
+    @staticmethod
+    def _gripper_entities(articulation):
+        return [
+            link.entity for link in articulation.get_links()
+            if link.get_name() in _GRIPPER_LINK_NAMES
+        ]
+
+    @staticmethod
+    def _iter_materials(entity):
+        for component in entity.get_components():
+            if not isinstance(component, sapien.render.RenderBodyComponent):
+                continue
+            for shape in component.render_shapes:
+                try:
+                    yield shape.material
+                except Exception:
+                    continue
+
+    def _remember(self, material):
+        if id(material) in self._orig:
+            return
+        try:
+            color = list(material.base_color)
+        except Exception:
+            color = [0.75, 0.75, 0.75, 1.0]
+        self._orig[id(material)] = (material, color)
+
+    def clear(self):
+        for material, color in self._orig.values():
+            try:
+                material.set_base_color(color)
+                material.base_color = color
+            except Exception:
+                pass
+
+    def set_selected(self, selection):
+        self.clear()
+        sides = ("left", "right") if selection == "both" else (selection,)
+        for side in sides:
+            if side not in _ARM_HIGHLIGHT:
+                continue
+            for entity in self._entities[side]:
+                for material in self._iter_materials(entity):
+                    self._remember(material)
+                    try:
+                        material.set_base_color_texture(None)
+                    except Exception:
+                        pass
+                    try:
+                        material.set_base_color(_ARM_HIGHLIGHT[side])
+                        material.base_color = _ARM_HIGHLIGHT[side]
+                    except Exception:
+                        pass
 
 
 def _ready_for_arm(env, arm: str):
@@ -150,7 +231,7 @@ def main():
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: apple → left basket, orange → right basket. Never pack black (Opt2).",
             "Q — select left arm (red apple) | E — select right arm (orange)",
-            "W — select both arms (apple + orange together)",
+            "X — select both arms (apple + orange together)",
             "Space — first press picks up selected fruit(s); second press drops them",
             "V — toggle view: top-down ↔ head_camera",
             "Esc — close the viewer window to quit",
@@ -163,6 +244,7 @@ def main():
     selected = None
     pending_pick = False
     held = None
+    highlight = ArmGripperHighlight(env) if use_robot else None
 
     def on_step(window, step):
         nonlocal settle_after_done, selected, pending_pick, held
@@ -172,16 +254,22 @@ def main():
         if held is None:
             if edge_pressed(window, "q", keys_prev):
                 selected = "left"
+                if highlight is not None:
+                    highlight.set_selected(selected)
                 print("Selected left arm: red apple.")
             if edge_pressed(window, "e", keys_prev):
                 selected = "right"
+                if highlight is not None:
+                    highlight.set_selected(selected)
                 print("Selected right arm: orange.")
-            if edge_pressed(window, "w", keys_prev):
+            if edge_pressed(window, "x", keys_prev):
                 selected = "both"
+                if highlight is not None:
+                    highlight.set_selected(selected)
                 print("Selected both arms: red apple + orange.")
             if edge_pressed(window, "space", keys_prev):
                 if selected is None:
-                    print("Select an arm first: Q (left), E (right), or W (both).")
+                    print("Select an arm first: Q (left), E (right), or X (both).")
                 else:
                     pending_pick = True
                     print(f"Waiting to pick with {selected} selection…")
@@ -193,6 +281,8 @@ def main():
             print("Dropped selected fruit(s) into their baskets.")
             held = None
             selected = None
+            if highlight is not None:
+                highlight.clear()
 
         # Keep a Space pickup request until its selected fruit(s) enter the
         # short live pick window, then leave them held for the next Space.
