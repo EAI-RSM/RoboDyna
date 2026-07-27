@@ -91,7 +91,7 @@ class play_billiard(Base_Task):
 
     # ----- cue rod (local +X = tip direction; cylinder + spherical ends)
     CUE_RADIUS = 0.0072  # 1.2× prior 6 mm shaft for a more graspable stick
-    CUE_HALF_LEN = 0.060
+    CUE_HALF_LEN = 0.180            # 3x the original 12 cm cue length
     CUE_COLOR = [0.72, 0.52, 0.28]
     CUE_TIP_COLOR = [0.05, 0.35, 1.0]  # vivid blue tip (was off-white)
     CUE_MASS = 0.05
@@ -101,7 +101,7 @@ class play_billiard(Base_Task):
     # WSG50 pads sit only ~3 cm below the planning EE (not the 12 cm TCP offset
     # assumed by get_grasp_pose). Top-down IK also cannot reach table height, so
     # the cue rests on a short stand and we target finger-pad height explicitly.
-    CUE_STAND_HEIGHT = 0.12
+    CUE_STAND_HEIGHT = 0.084         # 30% lower than the original 12 cm cradle
     # Planning-EE Z − shaft Z. Pads sit ≈3 cm below EE; +3 cm extra puts the
     # shaft between the fingertips instead of deep in the jaw.
     CUE_FINGER_EE_Z = 0.060
@@ -111,6 +111,8 @@ class play_billiard(Base_Task):
     CUE_PRE_GRASP_DIS = 0.12
     CUE_GRASP_OPEN = 0.85
     CUE_GRASP_CLOSE = 0.0
+    # Hold close to the butt end, leaving the long tip section free for aiming.
+    CUE_HANDLE_GRASP_FROM_BUTT = 0.030
 
     # ----- strike / settle
     APPROACH_GAP = 0.050
@@ -423,38 +425,30 @@ class play_billiard(Base_Task):
         for i, p in enumerate(self._pocket_centers):
             self._add_pocket_floor_well_visual(float(p[0]), float(p[1]), i)
 
-        # 3) Very low rails (cue clears them); gaps near pockets.
+        # 3) Very low continuous perimeter rail (cue clears it).  The genuine
+        # pocket cutouts are inset in the felt lid, so unlike split rail pieces
+        # this leaves no distracting gap on the table's outside edge.
         rail_z = self.felt_top + self.RAIL_HALF_H
-        gap = pr * 1.15
         for sign_y, tag in ((-1.0, "neg"), (1.0, "pos")):
             y = cy + sign_y * (hw + self.RAIL_HALF_T)
-            segs = [
-                (cx - (hl + gap) * 0.5, (hl - gap) * 0.5),
-                (cx + (hl + gap) * 0.5, (hl - gap) * 0.5),
-            ]
-            for j, (sx, shx) in enumerate(segs):
-                if shx <= 0.008:
-                    continue
-                create_box(
-                    self,
-                    pose=sapien.Pose([sx, y, rail_z], [1, 0, 0, 0]),
-                    half_size=[shx, self.RAIL_HALF_T, self.RAIL_HALF_H],
-                    color=tuple(self.RAIL_COLOR),
-                    is_static=True,
-                    name=f"rail_long_{tag}_{j}",
-                )
+            create_box(
+                self,
+                pose=sapien.Pose([cx, y, rail_z], [1, 0, 0, 0]),
+                half_size=[hl, self.RAIL_HALF_T, self.RAIL_HALF_H],
+                color=tuple(self.RAIL_COLOR),
+                is_static=True,
+                name=f"rail_long_{tag}",
+            )
         for sign_x, tag in ((-1.0, "neg"), (1.0, "pos")):
             x = cx + sign_x * (hl + self.RAIL_HALF_T)
-            sh = hw - gap
-            if sh > 0.01:
-                create_box(
-                    self,
-                    pose=sapien.Pose([x, cy, rail_z], [1, 0, 0, 0]),
-                    half_size=[self.RAIL_HALF_T, sh, self.RAIL_HALF_H],
-                    color=tuple(self.RAIL_COLOR),
-                    is_static=True,
-                    name=f"rail_short_{tag}",
-                )
+            create_box(
+                self,
+                pose=sapien.Pose([x, cy, rail_z], [1, 0, 0, 0]),
+                half_size=[self.RAIL_HALF_T, hw, self.RAIL_HALF_H],
+                color=tuple(self.RAIL_COLOR),
+                is_static=True,
+                name=f"rail_short_{tag}",
+            )
 
         self.prohibited_area.append([
             cx - hl - 0.04,
@@ -767,7 +761,7 @@ class play_billiard(Base_Task):
         half_h = 0.5 * stand_h
         z = float(self.z0 + half_h)
         wood = (0.42, 0.28, 0.16)
-        # Two posts under the shaft (along +Y); mid-span clear for butt grasp.
+        # Two posts under the shaft (along +Y); mid-span clear for handle grasp.
         for i, dy in enumerate((-0.052, 0.052)):
             create_box(
                 self,
@@ -1037,7 +1031,7 @@ class play_billiard(Base_Task):
         return float(np.mean(zs)) if zs else None
 
     def _pick_up_cue(self, arm):
-        """Open → descend onto shaft center (fingertip height) → close → weld."""
+        """Open → descend onto the cue handle → close → weld."""
         cue_p = np.asarray(self.cue.get_pose().p, dtype=np.float64)
         _pre, grasp = self.choose_grasp_pose(
             self.cue,
@@ -1048,12 +1042,21 @@ class play_billiard(Base_Task):
         )
         if grasp is None:
             return False
-        # Grasp at the stick center; EE a bit high so tips (not the palm) pinch it.
+        # ``choose_grasp_pose`` provides a valid top-down orientation.  Position
+        # that grasp at the butt/handle instead of the cue centre so the long
+        # tip section remains free for manual aiming and striking.
+        cue_R = t3d.quaternions.quat2mat(np.asarray(self.cue.get_pose().q, dtype=np.float64))
+        handle_local = np.array([
+            -self.CUE_HALF_LEN + self.CUE_HANDLE_GRASP_FROM_BUTT,
+            0.0,
+            0.0,
+        ])
+        handle_p = cue_p + cue_R @ handle_local
         grasp_z = float(cue_p[2] + self.CUE_FINGER_EE_Z)
         pre_z = float(grasp_z + self.CUE_PRE_GRASP_DIS)
         quat = list(grasp[3:7])
-        pre_pose = [float(cue_p[0]), float(cue_p[1]), pre_z, *quat]
-        grasp_pose = [float(cue_p[0]), float(cue_p[1]), grasp_z, *quat]
+        pre_pose = [float(handle_p[0]), float(handle_p[1]), pre_z, *quat]
+        grasp_pose = [float(handle_p[0]), float(handle_p[1]), grasp_z, *quat]
 
         self._disable_cue_robot_collision()
 

@@ -41,9 +41,11 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left / Right      rotate aim direction
-  Up / Down         slide tip along aim (approach / retreat)
-  Space             pick up cue, then planned strike
+  Left / Right      move the holding arm left / right
+  Up / Down         move the holding arm forward / backward
+  T / R             raise / lower the gripper
+  G / F             rotate gripper clockwise / counter-clockwise
+  Space             pick up cue, then strike in the cue's current direction
   V                 toggle view: top-down ↔ head_camera
   Q / Escape         quit
 ------------------------------------------------------------
@@ -129,7 +131,9 @@ def _place_cue_for_aim(env, gap=None):
     half = float(env.CUE_HALF_LEN)
     new_body = tip - np.array([aim[0] * half, aim[1] * half, 0.0])
     new_pose = sapien.Pose(new_body.tolist(), q)
-    env.cue.set_pose(new_pose)
+    # ``cue`` is the task's Actor wrapper; pose updates belong to its
+    # underlying SAPIEN actor (matching the main task's cue placement code).
+    env.cue.actor.set_pose(new_pose)
     rigid = _get_rigid(env.cue)
     if rigid is not None:
         try:
@@ -233,70 +237,62 @@ class RobotCueController:
         _default_aim(env)
 
     def pickup_and_aim(self):
+        """Pick only; the user positions and orients the cue afterwards."""
         self.busy = True
+        # Keep the grasp point 3 cm higher than the prior fingertip-height
+        # attempt.  Both values must move together because the task helper
+        # applies a final finger-pad-height correction before closing.
+        tip_clearance = float(self.env.CUE_RADIUS + 0.03)
+        pad_to_ee_z = float(
+            self.env.CUE_FINGER_EE_Z - self.env.CUE_TIP_GRASP_CLEARANCE
+        )
+        self.env.CUE_TIP_GRASP_CLEARANCE = tip_clearance
+        self.env.CUE_FINGER_EE_Z = pad_to_ee_z + tip_clearance
         if not self.env._pick_up_cue(self.arm):
             print("Cue pickup failed.")
             self.busy = False
             return
-        hover_z = float(self.env.felt_top + self.env.HOVER_CLEARANCE)
-        self.env._move_tip_z_to(self.arm, hover_z, max_step=0.09)
-        self.env._seat_cue_for_strike(self.arm)
-        self.env._move_tip_z_to(self.arm, hover_z, max_step=0.09)
-        # Yaw tip toward aim.
-        tip = self.env._tip_xyz()
-        cue_p = np.asarray(self.env.cue.get_pose().p, dtype=float)
-        tip_dir = tip[:2] - cue_p[:2]
-        if float(np.linalg.norm(tip_dir)) < 1e-4:
-            tip_ang = 0.0
-        else:
-            tip_ang = float(np.arctan2(tip_dir[1], tip_dir[0]))
-        aim_ang = float(np.arctan2(self.env._aim_dir[1], self.env._aim_dir[0]))
-        yaw_delta = (aim_ang - tip_ang + np.pi) % (2.0 * np.pi) - np.pi
-        import transforms3d as t3d
-        cur_q = np.array(self.env.get_arm_pose(str(self.arm))[3:], dtype=float)
-        new_q = t3d.quaternions.qmult(
-            t3d.quaternions.axangle2quat([0, 0, 1], float(np.clip(yaw_delta, -2.0, 2.0))),
-            cur_q,
-        )
-        self.env.move(self.env.move_by_displacement(
-            self.arm, quat=list(new_q), move_axis="world",
-        ))
-        ball_xy = self.env._ball_xy(self.env.primary_ball)
-        behind = ball_xy - self.env._aim_dir * self.env.APPROACH_GAP
-        tip = self.env._tip_xyz()
-        self.env.move(self.env.move_by_displacement(
-            self.arm,
-            x=float(behind[0] - tip[0]),
-            y=float(behind[1] - tip[1]),
-            z=float(hover_z - tip[2]),
-            move_axis="world",
-        ))
-        self.env._move_tip_z_to(self.arm, float(self.env.ball_z), max_step=0.05)
-        self.env._strike_armed = True
-        self.env._strike_done = False
         self.ready = True
-        print("Cue ready behind the ball. Space strikes.")
+        print("Cue picked up. Position it with arrows/T/R and rotate it with G/F; Space strikes.")
         self.busy = False
+
+    def _move_gripper(self, x=0.0, y=0.0, z=0.0, quat=None):
+        """Execute one small world-space manual motion without queued auto-aim."""
+        self.env.plan_success = True
+        ok = self.env.move(self.env.move_by_displacement(
+            self.arm, x=x, y=y, z=z, quat=quat, move_axis="world",
+        ))
+        if ok is False or not self.env.plan_success:
+            print("Requested gripper motion is unreachable.")
+            self.env.plan_success = True
+            return False
+        return True
+
+    def _rotate_gripper(self, yaw):
+        import transforms3d as t3d
+
+        cur_q = np.asarray(self.env.get_arm_pose(str(self.arm))[3:], dtype=float)
+        turn = t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], float(yaw))
+        # Premultiplication applies the turn around the fixed world-Z axis.
+        new_q = t3d.quaternions.qmult(turn, cur_q)
+        self._move_gripper(quat=list(new_q))
 
     def strike(self):
         if not self.ready:
             return
         self.busy = True
-        ball_xy = self.env._ball_xy(self.env.primary_ball)
-        through = ball_xy + self.env._aim_dir * self.env.STRIKE_PUSH
-        tip = self.env._tip_xyz()
-        self.env.move(self.env.move_by_displacement(
-            self.arm,
-            x=float(through[0] - tip[0]),
-            y=float(through[1] - tip[1]),
-            move_axis="world",
-        ))
+        # The user has aimed manually, so strike forward along the actual cue
+        # direction rather than moving it toward the task's automatic pocket aim.
+        cue_dir = self.env._stick_tip_dir_xy()
+        self.env._strike_armed = True
+        self.env._strike_done = False
+        self._move_gripper(
+            x=float(cue_dir[0] * self.env.STRIKE_PUSH),
+            y=float(cue_dir[1] * self.env.STRIKE_PUSH),
+        )
         self.env._dwell(20)
-        # Fallback impulse if contact did not fire.
-        if not self.env._strike_done:
-            _fire_impulse(self.env)
         self.struck = True
-        print("Robot strike complete.")
+        print("Robot strike complete." if self.env._strike_done else "Robot strike missed the ball.")
         self.busy = False
 
     def update(self, window):
@@ -310,16 +306,35 @@ class RobotCueController:
             return
         if not self.ready:
             return
-        rot = 0.0
+        step = 0.015
+        dx = dy = dz = 0.0
         if window.key_down("left"):
-            rot += 0.03
+            dx -= step
         if window.key_down("right"):
-            rot -= 0.03
+            dx += step
+        if window.key_down("up"):
+            dy += step
+        if window.key_down("down"):
+            dy -= step
+        if window.key_down("t"):
+            dz += step
+        if window.key_down("r"):
+            dz -= step
+        if dx or dy or dz:
+            self.busy = True
+            self._move_gripper(x=dx, y=dy, z=dz)
+            self.busy = False
+
+        # Clockwise is negative yaw when viewing the table from above.
+        rot = 0.0
+        if window.key_down("g"):
+            rot -= 0.08
+        if window.key_down("f"):
+            rot += 0.08
         if rot:
-            c, s = np.cos(rot), np.sin(rot)
-            ax, ay = self.env._aim_dir
-            self.env._aim_dir = np.array([c * ax - s * ay, s * ax + c * ay], dtype=float)
-            self.env._aim_dir /= max(float(np.linalg.norm(self.env._aim_dir)), 1e-6)
+            self.busy = True
+            self._rotate_gripper(rot)
+            self.busy = False
 
 
 def main():

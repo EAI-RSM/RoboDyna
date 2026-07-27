@@ -652,8 +652,8 @@ task_args:
     #     CLI: --task-arg enable_distractors=true   or   --option 2
     #   Opt 1+2 — distractors block exactly one hole; target = random open top pocket
     # Legacy: pocket_mode=top_three → Opt1; blocker_mode=path_to_top|... → Opt2
-    specific_hole: false
-    enable_distractors: false
+    specific_hole: True
+    enable_distractors: True
     num_extra_balls: 2          # used when Opt2 on; 0 → sample 1–2 per episode
     # bounce_threshold: 0.15    # PhysX min |v_rel| for restitution (default cue ~0.55 m/s)
     ball_radius: 0.012          # m; pocket diameter defaults to 1.2× ball diameter
