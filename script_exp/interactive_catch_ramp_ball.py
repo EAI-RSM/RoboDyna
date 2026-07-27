@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_ramp_ball.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_catch_ramp_ball.py --control robot
 
-Mixed keyboard + mouse: Space picks up / freezes the cup; left-click sets the
-table XY. Robot mode grasps on Space, then places at the click location.
+Keyboard mode nudges the cup with arrows and freezes it on Space.
+Robot mode: Space picks up the cup, Space again drops it in place.
 """
 
 import argparse
@@ -29,24 +29,20 @@ from _interactive_common import make_viewer_view_toggle, report_task_result, pri
 
 
 CONTROLS_KEYBOARD = """
-  Mouse left-click  set cup XY on the table
   Space             freeze/place cup at current XY
-  Arrow keys        fine nudge (optional)
   V                 toggle view: top-down ↔ head_camera
-  Escape             quit
+  Escape            quit
 ------------------------------------------------------------
-  Flow: click to aim → Space to freeze/place
+  Flow: nudge with arrows → Space to place
   Success: red ball lands in the cup (not the distractor)
 """
 
 CONTROLS_ROBOT = """
-  Mouse left-click  set cup place XY on the table
-  Space             pick up cup (grasp); place uses click
-  Arrow keys        fine nudge (optional)
+  Space             first press picks up the cup; second drops it
   V                 toggle view: top-down ↔ head_camera
-  Escape             quit
+  Escape            quit
 ------------------------------------------------------------
-  Flow: Space to pick up → click table to place
+  Flow: Space to pick up → move with arrows / E/Q → Space to drop
   Success: red ball lands in the cup (not the distractor)
   --robot-motion planner|interpolate
 """
@@ -104,7 +100,9 @@ def _set_cup_xy(env, x, y, z=None):
     if z is None:
         z = float(env.table_top + env.CUP_CENTER_Z)
     new_pose = sapien.Pose([float(x), float(y), float(z)], pose.q)
-    env.cup.set_pose(new_pose)
+    # ``create_actor`` returns an Actor wrapper; only its entity can be posed.
+    entity = getattr(env.cup, "actor", env.cup)
+    entity.set_pose(new_pose)
     rigid = env._cup_comp()
     if rigid is not None:
         try:
@@ -136,102 +134,6 @@ def _clamp_table_xy(env, x, y):
     return x, y
 
 
-def _ray_hit_table_xy(origin, direction, table_z):
-    """Intersect a world-space ray with the horizontal table plane."""
-    origin = np.asarray(origin, dtype=np.float64).reshape(3)
-    direction = np.asarray(direction, dtype=np.float64).reshape(3)
-    norm = float(np.linalg.norm(direction))
-    if norm < 1e-12:
-        return None
-    direction = direction / norm
-    if abs(direction[2]) < 1e-12:
-        return None
-    t = (float(table_z) - float(origin[2])) / float(direction[2])
-    if t < 0.0:
-        return None
-    hit = origin + t * direction
-    return float(hit[0]), float(hit[1])
-
-
-def _click_to_table_xy(viewer, pixel_x, pixel_y, table_z):
-    """Map a viewer click to XY on the table surface (``z=table_z``).
-
-    Prefer the renderer's OpenGL ``Position`` buffer (exact surface under the
-    cursor), then fall back to a model-matrix + fovy ray / table-plane hit.
-    """
-    window = viewer.window
-    px = int(pixel_x)
-    py = int(pixel_y)
-
-    # OpenGL camera → SAPIEN world (must be used after a render).
-    try:
-        model = np.asarray(window.get_camera_model_matrix(), dtype=np.float64)
-    except Exception:
-        return None
-    origin = model[:3, 3]
-    rot = model[:3, :3]
-
-    # 1) Position texture: camera-space point under the cursor (GL convention).
-    try:
-        pos = np.asarray(window.get_picture_pixel("Position", px, py), dtype=np.float64)
-        if pos.shape[0] >= 3 and np.all(np.isfinite(pos[:3])):
-            depth_ok = True
-            if pos.shape[0] >= 4:
-                depth_ok = float(pos[3]) < 0.999
-            if depth_ok and float(np.linalg.norm(pos[:3])) > 1e-6:
-                world = rot @ pos[:3] + origin
-                # Clicked the table (or something flush with it): use that XY.
-                if abs(float(world[2]) - float(table_z)) <= 0.04:
-                    return float(world[0]), float(world[1])
-                # Otherwise cast through the hit toward the table plane.
-                hit = _ray_hit_table_xy(origin, world - origin, table_z)
-                if hit is not None:
-                    return hit
-    except Exception:
-        pass
-
-    # 2) Analytic ray from fovy + model matrix (OpenGL: -Z forward, Y up).
-    try:
-        tw, th = window.get_picture_size("Color")
-    except Exception:
-        try:
-            tw, th = window.get_picture_size("Segmentation")
-        except Exception:
-            tw, th = window.size
-    if tw <= 0 or th <= 0:
-        return None
-
-    # Click handler remaps into Segmentation resolution; align to Color if needed.
-    try:
-        sw, sh = window.get_picture_size("Segmentation")
-        if sw > 0 and sh > 0 and (sw != tw or sh != th):
-            px = int(px * tw / sw)
-            py = int(py * th / sh)
-    except Exception:
-        pass
-
-    ndc_x = (float(px) + 0.5) / float(tw) * 2.0 - 1.0
-    ndc_y = 1.0 - (float(py) + 0.5) / float(th) * 2.0
-
-    if getattr(window, "camera_mode", "perspective") == "orthographic":
-        # Ortho: parallel rays; window.ortho_top is half-height in world units.
-        top = float(getattr(window, "ortho_top", 1.0))
-        aspect = float(tw) / float(th)
-        right = top * aspect
-        origin_o = origin + rot @ np.array(
-            [ndc_x * right, ndc_y * top, 0.0], dtype=np.float64
-        )
-        direction = rot @ np.array([0.0, 0.0, -1.0], dtype=np.float64)
-        return _ray_hit_table_xy(origin_o, direction, table_z)
-
-    fovy = float(window.fovy)
-    aspect = float(tw) / float(th)
-    tan_y = float(np.tan(0.5 * fovy))
-    tan_x = tan_y * aspect
-    dir_cam = np.array([ndc_x * tan_x, ndc_y * tan_y, -1.0], dtype=np.float64)
-    return _ray_hit_table_xy(origin, rot @ dir_cam, table_z)
-
-
 class EdgeKey:
     def __init__(self):
         self._prev = False
@@ -248,26 +150,20 @@ class KeyboardCupController:
         self.placed = False
         self._space = EdgeKey()
 
-    def on_table_click(self, x, y):
-        if self.placed:
-            return False
-        x, y = _clamp_table_xy(self.env, x, y)
-        _set_cup_xy(self.env, x, y)
-        print(f"Cup aimed at click ({x:.3f}, {y:.3f}). Press Space to place.")
-        return True
-
     def update(self, window):
         if not self.placed:
             dx, dy = _nudge_from_keys(window)
             if dx or dy:
                 p = np.asarray(self.env.cup.get_pose().p, dtype=float)
-                _set_cup_xy(self.env, p[0] + dx, p[1] + dy)
+                x, y = _clamp_table_xy(self.env, p[0] + dx, p[1] + dy)
+                _set_cup_xy(self.env, x, y)
         if self._space.poll(window.key_down("space")):
             p = np.asarray(self.env.cup.get_pose().p, dtype=float)
-            _set_cup_xy(self.env, p[0], p[1], self.env.table_top + self.env.CUP_CENTER_Z)
+            x, y = _clamp_table_xy(self.env, p[0], p[1])
+            _set_cup_xy(self.env, x, y, self.env.table_top + self.env.CUP_CENTER_Z)
             self.env._cup_ready = True
             self.placed = True
-            print(f"Cup placed at ({p[0]:.3f}, {p[1]:.3f}).")
+            print(f"Cup placed at ({x:.3f}, {y:.3f}).")
 
 
 class RobotCupController:
@@ -278,86 +174,52 @@ class RobotCupController:
         self.holding = False
         self.placed = False
         self.busy = False
-        self._pending_xy = None
         self._space = EdgeKey()
 
-    def _choose_arm(self, x=None):
+    def _choose_arm(self):
         selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
         if selected:
             return self.ArmTag(selected[0])
-        if x is None:
-            x, _ = _aim_xy(self.env)
+        x, _ = _aim_xy(self.env)
         return self.ArmTag("right" if float(x) > 0 else "left")
 
     def grasp(self):
         self.busy = True
-        aim_x = self._pending_xy[0] if self._pending_xy is not None else _aim_xy(self.env)[0]
-        self.arm = self._choose_arm(aim_x)
+        self.arm = self._choose_arm()
         self.env.move(self.env.grasp_actor(self.env.cup, arm_tag=self.arm, pre_grasp_dis=0.08))
         if self.env.plan_success:
             self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
             self.holding = True
-            print(f"Picked up cup with {self.arm} arm. Left-click the table to place.")
-            if self._pending_xy is not None:
-                x, y = self._pending_xy
-                self._pending_xy = None
-                self.busy = False
-                self.place_at(x, y)
-                return
+            print(f"Picked up cup with {self.arm} arm. Move, then Space to drop.")
         else:
             print("Grasp failed; planner disabled further robot actions.")
         self.busy = False
 
-    def place_at(self, x, y):
-        if self.placed:
-            return
-        if not self.holding or self.arm is None:
-            self._pending_xy = (float(x), float(y))
-            print(f"Place target ({x:.3f}, {y:.3f}) saved — press Space to pick up, then it will place.")
+    def drop(self):
+        if not self.holding or self.arm is None or self.placed:
             return
         self.busy = True
-        x, y = _clamp_table_xy(self.env, x, y)
-        cup_now = np.asarray(self.env.cup.get_pose().p, dtype=float)
-        target = np.array([x, y, self.env.table_top + self.env.CUP_CENTER_Z], dtype=float)
-        d = target - cup_now
-        self.env.move(self.env.move_by_displacement(
-            arm_tag=self.arm, x=float(d[0]), y=float(d[1]), z=float(d[2]), move_axis="world",
-        ))
         self.env.move(self.env.open_gripper(self.arm))
-        self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
+        for _ in range(8):
+            self.env._update_kinematic_tasks()
+            self.env.scene.step()
+        p = np.asarray(self.env.cup.get_pose().p, dtype=float)
+        x, y = _clamp_table_xy(self.env, p[0], p[1])
+        _set_cup_xy(self.env, x, y, self.env.table_top + self.env.CUP_CENTER_Z)
         self.env._cup_ready = True
         self.holding = False
         self.placed = True
-        print(f"Placed cup at click ({x:.3f}, {y:.3f}).")
-        self.busy = False
-
-    def on_table_click(self, x, y):
-        if self.busy or self.placed:
-            return False
-        x, y = _clamp_table_xy(self.env, x, y)
-        self.place_at(x, y)
-        return True
-
-    def nudge(self, window):
-        if self.busy or not self.holding or self.arm is None or self.placed:
-            return
-        dx, dy = _nudge_from_keys(window, step=0.02)
-        if not (dx or dy):
-            return
-        self.busy = True
-        self.env.move(self.env.move_by_displacement(
-            arm_tag=self.arm, x=dx, y=dy, move_axis="world",
-        ))
+        print(f"Dropped cup at ({x:.3f}, {y:.3f}).")
         self.busy = False
 
     def update(self, window):
-        if self.busy:
+        if self.busy or self.placed:
             return
         if self._space.poll(window.key_down("space")):
-            if not self.holding and not self.placed:
+            if not self.holding:
                 self.grasp()
-            return
-        # Universal viewer controls own arrow/E/Q motion.
+            else:
+                self.drop()
 
 
 def main():
@@ -408,16 +270,10 @@ def main():
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
 
-    def _handle_table_click(viewer_, pixel_x, pixel_y):
-        table_z = float(env.table_top)
-        xy = _click_to_table_xy(viewer_, pixel_x, pixel_y, table_z)
-        if xy is None:
-            print("Click did not hit the table plane.")
-            return False
-        return bool(controller.on_table_click(xy[0], xy[1]))
-
-    viewer.register_click_handler(_handle_table_click)
-    print("Left-click the table to set the cup location; Space picks up / places.")
+    if args.control == "robot":
+        print("Space picks up the cup; Space again drops it.")
+    else:
+        print("Arrows nudge the cup; Space places it.")
 
     settle_after = None
     try:
