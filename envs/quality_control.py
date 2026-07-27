@@ -315,6 +315,12 @@ class quality_control(Base_Task):
         self.black_press = False      # pressed a key on a black tile
         self.black_press_count = 0
         self._stamp_active = False
+        # The autonomous policy explicitly owns its stop windows. Interactive
+        # launchers opt into this step-driven equivalent.
+        self._interactive_tile_pause = False
+        self._interactive_pause_tile = None
+        self._interactive_pause_steps = 0
+        self._interactive_pause_released = None
         self.n_correct = 0
 
         self._tile_init_poses = [t.get_pose() for t in self.tiles]
@@ -439,7 +445,24 @@ class quality_control(Base_Task):
                 pass
 
     # ----------------------------------------------------- step-driven dynamics
+    def enable_interactive_tile_pause(self):
+        """Use the task's physics-step pause window for interactive control."""
+        self._interactive_tile_pause = True
+        self._interactive_pause_tile = None
+        self._interactive_pause_steps = 0
+        self._interactive_pause_released = None
+
     def _advance_belt(self):
+        if self._interactive_tile_pause:
+            paused_tile = self._interactive_pause_tile
+            if paused_tile is not None:
+                self._interactive_pause_steps += 1
+                if self._interactive_pause_steps < self.tile_pause_steps:
+                    return
+                self._interactive_pause_tile = None
+                self._interactive_pause_steps = 0
+                self._interactive_pause_released = paused_tile
+
         for i, t in enumerate(self.tiles):
             if self.tile_hidden[i]:
                 continue
@@ -450,6 +473,21 @@ class quality_control(Base_Task):
                 self._hide_tile(i)
                 continue
             t.actor.set_pose(sapien.Pose([p.p[0], ny, self._tile_ride_z], p.q))
+
+        if self._interactive_tile_pause:
+            under = self._tile_under_stamp(require_unhandled=True)
+            if under is None:
+                self._interactive_pause_released = None
+            elif under != self._interactive_pause_released:
+                # A tile enters the capture band on a discrete belt step. Snap
+                # its center onto the stamp before beginning the dwell so every
+                # interactive stop has the same, gap-free alignment.
+                pose = self.tiles[under].get_pose()
+                self.tiles[under].actor.set_pose(sapien.Pose(
+                    [self.stamp_x, self.stamp_y, self._tile_ride_z], pose.q
+                ))
+                self._interactive_pause_tile = under
+                self._interactive_pause_steps = 0
 
     def _tile_under_stamp(self, require_unhandled=True):
         sx, sy = self.stamp_x, self.stamp_y
