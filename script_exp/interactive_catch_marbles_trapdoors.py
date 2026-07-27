@@ -632,6 +632,8 @@ def main():
             env.scene.step()
             env.scene.update_render()
             viewer.render()
+            if viewer.window.key_down("escape"):
+                break
             mode = str(getattr(env, "_ball_mode", "track"))
             if mode != "track":
                 if left_track_since is None:

@@ -322,6 +322,8 @@ def main():
             env.scene.step()
             env.scene.update_render()
             viewer.render()
+            if viewer.window.key_down("escape"):
+                break
             mode = str(getattr(env, "_ball_mode", ""))
             if mode in ("done", "missed") and int(getattr(env, "active_shelf_idx", 0)) < 0:
                 report_task_result(env, f"ball_mode={mode}")

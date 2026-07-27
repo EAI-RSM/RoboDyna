@@ -430,6 +430,8 @@ def main():
             env.scene.step()
             env.scene.update_render()
             viewer.render()
+            if viewer.window.key_down("escape"):
+                break
             done, detail = _episode_done(env)
             if done:
                 report_task_result(env, detail)

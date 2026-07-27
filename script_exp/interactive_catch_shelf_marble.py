@@ -187,6 +187,8 @@ def main():
             env.scene.step()
             env.scene.update_render()
             viewer.render()
+            if viewer.window.key_down("escape"):
+                break
             if getattr(env, "_marble_state", None) == "landed":
                 if getattr(env, "_marble_result", None) is None:
                     env._resolve_marble()

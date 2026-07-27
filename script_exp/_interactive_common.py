@@ -408,6 +408,10 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
             env.scene.step()
             env.scene.update_render()
             viewer.render()
+            # SAPIEN does not close its window on Escape consistently, so make
+            # it an explicit launcher-level exit for every shared task loop.
+            if viewer.window.key_down("escape"):
+                break
             step += 1
             if is_done is not None:
                 result = is_done(step)
@@ -433,7 +437,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
 
 
 # ---------------------------------------------------------------------------
-# Shared robot key/button press (same routine as interactive_sort_apples)
+# Shared robot key/button press (same routine as interactive_sort_apples_belt)
 # ---------------------------------------------------------------------------
 
 
@@ -474,7 +478,7 @@ def default_arms_for_mode(mode):
 class RobotButtonController:
     """Hold-to-actuate (or tap) key press: grasp → TCP-limited press → latch → clear lift.
 
-    Matches ``interactive_sort_apples.RobotButtonController``. Task scripts supply
+    Matches ``interactive_sort_apples_belt.RobotButtonController``. Task scripts supply
     actor / top-z / latch adapters so the motion routine stays shared.
     """
 

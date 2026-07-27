@@ -550,6 +550,8 @@ def main():
             env.scene.step()
             env.scene.update_render()
             viewer.render()
+            if viewer.window.key_down("escape"):
+                break
             doneness = [round(float(st["doneness"]), 2) for st in env.stations]
             target_range = env.target_doneness_range
             status = (
