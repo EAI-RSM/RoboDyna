@@ -37,7 +37,7 @@ CONTROLS_KEYBOARD = """
   Right Arrow    stamp GREEN (right arm)
   Skip BLACK tiles — do not press while they are under the stamp
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Each press smoothly moves the matching arm: hover → press → lift.
 """
@@ -47,7 +47,7 @@ CONTROLS_ROBOT = """
   Right Arrow    stamp GREEN (right arm)
   Skip BLACK tiles — do not press while they are under the stamp
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Arrows physically tap the matching colored key.
 """
@@ -333,7 +333,7 @@ def main():
             env.scene.update_render()
             viewer.render()
 
-            if viewer.window.key_down("q") or viewer.window.key_down("escape"):
+            if viewer.window.key_down("escape"):
                 break
 
             if _episode_done(env):

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,6 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
-    arrow_nudge_xy,
     bootstrap_repo,
     configure_task,
     edge_pressed,
@@ -56,6 +56,14 @@ def _prepare_keyboard_hold(env):
     env._interactive_released = False
 
 
+def _nudge_from_keys(window, xy_step=0.022, z_step=0.016):
+    """Map arrows to world XY and T/R to vertical hold movement."""
+    dx = xy_step * (window.key_down("right") - window.key_down("left"))
+    dy = xy_step * (window.key_down("up") - window.key_down("down"))
+    dz = z_step * (window.key_down("t") - window.key_down("r"))
+    return float(dx), float(dy), float(dz)
+
+
 def _prepare_robot_hold(env):
     from envs.utils.action import ArmTag
 
@@ -80,6 +88,69 @@ def _prepare_robot_hold(env):
     env._interactive_holding = True
     env._interactive_released = False
     env.ball_released = False
+
+
+class RobotHoldMotion:
+    """Move a held ball without blocking the viewer on every nudge."""
+
+    DURATION = 0.06
+
+    def __init__(self, env, arm_tag, motion):
+        self.env = env
+        self.arm_tag = arm_tag
+        self.motion = motion
+        self.side = str(arm_tag)
+        self._start = None
+        self._target = None
+        self._started_at = None
+
+    def _drive_qpos(self):
+        joints = self.env.robot.left_arm_joints if self.side == "left" else self.env.robot.right_arm_joints
+        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
+
+    def _ee_pose(self):
+        get_pose = self.env.robot.get_left_ee_pose if self.side == "left" else self.env.robot.get_right_ee_pose
+        return np.asarray(get_pose(), dtype=np.float64)
+
+    def _plan_target(self, dx, dy, dz):
+        pose = self._ee_pose().copy()
+        pose[:3] += np.array([dx, dy, dz], dtype=np.float64)
+        planner = self.env.robot.left_plan_path if self.side == "left" else self.env.robot.right_plan_path
+        result = planner(pose, last_qpos=np.asarray(self._drive_qpos(), dtype=np.float32))
+        if result is None or result.get("status") != "Success":
+            return None
+        return np.asarray(result["position"][-1], dtype=np.float64)
+
+    def nudge(self, dx, dy, dz):
+        if self.motion == "planner":
+            self.env.move(self.env.move_by_displacement(
+                arm_tag=self.arm_tag, x=dx, y=dy, z=dz, move_axis="world",
+            ))
+            return
+        # Do not restart an in-flight curve every simulation frame. Holding a
+        # key schedules a sequence of complete, visibly smooth short moves.
+        if self._started_at is not None:
+            return
+        target = self._plan_target(dx, dy, dz)
+        if target is None:
+            return
+        self._start = self._drive_qpos()
+        self._target = target
+        self._started_at = time.perf_counter()
+
+    def update(self):
+        if self._started_at is None:
+            return
+        progress = min(1.0, (time.perf_counter() - self._started_at) / self.DURATION)
+        smooth = progress * progress * (3.0 - 2.0 * progress)
+        position = self._start + (self._target - self._start) * smooth
+        velocity = (
+            (self._target - self._start) / self.DURATION
+            if progress < 1.0 else np.zeros_like(self._target)
+        )
+        self.env.robot.set_arm_joints(position, velocity, self.side)
+        if progress >= 1.0:
+            self._started_at = None
 
 
 def _do_release(env, use_robot: bool):
@@ -114,6 +185,10 @@ def main():
     env.setup_demo(**configure_task(
         "rotating_shape_sorter", args.config, args.seed, use_robot=use_robot,
     ))
+    # Space performs the initial pickup, so the idle state must exist before
+    # the viewer loop evaluates release/hold conditions.
+    env._interactive_holding = False
+    env._interactive_released = False
 
     print_banner(
         "rotating_shape_sorter — interactive controls",
@@ -121,52 +196,52 @@ def main():
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: drop the ball through the rotating corner hole into the box.",
-            "Space  — open gripper / release when the hole is under the ball",
-            "Arrows — nudge hold XY",
+            "Space  — pick up the ball; press again to release",
+            "Arrows — move the held ball in XY",
+            "T / R — move the held ball up / down",
             "V — toggle view: top-down ↔ head_camera",
-            "Q / Esc — close the viewer window to quit",
+            "Esc — close the viewer window to quit",
             "Watch the spinning platform; release only when the hole passes under.",
             "--robot-motion planner|interpolate",
         ],
     )
-    if args.robot_motion == "interpolate":
-        print(
-            "Note: --robot-motion interpolate uses planner motions for this teleop task "
-            "(key-press sandboxes use joint interpolation)."
-        )
-
-    if use_robot:
-        print("Robot: grasping and moving to the release station…")
-        _prepare_robot_hold(env)
-        print("Holding over the station. Press Space when the hole aligns.")
-    else:
-        _prepare_keyboard_hold(env)
-        print("Ball pinned over the station. Nudge with arrows; Space to release.")
+    print("Press Space to pick up the ball, then position it over the moving hole.")
 
     keys_prev: dict = {}
     post_release = 0
+    hold_motion = None
 
     def on_step(window, step):
-        nonlocal post_release
-        if edge_pressed(window, "space", keys_prev) and not env._interactive_released:
-            _do_release(env, use_robot)
-        nudge = arrow_nudge_xy(window, step=0.002)
-        if float(np.linalg.norm(nudge)) > 0 and env._interactive_holding and not env._interactive_released:
-            if use_robot and getattr(env, "_interactive_arm", None) is not None:
-                if step % 8 == 0:
-                    env.move(env.move_by_displacement(
-                        arm_tag=env._interactive_arm,
-                        x=float(nudge[0]) * 4,
-                        y=float(nudge[1]) * 4,
-                    ))
-                    env._move_ball_to_height(arm_tag=env._interactive_arm, target_z=_release_z(env))
+        nonlocal post_release, hold_motion
+        if edge_pressed(window, "space", keys_prev):
+            if not getattr(env, "_interactive_holding", False):
+                if use_robot:
+                    print("Robot: picking up the ball…")
+                    _prepare_robot_hold(env)
+                    hold_motion = RobotHoldMotion(env, env._interactive_arm, args.robot_motion)
+                else:
+                    _prepare_keyboard_hold(env)
+                print("Holding ball. Use arrows/T/R to position it; Space releases.")
+            elif not env._interactive_released:
+                _do_release(env, use_robot)
+
+        dx, dy, dz = _nudge_from_keys(window)
+        if (dx or dy or dz) and getattr(env, "_interactive_holding", False) and not env._interactive_released:
+            if use_robot and hold_motion is not None:
+                # Planner mode executes robust Cartesian moves; interpolate mode
+                # retargets a smooth joint trajectory without blocking rendering.
+                if args.robot_motion == "interpolate" or step % 20 == 0:
+                    hold_motion.nudge(dx, dy, dz)
             else:
-                env._interactive_hold_xy = env._interactive_hold_xy + nudge
+                env._interactive_hold_xy = env._interactive_hold_xy + np.array([dx, dy])
+                env._interactive_hold_z += dz
                 hold_dynamic_at(
                     env._ball_rigid, env.ball,
                     [env._interactive_hold_xy[0], env._interactive_hold_xy[1], env._interactive_hold_z],
                 )
-        elif env._interactive_holding and not env._interactive_released and not use_robot:
+        if hold_motion is not None:
+            hold_motion.update()
+        if getattr(env, "_interactive_holding", False) and not env._interactive_released and not use_robot:
             hold_dynamic_at(
                 env._ball_rigid, env.ball,
                 [env._interactive_hold_xy[0], env._interactive_hold_xy[1], env._interactive_hold_z],

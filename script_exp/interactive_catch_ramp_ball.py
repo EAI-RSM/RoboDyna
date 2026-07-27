@@ -33,7 +33,7 @@ CONTROLS_KEYBOARD = """
   Space             freeze/place cup at current XY
   Arrow keys        fine nudge (optional)
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Flow: click to aim → Space to freeze/place
   Success: red ball lands in the cup (not the distractor)
@@ -44,7 +44,7 @@ CONTROLS_ROBOT = """
   Space             pick up cup (grasp); place uses click
   Arrow keys        fine nudge (optional)
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Flow: Space to pick up → click table to place
   Success: red ball lands in the cup (not the distractor)
@@ -425,7 +425,7 @@ def main():
             env.scene.update_render()
             viewer.render()
 
-            if viewer.window.key_down("q") or viewer.window.key_down("escape"):
+            if viewer.window.key_down("escape"):
                 break
 
             if getattr(env, "_ball_phase", None) == "released":

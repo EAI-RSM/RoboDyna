@@ -35,7 +35,7 @@ CONTROLS_KEYBOARD = """
   Up / Down         slide tip along aim (approach / retreat)
   Space             fire strike impulse along aim
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Success: red ball in an allowed pocket; no distractor sink
 """
@@ -47,7 +47,7 @@ CONTROLS_ROBOT = """
   G / F             rotate gripper clockwise / counter-clockwise
   Space             pick up cue, then strike in the cue's current direction
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Success: red ball in an allowed pocket; no distractor sink
   --robot-motion planner|interpolate
@@ -396,7 +396,7 @@ def main():
             env.scene.update_render()
             viewer.render()
 
-            if viewer.window.key_down("q") or viewer.window.key_down("escape"):
+            if viewer.window.key_down("escape"):
                 break
 
             if getattr(controller, "struck", False) or env._strike_done or env._primary_pocketed:

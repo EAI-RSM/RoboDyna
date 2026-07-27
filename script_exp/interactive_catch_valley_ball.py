@@ -33,7 +33,7 @@ CONTROLS_KEYBOARD = """
   Space             freeze/place catcher at current XY
   Arrow keys        fine nudge (optional)
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Flow: click to aim → Space to freeze/place
   Place snaps past the red line (success requires that).
@@ -45,7 +45,7 @@ CONTROLS_ROBOT = """
   Space             pick up catcher (grasp); place uses click
   Arrow keys        fine nudge (optional)
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Flow: Space to pick up → click table to place
   Place snaps past the red line (success requires that).
@@ -442,7 +442,7 @@ def main():
             env.scene.update_render()
             viewer.render()
 
-            if viewer.window.key_down("q") or viewer.window.key_down("escape"):
+            if viewer.window.key_down("escape"):
                 break
 
             if getattr(env, "_ball_phase", None) == "released":

@@ -36,7 +36,7 @@ CONTROLS_KEYBOARD = """
   [ / ]             lower / raise bat height
   T                 snap bat to predicted intercept
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Flow: click to aim → Space to arm / hold
   Success: red ball hits the red circular bat head before
@@ -50,7 +50,7 @@ CONTROLS_ROBOT = """
   [ / ]             lower / raise bat height
   T                 snap bat to predicted intercept
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Flow: Space to pick up → click mid-air to hold
   Success: red ball hits the red circular bat head before
@@ -506,7 +506,7 @@ def main():
             env.scene.update_render()
             viewer.render()
 
-            if viewer.window.key_down("q") or viewer.window.key_down("escape"):
+            if viewer.window.key_down("escape"):
                 break
 
             if getattr(env, "_ball_phase", None) == "released":

@@ -39,7 +39,7 @@ CONTROLS_KEYBOARD = """
   Up Arrow          punch BOTH belts
   Press when a card is under the stamp head
   V                 toggle view: front ↔ top-down
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Punches via direct _fire_punch (no arm motion).
 """
@@ -50,7 +50,7 @@ CONTROLS_ROBOT = """
   Up Arrow          punch BOTH belts
   Press when a card is under the stamp head
   V                 toggle view: front ↔ top-down
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Arms tap the side buttons, then fire punch.
   --robot-motion planner|interpolate
@@ -387,7 +387,7 @@ def main():
             env.scene.update_render()
             viewer.render()
 
-            if viewer.window.key_down("q") or viewer.window.key_down("escape"):
+            if viewer.window.key_down("escape"):
                 break
 
             if _all_pages_resolved(env):

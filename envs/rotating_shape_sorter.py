@@ -45,6 +45,9 @@ class rotating_shape_sorter(Base_Task):
     RELEASE_OPEN_STEPS_DEFAULT = 200
     HOLE_DROP_INSET_DEFAULT = 0.006
     HOLE_XY_JITTER_DEFAULT = 0.012        # m; ±x/±y randomization for target & dummy hole centers
+    CONTAINER_SHAPE_DEFAULT = "cubic"     # cubic | cylinder
+    CYLINDER_HOLE_INSET_DEFAULT = 0.025   # keep circular hole visibly inside the plate rim
+    CYLINDER_HOLE_EDGE_CLEARANCE_DEFAULT = 0.008
     FORCE_PLATFORM_MISS_DEFAULT = False   # demo/eval: drop onto solid / dummy (failure demo)
     # ----- feature toggles (independent; both may be true) -----
     STICK_TO_SURFACE_DEFAULT = False      # Opt1: latch misses onto the platform
@@ -147,6 +150,13 @@ class rotating_shape_sorter(Base_Task):
     # ----------------------------------------------------------------- actors
     def load_actors(self):
         cfg = self._cfg
+        self.container_shape = str(
+            cfg.get("container_shape", self.CONTAINER_SHAPE_DEFAULT)
+        ).strip().lower()
+        if self.container_shape == "square":
+            self.container_shape = "cubic"
+        if self.container_shape not in ("cubic", "cylinder"):
+            self.container_shape = self.CONTAINER_SHAPE_DEFAULT
         self.spin_speed = float(cfg.get("spin_speed", self.SPIN_SPEED_DEFAULT))
         # Relative range around spin_speed, or absolute [spin_speed_min, spin_speed_max] if both set.
         self.spin_speed_jitter = float(cfg.get("spin_speed_jitter", self.SPIN_SPEED_JITTER_DEFAULT))
@@ -185,6 +195,16 @@ class rotating_shape_sorter(Base_Task):
         self.release_open_steps = int(cfg.get("release_open_steps", self.RELEASE_OPEN_STEPS_DEFAULT))
         self.hole_drop_inset = float(cfg.get("hole_drop_inset", self.HOLE_DROP_INSET_DEFAULT))
         self.hole_xy_jitter = float(cfg.get("hole_xy_jitter", self.HOLE_XY_JITTER_DEFAULT))
+        self.cylinder_hole_inset = float(max(
+            0.0, cfg.get("cylinder_hole_inset", self.CYLINDER_HOLE_INSET_DEFAULT)
+        ))
+        self.cylinder_hole_edge_clearance = float(max(
+            0.0,
+            cfg.get(
+                "cylinder_hole_edge_clearance",
+                self.CYLINDER_HOLE_EDGE_CLEARANCE_DEFAULT,
+            ),
+        ))
         self._parse_surface_features()
 
         # Randomized spin direction and speed sampled from a range each episode.
@@ -202,7 +222,7 @@ class rotating_shape_sorter(Base_Task):
         z0 = 0.74 + self.table_z_bias
         self.table_top_z = z0
 
-        # ---- bucket: a wide, SHALLOW open-top tray at table center-mid ----
+        # ---- bucket: a wide, shallow open-top tray at table center-mid ----
         # Wide so each arm's drop spot stays over the cavity; shallow (low walls) so the tall walls
         # don't block the arm reaching over the centre (the deep-bucket version was unplannable).
         self.bucket_center = np.array([0.0, -0.02])     # x, y at center-mid
@@ -211,24 +231,51 @@ class rotating_shape_sorter(Base_Task):
         wall_t = 0.010
         floor_z = z0
         bc = self.bucket_center
-        # floor
-        self.bucket_floor = create_box(
-            scene=self, pose=sapien.Pose([bc[0], bc[1], floor_z + 0.006], [1, 0, 0, 0]),
-            half_size=(self.bucket_half + wall_t, self.bucket_half + wall_t, 0.006),
-            color=(0.55, 0.4, 0.25), name="bucket_floor", is_static=True,
-        )
+        self.bucket_radius = self.bucket_half
+        # A round tray uses a polygonal static wall so its interior is hollow.
+        if self.container_shape == "cylinder":
+            self.bucket_floor = create_cylinder(
+                scene=self,
+                pose=sapien.Pose([bc[0], bc[1], floor_z + 0.006], [1, 0, 0, 0]),
+                radius=self.bucket_radius + wall_t,
+                half_length=0.006,
+                color=(0.55, 0.4, 0.25), name="cylinder_bucket_floor",
+            )
+            floor_rigid = self._get_rigid(self.bucket_floor)
+            if floor_rigid is not None:
+                floor_rigid.set_kinematic(True)
+        else:
+            self.bucket_floor = create_box(
+                scene=self, pose=sapien.Pose([bc[0], bc[1], floor_z + 0.006], [1, 0, 0, 0]),
+                half_size=(self.bucket_half + wall_t, self.bucket_half + wall_t, 0.006),
+                color=(0.55, 0.4, 0.25), name="bucket_floor", is_static=True,
+            )
         self.bucket_floor_z = floor_z + 0.012
         cz = floor_z + 0.012 + self.bucket_h / 2.0
-        walls = [
-            ((bc[0], bc[1] + self.bucket_half + wall_t / 2), (self.bucket_half + wall_t, wall_t / 2)),
-            ((bc[0], bc[1] - self.bucket_half - wall_t / 2), (self.bucket_half + wall_t, wall_t / 2)),
-            ((bc[0] + self.bucket_half + wall_t / 2, bc[1]), (wall_t / 2, self.bucket_half + wall_t)),
-            ((bc[0] - self.bucket_half - wall_t / 2, bc[1]), (wall_t / 2, self.bucket_half + wall_t)),
-        ]
         self.bucket_walls = []
-        for i, ((wx, wy), (hx, hy)) in enumerate(walls):
+        walls = []
+        if self.container_shape == "cylinder":
+            segments = 32
+            ring_r = self.bucket_radius + wall_t / 2
+            segment_length = 2.0 * np.pi * ring_r / segments + 0.004
+            for i in range(segments):
+                angle = 2.0 * np.pi * i / segments
+                walls.append(((
+                    bc[0] + ring_r * np.cos(angle),
+                    bc[1] + ring_r * np.sin(angle),
+                ), (wall_t / 2, segment_length / 2, angle)))
+        else:
+            walls = [
+                ((bc[0], bc[1] + self.bucket_half + wall_t / 2), (self.bucket_half + wall_t, wall_t / 2, 0.0)),
+                ((bc[0], bc[1] - self.bucket_half - wall_t / 2), (self.bucket_half + wall_t, wall_t / 2, 0.0)),
+                ((bc[0] + self.bucket_half + wall_t / 2, bc[1]), (wall_t / 2, self.bucket_half + wall_t, 0.0)),
+                ((bc[0] - self.bucket_half - wall_t / 2, bc[1]), (wall_t / 2, self.bucket_half + wall_t, 0.0)),
+            ]
+        for i, ((wx, wy), (hx, hy, yaw)) in enumerate(walls):
             w = create_box(
-                scene=self, pose=sapien.Pose([wx, wy, cz], [1, 0, 0, 0]),
+                scene=self, pose=sapien.Pose(
+                    [wx, wy, cz], t3d.quaternions.axangle2quat([0, 0, 1], yaw)
+                ),
                 half_size=(hx, hy, self.bucket_h / 2.0),
                 color=(0.6, 0.45, 0.3), name=f"bucket_wall{i}", is_static=True,
             )
@@ -246,7 +293,7 @@ class rotating_shape_sorter(Base_Task):
         side_sign = -1.0 if self.ball_side == "left" else 1.0
         # Spawn the ball outside the rotating cap footprint, not just outside the box wall,
         # so the grasp approach stays clear of the platform edge. Small ±x/±y jitter.
-        platform_outer_half = self.bucket_half + 0.012
+        platform_outer_half = self.bucket_radius + 0.012
         ball_x = float(
             bc[0]
             + side_sign * (platform_outer_half + self.ball_radius + self.ball_side_clearance)
@@ -263,18 +310,20 @@ class rotating_shape_sorter(Base_Task):
         self.cap_z = floor_z + 0.012 + self.bucket_h + 0.015
         self.cap_center = np.array([bc[0], bc[1], self.cap_z])
 
-        # ---- rotating cap: a square collidable platform with a real circular corner hole ----
+        # ---- rotating cap: square or circular collidable platform with a real hole ----
         self.cap_half_extent = self.bucket_half + 0.012
+        self.cap_radius = self.bucket_radius + 0.012
         self.cap_hole_radius = float(np.clip(
             self.cap_hole_radius,
             0.02,
-            self.cap_half_extent - 0.02,
+            (self.cap_radius if self.container_shape == "cylinder" else self.cap_half_extent) - 0.02,
         ))
         self.cap_hole_diameter = 2.0 * self.cap_hole_radius
         self.cap_hole_corner_margin = float(np.clip(
             self.cap_hole_corner_margin,
             0.004,
-            self.cap_half_extent - self.cap_hole_radius - 0.002,
+            (self.cap_radius if self.container_shape == "cylinder" else self.cap_half_extent)
+            - self.cap_hole_radius - 0.002,
         ))
         self.cap_thickness = 0.006
         self._cap_base_q = np.array([1.0, 0.0, 0.0, 0.0])
@@ -290,7 +339,8 @@ class rotating_shape_sorter(Base_Task):
         self._dummy_hole_local_xy = None
         self.dummy_hole_radius = 0.0
         if self.add_dummy_hole:
-            max_fit = self.cap_half_extent - self.cap_hole_corner_margin - 0.002
+            outer = self.cap_radius if self.container_shape == "cylinder" else self.cap_half_extent
+            max_fit = outer - self.cap_hole_corner_margin - 0.002
             # Keep hole radius < ball radius (diameter < ball diameter) but nearly as large.
             max_r = min(self.ball_radius * 0.98, max_fit)
             if self.dummy_hole_radius_cfg is not None:
@@ -348,6 +398,24 @@ class rotating_shape_sorter(Base_Task):
     # ----------------------------------------------------- rotating-cap state
     def _randomized_hole_local_xy(self, radius, corner_sign):
         """Corner-biased hole center with slight ±x/±y jitter, clamped on-platform."""
+        if self.container_shape == "cylinder":
+            # Each opening samples an independent position near the rim, but
+            # its full disk always remains inside the circular platform.
+            min_orbit = radius + 0.012
+            max_orbit = (
+                self.cap_radius - radius - self.cap_hole_corner_margin
+                - self.cylinder_hole_inset - self.cylinder_hole_edge_clearance
+            )
+            max_orbit = max(min_orbit, max_orbit)
+            orbit = max_orbit
+            # The real hole uses (+,+); the dummy uses (-,-). Preserve that
+            # opposite-side relationship for the circular plate rather than
+            # mapping both same-sign corners onto the same orbit angle.
+            angle = np.pi / 4.0 if corner_sign[0] > 0 else -3.0 * np.pi / 4.0
+            angle += float(np.random.uniform(-0.16, 0.16))
+            radial_jitter = float(np.random.uniform(-self.hole_xy_jitter, self.hole_xy_jitter))
+            orbit = float(np.clip(orbit + radial_jitter, min_orbit, max_orbit))
+            return orbit * np.array([np.cos(angle), np.sin(angle)], dtype=np.float64)
         sx = 1.0 if float(corner_sign[0]) >= 0.0 else -1.0
         sy = 1.0 if float(corner_sign[1]) >= 0.0 else -1.0
         # Nominal corner placement (same as the previous fixed layout).
@@ -490,6 +558,8 @@ class rotating_shape_sorter(Base_Task):
         return self._subtract_intervals((-self.cap_half_extent, self.cap_half_extent), gaps)
 
     def _build_cap(self):
+        if self.container_shape == "cylinder":
+            return self._build_circular_cap()
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("dynamic")
 
@@ -498,7 +568,7 @@ class rotating_shape_sorter(Base_Task):
         band_h = cap_span / hole_bands
         holes = self._cap_holes()
         physical_material = self.scene.default_physical_material
-        visual_material = sapien.render.RenderMaterial(base_color=[0.30, 0.30, 0.34, 1.0])
+        visual_material = sapien.render.RenderMaterial(base_color=[0.45, 0.85, 0.50, 1.0])
 
         for band_idx in range(hole_bands):
             y0 = -self.cap_half_extent + band_idx * band_h
@@ -516,6 +586,41 @@ class rotating_shape_sorter(Base_Task):
 
         builder.set_initial_pose(sapien.Pose(self.cap_center.tolist(), [1, 0, 0, 0]))
         return builder.build(name="sorter_cap")
+
+    def _build_circular_cap(self):
+        """Approximate a circular rotating plate with box sectors and true gaps."""
+        builder = self.scene.create_actor_builder()
+        builder.set_physx_body_type("dynamic")
+        physical_material = self.scene.default_physical_material
+        visual_material = sapien.render.RenderMaterial(base_color=[0.45, 0.85, 0.50, 1.0])
+        # Fine cells make both the outer rim and the cutout read as circles;
+        # the previous coarse grid left the opening visibly polygonal.
+        radial_bands, angular_bands = 24, 144
+        dr = self.cap_radius / radial_bands
+        holes = self._cap_holes()
+        for radial_idx in range(radial_bands):
+            r0, r1 = radial_idx * dr, (radial_idx + 1) * dr
+            rmid = 0.5 * (r0 + r1)
+            tangential = max(0.004, rmid * 2.0 * np.pi / angular_bands)
+            for angular_idx in range(angular_bands):
+                angle = 2.0 * np.pi * (angular_idx + 0.5) / angular_bands
+                center = np.array([rmid * np.cos(angle), rmid * np.sin(angle)])
+                # Skip any cell intersecting the analytic circular cutout.
+                # With the dense grid this produces a visually round, fully
+                # open hole while retaining box-based collision primitives.
+                cell_radius = 0.5 * np.hypot(dr, tangential)
+                if any(np.linalg.norm(center - np.array([cx, cy])) <= radius + cell_radius
+                       for cx, cy, radius in holes):
+                    continue
+                pose = sapien.Pose(
+                    [float(center[0]), float(center[1]), 0.0],
+                    t3d.quaternions.axangle2quat([0, 0, 1], angle),
+                )
+                half_size = [0.5 * dr, 0.5 * tangential, self.cap_thickness]
+                builder.add_box_collision(pose=pose, half_size=half_size, material=physical_material)
+                builder.add_box_visual(pose=pose, half_size=half_size, material=visual_material)
+        builder.set_initial_pose(sapien.Pose(self.cap_center.tolist(), [1, 0, 0, 0]))
+        return builder.build(name="cylinder_sorter_cap")
 
     def _place_cap(self, angle):
         """Pose the rotating square platform with its corner pass-through hole."""
@@ -589,10 +694,10 @@ class rotating_shape_sorter(Base_Task):
             return False
         local_xy = self._world_to_cap_local_xy(p[:2])
         margin = self.ball_radius * 0.35
-        return bool(
-            abs(local_xy[0]) <= (self.cap_half_extent + margin)
-            and abs(local_xy[1]) <= (self.cap_half_extent + margin)
-        )
+        if self.container_shape == "cylinder":
+            return bool(np.linalg.norm(local_xy) <= self.cap_radius + margin)
+        return bool(abs(local_xy[0]) <= (self.cap_half_extent + margin)
+                    and abs(local_xy[1]) <= (self.cap_half_extent + margin))
 
     def _ball_linear_speed(self):
         rigid = getattr(self, "_ball_rigid", None)
@@ -745,8 +850,12 @@ class rotating_shape_sorter(Base_Task):
         if getattr(self, "ball_stuck_on_platform", False):
             return False
         p = np.array(self.ball.get_pose().p, dtype=np.float64)
-        in_x = abs(p[0] - self.bucket_center[0]) <= (self.bucket_half - 0.15 * self.ball_radius)
-        in_y = abs(p[1] - self.bucket_center[1]) <= (self.bucket_half - 0.15 * self.ball_radius)
+        if self.container_shape == "cylinder":
+            in_x = np.linalg.norm(p[:2] - self.bucket_center) <= (self.bucket_radius - 0.15 * self.ball_radius)
+            in_y = True
+        else:
+            in_x = abs(p[0] - self.bucket_center[0]) <= (self.bucket_half - 0.15 * self.ball_radius)
+            in_y = abs(p[1] - self.bucket_center[1]) <= (self.bucket_half - 0.15 * self.ball_radius)
         above_floor = p[2] >= (self.bucket_floor_z + 0.2 * self.ball_radius)
         below_platform = p[2] <= (self.cap_z - self.cap_thickness - 0.01)
         return bool(in_x and in_y and above_floor and below_platform)

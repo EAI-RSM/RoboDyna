@@ -416,7 +416,7 @@ def main():
         viewer.window.hide()
         if robot_controller is not None:
             restore_composite_motion_renderer = _attach_composite_motion_renderer(viewer, composite_view)
-        print("Composite view ready at 20 FPS. Press Left/Right Arrow for one side or Down Arrow for both; press again to release; V toggles view; Q/Escape to quit cleanly; X to force-quit.")
+        print("Composite view ready at 20 FPS. Press Left/Right Arrow for one side or Down Arrow for both; press again to release; V toggles view; Escape to quit cleanly; X to force-quit.")
     second_viewer = None
     restore_second_view = lambda: None
     if args.two_views:
@@ -432,7 +432,7 @@ def main():
                 "  Left / Right / Down Arrow — hold to press left / right / both buttons (plank stays diverted while held)\n"
                 "  release    — lift and return plank to rest\n"
                 "  V          — toggle top-down / head_camera\n"
-                "  Q/Esc      — quit; X — force-quit\n"
+                "  Esc        — quit; X — force-quit\n"
                 "  --robot-motion planner|interpolate"
             )
         else:
@@ -442,7 +442,7 @@ def main():
                 "  Down Arrow          — hold both buttons (dump hatch when rotten mode is on)\n"
                 "  release key         — lift arm(s); plank returns to rest\n"
                 "  V                   — toggle top-down / head_camera\n"
-                "  Q/Esc               — quit\n"
+                "  Esc                 — quit\n"
                 "  --robot-motion planner|interpolate"
             )
     else:

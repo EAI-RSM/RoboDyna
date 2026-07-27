@@ -32,7 +32,7 @@ CONTROLS_KEYBOARD = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
   Space             deploy / freeze keeper in place
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Success: keeper in green zone, front-face save, grippers open
   Place BEFORE the ball crosses the red line
@@ -42,7 +42,7 @@ CONTROLS_ROBOT = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
   Space             grasp, then release
   V                 toggle view: top-down ↔ head_camera
-  Q / Escape         quit
+  Escape             quit
 ------------------------------------------------------------
   Success: keeper in green zone, front-face save, grippers open
   Place BEFORE the ball crosses the red line
@@ -320,7 +320,7 @@ def main():
             env.scene.update_render()
             viewer.render()
 
-            if viewer.window.key_down("q") or viewer.window.key_down("escape"):
+            if viewer.window.key_down("escape"):
                 break
 
             shot_done = (not getattr(env, "_ball_motion_active", False)) or env._goal_conceded or env._ball_blocked

@@ -204,7 +204,7 @@ def main():
             "Space  — first press picks up the ball; second press releases it",
             "Arrows — nudge the held ball in XY (robot supports smooth interpolation)",
             "V — toggle view: top-down ↔ head_camera",
-            "Q / Esc — close the viewer window to quit",
+            "Esc — close the viewer window to quit",
             "The ball starts untouched; press Space to pick it up.",
             "--robot-motion planner|interpolate",
         ],

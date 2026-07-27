@@ -683,6 +683,11 @@ task_args:
     amp_y: 0.025                # m; peg Y oscillation amplitude
     amp_z: 0.018                # m; peg Z oscillation amplitude
   rotating_shape_sorter:
+    # cubic = existing box/tray + square rotating cap; cylinder = hollow
+    # circular tray + circular rotating cap.
+    container_shape: cylinder  # cubic | cylinder
+    cylinder_hole_inset: 0.025 # cylinder only: keep the hole clear of the plate rim
+    cylinder_hole_edge_clearance: 0.008  # keep the full hole disk inside the rim
     spin_speed: 1.9             # angular speed baseline; dir random ±
     spin_speed_jitter: 0.20     # sample speed ~ U(spin_speed×0.8, spin_speed×1.2)
     # spin_speed_min / spin_speed_max: optional absolute range (overrides jitter when both set)
@@ -697,7 +702,7 @@ task_args:
     hole_xy_jitter: 0.012       # m; ±x/±y randomization for target hole and dummy hole centers
     # Independent feature toggles (both may be true):
     stick_to_surface: false     # Opt1: latch ball on platform if dropped off the real hole
-    add_dummy_hole: false       # Opt2: cut opposite-corner decoy hole slightly smaller than ball
+    add_dummy_hole: true       # Opt2: cut opposite-corner decoy hole slightly smaller than ball
     # ---- Opt1 (stick_to_surface) params ----
     stick_contact_steps: 4      # frames on platform with NO hole overlap before latch (fail)
     stick_settle_steps: 12      # near-rest frames WITH hole overlap before latch on rim
