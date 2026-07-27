@@ -53,45 +53,56 @@ def _keyboard_pack_idx(env, idx: int):
     return True
 
 
-def _dispatch_side(env, side: str, use_robot: bool) -> bool:
-    """Mirror ``_dispatch_pack`` for one requested belt side."""
+def _ready_for_arm(env, arm: str):
+    """Oldest ready fruit assigned to this arm, regardless of belt side."""
+    latest_start = env.pick_station_y + 0.08
+    for idx in range(env.n_items):
+        if (
+            env._spawned_mask[idx]
+            and not env._packed[idx]
+            and not env._missed[idx]
+            and not env._welded[idx]
+            and env._item_y[idx] is not None
+            and env.item_arms[idx] == arm
+            and latest_start <= env._item_y[idx] <= env.pick_y
+        ):
+            return idx
+    return None
+
+
+def _dispatch_arm(env, arm: str, use_robot: bool) -> bool:
+    """Pack one ready fruit with its color-assigned arm."""
     if env._grasping_idxs:
         print("Arm busy — wait for the current pack to finish.")
         return False
-    ready = env._ready_by_side()
-    idx = ready.get(side)
+    idx = _ready_for_arm(env, arm)
     if idx is None:
-        print(f"No ready fruit on the {side} belt (in the pick window).")
+        print(f"No ready fruit for the {arm} arm (in the pick window).")
         return False
 
-    other = "right" if side == "left" else "left"
-    if env.spawn_mode in ("parallel", "random"):
-        partner = env._active_pair_partner(idx)
-        if partner is not None:
-            idx_l, idx_r = (idx, partner) if env.item_sides[idx] == "left" else (partner, idx)
-            print(f"Packing pair L={idx_l} R={idx_r}…")
-            if use_robot:
-                env._pack_pair(idx_l, idx_r)
-            else:
-                _keyboard_pack_idx(env, idx_l)
-                _keyboard_pack_idx(env, idx_r)
-            return True
-        if ready.get(other) is not None:
-            idx_l = ready["left"]
-            idx_r = ready["right"]
-            print(f"Packing both ready fruits L={idx_l} R={idx_r}…")
-            if use_robot:
-                env._pack_pair(idx_l, idx_r)
-            else:
-                _keyboard_pack_idx(env, idx_l)
-                _keyboard_pack_idx(env, idx_r)
-            return True
-
-    print(f"Packing {env.item_types[idx]}_{idx} with {side}…")
+    print(f"Packing {env.item_types[idx]}_{idx} with {arm} arm…")
     if use_robot:
         env._pack_item(idx)
     else:
         _keyboard_pack_idx(env, idx)
+    return True
+
+
+def _dispatch_both(env, use_robot: bool) -> bool:
+    """Pack a ready apple/orange pair with left and right arms simultaneously."""
+    if env._grasping_idxs:
+        print("Arms busy — wait for the current pack to finish.")
+        return False
+    idx_l = _ready_for_arm(env, "left")
+    idx_r = _ready_for_arm(env, "right")
+    if idx_l is None or idx_r is None:
+        return False
+    print(f"Packing both: apple_{idx_l} (left) + orange_{idx_r} (right)…")
+    if use_robot:
+        env._pack_pair(idx_l, idx_r)
+    else:
+        _keyboard_pack_idx(env, idx_l)
+        _keyboard_pack_idx(env, idx_r)
     return True
 
 
@@ -115,14 +126,14 @@ def main():
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: apple → left basket, orange → right basket. Never pack black (Opt2).",
-            "Left Arrow  — pack the ready fruit on the LEFT belt",
-            "Right Arrow — pack the ready fruit on the RIGHT belt",
-            "          (pairs pack together when both are ready / linked)",
+            "Left Arrow  — left arm packs a ready red apple",
+            "Right Arrow — right arm packs a ready orange",
+            "Up Arrow    — both arms pack a ready apple + orange together",
             "V — toggle view: top-down ↔ head_camera",
             "Q / Esc   — close the viewer window to quit",
             "Keyboard: teleports ready fruit into the matching basket.",
-            "Robot: runs the arm intercept → carry → drop path.",
-            "Belts keep moving; act while fruit is in the pick window.",
+            "Robot: queues an arm intercept → carry → drop path.",
+            "Press a key any time; it waits for its required fruit(s).",
             "--robot-motion planner|interpolate",
         ],
     )
@@ -134,16 +145,38 @@ def main():
 
     keys_prev: dict = {}
     settle_after_done = None
+    pending_mode = None
 
     def on_step(window, step):
-        nonlocal settle_after_done
+        nonlocal settle_after_done, pending_mode
         # Start belts every step (safe if already True).
         env._belt_running = True
 
         if edge_pressed(window, "left", keys_prev):
-            _dispatch_side(env, "left", use_robot)
+            pending_mode = "left"
+            print("Queued left-arm apple pack action.")
         if edge_pressed(window, "right", keys_prev):
-            _dispatch_side(env, "right", use_robot)
+            pending_mode = "right"
+            print("Queued right-arm orange pack action.")
+        if edge_pressed(window, "up", keys_prev):
+            pending_mode = "both"
+            print("Queued two-arm apple + orange pack action.")
+
+        # Retain the user's request until its fruit(s) enter the short live
+        # pick window, rather than silently dropping an early key press.
+        if pending_mode is not None and not env._grasping_idxs:
+            if pending_mode == "both":
+                if (
+                    _ready_for_arm(env, "left") is not None
+                    and _ready_for_arm(env, "right") is not None
+                    and _dispatch_both(env, use_robot)
+                ):
+                    pending_mode = None
+            elif (
+                _ready_for_arm(env, pending_mode) is not None
+                and _dispatch_arm(env, pending_mode, use_robot)
+            ):
+                pending_mode = None
 
         if settle_after_done is None:
             all_done = (
