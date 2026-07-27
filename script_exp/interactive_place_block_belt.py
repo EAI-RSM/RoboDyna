@@ -77,10 +77,8 @@ def _prepare_keyboard_hold(env):
     env._release_delay_left = 0
 
 
-def _prepare_robot_hold(env):
-    from envs.utils.action import ArmTag
-
-    arm_tag = ArmTag("right" if env.block.get_pose().p[0] > 0 else "left")
+def _prepare_robot_hold(env, arm_tag):
+    """Pick the block, then carry it to the normal belt hover position."""
     match_dist, hover_x, release_x, lane_y = _match_geometry(env)
     env.move(env.grasp_actor(env.block, arm_tag=arm_tag, pre_grasp_dis=0.1))
     env.move(env.move_by_displacement(arm_tag=arm_tag, z=0.14, move_axis="arm"))
@@ -163,10 +161,11 @@ def main():
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: place the tall block on the belt BEFORE the red place line;",
             "      match belt velocity, stay in the clear lane if a blocker is present.",
-            "Space  — match stroke (robot) / release onto belt (keyboard)",
+            "Q — select left arm | E — select right arm (robot mode)",
+            "Space  — (1) pick + lift above the belt  (2) match + release",
             "Arrows — nudge hold XY before release",
             "V — toggle view: top-down ↔ head_camera",
-            "Q / Esc — close the viewer window to quit",
+            "Esc — close the viewer window to quit",
             "Release too late (past the red line) or into the blocker → failure.",
             "--robot-motion planner|interpolate",
         ],
@@ -177,21 +176,43 @@ def main():
             "(key-press sandboxes use joint interpolation)."
         )
 
-    if use_robot:
-        print("Robot: grasping and hovering over the belt load…")
-        _prepare_robot_hold(env)
-        print("Ready. Nudge if needed, then Space to match+release.")
-    else:
-        _prepare_keyboard_hold(env)
-        print("Block pinned over belt start. Nudge; Space to drop onto the belt.")
+    selected_arm = "right" if env.block.get_pose().p[0] > 0 else "left"
+    env._interactive_holding = False
+    env._interactive_released = False
+    env._released = False
+    env._belt_active = False
+    env._release_delay_left = 0
+    print(
+        f"Selected {selected_arm} arm. Press Space to pick the block and lift it over the belt."
+        if use_robot else "Press Space to lift the block into the virtual hold over the belt."
+    )
 
     keys_prev: dict = {}
-    post_release = 0
+    off_belt_since = None
+    settle_steps = max(1, int(round(2.0 / float(env.scene.get_timestep()))))
 
     def on_step(window, step):
-        nonlocal post_release
+        nonlocal off_belt_since, selected_arm
+        if not env._interactive_holding and not env._interactive_released:
+            if edge_pressed(window, "q", keys_prev):
+                selected_arm = "left"
+                print("Selected left arm.")
+            if edge_pressed(window, "e", keys_prev):
+                selected_arm = "right"
+                print("Selected right arm.")
+
         if edge_pressed(window, "space", keys_prev) and not env._interactive_released:
-            _do_release(env, use_robot)
+            if not env._interactive_holding:
+                if use_robot:
+                    from envs.utils.action import ArmTag
+
+                    print(f"Robot: picking with {selected_arm} arm and lifting over the belt…")
+                    _prepare_robot_hold(env, ArmTag(selected_arm))
+                else:
+                    _prepare_keyboard_hold(env)
+                print("Holding above the belt. Nudge with arrows, then press Space to release.")
+            else:
+                _do_release(env, use_robot)
 
         nudge = arrow_nudge_xy(window, step=0.0025)
         if float(np.linalg.norm(nudge)) > 0 and env._interactive_holding and not env._interactive_released:
@@ -222,13 +243,21 @@ def main():
                 if env._release_delay_left == 0:
                     env._belt_active = True
                     print("Belt drive engaged.")
-            post_release += 1
+
+            # ``_block_dropped`` is latched by the task exactly when the
+            # conveyor carries the block past its exit.  The fallback also
+            # catches a block that falls off after a verified belt contact.
+            left_belt = bool(getattr(env, "_block_dropped", False)) or (
+                bool(getattr(env, "placed_on_belt", False)) and not env._on_belt()
+            )
+            if left_belt and off_belt_since is None:
+                off_belt_since = step
+                print("Block has left the belt — settling for 2 seconds…")
 
     def is_done(step):
-        ride = int(getattr(env, "belt_ride_steps", 600))
-        if env._interactive_released and env._belt_active and post_release > ride + 40:
+        if off_belt_since is not None and step - off_belt_since >= settle_steps:
             return True, (
-                f"on_belt={env.placed_on_belt}, in_bowl={env.in_bowl}, "
+                f"left_belt=True, on_belt={env.placed_on_belt}, in_bowl={env.in_bowl}, "
                 f"avoided_blocker={env.avoided_blocker}"
             )
         return False
