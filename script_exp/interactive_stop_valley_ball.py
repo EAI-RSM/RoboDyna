@@ -6,9 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control robot
 
-Mixed keyboard + mouse: left-click sets the bat XY on the mid-air intercept
-plane; Space freezes / arms the bat. Robot mode grasps on Space, then holds
-the bat at the click location (gripper stays closed).
+Press Space to grasp the bat, then use arrow keys for world XY and T/R for
+height while the gripper holds it.
 """
 
 import argparse
@@ -30,29 +29,25 @@ from _interactive_common import make_viewer_view_toggle, report_task_result, pri
 
 
 CONTROLS_KEYBOARD = """
-  Mouse left-click  set bat XY on the mid-air intercept plane
-  Space             freeze / arm bat at current pose
-  Arrow keys        fine nudge XY (optional)
-  [ / ]             lower / raise bat height
-  T                 snap bat to predicted intercept
+  Space             place bat at the predicted intercept, then arm it
+  Arrow keys        move bat in world XY
+  T / R             raise / lower bat height
   V                 toggle view: top-down ↔ head_camera
   Escape             quit
 ------------------------------------------------------------
-  Flow: click to aim → Space to arm / hold
+  Flow: Space → use arrows/T/R to aim
   Success: red ball hits the red circular bat head before
            falling to the table; handle contact does not count.
 """
 
 CONTROLS_ROBOT = """
-  Mouse left-click  set mid-air hold XY for the bat
-  Space             pick up bat (grasp); hold uses click
-  Arrow keys        fine nudge XY (optional)
-  [ / ]             lower / raise bat height
-  T                 snap bat to predicted intercept
+  Space             fast grasp and move bat to predicted intercept
+  Arrow keys        move the held bat in world XY
+  T / R             raise / lower the held bat
   V                 toggle view: top-down ↔ head_camera
   Escape             quit
 ------------------------------------------------------------
-  Flow: Space to pick up → click mid-air to hold
+  Flow: Space → use arrows/T/R to aim
   Success: red ball hits the red circular bat head before
            falling to the table; handle contact does not count.
   --robot-motion planner|interpolate
@@ -103,11 +98,6 @@ def _intercept_xyz(env):
     if getattr(env, "intercept", None) is None:
         env._compute_intercept()
     return np.asarray(env.intercept, dtype=float)
-
-
-def _hold_plane_z(env):
-    """Horizontal plane used for click aiming (predicted intercept height)."""
-    return float(_intercept_xyz(env)[2])
 
 
 def _get_rigid(actor):
@@ -167,103 +157,13 @@ def _set_bat_xyz(env, x, y, z=None):
     return x, y, z
 
 
-def _nudge_from_keys(window, step=0.008):
-    dx = dy = dz = 0.0
-    if window.key_down("left"):
-        dx -= step
-    if window.key_down("right"):
-        dx += step
-    if window.key_down("up"):
-        dy += step
-    if window.key_down("down"):
-        dy -= step
-    if window.key_down("["):
-        dz -= step
-    if window.key_down("]"):
-        dz += step
-    return dx, dy, dz
+def _nudge_from_keys(window, xy_step=0.045, z_step=0.030):
+    """Map arrows/T/R to world-frame held-bat movement."""
 
-
-def _ray_hit_plane_xy(origin, direction, plane_z):
-    origin = np.asarray(origin, dtype=np.float64).reshape(3)
-    direction = np.asarray(direction, dtype=np.float64).reshape(3)
-    norm = float(np.linalg.norm(direction))
-    if norm < 1e-12:
-        return None
-    direction = direction / norm
-    if abs(direction[2]) < 1e-12:
-        return None
-    t = (float(plane_z) - float(origin[2])) / float(direction[2])
-    if t < 0.0:
-        return None
-    hit = origin + t * direction
-    return float(hit[0]), float(hit[1])
-
-
-def _click_to_hold_xy(viewer, pixel_x, pixel_y, plane_z):
-    """Map a viewer click to XY on the mid-air hold plane (``z=plane_z``)."""
-    window = viewer.window
-    px = int(pixel_x)
-    py = int(pixel_y)
-
-    try:
-        model = np.asarray(window.get_camera_model_matrix(), dtype=np.float64)
-    except Exception:
-        return None
-    origin = model[:3, 3]
-    rot = model[:3, :3]
-
-    try:
-        pos = np.asarray(window.get_picture_pixel("Position", px, py), dtype=np.float64)
-        if pos.shape[0] >= 3 and np.all(np.isfinite(pos[:3])):
-            depth_ok = True
-            if pos.shape[0] >= 4:
-                depth_ok = float(pos[3]) < 0.999
-            if depth_ok and float(np.linalg.norm(pos[:3])) > 1e-6:
-                world = rot @ pos[:3] + origin
-                hit = _ray_hit_plane_xy(origin, world - origin, plane_z)
-                if hit is not None:
-                    return hit
-    except Exception:
-        pass
-
-    try:
-        tw, th = window.get_picture_size("Color")
-    except Exception:
-        try:
-            tw, th = window.get_picture_size("Segmentation")
-        except Exception:
-            tw, th = window.size
-    if tw <= 0 or th <= 0:
-        return None
-
-    try:
-        sw, sh = window.get_picture_size("Segmentation")
-        if sw > 0 and sh > 0 and (sw != tw or sh != th):
-            px = int(px * tw / sw)
-            py = int(py * th / sh)
-    except Exception:
-        pass
-
-    ndc_x = (float(px) + 0.5) / float(tw) * 2.0 - 1.0
-    ndc_y = 1.0 - (float(py) + 0.5) / float(th) * 2.0
-
-    if getattr(window, "camera_mode", "perspective") == "orthographic":
-        top = float(getattr(window, "ortho_top", 1.0))
-        aspect = float(tw) / float(th)
-        right = top * aspect
-        origin_o = origin + rot @ np.array(
-            [ndc_x * right, ndc_y * top, 0.0], dtype=np.float64
-        )
-        direction = rot @ np.array([0.0, 0.0, -1.0], dtype=np.float64)
-        return _ray_hit_plane_xy(origin_o, direction, plane_z)
-
-    fovy = float(window.fovy)
-    aspect = float(tw) / float(th)
-    tan_y = float(np.tan(0.5 * fovy))
-    tan_x = tan_y * aspect
-    dir_cam = np.array([ndc_x * tan_x, ndc_y * tan_y, -1.0], dtype=np.float64)
-    return _ray_hit_plane_xy(origin, rot @ dir_cam, plane_z)
+    dx = xy_step * (window.key_down("right") - window.key_down("left"))
+    dy = xy_step * (window.key_down("up") - window.key_down("down"))
+    dz = z_step * (window.key_down("t") - window.key_down("r"))
+    return float(dx), float(dy), float(dz)
 
 
 class EdgeKey:
@@ -281,24 +181,11 @@ class KeyboardBatController:
         self.env = env
         self.ready = False
         self._space = EdgeKey()
-        self._snap = EdgeKey()
-        # Lift off the holder to the intercept plane so the first click is mid-air.
+        # Start at the intercept plane; arrow keys provide all adjustments.
         ix, iy, iz = _intercept_xyz(env)
         _set_bat_xyz(env, ix, iy, iz)
 
-    def on_hold_click(self, x, y):
-        if self.ready:
-            return False
-        z = _hold_plane_z(self.env)
-        x, y, z = _set_bat_xyz(self.env, x, y, z)
-        print(f"Bat aimed at ({x:.3f}, {y:.3f}, {z:.3f}). Press Space to arm.")
-        return True
-
     def update(self, window):
-        if self._snap.poll(window.key_down("t")):
-            ix, iy, iz = _intercept_xyz(self.env)
-            x, y, z = _set_bat_xyz(self.env, ix, iy, iz)
-            print(f"Snapped bat to intercept ({x:.3f}, {y:.3f}, {z:.3f}).")
         if not self.ready:
             dx, dy, dz = _nudge_from_keys(window)
             if dx or dy or dz:
@@ -312,17 +199,71 @@ class KeyboardBatController:
             print(f"Bat armed mid-air at ({x:.3f}, {y:.3f}, {z:.3f}).")
 
 
+class RobotBatMotion:
+    """Fast non-blocking joint interpolation for a bat welded to one gripper."""
+
+    DURATION = 0.04
+
+    def __init__(self, env, arm):
+        self.env = env
+        self.arm = arm
+        self.side = str(arm)
+        self._start = None
+        self._target = None
+        self._started_at = None
+
+    def _drive_qpos(self):
+        joints = self.env.robot.left_arm_joints if self.side == "left" else self.env.robot.right_arm_joints
+        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
+
+    def _ee_pose(self):
+        get_pose = self.env.robot.get_left_ee_pose if self.side == "left" else self.env.robot.get_right_ee_pose
+        return np.asarray(get_pose(), dtype=np.float64)
+
+    def move_bat_to(self, x, y, z):
+        """Queue a short world-frame move; ignore new keys until it completes."""
+
+        if self._started_at is not None:
+            return False
+        x, y, z = _clamp_bat_xyz(self.env, x, y, z)
+        panel = np.asarray(self.env.panel.get_pose().p, dtype=np.float64)
+        pose = self._ee_pose().copy()
+        pose[:3] += np.asarray([x, y, z], dtype=np.float64) - panel
+        planner = self.env.robot.left_plan_path if self.side == "left" else self.env.robot.right_plan_path
+        result = planner(pose.tolist(), last_qpos=np.asarray(self._drive_qpos(), dtype=np.float32))
+        if result is None or result.get("status") != "Success":
+            return False
+        self._start = self._drive_qpos()
+        self._target = np.asarray(result["position"][-1], dtype=np.float64)
+        self._started_at = time.perf_counter()
+        return True
+
+    def update(self):
+        if self._started_at is None:
+            return
+        progress = min(1.0, (time.perf_counter() - self._started_at) / self.DURATION)
+        smooth = progress * progress * (3.0 - 2.0 * progress)
+        delta = self._target - self._start
+        position = self._start + delta * smooth
+        velocity = delta / self.DURATION if progress < 1.0 else np.zeros_like(delta)
+        self.env.robot.set_arm_joints(position, velocity, self.side)
+        if progress >= 1.0:
+            self._started_at = None
+
+    @property
+    def moving(self):
+        return self._started_at is not None
+
+
 class RobotBatController:
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
         self.arm = None
         self.holding = False
-        self.ready = False
         self.busy = False
-        self._pending_xy = None
         self._space = EdgeKey()
-        self._snap = EdgeKey()
+        self.motion = None
 
     def _choose_arm(self):
         return self.ArmTag("left" if self.env.mirrored else "right")
@@ -330,83 +271,40 @@ class RobotBatController:
     def grasp(self):
         self.busy = True
         self.arm = self._choose_arm()
-        self.env.move(self.env.grasp_actor(self.env.panel, arm_tag=self.arm, pre_grasp_dis=0.10))
+        # Preserve the task's normal grasp sequence; it establishes the weld
+        # offset used by the held-bat controller.
+        self.env.move(self.env.grasp_actor(
+            self.env.panel, arm_tag=self.arm, pre_grasp_dis=0.025, grasp_dis=0.025,
+        ))
         if self.env.plan_success:
             self.env._weld_bowl_to_end_effector(self.arm)
-            # Lift clear of the holder before any lateral move.
-            panel_now = np.asarray(self.env.panel.get_pose().p, dtype=float)
-            lift_z = float(max(0.10, _hold_plane_z(self.env) - panel_now[2]))
-            self.env.move(self.env.move_by_displacement(
-                self.arm, z=lift_z, move_axis="world",
-            ))
             self.holding = True
-            print(f"Picked up bat with {self.arm} arm. Left-click to hold mid-air.")
-            if self._pending_xy is not None:
-                x, y = self._pending_xy
-                self._pending_xy = None
-                self.busy = False
-                self.hold_at(x, y)
-                return
+            self.env._bowl_ready = True
+            self.motion = RobotBatMotion(self.env, self.arm)
+            panel = np.asarray(self.env.panel.get_pose().p, dtype=np.float64)
+            # Clear the holder/table, then leave all lateral placement to teleop.
+            self.motion.move_bat_to(panel[0], panel[1], panel[2] + 0.10)
+            print(f"Picked up bat with {self.arm} arm. Use arrows/T/R to adjust it.")
         else:
             print("Grasp failed; planner disabled further robot actions.")
         self.busy = False
 
-    def hold_at(self, x, y, z=None):
-        if self.ready:
-            return
-        if not self.holding or self.arm is None:
-            self._pending_xy = (float(x), float(y))
-            print(
-                f"Hold target ({x:.3f}, {y:.3f}) saved — press Space to pick up, "
-                "then it will move there."
-            )
-            return
-        self.busy = True
-        if z is None:
-            z = _hold_plane_z(self.env)
-        x, y, z = _clamp_bat_xyz(self.env, x, y, z)
-        panel_now = np.asarray(self.env.panel.get_pose().p, dtype=float)
-        d = np.array([x, y, z], dtype=float) - panel_now
-        self.env.move(self.env.move_by_displacement(
-            arm_tag=self.arm,
-            x=float(d[0]),
-            y=float(d[1]),
-            z=float(d[2]),
-            move_axis="world",
-        ))
-        # Keep gripper closed / welded — mid-air stop requires a held bat.
-        self.env._bowl_ready = True
-        self.ready = True
-        print(f"Holding bat mid-air at ({x:.3f}, {y:.3f}, {z:.3f}).")
-        self.busy = False
-
-    def on_hold_click(self, x, y):
-        if self.busy or self.ready:
-            return False
-        self.hold_at(x, y)
-        return True
-
     def nudge(self, window):
-        if self.busy or not self.holding or self.arm is None or self.ready:
+        if self.busy or not self.holding or self.motion is None:
             return
-        dx, dy, dz = _nudge_from_keys(window, step=0.02)
+        dx, dy, dz = _nudge_from_keys(window)
         if not (dx or dy or dz):
             return
-        self.busy = True
-        self.env.move(self.env.move_by_displacement(
-            arm_tag=self.arm, x=dx, y=dy, z=dz, move_axis="world",
-        ))
-        self.busy = False
+        p = np.asarray(self.env.panel.get_pose().p, dtype=np.float64)
+        self.motion.move_bat_to(p[0] + dx, p[1] + dy, p[2] + dz)
 
     def update(self, window):
+        if self.motion is not None:
+            self.motion.update()
         if self.busy:
             return
-        if self._snap.poll(window.key_down("t")) and self.holding and not self.ready:
-            ix, iy, iz = _intercept_xyz(self.env)
-            self.hold_at(ix, iy, iz)
-            return
         if self._space.poll(window.key_down("space")):
-            if not self.holding and not self.ready:
+            if not self.holding:
                 self.grasp()
             return
         self.nudge(window)
@@ -425,8 +323,8 @@ def main():
     parser.add_argument(
         "--robot-motion",
         choices=("planner", "interpolate"),
-        default="planner",
-        help="Robot motion backend (interpolate = faster joint interp when supported; default planner)",
+        default="interpolate",
+        help="Retained for compatibility; held-bat teleoperation uses fast interpolation.",
     )
     parser.add_argument(
         "--task-arg",
@@ -442,12 +340,6 @@ def main():
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("stop_valley_ball", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
-    if args.robot_motion == "interpolate":
-        print(
-            "Note: --robot-motion interpolate uses planner motions for this teleop task "
-            "(key-press sandboxes use joint interpolation)."
-        )
-
     config = _configure_task(args.config, args.seed, use_robot=args.control == "robot")
     # Optional option toggles (same as record_demo --task-arg).
     targs = config.setdefault("task_args", {}).setdefault("stop_valley_ball", {})
@@ -483,16 +375,7 @@ def main():
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
 
-    def _handle_hold_click(viewer_, pixel_x, pixel_y):
-        plane_z = _hold_plane_z(env)
-        xy = _click_to_hold_xy(viewer_, pixel_x, pixel_y, plane_z)
-        if xy is None:
-            print("Click did not hit the mid-air hold plane.")
-            return False
-        return bool(controller.on_hold_click(xy[0], xy[1]))
-
-    viewer.register_click_handler(_handle_hold_click)
-    print("Left-click to set the bat hold location; Space picks up / arms.")
+    print("Press Space to grasp the bat; arrows move XY and T/R move height.")
 
     settle_after = None
     try:
