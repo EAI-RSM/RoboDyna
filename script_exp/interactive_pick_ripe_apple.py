@@ -18,10 +18,12 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import sapien
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
     bootstrap_repo,
+    arrow_nudge_xy,
     configure_task,
     edge_pressed,
     print_banner,
@@ -31,15 +33,93 @@ from _interactive_common import (  # noqa: E402
 bootstrap_repo()
 
 
+_GRIPPER_LINK_NAMES = (
+    "wsg_50_base_link",
+    "gripper_left",
+    "gripper_right",
+    "finger_left",
+    "finger_right",
+)
+_ARM_HIGHLIGHT = {
+    "left": [1.0, 0.85, 0.10, 1.0],   # yellow
+    "right": [0.15, 0.75, 1.0, 1.0],  # cyan
+}
+
+
+class ArmGripperHighlight:
+    """Recolor the selected gripper so the active pickup arm is obvious."""
+
+    def __init__(self, env):
+        self._orig = {}
+        self._selected = None
+        self._entities = {
+            "left": self._gripper_entities(env.robot.left_entity),
+            "right": self._gripper_entities(env.robot.right_entity),
+        }
+
+    @staticmethod
+    def _gripper_entities(articulation):
+        return [
+            link.entity for link in articulation.get_links()
+            if link.get_name() in _GRIPPER_LINK_NAMES
+        ]
+
+    @staticmethod
+    def _iter_materials(entity):
+        for component in entity.get_components():
+            if not isinstance(component, sapien.render.RenderBodyComponent):
+                continue
+            for shape in component.render_shapes:
+                try:
+                    yield shape.material
+                except Exception:
+                    continue
+
+    def _remember(self, material):
+        if id(material) in self._orig:
+            return
+        try:
+            color = list(material.base_color)
+        except Exception:
+            color = [0.75, 0.75, 0.75, 1.0]
+        self._orig[id(material)] = (material, color)
+
+    def clear(self):
+        for material, color in self._orig.values():
+            try:
+                material.set_base_color(color)
+                material.base_color = color
+            except Exception:
+                pass
+        self._selected = None
+
+    def set_selected(self, arm):
+        if arm == self._selected:
+            return
+        self.clear()
+        for entity in self._entities[arm]:
+            for material in self._iter_materials(entity):
+                self._remember(material)
+                try:
+                    material.set_base_color_texture(None)
+                except Exception:
+                    pass
+                try:
+                    material.set_base_color(_ARM_HIGHLIGHT[arm])
+                    material.base_color = _ARM_HIGHLIGHT[arm]
+                except Exception:
+                    pass
+        self._selected = arm
+
+
 def _arm_for_good(env):
     from envs.utils.action import ArmTag
 
     return ArmTag("left" if env.apple_side < 0 else "right")
 
 
-def _do_grasp(env):
+def _do_grasp(env, arm):
     """Trigger the frozen front-grasp + clear/lift (no geometry retune)."""
-    arm = _arm_for_good(env)
     target = max(0.18, env.red_window - env.GRASP_LEAD_STEPS / max(1, env.ripen_steps))
     if env._apple_attached and env.ripeness < target - 0.02:
         print(
@@ -61,22 +141,11 @@ def _do_grasp(env):
     env.move(env.move_by_displacement(arm_tag=arm, x=clear_x, move_axis="world"))
     env.move(env.move_by_displacement(arm_tag=arm, z=env.CLEAR_LIFT_Z, move_axis="world"))
 
-    # Carry toward predicted basket (Opt2 keeps moving).
-    ap = np.array(env.apple.get_pose().p)
-    pred_x = env._predict_basket_x(env.DROP_PREDICT_TIME)
-    hover_z = max(env.basket_top_z + 0.05, float(ap[2]))
-    env.move(env.move_by_displacement(
-        arm_tag=arm,
-        x=float(pred_x - ap[0]),
-        y=float(env.basket_y - ap[1]),
-        z=float(hover_z - ap[2]),
-        move_axis="world",
-    ))
     env._interactive_arm = arm
     env._interactive_phase = "hold"
     print(
-        f"Holding over basket (r_grasp={env.r_grasp}). "
-        "Press Space again to drop when aligned."
+        f"Holding apple (r_grasp={env.r_grasp}). "
+        "Use arrows to carry it over the basket, then press Space to drop."
     )
     return True
 
@@ -131,6 +200,9 @@ def main():
     ))
     env._interactive_phase = "wait"  # wait → hold → done
     env._ripen_started = True
+    selected_arm = "left" if env.apple_side < 0 else "right"
+    highlight = ArmGripperHighlight(env)
+    highlight.set_selected(selected_arm)
 
     print_banner(
         "pick_ripe_apple — interactive controls",
@@ -139,9 +211,11 @@ def main():
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: pinch the GOOD (red-path) apple near peak red; drop in the basket.",
             "      Do NOT pick the spoiled/yellow apple (Opt1).",
-            "Space  — (1) grasp when red enough   (2) drop when over the basket",
+            "Q — select left arm (yellow) | E — select right arm (cyan)",
+            "Space — (1) grasp when red enough   (2) drop when over the basket",
+            "Arrows — move the held apple/arm in world XY over the basket",
             "V — toggle view: top-down ↔ head_camera",
-            "Q / Esc — close the viewer window to quit",
+            "Esc — close the viewer window to quit",
             "Grasp / hang / clear geometry is FROZEN — Space only triggers existing motions.",
             "Watch the apple color: green → red → black. Act near vivid red.",
             "--robot-motion planner|interpolate",
@@ -161,13 +235,46 @@ def main():
     done_since = None
 
     def on_step(window, step):
-        nonlocal done_since
+        nonlocal done_since, selected_arm
+        if env._interactive_phase == "wait":
+            if edge_pressed(window, "q", keys_prev):
+                selected_arm = "left"
+                highlight.set_selected(selected_arm)
+                print("Selected left arm (yellow).")
+            if edge_pressed(window, "e", keys_prev):
+                selected_arm = "right"
+                highlight.set_selected(selected_arm)
+                print("Selected right arm (cyan).")
+
         if edge_pressed(window, "space", keys_prev):
             if env._interactive_phase == "wait":
-                _do_grasp(env)
+                from envs.utils.action import ArmTag
+
+                _do_grasp(env, ArmTag(selected_arm))
             elif env._interactive_phase == "hold":
                 _do_drop(env)
+                highlight.clear()
                 done_since = step
+
+        # Carry at the frozen post-grasp height.  Throttle discrete plans so
+        # holding an arrow does not enqueue a new planner call every frame.
+        nudge = arrow_nudge_xy(window, step=0.0025)
+        if (
+            env._interactive_phase == "hold"
+            and float(np.linalg.norm(nudge)) > 0.0
+            and step % 8 == 0
+        ):
+            arm = env._interactive_arm
+            env.plan_success = True
+            env.move(env.move_by_displacement(
+                arm_tag=arm,
+                x=float(nudge[0]) * 4.0,
+                y=float(nudge[1]) * 4.0,
+                move_axis="world",
+            ))
+            if not env.plan_success:
+                print("Arm nudge could not reach the requested position.")
+
         if env._interactive_phase == "done" and done_since is None:
             done_since = step
         # Status heartbeat while waiting for red.
