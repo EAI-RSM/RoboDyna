@@ -137,13 +137,18 @@ def _robot_pack(env, picks):
                 return failed()
             held = [(idx_l, arm_l), (idx_r, arm_r)]
 
-        wrong = []
+        wrong, aborted = [], []
         for idx, arm in held:
             basket = ARM_BASKET[str(arm)]
             target = env._basket_target_xy(idx, basket=basket)
-            env._carry_and_drop(idx, arm, target, resend_on_miss=False)
-            if not env._fruit_in_basket(idx):
+            if not env._carry_and_drop(idx, arm, target, resend_on_miss=False):
+                aborted.append(idx)
+            elif not env._fruit_in_basket(idx):
                 wrong.append(idx)
+        if aborted:
+            names = ", ".join(f"{env.item_types[i]}_{i}" for i in aborted)
+            print(f"Could not reach the basket with {names} — back on the belt.")
+            return None
         return wrong
     finally:
         for idx in indices:

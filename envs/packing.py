@@ -71,7 +71,10 @@ class packing(Base_Task):
     # rotates local +y -> world +z, so mesh center offset affects ride height
     FRUIT_Q = [0.707, 0.707, 0.0, 0.0]
     BASKET_SCALE = 1.15                # bigger opening — easier drop-in target
-    BASKET_CATCH_R = 0.12              # scaled up to match the larger basket opening
+    # fallback mouth half-extents; the real ones come from the basket mesh in
+    # load_actors. The basket is clearly rectangular (~16 x 22 cm), so a single
+    # radius would call a fruit resting on the table beside it "in the basket".
+    BASKET_HALF_XY = (0.078, 0.111)
     BASKET_Y = 0.0                    # table midline (toward the belts / "higher")
     BASKET_X = 0.34                   # nudged out so the bigger basket clears the belts
     # after grasp: raise the gripper this far along world +Z (in place),
@@ -219,6 +222,7 @@ class packing(Base_Task):
         self.baskets = {}
         self.basket_base_z = {}
         self.basket_top_z = {}
+        self.basket_half_xy = {}
         for ftype, center in self.basket_centers.items():
             basket = create_actor(
                 self,
@@ -253,6 +257,13 @@ class packing(Base_Task):
             if basket_height <= 0.0:
                 basket_height = 0.07 * self.basket_scale
             self.basket_top_z[ftype] = self.basket_base_z[ftype] + basket_height
+            # the same orientation cycles local x -> world y and local z ->
+            # world x, so the mouth footprint is rectangular in world XY
+            half_x = 0.5 * float(extents[2]) * float(scale[2])
+            half_y = 0.5 * float(extents[0]) * float(scale[0])
+            if half_x <= 0.0 or half_y <= 0.0:
+                half_x, half_y = self.BASKET_HALF_XY
+            self.basket_half_xy[ftype] = (half_x, half_y)
             self.add_prohibit_area(basket, padding=0.04)
 
         # ---- fruit sequence: fixed per-color counts, shuffled order ----
@@ -879,16 +890,36 @@ class packing(Base_Task):
             self._pic_ctr += 1
 
     # ------------------------------------------------------------- packing
+    def _xy_inside_basket(self, xy, ftype, margin=0.0):
+        """True when a world XY sits inside a basket's rectangular mouth."""
+        c = self.basket_centers[ftype]
+        half_x, half_y = self.basket_half_xy.get(ftype, self.BASKET_HALF_XY)
+        d = np.abs(np.asarray(xy, dtype=np.float64)[:2] - c)
+        return bool(d[0] <= max(0.0, half_x - margin)
+                    and d[1] <= max(0.0, half_y - margin))
+
+    def _basket_for_target(self, target_xy):
+        """Basket a drop target belongs to (may not be the fruit's own color)."""
+        t = np.asarray(target_xy, dtype=np.float64)[:2]
+        return min(
+            self.basket_centers,
+            key=lambda k: float(np.linalg.norm(t - self.basket_centers[k])),
+        )
+
     def _fruit_in_basket(self, idx):
         ftype = self.item_types[idx]
         p = np.array(self.items[idx].get_pose().p, dtype=np.float64)
-        c = self.basket_centers[ftype]
-        in_xy = float(np.linalg.norm(p[:2] - c)) <= self.BASKET_CATCH_R
+        in_xy = self._xy_inside_basket(p[:2], ftype)
         above = p[2] >= (self.basket_base_z[ftype] - 0.02)
         below = p[2] <= (self.basket_base_z[ftype] + 0.18)
         return bool(in_xy and above and below)
 
-    def _mark_packed(self, idx):
+    def _mark_packed(self, idx, freeze=True):
+        """Resolve a fruit; ``freeze`` pins it (used for fruit inside a basket).
+
+        A fruit that ended up outside stays dynamic so it rests on the table
+        instead of hanging frozen wherever it landed.
+        """
         ftype = self.item_types[idx]
         if not self._packed[idx]:
             self._place_counts[ftype] = self._place_counts[ftype] + 1
@@ -897,7 +928,7 @@ class packing(Base_Task):
         self._item_y[idx] = None
         self._welded[idx] = False
         rigid = self._item_comps[idx]
-        if rigid is not None:
+        if rigid is not None and freeze:
             try:
                 rigid.set_kinematic(True)
                 rigid.set_disable_gravity(True)
@@ -915,13 +946,20 @@ class packing(Base_Task):
         )
 
     def _basket_target_xy(self, idx, slot_offset=0, basket=None):
-        """Drop pose in a basket; ``basket`` overrides the fruit's own color."""
+        """Drop pose in a basket; ``basket`` overrides the fruit's own color.
+
+        Slots are spread over the mouth footprint rather than a fixed pattern:
+        the basket is narrow along world X, so a fixed 2.8 cm offset there put
+        the fruit against the wall with no room for the slide's residual error.
+        """
         ftype = basket or self.item_types[idx]
         slot = self._place_counts[ftype] + int(slot_offset)
         c = self.basket_centers[ftype]
+        half_x, half_y = self.basket_half_xy.get(ftype, self.BASKET_HALF_XY)
+        sx = max(0.0, 0.45 * (half_x - self.fruit_r))
+        sy = max(0.0, 0.45 * (half_y - self.fruit_r))
         offsets = [
-            (0.0, 0.0), (0.028, 0.017), (-0.028, 0.017),
-            (0.028, -0.017), (-0.028, -0.017),
+            (0.0, 0.0), (sx, sy), (-sx, sy), (sx, -sy), (-sx, -sy),
         ]
         ox, oy = offsets[slot % len(offsets)]
         return c + np.array([ox, oy], dtype=float)
@@ -1160,10 +1198,17 @@ class packing(Base_Task):
                       f"p={np.round(fruit.get_pose().p, 3)}", flush=True)
             return
         if not resend_on_miss:
-            self._mark_packed(idx)
+            # a deliberate wrong-basket drop still lands in a basket, so pin it;
+            # anything that fell short stays dynamic and rests on the table
+            landed = self._xy_inside_basket(
+                np.array(fruit.get_pose().p, dtype=float)[:2],
+                self._basket_for_target(target_xy),
+            )
+            self._mark_packed(idx, freeze=bool(landed))
             if dbg:
                 print(f"[packing]  mis-packed {self.item_types[idx]}_{idx} "
-                      f"p={np.round(fruit.get_pose().p, 3)}", flush=True)
+                      f"p={np.round(fruit.get_pose().p, 3)} "
+                      f"in_target_basket={bool(landed)}", flush=True)
             return
         p = np.array(fruit.get_pose().p, dtype=float)
         if dbg:
@@ -1416,6 +1461,40 @@ class packing(Base_Task):
                   f"ee_dz={ee1[2]-ee0[2]:.3f} fruit_dz={fp1[2]-fp0[2]:.3f} "
                   f"fruit_z={fp1[2]:.3f}", flush=True)
 
+    def _fruit_xy_gap(self, idx, target_xy):
+        """Horizontal distance from the held fruit to a drop target."""
+        fp = np.array(self.items[idx].get_pose().p, dtype=float)
+        return float(np.hypot(float(target_xy[0]) - fp[0], float(target_xy[1]) - fp[1]))
+
+    def _slide_hover_z(self, idx):
+        """Carry height that clears every basket rim on the way in."""
+        fruit_z = float(self.items[idx].get_pose().p[2])
+        if not self.basket_top_z:
+            return fruit_z
+        rim = max(self.basket_top_z.values())
+        return max(fruit_z, float(rim) + self.fruit_r + 0.02)
+
+    def _slide_xy_to_target(self, idx, arm, target_xy, tries=3, tol=0.03):
+        """Slide the held fruit to ``target_xy`` at a rim-clearing height."""
+        import os
+        dbg = bool(os.environ.get("PACKING_DEBUG"))
+        hover_z = self._slide_hover_z(idx)
+        for _try in range(tries):
+            gap_xy = self._fruit_xy_gap(idx, target_xy)
+            if dbg:
+                fp = np.array(self.items[idx].get_pose().p, dtype=float)
+                print(f"[packing]  slide try={_try} fp={fp.round(4)} "
+                      f"gap_xy={gap_xy:.4f} hover_z={hover_z:.3f}", flush=True)
+            if gap_xy < tol:
+                return True
+            target = np.array(
+                [float(target_xy[0]), float(target_xy[1]), hover_z], dtype=float
+            )
+            self.plan_success = True
+            self.move(self.move_to_pose(arm, self._weld_target_ee_pose(idx, target)))
+            self.plan_success = True
+        return self._fruit_xy_gap(idx, target_xy) < tol
+
     def _slide_over_basket(self, idx, arm, target_xy, lift_z=None, tries=3, tol=0.03):
         """Raise ≥10 cm along Z in place, then slide horizontally over the basket."""
         import os
@@ -1426,31 +1505,68 @@ class packing(Base_Task):
         # 1) raise straight up (same XY)
         self._raise_along_z(idx, arm, lift_z=lift_z)
 
-        # 2) horizontal slide at the post-lift height (Z held fixed)
-        hover_z = float(self.items[idx].get_pose().p[2])
-        for _try in range(tries):
-            fp = np.array(self.items[idx].get_pose().p, dtype=float)
-            target = np.array([float(target_xy[0]), float(target_xy[1]), hover_z], dtype=float)
-            gap_xy = float(np.hypot(target[0] - fp[0], target[1] - fp[1]))
-            if dbg:
-                print(f"[packing]  slide try={_try} fp={fp.round(4)} "
-                      f"gap_xy={gap_xy:.4f} hover_z={hover_z:.3f}", flush=True)
-            if gap_xy < tol:
-                break
-            self.plan_success = True
-            self.move(self.move_to_pose(arm, self._weld_target_ee_pose(idx, target)))
-            self.plan_success = True
+        # 2) horizontal slide at a height that clears the basket rim
+        reached = self._slide_xy_to_target(idx, arm, target_xy, tries=tries, tol=tol)
         if dbg:
             fp = np.array(self.items[idx].get_pose().p, dtype=float)
             print(f"[packing]  slide residual_xy="
-                  f"{np.hypot(target_xy[0] - fp[0], target_xy[1] - fp[1]):.4f} "
+                  f"{self._fruit_xy_gap(idx, target_xy):.4f} "
                   f"fruit_z={fp[2]:.3f} basket_top="
                   f"{self.basket_top_z[self.item_types[idx]]:.3f}", flush=True)
+        return reached
+
+    def _hangs_over_basket(self, idx, target_xy):
+        """True when the held fruit is clear of the target basket's walls."""
+        p = np.array(self.items[idx].get_pose().p, dtype=float)
+        ftype = self._basket_for_target(target_xy)
+        return self._xy_inside_basket(p[:2], ftype, margin=self.fruit_r)
+
+    def _ensure_over_basket(self, idx, arm, target_xy, tries=2):
+        """True once the held fruit hangs over ``target_xy``, retrying the slide.
+
+        The gripper must never open short of the basket mouth — a stalled or
+        unplannable slide used to drop the fruit onto the table.
+        """
+        if self._hangs_over_basket(idx, target_xy):
+            return True
+        self._slide_xy_to_target(idx, arm, target_xy, tries=tries, tol=0.015)
+        return self._hangs_over_basket(idx, target_xy)
+
+    def _abort_drop_to_belt(self, idx, arm):
+        """Send an undroppable fruit back for another lap instead of the table."""
+        if bool(os.environ.get("PACKING_DEBUG")):
+            print(f"[packing]  drop aborted for fruit_{idx} "
+                  f"p={np.round(self.items[idx].get_pose().p, 3)} — back to belt",
+                  flush=True)
+        self._release_fruit(idx)
+        self._over_basket[idx] = False
+        self._item_y[idx] = float(self.BELT_Y_FAR)
+        rigid = self._item_comps[idx]
+        if rigid is not None:
+            rigid.set_kinematic(True)
+            rigid.set_disable_gravity(True)
+        self._set_fruit_pose(
+            idx, self.belt_cx[self.item_sides[idx]], self.BELT_Y_FAR,
+            self._fruit_ride_z,
+        )
+        self.plan_success = True
+        self.move(self.open_gripper(arm))
+        self.plan_success = True
 
     def _carry_and_drop(self, idx, arm, target_xy, resend_on_miss=True):
-        """Raise along Z, slide over the basket, open gripper, let fruit fall."""
+        """Raise along Z, slide over the basket, open gripper, let fruit fall.
+
+        Returns whether the fruit was actually released over the basket.
+        """
         self._slide_over_basket(idx, arm, target_xy, lift_z=self.pick_lift)
-        self._over_basket[idx] = True
+        over_basket = self._ensure_over_basket(idx, arm, target_xy)
+        self._over_basket[idx] = bool(over_basket)
+        if not over_basket:
+            self._abort_drop_to_belt(idx, arm)
+            self.plan_success = True
+            self.move(self.back_to_origin(arm))
+            self.plan_success = True
+            return False
 
         self.plan_success = True
         self.move(self.open_gripper(arm))
@@ -1460,6 +1576,7 @@ class packing(Base_Task):
         self.plan_success = True
         self.move(self.back_to_origin(arm))
         self.plan_success = True
+        return True
 
     def _pack_item(self, idx):
         """Intercept one still-moving fruit → weld → carry → release."""
@@ -1636,16 +1753,28 @@ class packing(Base_Task):
                       f"l={np.hypot(target_l[0] - fp_l[0], target_l[1] - fp_l[1]):.4f} "
                       f"r={np.hypot(target_r[0] - fp_r[0], target_r[1] - fp_r[1]):.4f} "
                       f"fruit_z l={fp_l[2]:.3f} r={fp_r[2]:.3f}", flush=True)
-            self._over_basket[idx_l] = True
-            self._over_basket[idx_r] = True
+            over_l = self._ensure_over_basket(idx_l, left, target_l)
+            over_r = self._ensure_over_basket(idx_r, right, target_r)
+            self._over_basket[idx_l] = bool(over_l)
+            self._over_basket[idx_r] = bool(over_r)
 
-            self.plan_success = True
-            self.move(self.open_gripper(left), self.open_gripper(right))
-            self._release_fruit(idx_l)
-            self._release_fruit(idx_r)
-            self._belt_dwell(80)
-            self._settle_after_drop(idx_l, target_l)
-            self._settle_after_drop(idx_r, target_r)
+            if not over_l:
+                self._abort_drop_to_belt(idx_l, left)
+            if not over_r:
+                self._abort_drop_to_belt(idx_r, right)
+
+            drop = [(i, a) for i, a, ok in
+                    ((idx_l, left, over_l), (idx_r, right, over_r)) if ok]
+            if drop:
+                self.plan_success = True
+                self.move(*[self.open_gripper(a) for _i, a in drop])
+                for i, _a in drop:
+                    self._release_fruit(i)
+                self._belt_dwell(80)
+                if over_l:
+                    self._settle_after_drop(idx_l, target_l)
+                if over_r:
+                    self._settle_after_drop(idx_r, target_r)
 
             self.move(self.back_to_origin(left), self.back_to_origin(right))
             self.plan_success = True

@@ -107,8 +107,10 @@ def _snapshot(env) -> dict:
         in_ok.append(bool(env._fruit_in_basket(i)))
         positions.append([float(x) for x in env.items[i].get_pose().p])
 
-    # Independent correct-basket check: apple near left center, orange near right.
-    catch_r = float(getattr(env, "BASKET_CATCH_R", 0.12))
+    # Independent correct-basket check: apple in the left basket mouth, orange
+    # in the right one. The mouth is rectangular, so a circle would also accept
+    # fruit resting on the table alongside the narrow (world X) walls.
+    half_xy = getattr(env, "basket_half_xy", {})
     centers = getattr(env, "basket_centers", {})
     base_z = getattr(env, "basket_base_z", {})
     independent_ok = []
@@ -116,7 +118,9 @@ def _snapshot(env) -> dict:
         ftype = types[i]
         p = np.array(positions[i], dtype=np.float64)
         c = np.array(centers[ftype], dtype=np.float64)
-        in_xy = float(np.linalg.norm(p[:2] - c)) <= catch_r
+        half_x, half_y = half_xy.get(ftype, (0.078, 0.111))
+        d = np.abs(p[:2] - c)
+        in_xy = bool(d[0] <= half_x and d[1] <= half_y)
         above = p[2] >= (float(base_z[ftype]) - 0.02)
         below = p[2] <= (float(base_z[ftype]) + 0.18)
         independent_ok.append(bool(in_xy and above and below))
