@@ -289,22 +289,31 @@ def main():
     # both launcher modes.
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
-    _start_belt(env)
     env.enable_interactive_tile_pause()
+    # Keep the belt frozen while arms move to the key hover poses. Starting it
+    # earlier burns the first tile's pause window before the operator can act.
 
     stamp_controller = KeyboardStampController(env, ArmTag)
     arrow_presses = ArrowPresses()
     last_under = None
-    last_frame_start = time.perf_counter()
-    simulation_credit = 0.0
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+    # Robot mode highlights the default arm inside UniversalRobotControls here.
+    # Start the first tile's approach/pause clock only once that is visible.
+    _start_belt(env)
+    last_frame_start = time.perf_counter()
+    simulation_credit = 0.0
 
     print("Press Left for red or Right for green when the matching tile is under the stamp.")
     print(f"Tile colors: {env.tile_colors}")
+    if args.control == "robot":
+        selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ("left",))
+        print(f"Belt started after arm highlight ({'+'.join(selected)}).")
+    else:
+        print("Belt started after stamp arms reached the keys.")
 
     try:
         while not viewer.closed:

@@ -914,8 +914,9 @@ class packing(Base_Task):
             roll=self._item_roll[idx],
         )
 
-    def _basket_target_xy(self, idx, slot_offset=0):
-        ftype = self.item_types[idx]
+    def _basket_target_xy(self, idx, slot_offset=0, basket=None):
+        """Drop pose in a basket; ``basket`` overrides the fruit's own color."""
+        ftype = basket or self.item_types[idx]
         slot = self._place_counts[ftype] + int(slot_offset)
         c = self.basket_centers[ftype]
         offsets = [
@@ -1141,10 +1142,12 @@ class packing(Base_Task):
             print(f"[packing]  pair reach done gotL={got_l} gotR={got_r}", flush=True)
         return got_l, got_r
 
-    def _settle_after_drop(self, idx, target_xy):
+    def _settle_after_drop(self, idx, target_xy, resend_on_miss=True):
         """Mark packed if the fruit fell into the basket; otherwise resend.
 
         No teleport / "near-miss nudge" — the fruit must land under gravity.
+        With ``resend_on_miss`` cleared the fruit stays where it landed, so a
+        deliberate mis-sort is final instead of getting another lap.
         """
         import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
@@ -1154,6 +1157,12 @@ class packing(Base_Task):
             self._mark_packed(idx)
             if dbg:
                 print(f"[packing]  dropped in basket "
+                      f"p={np.round(fruit.get_pose().p, 3)}", flush=True)
+            return
+        if not resend_on_miss:
+            self._mark_packed(idx)
+            if dbg:
+                print(f"[packing]  mis-packed {self.item_types[idx]}_{idx} "
                       f"p={np.round(fruit.get_pose().p, 3)}", flush=True)
             return
         p = np.array(fruit.get_pose().p, dtype=float)
@@ -1438,7 +1447,7 @@ class packing(Base_Task):
                   f"fruit_z={fp[2]:.3f} basket_top="
                   f"{self.basket_top_z[self.item_types[idx]]:.3f}", flush=True)
 
-    def _carry_and_drop(self, idx, arm, target_xy):
+    def _carry_and_drop(self, idx, arm, target_xy, resend_on_miss=True):
         """Raise along Z, slide over the basket, open gripper, let fruit fall."""
         self._slide_over_basket(idx, arm, target_xy, lift_z=self.pick_lift)
         self._over_basket[idx] = True
@@ -1447,7 +1456,7 @@ class packing(Base_Task):
         self.move(self.open_gripper(arm))
         self._release_fruit(idx)
         self._belt_dwell(80)  # give gravity time to settle into the basket
-        self._settle_after_drop(idx, target_xy)
+        self._settle_after_drop(idx, target_xy, resend_on_miss=resend_on_miss)
         self.plan_success = True
         self.move(self.back_to_origin(arm))
         self.plan_success = True
