@@ -1,0 +1,24 @@
+{
+  "full_description": "In the KitchenS scene (center sink+tap, cooking range on the side), turn the stove on so the pot of milk starts boiling and the level rises; shut the stove off before the milk spills over, then let it settle back to its resting level.",
+  "schema": "{A} notifies the pot of milk, {B} notifies the cooking range, {C} notifies the stove knob, {a} notifies the arm used to turn the knob",
+  "preference": "num of words should not exceed 25. Degree of detail avg is 6",
+  "seen": [
+    "Turn on {B} with {C}, then shut it off before {A} boils over",
+    "Use {a} to turn {C}, let {A} rise, then turn {B} off before it spills",
+    "Boil {A} on {B} but turn off {C} before the milk overflows",
+    "Turn {C} to heat {A}, then turn again before it spills over",
+    "Start {B}, watch the milk in {A} rise, then shut it off in time",
+    "With {a}, toggle {C} on then off so {A} does not overflow",
+    "Heat {A} on {B} and turn the stove off before it boils over",
+    "Prevent {A} from spilling: turn {B} on, then off via {C}",
+    "Boil milk briefly on {B}, then turn off {C} before overflow",
+    "Use {a} on {C} to stop {A} from boiling over on {B}"
+  ],
+  "unseen": [
+    "Keep {A} from overflowing by shutting off {B} in time",
+    "Turn the range on, then off before the milk spills",
+    "Stop the boil before the milk in the pot runs over",
+    "Turn the stove knob to start and stop cooking before overflow",
+    "Do not let the boiling milk spill; shut the stove off first"
+  ]
+}

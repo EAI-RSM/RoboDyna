@@ -1,0 +1,52 @@
+# KitchenS-flavored collection config for boil_milk (UR5e + WSG).
+render_freq: 0
+episode_num: 1
+use_seed: false
+save_freq: 25
+embodiment: [ur5-wsg, ur5-wsg, 0.6]
+language_num: 100
+use_dynamic: true
+dynamic_level: 1
+dynamic_coefficient: 0.1
+domain_randomization:
+  random_background: false
+  cluttered_table: false
+  clean_background_rate: 1
+  random_head_camera_dis: 0
+  random_table_height: 0
+  random_light: false
+  crazy_random_light_rate: 0
+camera:
+  head_camera_type: D435
+  wrist_camera_type: D435
+  collect_head_camera: true
+  collect_wrist_camera: true
+data_type:
+  rgb: true
+  third_view: false
+  depth: false
+  pointcloud: false
+  observer: false
+  endpose: true
+  qpos: true
+  mesh_segmentation: false
+  actor_segmentation: false
+pcd_down_sample_num: 1024
+pcd_crop: true
+save_path: ./data
+clear_cache_freq: 5
+collect_data: true
+eval_video_log: true
+save_failed_cases: false
+check_render_success: false
+task_args:
+  boil_milk:
+    scene_id: 0
+    # The pot boils through the whole reach for the knob (~960 steps), so the
+    # rise is slow enough that the shutoff motion still lands under overflow.
+    boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
+    settle_steps: 1200          # steps for liquid to return toward baseline when off
+    baseline_level: 0.35
+    expert_shutoff_level: 0.62  # level at which the expert starts reaching back
+    overflow_level: 0.95
+    knob_contact_radius: 0.06

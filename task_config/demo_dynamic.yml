@@ -800,10 +800,10 @@ task_args:
     table_height_bias: 0.05     # m; raise table (+board) this much
     board_z_lift: 0.06          # m; half-height compact board above the table
     board_color: [0.98, 0.82, 0.05]  # RGB board color (yellow)
-  prevent_boil_overflow:
-    # KitchenS scene with sink+tap replaced by a cooking range. Pot of liquid on
-    # a burner; grasp and twist the range's front knob to toggle heat. Liquid
-    # rises while on and settles back when off. Success = on then off before overflow.
+  boil_milk:
+    # KitchenS: center sink+tap, cooking range on the side. Pot of milk on a
+    # burner; grasp and twist the front knob to toggle heat. Milk rises while
+    # on and settles back when off. Success = on then off before overflow.
     scene_id: 0                 # MW left, rack center, range right (right-arm reach)
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
     settle_steps: 1200          # steps for liquid to return toward baseline when off
