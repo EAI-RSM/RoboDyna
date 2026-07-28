@@ -37,7 +37,7 @@ CONTROLS_KEYBOARD = """
   Left Arrow        punch LEFT belt
   Right Arrow       punch RIGHT belt
   Up Arrow          punch BOTH belts
-  Press when a card is under the stamp head
+  Counts only when half the stamp head is on the card; otherwise missed
   V                 toggle view: front ↔ top-down
   Escape             quit
 ------------------------------------------------------------
@@ -46,7 +46,7 @@ CONTROLS_KEYBOARD = """
 
 CONTROLS_ROBOT = """
   Space             punch with selected arm(s)
-  Press when a card is under the stamp head
+  Counts only when half the stamp head is on the card; otherwise missed
   V                 toggle view: front ↔ top-down
   Escape             quit
 ------------------------------------------------------------

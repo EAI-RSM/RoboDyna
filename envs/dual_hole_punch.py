@@ -34,6 +34,9 @@ class dual_hole_punch(Base_Task):
               Continuous belt speed is belt_speed × belt_continuous_speed_scale (default 2×).
           CLI: --task-arg belt_continous_motion=true   or   --option 2
 
+    A press only counts as a stamp when at least ``STAMP_OVERLAP_MIN`` of the punch-head
+    footprint lands on the card; anything less marks that card missed.
+
     Tile spacing is always variable for now (random gaps in [square_gap_min,
     square_gap_max]); equal_tile_spacing is not exposed as an option.
 
@@ -53,6 +56,10 @@ class dual_hole_punch(Base_Task):
     LEFT_BUTTON_COLOR = (0.20, 0.70, 0.35)
     RIGHT_BUTTON_COLOR = (0.18, 0.48, 0.82)
     PUNCH_HALF = (0.02, 0.02, 0.05)     # gantry punch-head half-extents
+    # Fraction of the punch-head footprint that must land on a card. MIN is what counts
+    # as stamped; READY is the margin the expert waits for before committing a tap.
+    STAMP_OVERLAP_MIN = 0.5
+    STAMP_OVERLAP_READY = 0.6
     PUNCH_MODEL = "100_seal"
     PUNCH_MODEL_IDS = (2, 3, 4)
     PUNCH_Q = [0.5, 0.5, 0.5, 0.5]
@@ -688,7 +695,13 @@ class dual_hole_punch(Base_Task):
         hi = min(center_a + half_a, center_b + half_b)
         return max(0.0, hi - lo)
 
-    def _page_stamp_overlap_ratio(self, side, k):
+    def _stamp_overlap_ratio(self, side, k):
+        """Fraction of the punch-head footprint that lies on page ``k``.
+
+        Normalized by the head, not the card: the head is the smaller of the two, so
+        dividing by the card area would cap the ratio below 1 and make the threshold
+        mean something other than "half the head is on the paper".
+        """
         page_x = self._page_x_at(side, k, self._belt_step)
         punch_x = self._punch_x[side]
         x_overlap = self._interval_overlap_length(
@@ -703,14 +716,24 @@ class dual_hole_punch(Base_Task):
             self._punch_y[side],
             self.PUNCH_HALF[1],
         )
-        page_area = (2.0 * self.PAGE_HALF[0]) * (2.0 * self.PAGE_HALF[1])
-        if page_area <= 1e-8:
+        punch_area = (2.0 * self.PUNCH_HALF[0]) * (2.0 * self.PUNCH_HALF[1])
+        if punch_area <= 1e-8:
             return 0.0
-        return float((x_overlap * y_overlap) / page_area)
+        return float((x_overlap * y_overlap) / punch_area)
 
     def _page_satisfies_stamp_criterion(self, side, k):
+        """Whether a press landing now counts as a stamp on page ``k``."""
+        return self._stamp_overlap_ratio(side, k) >= self.STAMP_OVERLAP_MIN
+
+    def _page_ready_for_press(self, side, k):
+        """Whether the expert should commit a tap on page ``k`` at this step.
+
+        Stricter than the credit threshold so scripted demos still punch near the card
+        center: on a discrete stop the page is snapped under the head, and in continuous
+        motion we wait for overlap margin above ``STAMP_OVERLAP_MIN``.
+        """
         if self.belt_continous_motion:
-            return self._page_stamp_overlap_ratio(side, k) > 0.5
+            return self._stamp_overlap_ratio(side, k) >= self.STAMP_OVERLAP_READY
         return self._page_is_under_stamp(side, k)
 
     def _ready_pages_at_current_step(self):
@@ -719,7 +742,7 @@ class dual_hole_punch(Base_Task):
             k = self._next_unpunched_page(side)
             if k is None:
                 continue
-            if self._page_satisfies_stamp_criterion(side, k):
+            if self._page_ready_for_press(side, k):
                 ready_by_side[side] = k
                 self._under_head[side] = k
         return ready_by_side
