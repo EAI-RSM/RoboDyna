@@ -110,7 +110,9 @@ def _set_tip_xyz(env, tip_xyz, kinematic=True):
     new_body = np.asarray(tip_xyz, dtype=float) - offset
     pose = env.dart.get_pose()
     new_pose = sapien.Pose(new_body.tolist(), pose.q)
-    env.dart.set_pose(new_pose)
+    # ``create_actor`` returns an Actor wrapper; only its entity can be posed.
+    entity = getattr(env.dart, "actor", env.dart)
+    entity.set_pose(new_pose)
     rigid = env._dart_rigid or _get_rigid(env.dart)
     env._dart_rigid = rigid
     if rigid is None:
@@ -170,20 +172,17 @@ class KeyboardDartController:
             tip = _tip(self.env)
             _set_tip_xyz(self.env, tip + np.array([dx, dy, dz]), kinematic=True)
         if self._space.poll(window.key_down("space")):
-            c = self.env._target_center_world()
-            # Preserve the user's X/Z aim and thrust only along world Y.
+            # Preserve the user's X/Z aim and thrust only along world Y, stopping
+            # with the black tip on the painted face.
             tip = _tip(self.env)
-            _set_tip_xyz(self.env, [tip[0], c[1] - 0.005, tip[2]], kinematic=True)
+            _set_tip_xyz(
+                self.env, [tip[0], self.env._plant_tip_y(), tip[2]], kinematic=True
+            )
             self.env._check_blocker_hit()
             if not self.env._hit_blocker:
                 self.env._try_form_stick()
             self.done = True
-            status = (
-                "STUCK on center" if self.env._stuck else
-                "BLOCKER HIT" if self.env._hit_blocker else
-                "missed"
-            )
-            print(f"Thrust: {status}.")
+            print(f"Thrust: {self.env.hit_result_detail()}.")
 
 
 class RobotDartController:
@@ -219,7 +218,6 @@ class RobotDartController:
             self.env.move(self.env.move_by_displacement(
                 self.arm, z=0.10, quat=list(new_q), move_axis="world",
             ))
-            self.env._go_to_standoff(self.arm)
             self.holding = True
             print(f"Grasped dart with {self.arm}. Arrows/E/Q aim; Space jabs.")
         else:
@@ -230,23 +228,20 @@ class RobotDartController:
         if not self.holding:
             return
         self.busy = True
-        c = self.env._target_center_world()
         tip = _tip(self.env)
         # Cup-curtain-style placement: retain the position selected with the
-        # movement keys and perform only the task-specific forward jab.
-        dy = float(c[1] - 0.012 - tip[1])
+        # movement keys and perform only the task-specific forward jab, ending
+        # with the tip against the painted face.
+        dy = float(self.env._plant_tip_y() - tip[1])
         if abs(dy) > 0.004:
             self.env.move(self.env.move_by_displacement(
                 self.arm, y=float(np.clip(dy, -0.06, 0.06)), move_axis="world",
             ))
         self.env._dwell(30)
+        if not self.env._hit_blocker and self.env._hit_color is None:
+            self.env._record_board_hit()
         self.done = True
-        status = (
-            "STUCK on center" if self.env._stuck else
-            "BLOCKER HIT" if self.env._hit_blocker else
-            "missed / settle"
-        )
-        print(f"Jab: {status}.")
+        print(f"Jab: {self.env.hit_result_detail()}.")
         self.busy = False
 
     def _drive_qpos(self):
@@ -388,13 +383,15 @@ def main():
                 break
 
             if env._hit_blocker:
-                report_task_result(env, "blocker hit")
+                report_task_result(env, env.hit_result_detail())
                 break
             if env._stuck or getattr(controller, "done", False):
                 if settle_after is None:
                     settle_after = time.perf_counter()
                 elif time.perf_counter() - settle_after >= 1.0:
-                    report_task_result(env)
+                    if not env._hit_blocker and env._hit_color is None:
+                        env._record_board_hit()
+                    report_task_result(env, env.hit_result_detail())
                     break
 
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)

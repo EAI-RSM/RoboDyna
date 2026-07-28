@@ -49,6 +49,7 @@ class hit_target(Base_Task):
         [0.15, 0.35, 0.80],          # blue
         [0.90, 0.80, 0.20],          # yellow center
     ]
+    RING_COLOR_NAMES = ["red", "white", "blue", "yellow"]
 
     # ----- blockers (Opt 1 = static green, Opt 2 = dynamic red)
     BLOCKER_ENABLED_DEFAULT = False       # Opt 1
@@ -81,8 +82,20 @@ class hit_target(Base_Task):
     MOTION_X_MAX_DEFAULT = 0.272
     TARGET_CENTER_X_DEFAULT = 0.0
 
+    # ----- painted face (rings are thin visual discs stacked in front of the collider)
+    RING_VISUAL_GAP = 0.0008     # per-ring y stagger, outer ring first
+    RING_VISUAL_HALF = 0.001     # half thickness of one ring disc
+    FACE_VISUAL_GAP = 0.001      # outer ring floats this far ahead of the collider
+
     # ----- contact / stick
-    STICK_DIST = 0.035 / 3.0
+    # The dart tip stops on the collider face, which sits ~4 mm behind the painted
+    # surface, so a touch is judged against the paint and allowed this much slack
+    # for IK undershoot. The weld then plants the tip flush with the paint.
+    TOUCH_GAP = 0.005
+    # Latching which color was struck is stricter than the stick test: a fly-over
+    # that never reaches the paint must not be reported as a ring hit.
+    TOUCH_LATCH_GAP = 0.002
+    STICK_DIST = 0.035 / 3.0     # legacy approach band (kept for external callers)
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("hit_target", {})
@@ -92,6 +105,7 @@ class hit_target(Base_Task):
         self._stuck = False
         self._hit_center = False
         self._hit_blocker = False
+        self._hit_color = None  # "yellow" / "blue" / "white" / "red" when tip meets the board
         self._hit_planar_offset = None
         self._hit_radial_offset = None
         self.hit_score = 0.0
@@ -350,19 +364,19 @@ class hit_target(Base_Task):
             material=back_mat,
         )
 
-        face_y = -(th + 0.001)
+        face_y = self._board_face_local_y()
         for k in range(self.n_rings):
             frac = (self.n_rings - k) / self.n_rings
             radius = board_radius * frac
             if k == self.n_rings - 1:
                 radius = min(radius, self.center_radius if self.center_radius > 0 else radius)
             col = self.RING_COLORS[min(k, len(self.RING_COLORS) - 1)]
-            yk = face_y - 0.0008 * k
+            yk = face_y - self.RING_VISUAL_GAP * k
             mat = sapien.render.RenderMaterial(base_color=[*col, 1.0])
             builder.add_cylinder_visual(
                 pose=sapien.Pose([0, yk, 0], self.FACE_ROT_Q),
                 radius=radius,
-                half_length=0.001,
+                half_length=self.RING_VISUAL_HALF,
                 material=mat,
             )
 
@@ -459,6 +473,70 @@ class hit_target(Base_Task):
 
     def _target_center_world(self):
         return np.array(self.target.get_functional_point(0, "list")[:3])
+
+    def _board_face_local_y(self):
+        """Board-local y of the outer ring plane (board front faces local −y)."""
+        return float(-(float(self.BOARD_THICKNESS) + self.FACE_VISUAL_GAP))
+
+    def _paint_front_offset(self):
+        """How far the frontmost (yellow) painted surface sits ahead of the rings' origin."""
+        n = max(1, int(getattr(self, "n_rings", self.N_RINGS_DEFAULT)))
+        return float(self.RING_VISUAL_GAP * (n - 1) + self.RING_VISUAL_HALF)
+
+    def _board_paint_front_y(self):
+        """World y of the visible board surface the dart tip must reach."""
+        return float(self._target_center_world()[1]) - self._paint_front_offset()
+
+    def _plant_tip_y(self):
+        """Tip y to command so the black tip lands on the paint (1 mm of overlap)."""
+        return self._board_paint_front_y() + 0.001
+
+    def _tip_gap_to_plant(self, tip=None) -> float:
+        """How far the tip still has to travel in +Y to reach ``_plant_tip_y``."""
+        if tip is None:
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3], dtype=float)
+        return float(self._plant_tip_y() - float(tip[1]))
+
+    def _push_tip_to_plant(self, arm, max_step: float = 0.035) -> bool:
+        """Drive the dart tip onto the painted face (same Y as interactive jab).
+
+        Returns False if planning fails or a blocker is hit mid-push.
+        """
+        for _ in range(12):
+            if self._hit_blocker or not self.plan_success:
+                return False
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3], dtype=float)
+            gap = self._tip_gap_to_plant(tip)
+            if gap <= 0.004:
+                return True
+            step = min(float(max_step), gap)
+            self.move(
+                self.move_by_displacement(arm_tag=arm, y=float(step), move_axis="world")
+            )
+            self._check_blocker_hit()
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3], dtype=float)
+        return bool(
+            self.plan_success
+            and not self._hit_blocker
+            and self._tip_gap_to_plant(tip) <= 0.006
+        )
+
+    def _tip_on_board_plane(self, tip_y, gap=None):
+        """True when the tip has reached the paint and has not passed out the back."""
+        front = self._board_paint_front_y()
+        back = float(self.target_y) + float(self.BOARD_THICKNESS)
+        slack = self.TOUCH_GAP if gap is None else float(gap)
+        return bool(front - slack <= float(tip_y) <= back)
+
+    def _tip_over_board(self, tip=None):
+        """True when the tip's XZ position lies within the board disc."""
+        if tip is None:
+            if getattr(self, "dart", None) is None:
+                return False
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3], dtype=float)
+        center = self._target_center_world()
+        radial = float(np.linalg.norm(np.asarray(tip)[[0, 2]] - center[[0, 2]]))
+        return radial <= float(self.board_radius)
 
     def _any_blocker(self):
         return bool(getattr(self, "blocker_enabled", False) or getattr(self, "blocker_dynamic", False))
@@ -658,17 +736,81 @@ class hit_target(Base_Task):
         if not self._stuck:
             self._check_blocker_hit()
 
+    def _ring_color_at_radius(self, radial_offset: float) -> str | None:
+        """Map planar tip distance from the bullseye to a painted ring color.
+
+        Rings are nested discs drawn outer→inner (``RING_COLORS``). Returns
+        ``None`` when the tip is outside the board radius.
+        """
+        r = float(radial_offset)
+        board_r = float(self.board_radius)
+        if r > board_r + 1e-6:
+            return None
+        n = max(1, int(self.n_rings))
+        color = self.RING_COLOR_NAMES[0]
+        for k in range(n):
+            frac = (n - k) / n
+            radius = board_r * frac
+            if k == n - 1:
+                radius = min(
+                    radius,
+                    float(self.center_radius) if self.center_radius > 0 else radius,
+                )
+            if r <= radius + 1e-9:
+                color = self.RING_COLOR_NAMES[min(k, len(self.RING_COLOR_NAMES) - 1)]
+            else:
+                break
+        return color
+
+    def _record_board_hit(self) -> str | None:
+        """Latch the ring color under the tip when it reaches the board face.
+
+        Does not change success rules: only yellow welds (via ``_try_form_stick``).
+        Returns the latched color name, or ``None`` if the tip is not on the board.
+        """
+        if self._hit_blocker or getattr(self, "dart", None) is None:
+            return self._hit_color
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3], dtype=float)
+        target_center = self._target_center_world()
+        planar_offset = tip[[0, 2]] - target_center[[0, 2]]
+        radial_offset = float(np.linalg.norm(planar_offset))
+        if not self._tip_on_board_plane(tip[1], gap=self.TOUCH_LATCH_GAP):
+            return self._hit_color
+        color = self._ring_color_at_radius(radial_offset)
+        if color is None:
+            return self._hit_color
+        self._hit_planar_offset = planar_offset.astype(float)
+        self._hit_radial_offset = radial_offset
+        self._hit_color = color
+        return color
+
+    def hit_result_detail(self) -> str:
+        """Short end-of-episode label: which color was hit, or why it failed."""
+        if self._hit_blocker:
+            return "blocker hit"
+        color = self._hit_color
+        if color is None:
+            # Last chance classification from the current tip pose.
+            color = self._record_board_hit()
+        if color == "yellow":
+            return "hit yellow (success)"
+        if color in ("blue", "white", "red"):
+            return f"hit {color} (failure)"
+        if self._tip_over_board():
+            return "no contact: tip stopped short of the board face"
+        return "missed the board"
+
     def _try_form_stick(self):
         """Weld the dart only on a yellow-center hit; never after a blocker strike."""
         if self._hit_blocker:
             return False
+        color = self._record_board_hit()
         tip = np.array(self.dart.get_functional_point(0, "list")[:3])
         target_center = self._target_center_world()
         planar_offset = tip[[0, 2]] - target_center[[0, 2]]
         radial_offset = float(np.linalg.norm(planar_offset))
-        plane_dist = abs(float(tip[1] - target_center[1]))
-        on_center = radial_offset <= self.center_radius
-        if plane_dist <= self.STICK_DIST and on_center:
+        on_center = radial_offset <= self.center_radius and color == "yellow"
+        if self._tip_on_board_plane(tip[1]) and on_center:
             self._check_blocker_hit()
             if self._hit_blocker:
                 return False
@@ -678,13 +820,18 @@ class hit_target(Base_Task):
             self._dart_rigid.set_kinematic(True)
             board_pose = self._target_rigid.entity.get_pose()
             inv = np.linalg.inv(board_pose.to_transformation_matrix())
-            self._stick_local = (inv @ np.append(tip, 1.0))[:3]
+            stick_local = (inv @ np.append(tip, 1.0))[:3]
+            # Plant the tip on the paint instead of freezing whatever approach gap
+            # was left, so the black tip visibly meets the yellow center.
+            stick_local[1] = self._board_face_local_y() - self._paint_front_offset() + 0.001
+            self._stick_local = stick_local
             self._tip_offset_world = tip - np.array(self.dart.get_pose().p)
             self._stick_dart_q = self.dart.get_pose().q
             self._stuck = True
             self._hit_planar_offset = planar_offset.astype(float)
             self._hit_radial_offset = radial_offset
             self._hit_center = True
+            self._hit_color = "yellow"
             self.hit_score = 1.0
             return True
         return False
@@ -743,7 +890,7 @@ class hit_target(Base_Task):
         if not self.plan_success or self._hit_blocker:
             return False
         tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-        goal_y = float(self.target_y - 0.018)
+        goal_y = float(self._plant_tip_y())
         for _ in range(12):
             tip = np.array(self.dart.get_functional_point(0, "list")[:3])
             if float(tip[1]) >= goal_y - 0.006:
@@ -1044,7 +1191,8 @@ class hit_target(Base_Task):
                         continue
                 else:
                     # Static disc only: lateral Y push at bullseye height (shaft stays outside x=0).
-                    while float(self.target_y - tip[1]) > 0.018:
+                    # Drive onto the painted face — same plant Y as interactive jab / stick check.
+                    while self._tip_gap_to_plant(tip) > 0.004:
                         if self._hit_blocker or not self.plan_success:
                             break
                         tip = np.array(self.dart.get_functional_point(0, "list")[:3])
@@ -1060,7 +1208,7 @@ class hit_target(Base_Task):
                                 break
                         if not self._xz_clear_of_blockers(tip[0], tip[2], step=self._step_count + 15):
                             break
-                        step_y = min(0.035, float(self.target_y - tip[1]) - 0.016)
+                        step_y = min(0.035, self._tip_gap_to_plant(tip))
                         if step_y <= 0.004:
                             break
                         self.move(
@@ -1076,17 +1224,15 @@ class hit_target(Base_Task):
                     self._safe_retreat_from_board(arm, side_sign, clear_need)
                     continue
                 self._align_tip_z(arm)
+                if not self._push_tip_to_plant(arm):
+                    self._safe_retreat_from_board(arm, side_sign, clear_need)
+                    continue
                 cleared = True
             else:
                 self._align_tip_z(arm)
-                tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-                gap = float(self.target_y - tip[1])
-                if gap > 0.018:
-                    self.move(
-                        self.move_by_displacement(
-                            arm_tag=arm, y=max(0.0, gap - 0.016), move_axis="world"
-                        )
-                    )
+                if not self._push_tip_to_plant(arm):
+                    if self._hit_blocker or not self.plan_success:
+                        break
 
             self._check_blocker_hit()
             self._dbg(f"after push attempt{attempt}")
@@ -1101,6 +1247,11 @@ class hit_target(Base_Task):
                 self._align_tip_z(arm)
                 if not self.plan_success:
                     break
+                # Re-seat tip on the paint each dwell cycle so contact matches
+                # interactive ``_plant_tip_y`` / ``_tip_on_board_plane`` rules.
+                if self._tip_gap_to_plant() > 0.004:
+                    if not self._push_tip_to_plant(arm):
+                        break
                 tip = np.array(self.dart.get_functional_point(0, "list")[:3])
                 if self._dyn_threatens_tip(tip[0], tip[2], horizon=55):
                     self._safe_retreat_from_board(arm, side_sign, clear_need)
@@ -1146,7 +1297,13 @@ class hit_target(Base_Task):
 
     # ------------------------------------------------------------------ success
     def check_success(self):
-        # Stick–blocker contact is an immediate failure.
+        """Success: black tip welded on the yellow paint; never struck a blocker.
+
+        Contact uses the same paint-face plane as interactive play
+        (``_tip_on_board_plane`` / ``_plant_tip_y``): tip must reach the painted
+        surface within the yellow radius. A tip that stops short of the paint
+        does not count.
+        """
         if self._hit_blocker:
             return False
         return bool(self._stuck and self._hit_center)
@@ -1177,6 +1334,7 @@ class hit_target(Base_Task):
             "stuck": bool(self._stuck),
             "center_hit": bool(self._hit_center),
             "hit_blocker": bool(self._hit_blocker),
+            "hit_color": self._hit_color,
             "planar_offset": planar_offset,
             "radial_offset": float(self._hit_radial_offset) if self._hit_radial_offset is not None else -1.0,
             "hit_score": float(self.hit_score),
