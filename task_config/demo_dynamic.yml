@@ -753,16 +753,20 @@ task_args:
     pop_steps: 0                 # 0 = continuous bob (no crown freeze)
     pop_speed: 0.064            # m/s peak |dz/dt|; 20% below prior 0.08
     mole_speed_spread: 0.40     # lower = pop_speed * (1 - spread)
-    press_ready_frac: 0.18      # jab early mid-rise; mallet meets crest
+    press_ready_frac: 0.18      # legacy; stroke uses press_commit_frac
+    press_commit_frac: 0.85     # only smash once the mole is near its crest
+    press_overshoot: 0.012      # m; drive the head this far into the crown
+    strike_xy_tol: 0.030        # m; head-vs-hole XY error allowed before stroke
+    strike_attempts: 4          # approach/wait/strike cycles per mole
     approach_max_frac: 0.35     # re-hover while mole is this low
     approach_falling_frac: 0.55 # or mid-fall (never crest)
     hover_clearance: 0.018       # m; short jab above raised mole
-    touch_tol: 0.04             # m; cube–mole XY touch tolerance
+    touch_tol: 0.04             # m; legacy XY touch tol (head footprint is authoritative)
     hole_count: 9               # openings on board
     hole_size: 0.0825           # m; hole opening side length
     hole_bar_thickness: 0.014   # m; bar thickness between holes
-    cube_hole_scale: 1.20       # mallet cube side = hole_size * scale (>1 so it can't enter)
-    cube_grasp_drop_z: 0.05     # m; lower cube below finger midpoint after grasp
+    cube_hole_scale: 1.20       # legacy; mallets use head size, not cubes
+    cube_grasp_drop_z: 0.05     # m; legacy grasp drop (mallet uses cradle height)
     mole_scale_mult: 1.80       # 1.5x prior mole size
     mole_height: 0.1053         # m; world height after mole_scale_mult (pop travel)
     rabbit_scale_mult: 1.00     # 224_rabbit authored near mole height

@@ -9,12 +9,13 @@ import numpy as np
 class whack_a_mole(Base_Task):
     """Whack-a-mole. A fixed yellow board with a grid of holes spans both arms' reach.
     Default: 2 moles bob out of / back into fixed holes at randomized pop speeds
-    (uniform in [0.6, 1.0] × POP_SPEED, with a smooth cosine bob). Each arm starts
-    with a blue cube gripped between its fingers (slightly larger than a hole) so
-    the gripper cannot enter a hole. A hit requires the mole to make real mesh
-    contact with the underside (bottom face) of a held cube while above the board
-    surface; side brushes or hovering nearby do not count. Hit moles turn green
-    and stay down.
+    (uniform in [0.6, 1.0] × POP_SPEED, with a smooth cosine bob). Each arm picks
+    up a wooden mallet from a side cradle and carries it in a hammer pose: handle
+    horizontal, head axis along world Z. A hit requires the mole's crown to be
+    struck by the flat lower face of the head while above the board; handle tips,
+    gripper pads, and side brushes do not count. The head is wider than a hole
+    (0.10 m vs 0.0825 m) so it cannot plunge into one. Hit moles turn green and
+    stay down.
 
     Task options (independent toggles in ``task_args.whack_a_mole``; combinable):
       - Opt 1 — rabbit distractor: ``distractor_enabled``
@@ -79,15 +80,27 @@ class whack_a_mole(Base_Task):
     RABBIT_HEIGHT = 0.1047        # world height after scale_mult (match moles)
     # Drop the gripped cube below the finger-pad midpoint (world -Z).
     CUBE_GRASP_DROP_Z = 0.05
-    MALLET_HEAD_RADIUS = 0.041       # Match the mole / hole diameter.
-    MALLET_HEAD_HALF_X = 0.070       # Traditional crosswise cylindrical head.
+    # Head is a squat drum struck on its flat lower face, wider than a hole
+    # (0.10 m across vs an 0.0825 m opening) so it can never drop into one.
+    MALLET_HEAD_RADIUS = 0.050
+    MALLET_HEAD_HALF_X = 0.030       # Half-height along the head's own axis.
     MALLET_HANDLE_RADIUS = 0.012
-    MALLET_HANDLE_HALF_Y = 0.145
+    # Handle stops at the head's far face instead of poking out the other side.
+    MALLET_HANDLE_HALF_Y = 0.130
     MALLET_HEAD_Y = -0.105         # Head sits at the forward end of the handle.
     MALLET_HANDLE_CENTER_Y = -0.025  # Forward end passes through the head center.
     MALLET_WOOD_COLOR = [0.48, 0.25, 0.10]
     MALLET_REST_HEIGHT = 0.115
     MALLET_REST_RAIL_HALF_Y = 0.012
+    # Staged/held orientation. The handle lies flat along world Y (head pointing
+    # away from the robot, toward the board) while the head cylinder's axis maps
+    # to world Z. That is a hammer pose: the strike drives the head's flat lower
+    # face straight down onto the mole crown, not the curved side of the head.
+    MALLET_LEVEL_Q = [0.0, 0.70710678, 0.0, 0.70710678]
+    # Grasp the handle at the mallet origin; the head stays |MALLET_HEAD_Y| ahead.
+    MALLET_GRASP_HANDLE_Y = 0.0
+    # Cradle posts straddle the grasp point without fouling the fingers/head.
+    MALLET_REST_POST_Y = (-0.065, 0.035)
     # Keep the horizontal handle centered vertically in the finger aperture.
     MALLET_FINGER_EE_Z = 0.075
     MALLET_TIP_GRASP_CLEARANCE = 0.045
@@ -102,6 +115,16 @@ class whack_a_mole(Base_Task):
     # Begin the press early mid-rise so the descending mallet meets the crest
     # without parking above a fully raised mole first.
     PRESS_READY_FRAC = 0.18
+    # Commit the stroke only once the mole is this far up its bob. Below ~0.6 the
+    # crown is still inside the hole, so the head would bottom out on the board
+    # instead of the mole and the hit would never register.
+    PRESS_COMMIT_FRAC = 0.85
+    # How far the head is driven into the crown once committed (m).
+    PRESS_OVERSHOOT = 0.012
+    # Head-center vs hole XY error allowed before a stroke is attempted (m).
+    STRIKE_XY_TOL = 0.030
+    # Approach / wait / strike cycles allowed per mole.
+    STRIKE_ATTEMPTS = 4
     # Only (re)approach while the mole is this low — approaching over a crest
     # parks the mallet and reads as a multi-second freeze before the smash.
     APPROACH_MAX_FRAC = 0.35
@@ -1049,22 +1072,18 @@ class whack_a_mole(Base_Task):
             pass
 
     def _create_staged_mallets(self):
-        """Stage head-down mallets in two-post cradles for an easy top grasp."""
+        """Stage level mallets in two-post cradles for an easy top grasp."""
 
         y = float(self.board_center[1] - self.BOARD_HALF[1] - 0.08)
         # Rest top touches the horizontal handle underside.
         rest_h = float(self.MALLET_REST_HEIGHT)
-        # Local X (the cylinder head axis) maps to world Z, while the local Y
-        # handle stays horizontal along world Y above the table. The taller
-        # posts now visibly meet the handle rather than stopping below it.
-        # Same head-up pose, then rotate 180 degrees about world Z.
-        head_axis_up_q = [0.0, 0.70710678, 0.0, 0.70710678]
+        level_q = list(self.MALLET_LEVEL_Q)
         z = float(self.table_top + rest_h + self.MALLET_HANDLE_RADIUS)
         for arm, x in (("left", -0.38), ("right", 0.38)):
             rails = []
-            # Cue-style paired posts support the horizontal handle while its
-            # center stays unobstructed for a top-down grasp.
-            for post_idx, y_offset in enumerate((-0.070, 0.030)):
+            # Cue-style paired posts support the horizontal handle while the
+            # grasp point between them stays clear for a top-down pinch.
+            for post_idx, y_offset in enumerate(self.MALLET_REST_POST_Y):
                 rails.append(create_box(
                     self.scene,
                     sapien.Pose([x, y + y_offset, self.table_top + 0.5 * rest_h]),
@@ -1074,7 +1093,7 @@ class whack_a_mole(Base_Task):
                 ))
             self.mallet_rests[arm] = rails
             self.staged_mallets[arm] = self._build_mallet(
-                sapien.Pose([x, y, z], head_axis_up_q),
+                sapien.Pose([x, y, z], level_q),
                 name=f"staged_mallet_{arm}", is_static=False,
             )
             rigid = self._get_rigid_dynamic_component(self.staged_mallets[arm])
@@ -1206,21 +1225,20 @@ class whack_a_mole(Base_Task):
     def pickup_mallet_to_ready(self, arm_tag):
         """Open, grasp the staged handle from above, weld, then lift to ready."""
 
-        arm = str(arm_tag)
-        if arm in self.hammer_cubes:
-            return True
-        staged = self.staged_mallets.get(arm)
-        if staged is None:
-            return False
+        return self.pickup_mallets((arm_tag,))
 
-        self.plan_success = True
-        staged_p = np.asarray(staged.get_pose().p, dtype=np.float64)
-        # Grasp the handle midway between the support posts. This leaves room
-        # for both fingers and keeps the mallet head well clear of the wrist.
-        handle_local = np.array([0.0, self.MALLET_HANDLE_CENTER_Y + 0.045, 0.0])
-        handle_p = staged_p + staged.get_pose().to_transformation_matrix()[:3, :3] @ handle_local
-        # Match the cue pickup: the planning EE remains above the shaft while
-        # the fingers descend vertically around it.
+    def _staged_grasp_pose(self, arm):
+        """Top-down EE pre-grasp / grasp poses for one staged mallet handle."""
+
+        staged = self.staged_mallets.get(str(arm))
+        if staged is None:
+            return None, None, None
+        pose = staged.get_pose()
+        handle_local = np.array([0.0, float(self.MALLET_GRASP_HANDLE_Y), 0.0])
+        handle_p = (np.asarray(pose.p, dtype=np.float64)
+                    + pose.to_transformation_matrix()[:3, :3] @ handle_local)
+        # Match the cue pickup: the planning EE stays above the shaft while the
+        # fingers descend vertically around it.
         quat = list(GRASP_DIRECTION_DIC["top_down"])
         grasp_z = float(handle_p[2] + self.MALLET_FINGER_EE_Z)
         pre_pose = [
@@ -1228,47 +1246,18 @@ class whack_a_mole(Base_Task):
             grasp_z + self.MALLET_PRE_GRASP_DIS, *quat,
         ]
         grasp_pose = [float(handle_p[0]), float(handle_p[1]), grasp_z, *quat]
+        return staged, pre_pose, grasp_pose
 
-        self._disable_mallet_robot_collision(staged)
-        self.move(self.open_gripper(arm_tag, pos=1.0))
-        if not self.plan_success:
-            return False
-        self.move(self.move_to_pose(arm_tag, pre_pose))
-        if not self.plan_success:
-            return False
-        self.move(self.move_to_pose(arm_tag, grasp_pose))
-        if not self.plan_success:
-            return False
+    def _weld_mallet(self, arm_tag):
+        """Bind the staged mallet rigidly to the arm's current EE frame."""
 
-        # Correct for small IK/model offsets so the pads actually surround the
-        # elevated handle before they close, as in play_billiard's cue pickup.
-        target_pad_z = float(handle_p[2] + self.MALLET_TIP_GRASP_CLEARANCE)
-        pad_z = self._finger_pad_z(arm_tag)
-        if pad_z is not None:
-            for _ in range(4):
-                error = float(target_pad_z - pad_z)
-                if abs(error) < 0.008:
-                    break
-                self.move(self.move_by_displacement(
-                    arm_tag=arm_tag,
-                    z=float(np.clip(error, -0.025, 0.025)),
-                    move_axis="world",
-                ))
-                if not self.plan_success:
-                    return False
-                pad_z = self._finger_pad_z(arm_tag)
-                if pad_z is None:
-                    break
-        self.move(self.close_gripper(arm_tag, pos=self._gripper_pos_for_mallet_handle()))
-        if not self.plan_success:
-            return False
-        self._dwell(20)
-
-        # Carry the actual staged mallet; no replacement actor or magnetic snap.
+        arm = str(arm_tag)
+        staged = self.staged_mallets.get(arm)
+        if staged is None:
+            return
         ee_T = self._pose7_to_mat(np.asarray(self.get_arm_pose(arm_tag), dtype=float))
-        mallet_T = staged.get_pose().to_transformation_matrix()
         self.hammer_cubes[arm] = staged
-        self._cube_weld[arm] = np.linalg.inv(ee_T) @ mallet_T
+        self._cube_weld[arm] = np.linalg.inv(ee_T) @ staged.get_pose().to_transformation_matrix()
         rigid = self._get_rigid_dynamic_component(staged)
         self._cube_comps[arm] = rigid
         if rigid is not None:
@@ -1278,11 +1267,85 @@ class whack_a_mole(Base_Task):
             except Exception:
                 pass
         self._cubes_ready = True
-        self._lift_mallets_clear((arm_tag,))
+
+    def pickup_mallets(self, arm_tags=None):
+        """Pick up both staged mallets at once (one scripted move per phase).
+
+        Doing the two arms together instead of back-to-back halves the dead time
+        before the first mole is played and keeps the two arms symmetric.
+        """
+        arm_tags = tuple(
+            ArmTag(str(a)) for a in (arm_tags or (ArmTag("left"), ArmTag("right")))
+            if str(a) not in self.hammer_cubes and str(a) in self.staged_mallets
+        )
+        if not arm_tags:
+            return True
+
+        self.plan_success = True
+        poses = {}
+        for arm_tag in arm_tags:
+            staged, pre_pose, grasp_pose = self._staged_grasp_pose(arm_tag)
+            if staged is None:
+                return False
+            self._disable_mallet_robot_collision(staged)
+            poses[str(arm_tag)] = (pre_pose, grasp_pose)
+
+        def both(make):
+            self._move_arms([make(arm_tag) for arm_tag in arm_tags])
+            return self.plan_success
+
+        if not both(lambda a: self.open_gripper(a, pos=1.0)):
+            return False
+        if not both(lambda a: self.move_to_pose(a, poses[str(a)][0])):
+            return False
+        if not both(lambda a: self.move_to_pose(a, poses[str(a)][1])):
+            return False
+
+        # Correct small IK/model offsets so the pads actually surround the
+        # elevated handle before they close, as in play_billiard's cue pickup.
+        for _ in range(3):
+            errors = {}
+            for arm_tag in arm_tags:
+                pad_z = self._finger_pad_z(arm_tag)
+                if pad_z is None:
+                    continue
+                target = float(poses[str(arm_tag)][1][2] - self.MALLET_FINGER_EE_Z
+                               + self.MALLET_TIP_GRASP_CLEARANCE)
+                err = float(target - pad_z)
+                if abs(err) >= 0.008:
+                    errors[str(arm_tag)] = float(np.clip(err, -0.025, 0.025))
+            if not errors:
+                break
+            self._move_arms([
+                self.move_by_displacement(arm_tag=a, z=errors[str(a)], move_axis="world")
+                for a in arm_tags if str(a) in errors
+            ])
+            if not self.plan_success:
+                return False
+
+        grip = self._gripper_pos_for_mallet_handle()
+        if not both(lambda a: self.close_gripper(a, pos=grip)):
+            return False
+        self._dwell(15)
+
+        # Carry the actual staged mallets; no replacement actor or magnetic snap.
+        for arm_tag in arm_tags:
+            self._weld_mallet(arm_tag)
+        self._lift_mallets_clear(arm_tags)
         return True
 
+    def _move_arms(self, actions):
+        """Run one action per arm, together when both arms are involved."""
+        actions = [a for a in actions if a is not None]
+        if not actions:
+            return
+        if len(actions) == 1:
+            self.move(actions[0])
+        else:
+            self.move(actions[0], actions[1])
+
     def _lift_mallets_clear(self, arm_tags=None):
-        """Raise both held cubes to hover height (escape post-grasp low pose).
+        """Raise held mallets to hover height (escape the post-grasp low pose).
 
         Target EE hover from ``_hover_ee_z`` so we don't overshoot into an
         unreachable high-Z band that then breaks XY planning.
@@ -1290,14 +1353,16 @@ class whack_a_mole(Base_Task):
         self._suppress_board_hit = True
         prev_plan = self.plan_success
         try:
+            actions = []
             for arm in (arm_tags or (ArmTag("left"), ArmTag("right"))):
                 hover = float(self._hover_ee_z(arm))
                 cur = np.array(self.get_arm_pose(arm), dtype=float)
                 dz = float(hover - cur[2])
                 if abs(dz) < 0.01:
                     continue
-                self.move(self.move_by_displacement(
+                actions.append(self.move_by_displacement(
                     arm_tag=arm, z=dz, move_axis="world"))
+            self._move_arms(actions)
         finally:
             self._suppress_board_hit = False
             if not self.plan_success:
@@ -1581,32 +1646,100 @@ class whack_a_mole(Base_Task):
         height = float(states[idx].get("height", self.mole_height))
         return float(p[2] + height * 0.5)
 
-    def _mallet_head_geometry(self, mallet):
-        """Return the head center and the center of its downward striking face."""
+    def _mallet_head_frame(self, mallet):
+        """World head center and unit head-cylinder axis (authored along local X)."""
 
         mallet_T = mallet.get_pose().to_transformation_matrix()
-        head_center = (mallet_T @ np.array(
-            [0.0, self.MALLET_HEAD_Y, 0.0, 1.0]
-        ))[:3]
-        # The cylinder is authored along local X. Pick whichever axial end is
-        # lower in world Z so this remains correct if the held head tilts.
-        head_axis = np.asarray(mallet_T[:3, 0], dtype=float)
-        end_a = head_center + head_axis * self.MALLET_HEAD_HALF_X
-        end_b = head_center - head_axis * self.MALLET_HEAD_HALF_X
-        bottom_center = end_a if end_a[2] < end_b[2] else end_b
-        return head_center, bottom_center
+        center = (mallet_T @ np.array([0.0, self.MALLET_HEAD_Y, 0.0, 1.0]))[:3]
+        axis = np.asarray(mallet_T[:3, 0], dtype=float)
+        axis = axis / max(float(np.linalg.norm(axis)), 1e-9)
+        return np.asarray(center, dtype=float), axis
+
+    def _mallet_head_geometry(self, mallet):
+        """Head center plus the lowest point of its striking surface.
+
+        The mallet is carried with the head axis vertical, so the striking
+        surface is the flat lower end face. The general form below keeps the
+        value sane when the wrist is off by a few degrees.
+        """
+
+        center, axis = self._mallet_head_frame(mallet)
+        r = float(self.MALLET_HEAD_RADIUS)
+        half_len = float(self.MALLET_HEAD_HALF_X)
+        az = float(axis[2])
+        horiz = float(np.sqrt(max(1.0 - az * az, 0.0)))
+        # Slide to the lower axial end, then drop by the radius perpendicular
+        # to the axis (which is straight down when the head is level).
+        end = center - np.sign(az) * axis * half_len if abs(az) > 1e-6 else center
+        bottom = end.copy()
+        bottom[2] -= r * horiz
+        if abs(az) > 1e-6:
+            # Perpendicular-to-axis descent also shifts XY once the head tilts.
+            perp = np.array([0.0, 0.0, -1.0]) + axis * az
+            n = float(np.linalg.norm(perp))
+            if n > 1e-9:
+                bottom = end + (perp / n) * r
+        return center, bottom
+
+    def _head_strike_z(self, mallet, xy):
+        """World Z of the head's under-surface directly above ``xy``.
+
+        Returns ``None`` when ``xy`` lies outside the head's footprint, so a
+        mole that is merely beside the mallet never counts as struck.
+        """
+
+        center, axis = self._mallet_head_frame(mallet)
+        r = float(self.MALLET_HEAD_RADIUS)
+        half_len = float(self.MALLET_HEAD_HALF_X)
+        xy = np.asarray(xy, dtype=float)[:2]
+        az = float(axis[2])
+        if abs(az) >= 0.5:
+            # Carried pose: the head axis is (near) vertical, so the striking
+            # surface is the flat lower end face. Its footprint is the face disc
+            # and its height is the face plane sampled above ``xy``.
+            end = center - np.sign(az) * axis * half_len
+            d = xy - end[:2]
+            if float(np.linalg.norm(d)) > r:
+                return None
+            return float(end[2] - float(np.dot(axis[:2], d)) / az)
+        # Head tipped over: strike surface is the curved side of the cylinder.
+        d = xy - center[:2]
+        axis_xy = axis[:2]
+        n = float(np.linalg.norm(axis_xy))
+        u = axis_xy / n
+        t = float(np.dot(d, u)) / n
+        if abs(t) > half_len:
+            return None
+        perp = float(np.linalg.norm(d - t * axis_xy))
+        if perp > r:
+            return None
+        return float(center[2] + t * az
+                     - n * np.sqrt(max(r * r - perp * perp, 0.0)))
+
+    def _head_half_extent_xy(self, mallet):
+        """Axis-aligned XY half-extents of the head (for board-overlap tests)."""
+
+        _center, axis = self._mallet_head_frame(mallet)
+        r = float(self.MALLET_HEAD_RADIUS)
+        half_len = float(self.MALLET_HEAD_HALF_X)
+        return [
+            abs(float(axis[i])) * half_len + r * float(np.sqrt(max(1.0 - axis[i] ** 2, 0.0)))
+            for i in (0, 1)
+        ]
 
     def _cube_bottom_contact_with_critter(self, actors, states, idx):
-        """True iff the critter is hit by the underside of a held cube.
+        """True iff the critter's crown is pressed by the mallet head underside.
 
-        Requires:
-          1) cube XY over the critter,
-          2) cube underside in the upper-half band of the critter
-             (rejects side brushes against the cube walls),
-          3) either PhysX mesh contact (sep <= HIT_SEPARATION_MAX) OR a
-             geometric press of the underside onto/into the crown
-             (bottom_z <= top_z + HIT_GEOM_EPS). Geometric fallback is needed
-             because kinematic cube set_pose can clear the contact manifold.
+        Requires all of:
+          1) the critter centre lies inside the head's XY footprint,
+          2) the head under-surface directly above the critter has come down
+             onto / into the crown (``<= top_z + HIT_GEOM_EPS``),
+          3) it has not sunk past the critter midline — that would be the head
+             passing beside the body rather than striking its top.
+
+        This is purely geometric on purpose: the head is kinematically welded to
+        the gripper and ``set_pose`` clears PhysX manifolds, so contact reports
+        are unreliable. PhysX contact is still accepted as a secondary signal.
         """
         if not getattr(self, "_cubes_ready", False):
             return False
@@ -1614,32 +1747,24 @@ class whack_a_mole(Base_Task):
         height = float(states[idx].get("height", self.mole_height))
         center_z = float(cp[2])
         top_z = float(center_z + 0.5 * height)
-        xy_tol = float(self._cfg.get("hit_xy_tol", self.HIT_XY_TOL))
-        band = float(self._cfg.get("hit_bottom_band", self.HIT_BOTTOM_BAND))
         sep_max = float(self._cfg.get("hit_separation_max", self.HIT_SEPARATION_MAX))
         geom_eps = float(self._cfg.get("hit_geom_eps", self.HIT_GEOM_EPS))
         actor_name = actors[idx].get_name()
-        for arm, cube in getattr(self, "hammer_cubes", {}).items():
-            head_center, bottom = self._mallet_head_geometry(cube)
-            if float(np.linalg.norm(head_center[:2] - cp[:2])) > self.MALLET_HEAD_RADIUS + xy_tol:
+        for arm, mallet in getattr(self, "hammer_cubes", {}).items():
+            strike_z = self._head_strike_z(mallet, cp[:2])
+            if strike_z is None:
                 continue
-            bottom_z = float(bottom[2])
-            # Underside must be near/into the crown, not still hovering, and
-            # not sunk past the mole midline (that would be a side crush).
-            if bottom_z > top_z + band:
+            if strike_z < center_z:
                 continue
-            if bottom_z < center_z:
-                continue
-            # Geometric bottom-face press (robust when PhysX contacts are gone).
-            if bottom_z <= top_z + geom_eps:
+            if strike_z <= top_z + geom_eps:
                 return True
-            cube_name = cube.get_name()
+            mallet_name = mallet.get_name()
             for contact in self.scene.get_contacts():
                 name0 = contact.bodies[0].entity.name
                 name1 = contact.bodies[1].entity.name
                 if not (
-                    (name0 == actor_name and name1 == cube_name)
-                    or (name1 == actor_name and name0 == cube_name)
+                    (name0 == actor_name and name1 == mallet_name)
+                    or (name1 == actor_name and name0 == mallet_name)
                 ):
                     continue
                 for pt in (getattr(contact, "points", None) or []):
@@ -1654,7 +1779,7 @@ class whack_a_mole(Base_Task):
         return False
 
     def _cube_critter_hit(self, actors, states, idx):
-        """Hit = contact between the critter and the cube bottom face."""
+        """Hit = the mallet head underside pressing down on the critter crown."""
         return self._cube_bottom_contact_with_critter(actors, states, idx)
 
     def _poll_mole_hits(self):
@@ -1733,9 +1858,8 @@ class whack_a_mole(Base_Task):
         cube = getattr(self, "hammer_cubes", {}).get(str(arm))
         if cube is None or not hasattr(self, "board_center"):
             return False
-        p = np.array(cube.get_pose().p, dtype=float)
-        half_x = float(self.MALLET_HEAD_RADIUS)
-        half_y = float(self.MALLET_HEAD_RADIUS)
+        p, _axis = self._mallet_head_frame(cube)
+        half_x, half_y = self._head_half_extent_xy(cube)
         bx, by = float(self.board_center[0]), float(self.board_center[1])
         hx, hy = float(self.BOARD_HALF[0]), float(self.BOARD_HALF[1])
         return (
@@ -1830,7 +1954,7 @@ class whack_a_mole(Base_Task):
             local_T = self._grasp_local_T_for_arm(arm_tag)
         # Head underside is below the handle center by its local head thickness.
         local_z = float(local_T[2, 3])
-        return float(cube_bottom_z + self.MALLET_HEAD_RADIUS - local_z)
+        return float(cube_bottom_z + self.MALLET_HEAD_HALF_X - local_z)
 
     def _hover_ee_z(self, arm_tag):
         # Hover just above a fully raised mole so the smash is a short, fast jab
@@ -1844,96 +1968,118 @@ class whack_a_mole(Base_Task):
     def _cube_xy_err(self, idx, arm_tag):
         hole = self.holes[self.mole_holes[idx]]
         head_p = self._mallet_head_center(arm_tag)
+        if head_p is None:
+            return 1.0
         return float(np.linalg.norm(head_p[:2] - hole[:2]))
 
+    def _carry_quat(self):
+        """EE orientation used to carry the mallet level, head axis vertical."""
+        return list(GRASP_DIRECTION_DIC["top_down"])
+
+    def _head_bottom_drop(self, arm_tag):
+        """Distance from the head center down to its striking surface (m)."""
+        mallet = getattr(self, "hammer_cubes", {}).get(str(arm_tag))
+        if mallet is None:
+            return float(self.MALLET_HEAD_HALF_X)
+        center, bottom = self._mallet_head_geometry(mallet)
+        return float(center[2] - bottom[2])
+
+    def _ee_pose_for_head(self, arm_tag, xy, head_bottom_z):
+        """Absolute EE pose putting the head over ``xy`` with its underside at z.
+
+        The mallet is rigidly welded to the EE, so the head offset is exact for
+        the canonical carry orientation. Commanding an absolute pose (instead of
+        chaining relative displacements) keeps the arm in one consistent posture
+        and stops the wrist from drifting the mallet out of level.
+        """
+        local_T = self._cube_weld.get(str(arm_tag))
+        if local_T is None:
+            return None
+        quat = self._carry_quat()
+        R_ee = self._pose7_to_mat(np.array([0.0, 0.0, 0.0, *quat], dtype=float))[:3, :3]
+        head_local = (local_T[:3, :3] @ np.array([0.0, self.MALLET_HEAD_Y, 0.0])
+                      + local_T[:3, 3])
+        offset = R_ee @ head_local
+        return [
+            float(xy[0] - offset[0]),
+            float(xy[1] - offset[1]),
+            float(head_bottom_z + self._head_bottom_drop(arm_tag) - offset[2]),
+            *quat,
+        ]
+
     def _approach_hole(self, idx, arm_tag, quick=False):
-        """Slide the mallet over ``idx``'s hole at a safe hover height.
+        """Park the mallet head over ``idx``'s hole at a safe hover height.
 
         Approach sits a few cm above jab hover so a slow XY plan cannot graze a
-        cresting mole (that read as freeze-then-hit). Hit checks are suppressed
-        for the same reason.
+        cresting mole; hit checks are suppressed for the same reason.
         """
         hole = self.holes[self.mole_holes[idx]]
+        clearance = float(self._cfg.get(
+            "hover_clearance", self.HOVER_CLEARANCE_DEFAULT))
         # Clear the fully-raised crown while aligning.
-        hover_z = self._hover_ee_z(arm_tag) + 0.025
+        head_bottom = float(self.board_top_z + self.mole_height + clearance + 0.025)
+        target = self._ee_pose_for_head(arm_tag, hole, head_bottom)
 
         self._suppress_board_hit = True
         self._suppress_mole_hit = True
         try:
-            cur = np.array(self.get_arm_pose(arm_tag), dtype=float)
-            dx = float(hole[0] - cur[0])
-            dy = float(hole[1] - cur[1])
-            dz = float(hover_z - cur[2])
-            # Clamp Z — never ask for a huge lift (curobo will oblige).
-            if abs(dz) >= 0.15:
-                dz = float(np.clip(dz, -0.08, 0.08))
-            elif abs(dz) < 0.01:
-                dz = 0.0
             if not self.plan_success:
                 self.plan_success = True
-            self.move(self.move_by_displacement(
-                arm_tag=arm_tag, x=dx, y=dy, z=dz, move_axis="world"))
-            if not self.plan_success:
+            if target is not None:
+                self.move(self.move_to_pose(arm_tag, target))
+            if target is None or not self.plan_success:
+                # Fall back to a relative slide measured off the head itself.
                 self.plan_success = True
-                self.move(self.move_by_displacement(
-                    arm_tag=arm_tag, x=dx, y=dy, z=0.0, move_axis="world"))
-        finally:
-            self._suppress_board_hit = False
-            self._suppress_mole_hit = False
-
-        if getattr(self, "_cubes_ready", False):
-            err = self._cube_xy_err(idx, arm_tag)
-            if err >= (0.04 if quick else 0.03):
-                if not self.plan_success:
-                    self.plan_success = True
-                cube_p = np.array(
-                    self.hammer_cubes[str(arm_tag)].get_pose().p, dtype=float)
-                self._suppress_mole_hit = True
-                try:
+                head_p = self._mallet_head_center(arm_tag)
+                if head_p is not None:
                     self.move(self.move_by_displacement(
                         arm_tag=arm_tag,
-                        x=float(hole[0] - cube_p[0]),
-                        y=float(hole[1] - cube_p[1]),
+                        x=float(hole[0] - head_p[0]),
+                        y=float(hole[1] - head_p[1]),
+                        z=float(head_bottom - self._cube_bottom_z(arm_tag)),
+                        move_axis="world",
+                    ))
+
+            # Close the loop on the measured head center; the weld/IK can leave
+            # a centimetre of residual offset.
+            if getattr(self, "_cubes_ready", False):
+                if not self.plan_success:
+                    self.plan_success = True
+                err = self._cube_xy_err(idx, arm_tag)
+                if err >= (0.02 if quick else 0.012):
+                    head_p = self._mallet_head_center(arm_tag)
+                    self.move(self.move_by_displacement(
+                        arm_tag=arm_tag,
+                        x=float(hole[0] - head_p[0]),
+                        y=float(hole[1] - head_p[1]),
                         z=0.0,
                         move_axis="world",
                     ))
-                finally:
-                    self._suppress_mole_hit = False
+        finally:
+            self._suppress_board_hit = False
+            self._suppress_mole_hit = False
         if not self.plan_success:
             self.plan_success = True
 
     def _press_down(self, arm_tag, depth=None, mole_idx=None):
-        """Press onto a raised mole top — never down to the board deck.
+        """Drive the mallet head's flat face down onto a raised mole crown.
 
-        Target the critter crown so the cube gets real mesh contact while the
-        gripper / arm stay clear of the hole board (board touch = fail).
-        If the mole is still low (just synced), aim at the fully-raised crown
-        so the jab meets it mid-rise instead of short-stroking then waiting.
+        The stroke is only ever committed once the mole is near its crest (see
+        ``PRESS_COMMIT_FRAC``), so aiming a centimetre into the current crown
+        both lands a real contact and keeps the head clear of the board deck.
         """
         if depth is None:
-            cube_bottom = self._cube_bottom_z(arm_tag)
+            head_bottom = self._cube_bottom_z(arm_tag)
             mole_top = self.board_top_z + self.mole_height
             if mole_idx is not None and getattr(self, "_mole_state", None):
                 if 0 <= int(mole_idx) < len(self._mole_state):
-                    st = self._mole_state[int(mole_idx)]
-                    cur_top = self._critter_top_z(
+                    mole_top = self._critter_top_z(
                         self.moles, self._mole_state, int(mole_idx))
-                    # If bob is pinned for the jab, aim at the current crown.
-                    # Otherwise, when still early in the rise, aim at full height
-                    # so the descending cube meets the mole mid-rise.
-                    if st.get("freeze_bob"):
-                        mole_top = cur_top
-                    elif self._mole_rise_frac(int(mole_idx)) < 0.45:
-                        mole_top = max(
-                            cur_top,
-                            float(st.get("raised_z", mole_top)),
-                            self.board_top_z + self.mole_height,
-                        )
-                    else:
-                        mole_top = cur_top
-            board_clear = self.board_top_z + 0.045
-            target_bottom = max(board_clear, mole_top - 0.010)
-            depth = max(0.01, float(cube_bottom - target_bottom))
+            overshoot = float(self._cfg.get(
+                "press_overshoot", self.PRESS_OVERSHOOT))
+            board_clear = float(self.board_top_z + 0.030)
+            target_bottom = max(mole_top - overshoot, board_clear)
+            depth = max(0.01, float(head_bottom - target_bottom))
         return self.move_by_displacement(
             arm_tag=arm_tag, z=-float(depth), move_axis="world")
 
@@ -1947,9 +2093,8 @@ class whack_a_mole(Base_Task):
 
     # ------------------------------------------------------------- policy
     def play_once(self):
-        # Pick both side-staged mallets before running the scripted policy.
-        self.pickup_mallet_to_ready(ArmTag("left"))
-        self.pickup_mallet_to_ready(ArmTag("right"))
+        # Pick both side-staged mallets (together) before playing.
+        self.pickup_mallets()
 
         for group in self.schedule:
             # Soft-recover from motion-plan blips so later moles still get pressed.
@@ -1989,293 +2134,155 @@ class whack_a_mole(Base_Task):
         }
         return self.info
 
-    def _play_single(self, idx):
-        """Seat while mole is falling/low, force a fresh rise, smash mid-rise.
+    def _wait_while(self, predicate, max_steps):
+        """Step physics (and recording) until ``predicate()`` clears."""
+        for _ in range(int(max_steps)):
+            if not predicate():
+                return True
+            self._dwell(1)
+        return False
 
-        Never park over a crest and wait out a full bob — that is the
-        freeze-before-hit the demos were showing.
+    def _wait_until_approachable(self, idxs, max_steps=2500):
+        """Wait until every listed mole is low enough to slide the mallet over.
+
+        Sliding across a cresting mole would knock it sideways instead of
+        striking it from above, so the mallet only travels while the moles are
+        near the bottom of their bob or already on the way down.
         """
-        approach_max = float(
-            self._cfg.get("approach_max_frac", self.APPROACH_MAX_FRAC))
-        approach_falling = float(
-            self._cfg.get("approach_falling_frac", self.APPROACH_FALLING_FRAC))
-        ready_frac = float(
-            self._cfg.get("press_ready_frac", self.PRESS_READY_FRAC))
-        arm = self._arm_for_hole(self.mole_holes[idx])
-        aligned = False
-        ready = False
-        forced_rise = False
+        limit = float(self._cfg.get(
+            "approach_falling_frac", self.APPROACH_FALLING_FRAC))
 
-        for step in range(2500):
-            if self.touched[idx]:
-                return
-            if not self.plan_success:
-                self.plan_success = True
-            arm = self._arm_for_hole(self.mole_holes[idx])
-            frac = self._mole_rise_frac(idx)
-            rising = self._mole_is_rising(idx)
-            xy_err = (
-                self._cube_xy_err(idx, arm)
-                if getattr(self, "_cubes_ready", False) else 1.0)
-            aligned = xy_err < 0.045
+        def blocked():
+            for i in idxs:
+                if self.touched[i]:
+                    continue
+                frac = self._mole_rise_frac(i)
+                if frac <= 0.12:
+                    continue
+                if (not self._mole_is_rising(i)) and frac <= limit:
+                    continue
+                return True
+            return False
 
-            # Seat only while falling or near the bottom — never mid-rise.
-            # Approaching on the way up lets the mole crest under the mallet
-            # (the freeze-before-hit look) before we can jab.
-            can_approach = (not rising and frac <= approach_falling) or (
-                frac <= 0.12)
-            if (not aligned) and can_approach:
-                self._approach_hole(idx, arm, quick=True)
-                continue
+        return self._wait_while(blocked, max_steps)
 
-            # Commit only past mid-rise — earlier freezes a low mole under the jab.
-            if aligned and rising and (0.32 <= frac <= 0.55):
-                ready = True
-                break
+    def _wait_for_crest(self, idxs, max_steps=2500):
+        """Kick a fresh rise if needed, then wait until the moles are near the top."""
+        live = [i for i in idxs if not self.touched[i]]
+        if not live:
+            return True
+        # Restarting from the bottom gives both arms one shared crest in hard
+        # mode, and stops an Opt-2 mole relocating between approach and strike.
+        if any(self._mole_rise_frac(i) < 0.15 or not self._mole_is_rising(i)
+               for i in live):
+            self._sync_rise(live)
+        commit = float(self._cfg.get("press_commit_frac", self.PRESS_COMMIT_FRAC))
 
-            # Once seated near the bottom, kick a fresh rise — press once mid-rise.
-            if aligned and (not forced_rise) and (frac <= 0.20) and (not rising):
-                self._sync_rise([idx])
-                forced_rise = True
-                for _ in range(350):
-                    if self.touched[idx]:
-                        return
-                    if self._mole_rise_frac(idx) >= 0.38:
-                        break
-                    self._update_kinematic_tasks()
-                    self.scene.step()
-                    if self.save_freq and (self._global_step % self.save_freq == 0):
-                        self._take_picture()
-                ready = True
-                break
+        def not_ready():
+            return not all(
+                self.touched[i] or self._mole_rise_frac(i) >= commit
+                for i in live)
 
-            # Seated but arrived late (mole already high): wait for the bottom.
-            if aligned and frac > 0.55:
-                pass  # dwell until fall + sync above
+        return self._wait_while(not_ready, max_steps)
 
-            self._update_kinematic_tasks()
-            self.scene.step()
-            if self.save_freq and (self._global_step % self.save_freq == 0):
-                self._take_picture()
+    def _strike(self, pressers):
+        """Drive the mallet head(s) onto near-crest moles, then lift clear.
 
-        if self.touched[idx]:
+        ``pressers`` is a list of ``(mole_idx, arm_tag)``, at most one per arm.
+        The bob is pinned for the duration of the stroke so the mole cannot slip
+        back down the hole while the head is still descending.
+        """
+        live = [(i, a) for i, a in pressers if not self.touched[i]]
+        if not live:
             return
-        if not ready:
-            frac = self._mole_rise_frac(idx)
-            rising = self._mole_is_rising(idx)
-            can_approach = (not rising and frac <= approach_falling) or (
-                frac <= 0.12)
-            if (not aligned) and can_approach:
-                self._approach_hole(idx, arm, quick=True)
-            self._sync_rise([idx])
-            for _ in range(350):
-                if self.touched[idx]:
-                    return
-                if self._mole_rise_frac(idx) >= 0.38:
-                    break
-                self._update_kinematic_tasks()
-                self.scene.step()
+        for i, _arm in live:
+            self._mole_state[i]["freeze_bob"] = True
+        try:
+            self.plan_success = True
+            self._move_arms([self._press_down(a, mole_idx=i) for i, a in live])
+            self._dwell(12)
+            again = [(i, a) for i, a in live if not self.touched[i]]
+            if again:
+                self.plan_success = True
+                self._move_arms(
+                    [self._press_down(a, mole_idx=i) for i, a in again])
+                self._dwell(10)
+        finally:
+            for i, _arm in live:
+                self._mole_state[i]["freeze_bob"] = False
+        self.plan_success = True
+        self._move_arms([self._press_up(a) for _i, a in live])
+        self.plan_success = True
+
+    def _play_single(self, idx):
+        """Park over the hole while the mole is down, then smash it at the crest."""
+        attempts = int(self._cfg.get("strike_attempts", self.STRIKE_ATTEMPTS))
+        tol = float(self._cfg.get("strike_xy_tol", self.STRIKE_XY_TOL))
+        for _attempt in range(attempts):
+            if self.touched[idx] or getattr(self, "distractor_hit", False):
+                return
+            self.plan_success = True
+            self._wait_until_approachable([idx])
             if self.touched[idx]:
                 return
-
-        # Commit immediately — no post-ready hover / re-approach.
-        self._cut_hold_for_press([idx])
-        if not self.plan_success:
-            self.plan_success = True
-        arm = self._arm_for_hole(self.mole_holes[idx])
-        press_hole = int(self.mole_holes[idx])
-        # Seat mid-rise, then pin height so the mole cannot crest under the jab.
-        if 0 <= idx < len(self._mole_state):
-            st = self._mole_state[idx]
-            if self._mole_rise_frac(idx) < 0.35:
-                st["bob_phase"] = float(np.arccos(0.2))  # frac ≈ 0.40
-                travel = float(st["raised_z"] - st["hidden_z"])
-                z = float(st["hidden_z"] + travel * 0.40)
-                st["raised"] = True
-                st["motion"] = "rising"
-                self._set_mole_pose(idx, raised=True, z=z)
-            st["freeze_bob"] = True
-        self.move(self._press_down(arm, mole_idx=idx))
-        self._dwell(10)
-        if not self.touched[idx] and self._mole_above_surface(idx):
-            if not self.plan_success:
-                self.plan_success = True
-            self.move(self._press_down(arm, mole_idx=idx))
-            self._dwell(6)
-        if 0 <= idx < len(self._mole_state):
-            self._mole_state[idx]["freeze_bob"] = False
-        if not self.touched[idx]:
-            hole = self.holes[press_hole]
-            head_p = self._mallet_head_center(arm)
-            if float(np.linalg.norm(head_p[:2] - hole[:2])) < 0.08:
-                self._mark_touched(idx)
-            elif self._cube_xy_err(idx, arm) < 0.08:
-                self._mark_touched(idx)
-        if not self.plan_success:
-            self.plan_success = True
-        self.move(self._press_up(arm))
-        if not self.plan_success:
-            self.plan_success = True
-        if not self.touched[idx]:
-            self._mark_touched(idx)
+            arm = self._arm_for_hole(self.mole_holes[idx])
+            if self._cube_xy_err(idx, arm) > 0.015:
+                self._approach_hole(idx, arm, quick=True)
+            if self.touched[idx]:
+                return
+            self._wait_for_crest([idx])
+            if self.touched[idx]:
+                return
+            arm = self._arm_for_hole(self.mole_holes[idx])
+            if self._cube_xy_err(idx, arm) > tol:
+                continue  # the mole relocated (Opt 2) — realign and retry
+            self._strike([(idx, arm)])
 
     def _play_pair(self, i, j):
-        """Dual-arm strike with the same fall/low approach + forced-rise press."""
+        """Hard mode: both arms smash one mole each on a shared crest."""
         if self.holes[self.mole_holes[i]][0] > self.holes[self.mole_holes[j]][0]:
             i, j = j, i
-        arm_i = self._arm_for_hole(self.mole_holes[i])
-        arm_j = self._arm_for_hole(self.mole_holes[j])
-        if arm_i == arm_j:
-            self._play_single(i)
-            self._play_single(j)
-            return
-
-        approach_max = float(
-            self._cfg.get("approach_max_frac", self.APPROACH_MAX_FRAC))
-        approach_falling = float(
-            self._cfg.get("approach_falling_frac", self.APPROACH_FALLING_FRAC))
-        ready_frac = float(
-            self._cfg.get("press_ready_frac", self.PRESS_READY_FRAC))
-        ready = False
-        forced = {i: False, j: False}
-        for step in range(2500):
-            if self.touched[i] and self.touched[j]:
+        attempts = int(self._cfg.get("strike_attempts", self.STRIKE_ATTEMPTS))
+        tol = float(self._cfg.get("strike_xy_tol", self.STRIKE_XY_TOL))
+        for _attempt in range(attempts):
+            if getattr(self, "distractor_hit", False):
                 return
-            if not self.plan_success:
-                self.plan_success = True
-            arm_i = self._arm_for_hole(self.mole_holes[i])
-            arm_j = self._arm_for_hole(self.mole_holes[j])
-            if arm_i == arm_j:
-                if not self.touched[i]:
-                    self._play_single(i)
-                if not self.touched[j]:
-                    self._play_single(j)
+            live = [k for k in (i, j) if not self.touched[k]]
+            if not live:
+                return
+            arms = {k: self._arm_for_hole(self.mole_holes[k]) for k in live}
+            if len(live) < 2 or arms[live[0]] == arms[live[1]]:
+                # One mole left, or both drifted onto the same arm's half.
+                for k in live:
+                    self._play_single(k)
                 return
 
-            need = {}
-            for idx, arm in ((i, arm_i), (j, arm_j)):
-                if self.touched[idx]:
-                    need[idx] = False
-                    continue
-                need[idx] = (
-                    self._cube_xy_err(idx, arm) >= 0.045
-                    if getattr(self, "_cubes_ready", False) else True)
-
-            moved = False
-            for idx, arm in ((i, arm_i), (j, arm_j)):
-                if not need[idx]:
-                    continue
-                frac = self._mole_rise_frac(idx)
-                rising = self._mole_is_rising(idx)
-                can_approach = (not rising and frac <= approach_falling) or (
-                    frac <= 0.12)
-                if can_approach:
-                    self._approach_hole(idx, arm, quick=True)
-                    moved = True
-            if moved:
-                continue
-
-            # Force a shared rise once both (unhit) moles are seated low, then jab.
-            to_sync = []
-            for idx in (i, j):
-                if self.touched[idx] or need[idx] or forced[idx]:
-                    continue
-                frac = self._mole_rise_frac(idx)
-                if (frac <= 0.20) and (not self._mole_is_rising(idx)):
-                    to_sync.append(idx)
-                    forced[idx] = True
-            if to_sync:
-                self._sync_rise(to_sync)
-                for _ in range(350):
-                    ok = all(
-                        self.touched[k] or self._mole_rise_frac(k) >= 0.38
-                        for k in to_sync)
-                    if ok:
-                        break
-                    self._update_kinematic_tasks()
-                    self.scene.step()
-                    if self.save_freq and (self._global_step % self.save_freq == 0):
-                        self._take_picture()
-                ready = True
-                break
-
-            both_ready = True
-            for idx in (i, j):
-                if self.touched[idx]:
-                    continue
-                frac = self._mole_rise_frac(idx)
-                if not (self._mole_is_rising(idx) and 0.32 <= frac <= 0.55):
-                    both_ready = False
-                    break
-            if both_ready and not need[i] and not need[j]:
-                ready = True
-                break
-
-            self._update_kinematic_tasks()
-            self.scene.step()
-            if self.save_freq and (self._global_step % self.save_freq == 0):
-                self._take_picture()
-
-        if self.touched[i] and self.touched[j]:
-            return
-        if not ready:
-            self._sync_rise([i, j])
-            for _ in range(350):
-                ok = all(
-                    self.touched[k] or self._mole_rise_frac(k) >= 0.38
-                    for k in (i, j))
-                if ok:
-                    break
-                self._update_kinematic_tasks()
-                self.scene.step()
-            if self.touched[i] and self.touched[j]:
-                return
-
-        self._cut_hold_for_press([i, j])
-        if not self.plan_success:
             self.plan_success = True
-        arm_i = self._arm_for_hole(self.mole_holes[i])
-        arm_j = self._arm_for_hole(self.mole_holes[j])
-        if arm_i == arm_j:
-            if not self.touched[i]:
-                self._play_single(i)
-            if not self.touched[j]:
-                self._play_single(j)
-            return
-        for idx in (i, j):
-            if self.touched[idx] or not (0 <= idx < len(self._mole_state)):
-                continue
-            st = self._mole_state[idx]
-            if self._mole_rise_frac(idx) < 0.35:
-                st["bob_phase"] = float(np.arccos(0.2))
-                travel = float(st["raised_z"] - st["hidden_z"])
-                z = float(st["hidden_z"] + travel * 0.40)
-                st["raised"] = True
-                st["motion"] = "rising"
-                self._set_mole_pose(idx, raised=True, z=z)
-            st["freeze_bob"] = True
-        holes_ij = (int(self.mole_holes[i]), int(self.mole_holes[j]))
-        self.move(
-            self._press_down(arm_i, mole_idx=i),
-            self._press_down(arm_j, mole_idx=j),
-        )
-        self._dwell(10)
-        for idx in (i, j):
-            if 0 <= idx < len(self._mole_state):
-                self._mole_state[idx]["freeze_bob"] = False
-        for idx, arm, h in ((i, arm_i, holes_ij[0]), (j, arm_j, holes_ij[1])):
-            if self.touched[idx]:
-                continue
-            hole = self.holes[h]
-            head_p = self._mallet_head_center(arm)
-            if float(np.linalg.norm(head_p[:2] - hole[:2])) < 0.06:
-                self._mark_touched(idx)
-        self.move(self._press_up(arm_i), self._press_up(arm_j))
-        if not self.plan_success:
-            self.plan_success = True
-        for idx in (i, j):
-            if not self.touched[idx]:
-                self._mark_touched(idx)
+            self._wait_until_approachable(live)
+            for k in live:
+                if self.touched[k]:
+                    continue
+                arm = self._arm_for_hole(self.mole_holes[k])
+                if self._cube_xy_err(k, arm) > 0.015:
+                    self._approach_hole(k, arm, quick=True)
+
+            live = [k for k in live if not self.touched[k]]
+            if not live:
+                return
+            self._wait_for_crest(live)
+
+            pressers = []
+            for k in live:
+                if self.touched[k]:
+                    continue
+                arm = self._arm_for_hole(self.mole_holes[k])
+                if self._cube_xy_err(k, arm) <= tol:
+                    pressers.append((k, arm))
+            if len({str(a) for _k, a in pressers}) < len(pressers):
+                for presser in pressers:
+                    self._strike([presser])
+            elif pressers:
+                self._strike(pressers)
 
     # ------------------------------------------------------------- success
     def check_success(self):

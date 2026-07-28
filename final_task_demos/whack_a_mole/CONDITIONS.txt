@@ -10,7 +10,7 @@ opt1+2   : distractor_enabled=true,  relocating_moles=true
            rabbit + relocating moles
 
 Success:
-  - every mole touched from above at least once (turns green), AND
+  - every mole struck from above by a mallet's flat lower face (turns green), AND
   - no rabbit touched (distractor_hit stays false).
 
 Files (side-by-side is the primary deliverable):
