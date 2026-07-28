@@ -35,3 +35,22 @@ save_path: ./data
 clear_cache_freq: 1
 collect_data: true
 eval_video_log: true
+# Task-scoped knobs (read by envs that look under task_args.<task_name>).
+task_args:
+  fill_coffee_jar:
+    # Locked to the first (25%) fill ring.
+    target_fill: 0.25
+    scene_id: 0
+    beans_full: 24
+    beans_per_press: 6
+    fill_tol: 0.12
+  pour_beer_with_foam:
+    scene_id: 0
+    bottle_beer_frac: 0.90
+    pour_rate: 0.004
+    foam_gain: 1.8
+    foam_decay: 0.0035
+    expert_foam_stop: 0.82
+    expert_foam_resume: 0.55
+    target_liquid: 0.90
+    full_liquid_tol: 0.05

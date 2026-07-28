@@ -305,7 +305,18 @@ class MplibPlanner:
         links = [link.get_name() for link in robot_entity.get_links()]
         joints = [joint.get_name() for joint in robot_entity.get_active_joints()]
 
-        if scene is None:
+        self.planner = None
+        if scene is not None:
+            try:
+                planning_world = SapienPlanningWorld(scene, [robot_entity])
+                self.planner = SapienPlanner(planning_world, move_group)
+            except Exception as e:
+                # mplib requires unit-scale collision meshes; scenes with scaled
+                # assets (e.g. the office cabinet URDF) fall back to the
+                # robot-only planner, which is enough for TOPP.
+                print(f"[Planner.py]: SapienPlanningWorld unavailable ({e}); "
+                      "falling back to URDF-only mplib planner.")
+        if self.planner is None:
             self.planner = mplib.Planner(
                 urdf=urdf_path,
                 srdf=srdf_path,
@@ -315,9 +326,6 @@ class MplibPlanner:
                 use_convex=False,
             )
             self.planner.set_base_pose(robot_origion_pose)
-        else:
-            planning_world = SapienPlanningWorld(scene, [robot_entity])
-            self.planner = SapienPlanner(planning_world, move_group)
 
         self.planner_type = planner_type
         self.plan_step_lim = 2500

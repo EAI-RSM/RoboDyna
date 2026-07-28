@@ -49,3 +49,6 @@ stack_bowls_three: 1200
 stack_bowls_two: 900
 stamp_seal: 400
 turn_switch: 400
+fill_coffee_jar: 800
+pour_beer_with_foam: 1200
+trap_bug: 1500

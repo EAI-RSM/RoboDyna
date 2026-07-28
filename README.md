@@ -65,6 +65,16 @@ to GIFs for in-page playback; the condition shown below each GIF describes that 
 | **`sort_apples_belt`**<br><sub>Sort moving red and green apples into matching bins, sending rotten apples to the garbage dump.</sub> | <div align="center"><img src="final_task_demos/sort_apples_belt/default_sidebyside.gif" width="240" height="90"/><br><sub>Alternating colors; no rotten apple.</sub></div> | <div align="center"><img src="final_task_demos/sort_apples_belt/opt1_sidebyside.gif" width="240" height="90"/><br><sub>Random colors; no rotten apple.</sub></div> | <div align="center"><img src="final_task_demos/sort_apples_belt/opt2_sidebyside.gif" width="240" height="90"/><br><sub>Alternating colors with one rotten apple.</sub></div> | <div align="center"><img src="final_task_demos/sort_apples_belt/opt1+2_sidebyside.gif" width="240" height="90"/><br><sub>Random colors with one rotten apple.</sub></div> |
 | **`whack_a_mole`**<br><sub>Strike randomized-speed moles with the mallets' flat faces without touching a rabbit.</sub> | <div align="center"><img src="final_task_demos/whack_a_mole/default_sidebyside.gif" width="240" height="90"/><br><sub>Two moles bob in fixed holes; no rabbit.</sub></div> | <div align="center"><img src="final_task_demos/whack_a_mole/opt1_sidebyside.gif" width="240" height="90"/><br><sub>Fixed-hole moles with one rabbit distractor.</sub></div> | <div align="center"><img src="final_task_demos/whack_a_mole/opt2_sidebyside.gif" width="240" height="90"/><br><sub>Unhit moles relocate after falling; no rabbit.</sub></div> | <div align="center"><img src="final_task_demos/whack_a_mole/opt1+2_sidebyside.gif" width="240" height="90"/><br><sub>Relocating moles with one rabbit distractor.</sub></div> |
 
+## Household Tasks
+
+Household scenes built on the robotwin_bench office / KitchenS environments. Each row shows the latest side-by-side expert demo.
+
+| Task | Demo |
+|---|---|
+| **`trap_bug`**<br><sub>Trap a scurrying cockroach, spider, or ant under the office bookshelf by placing a transparent glass box over it while it is still moving.</sub> | <div align="center"><img src="final_task_demos/trap_bug/default_sidebyside.gif" width="320" height="120"/><br><sub>Office wall-shelf; live bug run (roach/spider/ant).</sub></div> |
+| **`pour_beer_with_foam`**<br><sub>Pour beer into a glass in bursts so the foam can settle; overflow fails, a full glass succeeds.</sub> | <div align="center"><img src="final_task_demos/pour_beer_with_foam/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS counter; pause between pours.</sub></div> |
+| **`fill_coffee_jar`**<br><sub>Press the coffee dispenser's lid to fill a marked glass jar to the target fill line.</sub> | <div align="center"><img src="final_task_demos/fill_coffee_jar/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS counter; 50% fill target.</sub></div> |
+
 ## 🛠️ Adding a task
 
 Tasks are intentionally **lightweight to add** — a new task touches only a handful of files and plugs
