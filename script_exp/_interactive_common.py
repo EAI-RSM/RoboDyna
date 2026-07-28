@@ -396,14 +396,19 @@ def make_viewer_view_toggle(
             topdown_rpy = ViewerViewToggle.DEFAULT_TOPDOWN_RPY
     robot_controls = None
     robot_mode = bool(getattr(env, "_interactive_robot_mode", False))
-    if not robot_mode:
-        for index, arg in enumerate(sys.argv):
-            if arg == "--control" and index + 1 < len(sys.argv):
-                robot_mode = sys.argv[index + 1] == "robot"
-                break
-            if arg.startswith("--control="):
-                robot_mode = arg.split("=", 1)[1] == "robot"
-                break
+    control_from_argv = None
+    for index, arg in enumerate(sys.argv):
+        if arg == "--control" and index + 1 < len(sys.argv):
+            control_from_argv = sys.argv[index + 1]
+            break
+        if arg.startswith("--control="):
+            control_from_argv = arg.split("=", 1)[1]
+            break
+    if control_from_argv is not None:
+        robot_mode = control_from_argv == "robot"
+    elif not robot_mode:
+        # Match add_robot_motion_arg default when --control is omitted.
+        robot_mode = True
     if robot_mode:
         robot_controls = UniversalRobotControls(env)
     return ViewerViewToggle(
@@ -731,8 +736,8 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
     parser.add_argument(
         "--control",
         choices=("keyboard", "robot"),
-        default="keyboard",
-        help="Interaction method (default: keyboard)",
+        default="robot",
+        help="Interaction method (default: robot)",
     )
     parser.add_argument(
         "--robot-motion",

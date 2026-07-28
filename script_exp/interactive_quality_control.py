@@ -272,8 +272,8 @@ def main():
     parser.add_argument(
         "--control",
         choices=("keyboard", "robot"),
-        default="keyboard",
-        help="Interaction method (default: keyboard)",
+        default="robot",
+        help="Interaction method (default: robot)",
     )
     args = parser.parse_args()
 

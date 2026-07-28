@@ -177,7 +177,7 @@ def main():
     parser.add_argument(
         "--control",
         choices=("keyboard", "robot"),
-        default="keyboard",
+        default="robot",
         help="Both modes trigger the same frozen grasp/drop motions via Space.",
     )
     parser.add_argument(

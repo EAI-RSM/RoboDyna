@@ -437,8 +437,8 @@ def main():
     parser.add_argument(
         "--control",
         choices=("keyboard", "mouse", "robot"),
-        default="keyboard",
-        help="Interaction method (default: keyboard)",
+        default="robot",
+        help="Interaction method (default: robot)",
     )
     parser.add_argument(
         "--robot-motion",
