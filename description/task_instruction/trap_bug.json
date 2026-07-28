@@ -1,0 +1,34 @@
+{
+  "full_description": "Trap the bug that scurries out from under the bookshelf by placing the glass trap box over it",
+  "schema": "{A} is the bug model, {B} is the glass trap, {C} is the wall shelf, {S} is the bug species (cockroach/spider/ant), {a} is the arm used, {d} is the run direction (left/right)",
+  "preference": "num of words should not exceed 16",
+  "seen": [
+    "Trap the {A} with the {B} using {a}.",
+    "Use {a} to place the {B} over the {A}.",
+    "Cover the {A} with the {B}.",
+    "Catch the {A} under the {B} using {a}.",
+    "Put the {B} on top of the scurrying {A}.",
+    "Trap the {S} running {d} with the {B}.",
+    "Use {a} to trap the {A} under the glass box.",
+    "Place the {B} over the {A} before it escapes.",
+    "Drop the {B} onto the {A} with {a}.",
+    "Cover the moving {A} using the {B}.",
+    "Trap {A} by setting the {B} over it.",
+    "With {a}, place the {B} over the {A}.",
+    "Stop the {A} by covering it with the {B}.",
+    "Use {a} to catch the {A} under the {B}.",
+    "Put the glass trap on the {A}.",
+    "Trap the {d}-running {S} with the {B}.",
+    "Lower the {B} onto the {A} using {a}.",
+    "Cover the {A} that came from under the {C}.",
+    "Catch the {S} with the {B}.",
+    "Place the {B} over the moving {A}."
+  ],
+  "unseen": [
+    "Seal the {A} under the {B} with {a}.",
+    "Intercept the {A} by placing the {B} on it.",
+    "Contain the scurrying {S} beneath the {B}.",
+    "Use {a} to pin the {A} under the glass trap.",
+    "Drop the {B} to trap the {A} running {d}."
+  ]
+}

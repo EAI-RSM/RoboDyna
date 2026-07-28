@@ -1,0 +1,8 @@
+Asset: 200_cockroach
+Source: "Cockroach" by Poly by Google
+URL: https://poly.pizza/m/eSCFQN_47V4
+License: Creative Commons Attribution (CC-BY 3.0) — attribution required.
+Attribution: Poly by Google (https://poly.pizza/m/eSCFQN_47V4)
+Notes: Texture stripped and recolored to light brown (approx. #A67C52) to
+       resemble a real cockroach. Sized to ~4 cm body length for tabletop trapping.
+Use: kinematic cockroach actor for the trap_bug DOMINO task.

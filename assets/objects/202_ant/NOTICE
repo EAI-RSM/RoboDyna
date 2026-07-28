@@ -1,0 +1,8 @@
+Asset: 202_ant
+Source: "Ant" by Poly by Google
+URL: https://poly.pizza/m/2YvCk4p0xdH
+License: Creative Commons Attribution (CC-BY 3.0) — attribution required.
+Attribution: Poly by Google (https://poly.pizza/m/2YvCk4p0xdH)
+Notes: Texture stripped and recolored reddish-brown (approx. #78371E).
+       Sized to ~3.5 cm body length for tabletop trapping.
+Use: kinematic ant actor for the trap_bug DOMINO task.

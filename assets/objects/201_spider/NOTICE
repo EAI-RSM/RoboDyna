@@ -1,0 +1,7 @@
+Asset: 201_spider
+Source: "Spider" by Quaternius
+URL: https://poly.pizza/m/yRYJiAJyiM
+License: Public Domain (CC0)
+Notes: Texture stripped and recolored dark brown (approx. #3C281C).
+       Sized to ~4.5 cm footprint for tabletop trapping.
+Use: kinematic spider actor for the trap_bug DOMINO task.
