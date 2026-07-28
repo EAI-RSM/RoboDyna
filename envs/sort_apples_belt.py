@@ -1092,6 +1092,10 @@ class sort_apples_belt(Base_Task):
 
         expert = getattr(self, "_expert_hold", None)
         awaiting = getattr(self, "_awaiting_dump_press", False)
+        # Interactive robot mode uses Space to click; ignore bare proximity so a
+        # brush against a button cannot divert without an intentional press.
+        if bool(getattr(self, "_interactive_space_click", False)):
+            pressed = {"left": False, "right": False}
 
         if expert == "dump" or (expert is None and pressed["left"] and pressed["right"]
                                 and self.rotten_enabled and not awaiting):
