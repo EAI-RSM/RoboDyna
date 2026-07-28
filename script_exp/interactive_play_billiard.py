@@ -41,10 +41,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Left / Right      move the holding arm left / right
-  Up / Down         move the holding arm forward / backward
-  E / Q             raise / lower the gripper
-  G / F             rotate gripper clockwise / counter-clockwise
+  R / T             rotate gripper clockwise / counter-clockwise
   Space             pick up cue, then strike in the cue's current direction
   V                 toggle view: top-down ↔ head_camera
   Escape             quit
@@ -314,9 +311,9 @@ class RobotCueController:
             return
         # Clockwise is negative yaw when viewing the table from above.
         rot = 0.0
-        if window.key_down("g"):
+        if window.key_down("r"):
             rot -= 0.08
-        if window.key_down("f"):
+        if window.key_down("t"):
             rot += 0.08
         if rot:
             self.busy = True
