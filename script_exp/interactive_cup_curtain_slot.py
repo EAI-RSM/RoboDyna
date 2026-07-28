@@ -46,7 +46,6 @@ CONTROLS_KEYBOARD = """
   Q / E             raise/lower cup (world Z)
   Space             release cup at its current position
   V                 toggle view: top-down ↔ head_camera
-  W / A / S / D     disabled while top-down view is active
   Escape            quit
 ------------------------------------------------------------
   Success: cup seated between yellow sticks; no curtain touch
@@ -55,7 +54,6 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Space             first press: grasp; second press: release at current pose
   V                 toggle view: top-down ↔ head_camera
-  W / A / S / D     disabled while top-down view is active
   Escape            quit
 ------------------------------------------------------------
   Success: cup seated between yellow sticks; no curtain touch

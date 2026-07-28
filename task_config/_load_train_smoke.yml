@@ -62,8 +62,8 @@ task_args:
     dual_setup_enabled: false
     target_doneness_min: 0.45 # tight band around medium
     target_doneness_max: 0.55
-    place_dx: 0.010           # center the steak in the bowl (+x)
-    place_dy: -0.015          # center the steak in the bowl (-y)
+    place_dx: 0.0             # nudge from the measured bowl center (mirrored on the left pan)
+    place_dy: 0.0             # nudge from the measured bowl center (+y = away from robot)
   assemble_markers_cylinder:
     side_cyl_radius: 0.018
     side_cyl_half_len: 0.10

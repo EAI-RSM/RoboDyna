@@ -242,6 +242,31 @@ class cook_meat(Base_Task):
         return float(world[:, 2].min()), float(world[:, 2].max())
 
     @classmethod
+    def _bowl_center_xy(
+        cls,
+        collision_path: str,
+        pose: sapien.Pose,
+        scale: float,
+        floor_band: float = 0.010,
+    ) -> tuple[float, float]:
+        """Return the world XY center of a pan's bowl floor.
+
+        ``get_functional_point(0)`` sits up to ~3.5 cm off the bowl center (the
+        offset differs per ``base*`` mesh), so a steak dropped there can end up
+        against the bowl wall, where the fingers hit the rim on the way down and
+        the steak can no longer be picked up. The floor band of the collision
+        mesh gives the real center: it is per-mesh, follows the sampled yaw, and
+        mirrors automatically with the pan pose.
+        """
+        vertices = cls._mesh_vertices(collision_path) * scale
+        transform = pose.to_transformation_matrix()
+        world = (transform[:3, :3] @ vertices.T).T + np.asarray(pose.p)
+        floor = world[world[:, 2] < world[:, 2].min() + float(floor_band)]
+        if len(floor) == 0:
+            return float(pose.p[0]), float(pose.p[1])
+        return float(floor[:, 0].mean()), float(floor[:, 1].mean())
+
+    @classmethod
     def _footprint_offsets(
         cls,
         collision_path: str,
@@ -564,6 +589,8 @@ class cook_meat(Base_Task):
         )
         skillet_name = f"106_skillet_{tag}"
         skillet.set_name(skillet_name)
+        # Pan is static, so its bowl center never moves after spawn.
+        bowl_center_xy = self._bowl_center_xy(skillet_path, skillet_pose, skillet_scale)
         # Mesh AABB includes the handle; board/key only need the bowl footprint clear.
         px, py = float(skillet_pose.p[0]), float(skillet_pose.p[1])
         br = float(self.PAN_BOWL_HALF)
@@ -769,6 +796,7 @@ class cook_meat(Base_Task):
             "skillet": skillet,
             "skillet_id": skillet_id,
             "skillet_name": skillet_name,
+            "bowl_center_xy": bowl_center_xy,
             "board": board,
             "board_xy": (float(board_xy[0]), float(board_xy[1])),
             "board_top": float(board_top),
@@ -1178,13 +1206,28 @@ class cook_meat(Base_Task):
             return self._play_once_dynamic()
         return self._play_once_static()
 
+    def _pan_place_target(self, station: dict[str, Any]) -> list[float]:
+        """Return the drop pose (XYZ + quat) that centers a steak in this pan.
+
+        XY comes from the bowl-floor center so the steak keeps the same finger
+        clearance to the rim on every mesh, yaw and side; Z stays the functional
+        point's height. ``place_dx`` is mirrored on the left station so one
+        config value nudges both stations the same way relative to the pan.
+        """
+        target = list(station["skillet"].get_functional_point(0))
+        bowl_x, bowl_y = station.get(
+            "bowl_center_xy", (target[0], target[1])
+        )
+        side = 1.0 if float(station.get("side", 1.0)) > 0 else -1.0
+        target[0] = float(bowl_x) + side * self.place_dx
+        target[1] = float(bowl_y) + self.place_dy
+        return target
+
     def _place_steaks_on_pans(self) -> None:
         """Place each held steak into its skillet bowl (parallel when dual)."""
         def _place_one(st: dict[str, Any]) -> None:
             arm = st["arm"]
-            pan_target = list(st["skillet"].get_functional_point(0))
-            pan_target[0] += self.place_dx
-            pan_target[1] += self.place_dy
+            pan_target = self._pan_place_target(st)
             self.move(
                 self.place_actor(
                     st["steak"],
@@ -1214,9 +1257,7 @@ class cook_meat(Base_Task):
         right = next(st for st in self.stations if st["arm"] == "right")
         actions = []
         for st in (left, right):
-            pan_target = list(st["skillet"].get_functional_point(0))
-            pan_target[0] += self.place_dx
-            pan_target[1] += self.place_dy
+            pan_target = self._pan_place_target(st)
             actions.append(
                 self.place_actor(
                     st["steak"],

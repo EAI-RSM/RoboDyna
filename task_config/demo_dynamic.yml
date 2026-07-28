@@ -318,8 +318,8 @@ task_args:
     place_yaw_lim: 0.175        # CHANGE: ±rad Z yaw on pan/board (~10 deg)
     target_doneness_range: [0.45, 0.55]  # CHANGE: inclusive success range per steak
     target_doneness_range_jitter: 0.05   # sample one shift U(-0.05,+0.05) per episode
-    place_dx: 0.010           # center the steak in the bowl (+x)
-    place_dy: -0.015          # center the steak in the bowl (-y)
+    place_dx: 0.0             # nudge from the measured bowl center (mirrored on the left pan)
+    place_dy: 0.0             # nudge from the measured bowl center (+y = away from robot)
     board_scale_mult: 0.075 # cutting board size (steak starts and finishes here)
     # plate removed: cooked steak returns to the cutting board
   cup_curtain_slot:

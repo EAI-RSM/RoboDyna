@@ -145,9 +145,7 @@ def _station_for_side(env, side):
 
 def _snap_steaks_to_pans(env):
     for st in getattr(env, "stations", []) or []:
-        pan = list(st["skillet"].get_functional_point(0))
-        pan[0] += float(getattr(env, "place_dx", 0.0))
-        pan[1] += float(getattr(env, "place_dy", 0.0))
+        pan = list(env._pan_place_target(st))
         pan[2] += 0.012
         q = st["steak"].get_pose().q
         st["steak"].set_pose(sapien.Pose(pan[:3], q))

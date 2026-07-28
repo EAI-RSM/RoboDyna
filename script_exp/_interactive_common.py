@@ -252,6 +252,7 @@ class ViewerViewToggle:
         self._topdown_fovy = float(
             self.DEFAULT_TOPDOWN_FOVY if topdown_fovy is None else topdown_fovy
         )
+        self._disable_wasd_camera_move()
         if topdown_xyz is not None:
             self._topdown_xyz = tuple(topdown_xyz)
             self._topdown_rpy = tuple(
@@ -275,6 +276,19 @@ class ViewerViewToggle:
             if hasattr(plugin, "fps_camera_controller") and hasattr(plugin, "set_camera_xyz"):
                 return plugin
         return getattr(self.viewer, "control_window", None)
+
+    def _disable_wasd_camera_move(self):
+        """Stop SAPIEN's FPS controller from translating the view on W/A/S/D.
+
+        Interactive tasks own the camera (top-down lock or head_camera follow),
+        so free-fly WASD only fights the fixed framing.
+        """
+        cw = self._control_window()
+        if cw is not None and hasattr(cw, "move_speed"):
+            try:
+                cw.move_speed = 0.0
+            except Exception:
+                pass
 
     def _set_fovy(self, fovy: float):
         window = getattr(self.viewer, "window", None)
@@ -350,8 +364,8 @@ class ViewerViewToggle:
                 self.mode = "topdown"
                 self.apply(announce=True)
             return
-        # Keep the overhead view fixed.  SAPIEN's FPS controller otherwise
-        # translates the viewer in response to WASD while the task is running.
+        # Keep the fixed framing. WASD move_speed is zeroed at init; re-apply
+        # still covers any leftover free-fly nudges (mouse drag, scroll).
         if self.mode == "topdown":
             self.apply(announce=False)
         # Keep head view locked to the moving head_camera.
