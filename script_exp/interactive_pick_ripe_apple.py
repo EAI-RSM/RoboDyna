@@ -1,7 +1,7 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive sandbox for ``pick_ripe_apple``.
 
-Wait for the red ripeness window, trigger the frozen front-pinch grasp, then
+Space triggers the frozen front-pinch grasp immediately (any ripeness), then
 drop into the basket. Grasp / hang geometry is FROZEN — this script only
 triggers existing ``play_once`` motion steps.
 
@@ -119,16 +119,14 @@ def _arm_for_good(env):
 
 
 def _do_grasp(env, arm):
-    """Trigger the frozen front-grasp + clear/lift (no geometry retune)."""
-    target = max(0.18, env.red_window - env.GRASP_LEAD_STEPS / max(1, env.ripen_steps))
-    if env._apple_attached and env.ripeness < target - 0.02:
-        print(
-            f"Too early: ripeness={env.ripeness:.3f} < trigger≈{target:.3f} "
-            f"(red_window={env.red_window:.3f}). Wait for the apple to redden."
-        )
-        return False
-
-    print(f"Grasping good apple at ripeness={env.ripeness:.3f} (red_window={env.red_window:.3f})…")
+    """Trigger the frozen front-grasp + clear/lift immediately on Space."""
+    tol = float(getattr(env, "red_tol", env.RED_TOLERANCE_DEFAULT))
+    in_window = abs(float(env.ripeness) - float(env.red_window)) <= tol
+    print(
+        f"Grasping good apple at ripeness={env.ripeness:.3f} "
+        f"(window={env.red_window:.3f}±{tol:.3f}, "
+        f"{'in window' if in_window else 'OUTSIDE window — will fail'})…"
+    )
     env.move(env.open_gripper(arm))
     env.plan_success = True
     if not env._try_front_grasp(arm, grasp_dis=env.FRONT_GRASP_DIS, gripper_pos=0.0):
@@ -213,12 +211,12 @@ def main():
             "Goal: pinch the GOOD (red-path) apple near peak red; drop in the basket.",
             "      Do NOT pick the spoiled/yellow apple (Opt1).",
             "1 / 2 / 3 — select left / right / both arms",
-            "Space — (1) grasp when red enough   (2) drop when over the basket",
+            "Space — (1) grasp immediately   (2) drop when over the basket",
             "Arrows — move the held apple/arm in world XY over the basket",
             "V — toggle view: top-down ↔ head_camera",
             "Esc — close the viewer window to quit",
             "Grasp / hang / clear geometry is FROZEN — Space only triggers existing motions.",
-            "Watch the apple color: green → red → black. Act near vivid red.",
+            "Success needs BOTH: grasp inside the ripeness window AND apple in the basket.",
             "--robot-motion planner|interpolate",
         ],
     )
@@ -229,7 +227,9 @@ def main():
         )
     print(
         f"Good side={'left' if env.apple_side < 0 else 'right'}  "
-        f"red_window={env.red_window:.3f}  ripen_steps={env.ripen_steps}"
+        f"red_window={env.red_window:.3f}"
+        f"±{float(getattr(env, 'red_tol', env.RED_TOLERANCE_DEFAULT)):.3f}  "
+        f"ripen_steps={env.ripen_steps}"
     )
 
     keys_prev: dict = {}
@@ -275,15 +275,14 @@ def main():
 
         if env._interactive_phase == "done" and done_since is None:
             done_since = step
-        # Status heartbeat while waiting for red.
+        # Status heartbeat while the apple is still on the tree.
         if env._interactive_phase == "wait" and step % 150 == 0:
-            target = max(
-                0.18,
-                env.red_window - env.GRASP_LEAD_STEPS / max(1, env.ripen_steps),
-            )
+            tol = float(getattr(env, "red_tol", env.RED_TOLERANCE_DEFAULT))
+            in_window = abs(float(env.ripeness) - float(env.red_window)) <= tol
             print(
-                f"[ripeness] good={env.ripeness:.3f}  trigger≥{target:.3f}  "
-                f"red_window={env.red_window:.3f}"
+                f"[ripeness] good={env.ripeness:.3f}  "
+                f"window={env.red_window:.3f}±{tol:.3f}  "
+                f"{'IN window' if in_window else 'outside window'}"
                 + (
                     f"  spoiled={env.spoiled_ripeness:.3f}"
                     if getattr(env, "spoiled_apple", None) is not None
@@ -294,7 +293,10 @@ def main():
     def is_done(step):
         if done_since is not None and step - done_since > 80:
             return True, (
-                f"r_grasp={env.r_grasp}, ripeness_score={env._ripeness_score():.3f}"
+                f"r_grasp={env.r_grasp}, window={env.red_window:.3f}"
+                f"±{float(getattr(env, 'red_tol', env.RED_TOLERANCE_DEFAULT)):.3f}, "
+                f"ripeness_ok={env._grasp_in_red_window()}, "
+                f"ripeness_score={env._ripeness_score():.3f}"
             )
         # Overripe with no grasp — definitive FAILURE.
         if (

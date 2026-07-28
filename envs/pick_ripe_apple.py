@@ -21,8 +21,9 @@ class pick_ripe_apple(Base_Task):
     left↔right under the branches (default: static).
 
     Metric: ripeness_score = clamp(1 - |r_grasp - red_window| / 0.5, 0, 1), latched at detach of
-    the good apple; episode succeeds only if the good apple is in the basket and the spoiled
-    apple (if any) is not.
+    the good apple; episode succeeds only if the good apple was picked inside the ripeness
+    window (|r_grasp - red_window| <= red_tolerance), it ends up in the basket, and the
+    spoiled apple (if any) does not.
 
     ========================================================================
     FROZEN SETUP STRATEGY — DO NOT CHANGE (user-locked)
@@ -856,6 +857,13 @@ class pick_ripe_apple(Base_Task):
             return 0.0
         return float(np.clip(1.0 - abs(self.r_grasp - self.red_window) / 0.5, 0.0, 1.0))
 
+    def _grasp_in_red_window(self):
+        """Whether the good apple was detached while inside the ripeness window."""
+        if self.r_grasp is None:
+            return False
+        tol = float(getattr(self, "red_tol", self.RED_TOLERANCE_DEFAULT))
+        return bool(abs(float(self.r_grasp) - float(self.red_window)) <= tol)
+
     # ------------------------------------------------------------- success
     def _pose_in_basket(self, apple_p, basket_xy):
         """Geometric in-basket test (same thresholds as check_success)."""
@@ -866,13 +874,15 @@ class pick_ripe_apple(Base_Task):
         return bool(xy_close and settled and not_floor)
 
     def check_success(self):
-        # Success = good apple in basket AND spoiled (if any) not in basket.
+        # Success = good apple picked inside the ripeness window AND in the basket
+        # AND spoiled (if any) not in basket.
         bp = np.array(self.basket.get_pose().p)
         basket_xy = np.array([bp[0], bp[1]], dtype=np.float64)
         self.basket_center = basket_xy
 
         ap = np.array(self.apple.get_pose().p)
         good_in = bool(self._pose_in_basket(ap, basket_xy) and (self.r_grasp is not None))
+        ripeness_ok = self._grasp_in_red_window()
 
         spoiled = getattr(self, "spoiled_apple", None)
         spoiled_in = False
@@ -880,13 +890,29 @@ class pick_ripe_apple(Base_Task):
             spoiled_in = bool(self._pose_in_basket(
                 np.array(spoiled.get_pose().p), basket_xy))
 
-        success = bool(good_in and not spoiled_in)
+        success = bool(good_in and ripeness_ok and not spoiled_in)
+        if not success:
+            if good_in and not ripeness_ok:
+                self._last_fail_reason = (
+                    f"picked outside ripeness window (r_grasp="
+                    f"{-1.0 if self.r_grasp is None else float(self.r_grasp):.3f}, "
+                    f"window={self.red_window:.3f}±"
+                    f"{float(getattr(self, 'red_tol', self.RED_TOLERANCE_DEFAULT)):.3f})"
+                )
+            elif spoiled_in:
+                self._last_fail_reason = "spoiled apple in basket"
+            elif not good_in:
+                self._last_fail_reason = "good apple not in basket"
 
         ripe = self._ripeness_score()
         self.info["ripeness_score"] = ripe
         self.info["r_grasp"] = float(self.r_grasp) if self.r_grasp is not None else -1.0
         self.info["final_score"] = ripe if success else 0.0
         self.info["in_basket"] = bool(good_in)
+        self.info["ripeness_ok"] = bool(ripeness_ok)
+        self.info["red_window"] = float(self.red_window)
+        self.info["red_tolerance"] = float(
+            getattr(self, "red_tol", self.RED_TOLERANCE_DEFAULT))
         self.info["spoiled_in_basket"] = bool(spoiled_in)
         self.info["apple_side"] = float(self.apple_side)
         self.info["good_side"] = float(self.apple_side)
@@ -907,6 +933,9 @@ class pick_ripe_apple(Base_Task):
             "spoiled_ripeness": float(getattr(self, "spoiled_ripeness", 0.0)),
             "r_grasp": float(self.r_grasp) if getattr(self, "r_grasp", None) is not None else -1.0,
             "red_window": float(getattr(self, "red_window", 0.5)),
+            "red_tolerance": float(
+                getattr(self, "red_tol", self.RED_TOLERANCE_DEFAULT)),
+            "ripeness_ok": bool(self._grasp_in_red_window()),
             "attached": bool(getattr(self, "_apple_attached", False)),
             "spoiled_attached": bool(getattr(self, "_spoiled_attached", False)),
             "apple_side": float(getattr(self, "apple_side", 0.0)),

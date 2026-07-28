@@ -340,10 +340,9 @@
         <p>Move the receiving bowl under the dispenser and use the other arm to dispense a gummy.</p>
         <code class="command">python script_exp/interactive_dispense_gummy.py --control robot</code>
         <dl class="controls">
-          <dt><kbd>Z</kbd> / <kbd>C</kbd></dt><dd>Press the bowl-left or bowl-right belt key.</dd>
-          <dt><kbd>Space</kbd></dt><dd>Press the dispense key.</dd>
+          <dt><kbd>Space</kbd></dt><dd>Press the key under the selected arm.</dd>
         </dl>
-        <div class="note">Hold arrows for continuous-belt Opt2; tap for discrete movement in default mode.</div>
+        <div class="note">Left arm: hover over the red dispense key, then Space. Right arm: hover over a left/right belt key, then Space. Hold Space on a belt key for continuous-belt Opt2; tap for discrete hops.</div>
       </article>
 
       <article class="task">
@@ -411,7 +410,7 @@
         <dl class="controls">
           <dt><kbd>Space</kbd></dt><dd>First press grasps; second press drops over the basket.</dd>
         </dl>
-        <div class="note">Watch green to red to black; avoid the spoiled/yellow apple in Opt1.</div>
+        <div class="note">Success: grasp inside the ripeness window (|r_grasp − red_window| ≤ red_tolerance) and land in the basket. Avoid the spoiled/yellow apple in Opt1.</div>
       </article>
 
       <article class="task">

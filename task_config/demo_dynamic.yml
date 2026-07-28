@@ -603,7 +603,7 @@ task_args:
     ripen_steps: 2500           # sim steps for ripeness 0→1 while apple hangs on the tree
     red_window_min: 0.48        # per-ep red target band low (like cook_meat doneness)
     red_window_max: 0.52        # high; ~0.5 = vivid red
-    red_tolerance: 0.12         # how close to target before expert fires grasp
+    red_tolerance: 0.12         # success: |r_grasp - red_window| must be ≤ this
     tree_x: 0.0                 # m; tree at table centerline
     tree_y: 0.05                # m; toward back wall (wall is at y=1; table ~±0.35)
     basket_x: 0.0               # m; basket start X (then oscillates if Opt 2)

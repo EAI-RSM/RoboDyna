@@ -11,7 +11,8 @@ Conditions (5 episodes each for pass/fail; 1 sidebyside demo each):
   opt1+2  : two_apples_enabled=true,  basket_move_enabled=true
             good + spoiled; oscillating basket
 
-Success: good apple in basket; spoiled (if any) NOT in basket.
+Success: good apple picked inside the ripeness window AND in basket;
+spoiled (if any) NOT in basket.
 
 Demos land in:
   final_task_demos/pick_ripe_apple/<tag>_sidebyside.mp4
@@ -108,6 +109,9 @@ def _snapshot(env) -> dict:
         "r_grasp": (
             None if getattr(env, "r_grasp", None) is None else float(env.r_grasp)
         ),
+        "red_window": float(getattr(env, "red_window", 0.5)),
+        "red_tolerance": float(info.get("red_tolerance", getattr(env, "red_tol", 0.12))),
+        "ripeness_ok": bool(info.get("ripeness_ok", False)),
         "in_basket": bool(info.get("in_basket", False)),
         "spoiled_in_basket": bool(info.get("spoiled_in_basket", False)),
         "ripeness_score": float(info.get("ripeness_score", 0.0)),
@@ -118,7 +122,10 @@ def _snapshot(env) -> dict:
 def _criteria_ok(snap: dict, condition: str) -> bool:
     if not snap.get("in_basket"):
         return False
-    if snap.get("r_grasp") is None:
+    r_grasp = snap.get("r_grasp")
+    if r_grasp is None:
+        return False
+    if abs(r_grasp - snap["red_window"]) > snap["red_tolerance"]:
         return False
     cfg = CONDITIONS[condition]
     if cfg["two_apples_enabled"]:
@@ -396,7 +403,8 @@ def write_reports(all_results: dict, exported: dict) -> None:
         "           single good apple; oscillating basket (no pause for drop)",
         "opt1+2   : two_apples_enabled=true,  basket_move_enabled=true",
         "           two apples + oscillating basket\n",
-        "Success: good apple in basket; spoiled (if any) NOT in basket.\n",
+        "Success: good apple picked inside the ripeness window (|r_grasp - red_window|\n"
+        "         <= red_tolerance) AND in basket; spoiled (if any) NOT in basket.\n",
         "Files (1 sidebyside demo per condition):\n"
         "  default_sidebyside.mp4   opt1_sidebyside.mp4\n"
         "  opt2_sidebyside.mp4      opt1+2_sidebyside.mp4\n"
