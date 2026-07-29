@@ -38,12 +38,16 @@ eval_video_log: true
 # Task-scoped knobs (read by envs that look under task_args.<task_name>).
 task_args:
   fill_coffee_jar:
-    # Locked to the first (25%) fill ring.
+    # Success = dense pile height ≥ target_fill (red-ring scale).
+    # Hold duration (sec) maps linearly to beans_per_press_min..beans_per_press.
     target_fill: 0.25
     scene_id: 0
-    beans_full: 24
-    beans_per_press: 6
-    fill_tol: 0.12
+    beans_full: 160
+    press_duration_min: 0.35
+    press_duration_max: 1.40
+    beans_per_press_min: 2
+    beans_per_press: 12
+    fill_tol: 0.02
   pour_beer_with_foam:
     scene_id: 0
     bottle_beer_frac: 0.90

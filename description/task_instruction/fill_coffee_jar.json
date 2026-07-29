@@ -1,0 +1,20 @@
+{
+  "full_description": "touch the top of the coffee dispenser to fill the glass jar to the target red ring",
+  "schema": "{A} is the coffee dispenser, {B} is the glass jar with the target fill line, {C} is the coffee beans, {a} is the arm used, {L} is the target fill level",
+  "preference": "num of words should not exceed 14. Degree of detail avg is 5",
+  "seen": [
+    "Touch the top of {A} to fill {B} to {L}",
+    "Use {a} to dispense {C} into {B} up to {L}",
+    "Fill the jar to the {L} red line with coffee beans",
+    "Touch the lid of {A} until {B} reaches {L}",
+    "Dispense beans from {A} into {B} to the {L} mark",
+    "With {a}, touch {A} and fill {B} to {L}",
+    "Fill {B} with {C} up to the {L} line",
+    "Operate {A} to fill the jar to {L}"
+  ],
+  "unseen": [
+    "Touch the dispenser lid until the jar hits the target fill line",
+    "Fill the marked jar to {L} using coffee beans from the dispenser",
+    "Use {a} to dispense beans into the jar up to {L}"
+  ]
+}
