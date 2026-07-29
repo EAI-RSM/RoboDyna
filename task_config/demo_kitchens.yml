@@ -53,16 +53,19 @@ task_args:
   cook_food:
     scene_id: 0
     # food_type: meat | chicken | sausage | random
-    # Food starts in the pan; expert cooks via knob (0–180°), then picks onto plate.
+    # Food starts on a chopping board; expert places into pan, cooks via knob, then plates.
     food_type: random
     # burner: left_front | left_rear | right_front | right_rear
     burner: left_front
+    # Counter-local stove XY (shifted left vs default +0.42).
+    range_xy: [0.02, 0.08]
     cook_steps: 2000            # steps for doneness 0→1 while stove is on
     cook_speed_jitter: 0.0
     shutoff_lead: 0.04
     cook_intensity: 0.75        # expert knob turn as fraction of 180°
     pan_scale: 0.60
     plate_scale: 0.55
+    board_scale_mult: 0.07
     knob_contact_radius: 0.06
   pour_beer:
     scene_id: 0
@@ -75,13 +78,21 @@ task_args:
     target_liquid: 0.90
     full_liquid_tol: 0.05
   measure_ingredient:
-    # Silver oil dispenser: open tab to pour, close when jar hits target ring.
+    # Baking counter (no sink/tap/stove): pour oil, then place jar on scale.
     scene_id: 0
     target_fill: 0.25
     pour_rate: 0.0015
     fill_tol: 0.02
     # oil_style: transparent (see-through amber) | solid (previous dark-green)
     oil_style: transparent
+    scale_id: 0
+    station_x: -0.08
+    jar_y: -0.16
+    scale_x: -0.20
+    scale_y: -0.14
+    bread_xy: [0.22, -0.10]
+    flour_xy: [0.08, 0.06]
+    bowl_xy: [0.30, 0.05]
   empty_bag:
     # Kitchen Large scene (fridge + microwave + basket + cabinet).
     scene_id: 0
@@ -100,3 +111,33 @@ task_args:
     grasp_hover_z: 0.16
     grasp_tcp_dz: 0.025
     post_catch_lift: 0.10
+  make_soup:
+    # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
+    # Lift board level, pour into pot (physics), then turn stove on. No spills.
+    scene_id: 0
+    burner: left_front
+    range_xy: [0.20, 0.06]
+    water_level: 0.45
+    pot_radius: 0.055
+    pot_height: 0.075
+    board_half: [0.095, 0.065, 0.010]
+    cube_half: 0.012
+    tomato_radius: 0.015
+    tilt_hold_dot: 0.82          # soft friction break during pour ≈35° tip
+    tilt_spill_dot: 0.50         # accidental spill during carry ≈60° tip
+    pour_tip_rad: 0.96           # expert pour tip (~55°)
+    knob_contact_radius: 0.06
+  serve_dinner:
+    # KitchenS: pan with 3–4 meatballs in sauce on a lit burner; plate in front.
+    # Turn stove off, lift pan level, tip so meatballs land on the plate (physics).
+    # Any meatball off the plate = fail.
+    scene_id: 0
+    burner: left_front
+    range_xy: [0.18, 0.06]
+    pan_scale: 0.60
+    plate_scale: 0.55
+    meatball_radius: 0.016
+    # n_meatballs: 3 | 4 | omit for random 3–4
+    tilt_hold_dot: 0.82          # soft friction break during pour ≈35° tip
+    pour_tip_rad: 0.87           # expert pour tip (~50°)
+    knob_contact_radius: 0.06

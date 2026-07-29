@@ -52,8 +52,18 @@ class KitchenS_base_task(Base_Task):
             "table_area": [1.2, 0.7],
             "table_lims": [],
         }
-        # Replace sink+tap with a cooking range (task default).
-        self.replace_sink_with_range = True
+        # Preserve subclass overrides set before super().setup_demo().
+        if not hasattr(self, "replace_sink_with_range"):
+            # Replace sink+tap with a cooking range (task default).
+            self.replace_sink_with_range = True
+        if not hasattr(self, "clear_sink_and_range"):
+            # Bare counter: no sink, tap, or cooking range (solid top + microwave).
+            self.clear_sink_and_range = False
+        if not hasattr(self, "omit_sink"):
+            # Solid counter + no tap/basin, but still load the cooking range.
+            self.omit_sink = False
+        if not hasattr(self, "range_position_override"):
+            self.range_position_override = None
         super()._init_task_env_(**kwags)
 
     # ------------------------------------------------------------------
@@ -148,27 +158,36 @@ class KitchenS_base_task(Base_Task):
 
         # Sink stays at the center (dishrack slot). The cooking range occupies the
         # former KitchenS sink slot on the side — tap never goes next to the stove.
-        if getattr(self, "replace_sink_with_range", True):
-            sink_rel_x, sink_rel_y = self._get_scene_obj_locations("dishrack")
-            # Slightly forward of the shallow rack pose so the basin reads as a sink.
-            sink_rel_y = 0.10
-        else:
-            sink_rel_x, sink_rel_y = self._get_scene_obj_locations("sink")
-        self.kitchens_info["sink_geom"] = {
-            "rel_p": [sink_rel_x, sink_rel_y],
-            "hole_hx": 0.12,
-            "hole_hy": 0.16,
-            "depth": 0.09,
-            "inner_hx": 0.11,
-            "inner_hy": 0.15,
-        }
+        clear_fixtures = bool(getattr(self, "clear_sink_and_range", False))
+        omit_sink = bool(getattr(self, "omit_sink", False))
+        if not clear_fixtures and not omit_sink:
+            if getattr(self, "replace_sink_with_range", True):
+                sink_rel_x, sink_rel_y = self._get_scene_obj_locations("dishrack")
+                # Slightly forward of the shallow rack pose so the basin reads as a sink.
+                sink_rel_y = 0.10
+            else:
+                sink_rel_x, sink_rel_y = self._get_scene_obj_locations("sink")
+            self.kitchens_info["sink_geom"] = {
+                "rel_p": [sink_rel_x, sink_rel_y],
+                "hole_hx": 0.12,
+                "hole_hy": 0.16,
+                "depth": 0.09,
+                "inner_hx": 0.11,
+                "inner_hy": 0.15,
+            }
 
         self._create_backsplash(counter_length, counter_width, table_height, table_xy_bias)
 
-        # Always cut a sink hole — the basin (and its tap) live at sink_geom.
-        self._create_counter_with_sink_hole(
-            counter_length, counter_width, counter_thickness, table_height, table_xy_bias
-        )
+        if clear_fixtures or omit_sink:
+            # Solid counter (no sink hole / tap). Range may still load when omit_sink.
+            self._create_solid_counter(
+                counter_length, counter_width, counter_thickness, table_height, table_xy_bias
+            )
+        else:
+            # Cut a sink hole — the basin (and its tap) live at sink_geom.
+            self._create_counter_with_sink_hole(
+                counter_length, counter_width, counter_thickness, table_height, table_xy_bias
+            )
 
         self._create_base_cabinets(counter_length, counter_width, table_height, counter_thickness, table_xy_bias)
         self._create_counter_edge_trim(counter_length, counter_width, table_height, counter_thickness, table_xy_bias)
@@ -180,10 +199,13 @@ class KitchenS_base_task(Base_Task):
         ]
 
         self._load_microwave(table_height, table_xy_bias)
+        if clear_fixtures:
+            return
         # Center is the sink; skip the dishrack stand-in in the range layout.
         if not getattr(self, "replace_sink_with_range", True):
             self._load_dishrack(table_height, table_xy_bias)
-        self._load_sink(table_height, table_xy_bias)
+        if not omit_sink:
+            self._load_sink(table_height, table_xy_bias)
         if getattr(self, "replace_sink_with_range", True):
             self._load_cooking_range(table_height, table_xy_bias)
 
@@ -419,7 +441,11 @@ class KitchenS_base_task(Base_Task):
         panel. Its collision is deliberately reduced to one unit-scale box so
         mplib/CuRobo never sees a scaled triangle mesh.
         """
-        rel_x, rel_y = self._get_scene_obj_locations("range")
+        override = getattr(self, "range_position_override", None)
+        if override is not None and len(override) >= 2:
+            rel_x, rel_y = float(override[0]), float(override[1])
+        else:
+            rel_x, rel_y = self._get_scene_obj_locations("range")
         x = rel_x + table_xy_bias[0]
         y = rel_y + table_xy_bias[1]
 

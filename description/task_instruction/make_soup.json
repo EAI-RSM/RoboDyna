@@ -1,0 +1,24 @@
+{
+  "full_description": "In the KitchenS scene, lift a chopping board holding colored vegetable cubes and a tomato, carry it level over a pot of water on the stove without dropping any pieces, tip the board to pour them into the pot, then turn the stove on.",
+  "schema": "{A} notifies the chopping board, {B} notifies the pot of water, {C} notifies the cooking range, {D} notifies the stove knob, {E} notifies the vegetable pieces, {a} notifies the arm used",
+  "preference": "num of words should not exceed 25. Degree of detail avg is 6",
+  "seen": [
+    "Pour {E} from {A} into {B}, then turn on {C} with {D}",
+    "Use {a} to tip {A} over {B} without dropping {E}, then turn {D}",
+    "Carry {A} level to {B}, pour {E} in, then turn on {C}",
+    "Dump {E} from {A} into the pot, then turn {D} on {C}",
+    "Lift {A}, pour {E} into {B}, then start {C} via {D}",
+    "With {a}, pour board vegetables into {B} and turn on the stove",
+    "Keep {E} on {A} until over {B}, pour them in, then turn {D}",
+    "Make soup: pour {E} into {B} from {A}, then turn on {C}",
+    "Tip {A} over {B} so {E} fall in, then turn the stove on",
+    "Use {a} on {A} to fill {B} with {E}, then turn {D}"
+  ],
+  "unseen": [
+    "Pour the board vegetables into the pot and turn the stove on",
+    "Do not drop any pieces while tipping them into the water",
+    "Carry the chopping board level, dump into the pot, light the burner",
+    "Fill the pot from the board then turn the range on",
+    "Tip the board carefully over the pot before starting the stove"
+  ]
+}

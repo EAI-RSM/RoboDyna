@@ -142,7 +142,8 @@ task_args:
     roll_speed: 0.14            # m/s; shelf + table roll speed (arm pre-positions first)
     fall_speed_xy: 0.07         # m/s; retained horizontal speed during shelf→table fall
     table_edge_y: -0.30         # m; near table edge (past this without catch = fail)
-    intercept_frac: 0.40        # fraction along table-roll leg for the catch point
+    intercept_frac: 0.72        # farther from shelf along table-roll (room to manipulate)
+    catch_shelf_clearance: 0.28 # m; min gap between catch hand and shelf front lip
     grasp_tol: 0.08             # m; TCP-to-cup tolerance to count a catch
     grasp_z_above: 0.055        # m; TCP height above table at the catch
     jaw_clearance: 0.002        # m; pads stop this far short of the cup surface
@@ -855,8 +856,7 @@ task_args:
     target_liquid: 0.90
     full_liquid_tol: 0.05
   measure_ingredient:
-    # KitchenS: silver cylindrical olive-oil dispenser with nozzle tab.
-    # Open tab → oil stream + rising liquid in marked glass jar; close tab to stop.
+    # KitchenS baking counter: pour oil, then place jar on electronic scale.
     # oil_style: transparent (see-through amber) | solid (previous dark-green)
     scene_id: 0
     target_fill: 0.25
@@ -864,3 +864,34 @@ task_args:
     fill_tol: 0.02
     overflow_level: 1.02
     oil_style: transparent
+    scale_id: 0
+    scale_x: -0.20
+    scale_y: -0.14
+  make_soup:
+    # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
+    # Lift board level, pour into pot (physics), then turn stove on. No spills.
+    scene_id: 0
+    burner: left_front
+    range_xy: [0.20, 0.06]
+    water_level: 0.45
+    pot_radius: 0.055
+    pot_height: 0.075
+    board_half: [0.095, 0.065, 0.010]
+    cube_half: 0.012
+    tomato_radius: 0.015
+    tilt_hold_dot: 0.82
+    tilt_spill_dot: 0.50
+    pour_tip_rad: 0.96
+    knob_contact_radius: 0.06
+  serve_dinner:
+    # KitchenS: pan with meatballs in sauce on a lit burner; serve onto a plate.
+    # Turn stove off, tip pan carefully; any meatball off the plate = fail.
+    scene_id: 0
+    burner: left_front
+    range_xy: [0.18, 0.06]
+    pan_scale: 0.60
+    plate_scale: 0.55
+    meatball_radius: 0.016
+    tilt_hold_dot: 0.82
+    pour_tip_rad: 0.87
+    knob_contact_radius: 0.06

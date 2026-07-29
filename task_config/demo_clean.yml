@@ -49,13 +49,16 @@ task_args:
     beans_per_press: 12
     fill_tol: 0.02
   measure_ingredient:
-    # Open nozzle tab → olive oil fills marked jar; close tab to stop.
+    # Pour oil to target ring, then place jar on electronic scale.
     target_fill: 0.25
     scene_id: 0
     pour_rate: 0.0015
     fill_tol: 0.02
     # oil_style: transparent (see-through amber) | solid (previous dark-green)
     oil_style: transparent
+    scale_id: 0
+    scale_x: -0.20
+    scale_y: -0.14
   pour_beer:
     scene_id: 0
     bottle_beer_frac: 0.90

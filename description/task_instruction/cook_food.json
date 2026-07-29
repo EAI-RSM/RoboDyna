@@ -1,0 +1,24 @@
+{
+  "full_description": "In the KitchenS scene (no sink), raw food starts on a chopping board. Put the food into the pan on the stove, turn the stove knob up to 180 degrees to cook to the food's ideal doneness (meat medium, chicken dark-yellow, sausage dark-red), turn the knob back to zero, then pick the cooked food from the pan and place it on the plate.",
+  "schema": "{A} notifies the food, {B} notifies the pan, {C} notifies the plate, {D} notifies the cooking range, {E} notifies the stove knob, {F} notifies the food type (meat/chicken/sausage), {G} notifies the chopping board, {a} notifies the arm used",
+  "preference": "num of words should not exceed 25. Degree of detail avg is 6",
+  "seen": [
+    "Move {A} from {G} into {B}, cook {F}, place on {C}",
+    "Use {a} to put {A} in {B}, turn {E}, then place on {C}",
+    "Cook {F} from the board via {D}, then put it on {C}",
+    "Place {A} into {B} from {G}, cook with {E}, plate on {C}",
+    "Put {A} on {B}, cook with {E}, shut off, place onto {C}",
+    "From {G}, cook {F} in {B} on {D}, then place on {C}",
+    "With {a}, move {A} into the pan, cook, put on {C}",
+    "Board to pan to plate: cook {A} on {D}",
+    "Heat {A} via {E} after placing it in {B}, then plate it",
+    "Cook {A} from {G} on {B}, shut {E}, place onto {C}"
+  ],
+  "unseen": [
+    "Put the food from the board into the pan, cook, then plate it",
+    "Do not leave the stove on; place the cooked food on the plate",
+    "Cook meat, chicken, or sausage from the chopping board onto the plate",
+    "Move food into the pan before turning the knob",
+    "Shut the stove off before moving the food onto the plate"
+  ]
+}

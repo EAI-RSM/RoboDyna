@@ -72,8 +72,13 @@ Household scenes built on the robotwin_bench office / KitchenS environments. Eac
 | Task | Demo |
 |---|---|
 | **`trap_bug`**<br><sub>Trap a scurrying cockroach, spider, or ant under the office bookshelf by placing a transparent glass box over it while it is still moving.</sub> | <div align="center"><img src="final_task_demos/trap_bug/default_sidebyside.gif" width="320" height="120"/><br><sub>Office wall-shelf; live bug run (roach/spider/ant).</sub></div> |
-| **`pour_beer`**<br><sub>Pour beer into a glass in bursts so the foam can settle; overflow fails, a full glass succeeds.</sub> | <div align="center"><img src="final_task_demos/pour_beer/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS counter; pause between pours.</sub></div> |
+| **`catch_rolling_cup`**<br><sub>Stop a cup that tips off a shelf and rolls across the desk, upright it in hand, and place it back on the shelf.</sub> | <div align="center"><img src="final_task_demos/catch_rolling_cup/default_sidebyside.gif" width="320" height="120"/><br><sub>Office desk; tip → roll → catch → re-shelve.</sub></div> |
 | **`fill_coffee_jar`**<br><sub>Press the coffee dispenser's lid to fill a marked glass jar to the target fill line.</sub> | <div align="center"><img src="final_task_demos/fill_coffee_jar/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS counter; 50% fill target.</sub></div> |
+| **`pour_beer`**<br><sub>Pour beer into a glass in bursts so the foam can settle; overflow fails, a full glass succeeds.</sub> | <div align="center"><img src="final_task_demos/pour_beer/default_sidebyside.gif" width="320" height="120"/><br><sub>Bar counter; pause between pours.</sub></div> |
+| **`cook_food`**<br><sub>Cook meat, chicken, or sausage on the stove to the target doneness, then plate it.</sub> | <div align="center"><img src="final_task_demos/cook_food/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS stove; board → pan → plate.</sub></div> |
+| **`make_soup`**<br><sub>Tip chopping-board vegetables into a pot of water, then turn the stove on.</sub> | <div align="center"><img src="final_task_demos/make_soup/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS range; tip board, then heat.</sub></div> |
+| **`measure_ingredient`**<br><sub>Open an oil dispenser to fill a marked jar to the target ring, close the tab, and weigh the jar on a scale.</sub> | <div align="center"><img src="final_task_demos/measure_ingredient/default_sidebyside.gif" width="320" height="120"/><br><sub>Prep counter; pour, then place on scale.</sub></div> |
+| **`serve_dinner`**<br><sub>Turn off a lit stove, then tip meatballs from the skillet onto a plate without spilling onto the table.</sub> | <div align="center"><img src="final_task_demos/serve_dinner/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS stove; pan tip onto plate.</sub></div> |
 
 ## 🛠️ Adding a task
 

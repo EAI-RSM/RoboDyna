@@ -1,0 +1,56 @@
+# KitchenS pour-beer demo config — dual UR5e + WSG gripper.
+render_freq: 0
+episode_num: 1
+use_seed: false
+save_freq: 20
+embodiment: [ur5-wsg, ur5-wsg, 0.6]
+language_num: 100
+use_dynamic: false
+dynamic_level: 1
+dynamic_coefficient: 0.1
+domain_randomization:
+  random_background: false
+  cluttered_table: false
+  clean_background_rate: 1
+  random_head_camera_dis: 0
+  random_table_height: 0
+  random_light: false
+  crazy_random_light_rate: 0
+camera:
+  head_camera_type: D435
+  wrist_camera_type: D435
+  collect_head_camera: true
+  collect_wrist_camera: true
+data_type:
+  rgb: true
+  third_view: false
+  depth: false
+  pointcloud: false
+  observer: false
+  endpose: true
+  qpos: true
+  mesh_segmentation: false
+  actor_segmentation: false
+pcd_down_sample_num: 1024
+pcd_crop: true
+save_path: ./data
+clear_cache_freq: 5
+collect_data: true
+eval_video_log: true
+save_failed_cases: false
+check_render_success: false
+task_args:
+  pour_beer:
+    scene_id: 0
+    bottle_beer_frac: 0.90
+    pour_rate: 0.020
+    foam_gain: 1.4
+    foam_decay: 0.0030
+    expert_foam_resume: 0.22
+    target_liquid: 0.80
+    full_liquid_tol: 0.08
+    max_pour_cycles: 8
+    station_x: 0.10
+    cup_y: -0.08
+    bottle_y: 0.04
+    bottle_dx: 0.09
