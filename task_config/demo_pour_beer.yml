@@ -23,7 +23,7 @@ camera:
   collect_wrist_camera: true
 data_type:
   rgb: true
-  third_view: false
+  third_view: true
   depth: false
   pointcloud: false
   observer: false
@@ -42,14 +42,15 @@ check_render_success: false
 task_args:
   pour_beer:
     scene_id: 0
-    bottle_beer_frac: 0.90
-    pour_rate: 0.020
-    foam_gain: 1.4
-    foam_decay: 0.0030
-    expert_foam_resume: 0.22
-    target_liquid: 0.80
-    full_liquid_tol: 0.08
-    max_pour_cycles: 8
+    bottle_beer_frac: 1.0
+    pour_rate: 0.024
+    foam_gain: 0.85
+    foam_decay: 0.0045
+    expert_foam_resume: 0.14
+    target_liquid: 0.95
+    full_liquid_tol: 0.05
+    overflow_level: 1.0
+    max_pour_cycles: 14
     station_x: 0.10
     cup_y: -0.08
     bottle_y: 0.04
