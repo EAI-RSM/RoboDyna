@@ -52,13 +52,14 @@ task_args:
     # Pour oil to target ring, then place jar on electronic scale.
     target_fill: 0.25
     scene_id: 0
-    pour_rate: 0.0015
+    pour_rate: 0.00022
     fill_tol: 0.02
-    # oil_style: transparent (see-through amber) | solid (previous dark-green)
-    oil_style: transparent
+    # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
+    oil_style: solid
     scale_id: 0
-    scale_x: -0.20
+    scale_x: -0.32
     scale_y: -0.14
+    chips_xy: [0.16, 0.08]
   pour_beer:
     scene_id: 0
     bottle_beer_frac: 0.90

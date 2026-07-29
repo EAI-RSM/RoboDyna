@@ -81,18 +81,20 @@ task_args:
     # Baking counter (no sink/tap/stove): pour oil, then place jar on scale.
     scene_id: 0
     target_fill: 0.25
-    pour_rate: 0.0015
+    pour_rate: 0.00022
     fill_tol: 0.02
-    # oil_style: transparent (see-through amber) | solid (previous dark-green)
-    oil_style: transparent
+    # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
+    oil_style: solid
     scale_id: 0
     station_x: -0.08
     jar_y: -0.16
-    scale_x: -0.20
+    scale_x: -0.32
     scale_y: -0.14
     bread_xy: [0.22, -0.10]
     flour_xy: [0.08, 0.06]
+    chips_xy: [0.16, 0.08]
     bowl_xy: [0.30, 0.05]
+    board_scale_mult: 0.07
   empty_bag:
     # Kitchen Large scene (fridge + microwave + basket + cabinet).
     scene_id: 0

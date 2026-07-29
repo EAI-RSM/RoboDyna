@@ -1,9 +1,10 @@
 """Measure olive oil into a marked jar, then weigh it on a kitchen scale.
 
 KitchenS prep-counter scene (no sink / tap / stove): silver oil dispenser, marked
-glass jar, electronic scale, and baking props (bread, flour sack, bowl of eggs).
-Open the nozzle tab to pour, close it at the target ring, then grasp the jar and
-place it on ``072_electronicscale``.
+glass jar, electronic scale, and baking props (bread on a cutting board, flour
+sack, chocolate chips, bowl of eggs). Turn the nozzle valve open to pour; oil
+flows while the valve stays open. Turn it closed at the target ring, then place
+the jar on ``072_electronicscale``.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import sapien
 import sapien.render
+import transforms3d as t3d
 
 from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
@@ -25,6 +27,8 @@ class measure_ingredient(KitchenS_base_task):
 
     EGG_ORANGE = [0.95, 0.48, 0.10, 1.0]
     YUP_Q = [0.5, 0.5, 0.5, 0.5]
+    BOARD_QPOS = [0.707, 0.707, 0.0, 0.0]
+    BOARD_SCALE_DEFAULT = 0.07
 
     JAR_MODEL = "253_glass_jar"
 
@@ -50,23 +54,32 @@ class measure_ingredient(KitchenS_base_task):
     TAB_STEM_R = 0.005
 
     EE_TO_TCP = 0.12
-    KEY_HOVER_DIS = 0.06
-    KEY_PRESS_DEPTH = 0.045
+    VALVE_HOVER_Z = 0.07
+    VALVE_GRASP_Z = 0.012
+    VALVE_TURN_STEPS = 8
 
     FILL_LEVELS = (0.25,)
     FILL_TOL = 0.02
-    POUR_RATE = 0.0015          # fill fraction per physics step while tab open
+    # Slow enough that opening the valve does not already overshoot the mark;
+    # oil still rises continuously while the valve stays open (incl. close approach).
+    POUR_RATE = 0.00022         # fill fraction per physics step while valve open
     OVERFLOW_LEVEL = 1.02
+    # Closed = 0 (lever +x); open = π/2 (lever −y, along nozzle).
+    VALVE_CLOSED_ANGLE = 0.0
+    VALVE_OPEN_ANGLE = 0.5 * np.pi
+    # Flow only when the lever is nearly fully open (ball-valve style).
+    VALVE_FLOW_FRAC = 0.85
 
     # Oil look (``oil_style`` task_arg):
-    #   transparent — see-through amber (glass-jar recipe); default
-    #   solid       — previous dark-green / opaque column
-    OIL_STYLE_DEFAULT = "transparent"
+    #   solid       — opaque sunflower-yellow oil (default)
+    #   transparent — see-through amber (glass-jar recipe)
+    OIL_STYLE_DEFAULT = "solid"
     OIL_COLOR_TRANSPARENT = [0.90, 0.92, 0.62, 0.16]
     OIL_STREAM_TRANSPARENT = [0.88, 0.90, 0.55, 0.14]
     OIL_MENISCUS_TRANSPARENT = [0.88, 0.90, 0.50, 0.20]
-    OIL_COLOR_SOLID = [0.12, 0.32, 0.10, 0.78]
-    OIL_STREAM_SOLID = [0.10, 0.28, 0.08, 0.72]
+    # Opaque sunflower-oil yellow.
+    OIL_COLOR_SOLID = [0.96, 0.78, 0.12, 0.95]
+    OIL_STREAM_SOLID = [0.94, 0.74, 0.08, 0.92]
     UPRIGHT_CYL_Q = [0.70710678, 0.0, -0.70710678, 0.0]
     SILVER = [0.78, 0.80, 0.84, 1.0]
     SILVER_DARK = [0.55, 0.57, 0.60, 1.0]
@@ -85,6 +98,7 @@ class measure_ingredient(KitchenS_base_task):
         # Per-step state before early _update_kinematic_tasks (camera init).
         self._loaded = False
         self.tab_open = False
+        self.tab_angle = float(self.VALVE_CLOSED_ANGLE)
         self.liquid_level = 0.0
         self.overflowed = False
         self.opened_once = False
@@ -99,7 +113,6 @@ class measure_ingredient(KitchenS_base_task):
         self._ring_entities = []
         self._touch_latched = False
         self._ignore_tab = False
-        self._pour_halted = False
         self._jar_locked = True
         self._jar_carry = False
         self._jar_carry_offset = None
@@ -308,6 +321,7 @@ class measure_ingredient(KitchenS_base_task):
         self._apply_oil_style(self._parse_oil_style(cfg))
 
         self.tab_open = False
+        self.tab_angle = float(self.VALVE_CLOSED_ANGLE)
         self.liquid_level = 0.0
         self.overflowed = False
         self.opened_once = False
@@ -320,7 +334,6 @@ class measure_ingredient(KitchenS_base_task):
         self._ring_entities = []
         self._touch_latched = False
         self._ignore_tab = False
-        self._pour_halted = False
         self._jar_locked = True
         self._jar_carry = False
         self._jar_carry_offset = None
@@ -482,18 +495,41 @@ class measure_ingredient(KitchenS_base_task):
         )
         self._rebuild_tab()
 
-    def _rebuild_tab(self):
-        """Ball-valve lever on a stem (valve.jpg): yaw 90° closed ↔ open.
+    def _valve_lever_center(self, angle: float):
+        """World XYZ of the lever box center at the given stem yaw (rad)."""
+        hx, hy, hz = self.tab_hinge_xyz
+        half_l = self.TAB_LEN * 0.5
+        half_t = self.TAB_THICK * 0.5
+        root = self.TAB_STEM_R * 0.6
+        reach = root + half_l
+        # angle=0 → +x (closed); angle=π/2 → −y (open, along nozzle).
+        cx = hx + reach * float(np.cos(angle))
+        cy = hy - reach * float(np.sin(angle))
+        cz = hz + self.TAB_STEM_H + half_t
+        return np.array([cx, cy, cz], dtype=float)
 
-        Lever is a flat bar that sticks out from the stem (not centered on it):
-          closed → extends sideways (±x), 90° to the nozzle
-          open   → extends along the nozzle (±y)
+    def _valve_lever_tip(self, angle: float):
+        """World XYZ of the graspable tip of the lever."""
+        hx, hy, hz = self.tab_hinge_xyz
+        half_t = self.TAB_THICK * 0.5
+        root = self.TAB_STEM_R * 0.6
+        tip_r = root + self.TAB_LEN
+        tx = hx + tip_r * float(np.cos(angle))
+        ty = hy - tip_r * float(np.sin(angle))
+        tz = hz + self.TAB_STEM_H + half_t
+        return np.array([tx, ty, tz], dtype=float)
+
+    def _rebuild_tab(self):
+        """Ball-valve lever on a stem: continuous yaw about the vertical stem.
+
+        angle=0 (closed) → lever along +x; angle=π/2 (open) → along −y (nozzle).
         """
         for part in getattr(self, "_tab_parts", []) or []:
             self._remove_entity(part)
         self._tab_parts = []
 
         hx, hy, hz = self.tab_hinge_xyz
+        angle = float(getattr(self, "tab_angle", self.VALVE_CLOSED_ANGLE))
         silver = self._metallic_material([0.85, 0.87, 0.90], roughness=0.15, metallic=0.97)
         silver_stem = self._metallic_material([0.75, 0.77, 0.80], roughness=0.20, metallic=0.94)
 
@@ -516,33 +552,24 @@ class measure_ingredient(KitchenS_base_task):
         stem_builder.set_initial_pose(sapien.Pose([hx, hy, hz + stem_half]))
         self._tab_parts.append(stem_builder.build(name="oil_valve_stem"))
 
-        # Flat lever: small root overlap on the stem, long arm sticking out.
+        # Flat lever: long axis along local +X, yawed by −angle about world Z.
         half_l = self.TAB_LEN * 0.5
         half_w = self.TAB_WIDTH * 0.5
         half_t = self.TAB_THICK * 0.5
-        lever_z = hz + self.TAB_STEM_H + half_t
-        # Slight overlap onto the stem so it reads as attached.
-        root = self.TAB_STEM_R * 0.6
-        if self.tab_open:
-            # Alongside nozzle: arm points toward the tip / jar (−y), clearly visible.
-            half = [half_w, half_l, half_t]
-            lever_pose = sapien.Pose([hx, hy - (root + half_l), lever_z])
-        else:
-            # Closed: arm points sideways (+x), 90° to the nozzle (valve.jpg).
-            half = [half_l, half_w, half_t]
-            lever_pose = sapien.Pose([hx + root + half_l, hy, lever_z])
+        center = self._valve_lever_center(angle)
+        yaw_q = t3d.euler.euler2quat(0.0, 0.0, -angle, axes="sxyz")
         lever = self._add_static_box(
-            pose=lever_pose,
-            half_size=half,
+            pose=sapien.Pose(center.tolist(), list(yaw_q)),
+            half_size=[half_l, half_w, half_t],
             material=silver,
             name="oil_valve_lever",
             collision=True,
         )
         self._tab_parts.append(lever)
-        # Touch target = top of stem/lever junction (stable for open & closed).
-        self.tab_touch_xyz = np.array([hx, hy, lever_z + half_t], dtype=float)
-        self.touch_xy = self.tab_touch_xyz[:2].copy()
-        self.touch_top_z = float(self.tab_touch_xyz[2] + 0.004)
+        tip = self._valve_lever_tip(angle)
+        self.tab_touch_xyz = tip.copy()
+        self.touch_xy = tip[:2].copy()
+        self.touch_top_z = float(tip[2] + 0.004)
 
     def _build_jar(self):
         """See-through coffee-task jar: dynamic convex collision + cylinder visual.
@@ -663,8 +690,8 @@ class measure_ingredient(KitchenS_base_task):
         """Electronic kitchen scale on the same arm side as the jar."""
         cfg = self._cfg
         side = float(self.jar_xy[0])
-        scale_x = float(cfg.get("scale_x", side - 0.14 if side <= 0 else side + 0.14))
-        scale_y = float(cfg.get("scale_y", -0.08))
+        scale_x = float(cfg.get("scale_x", side - 0.26 if side <= 0 else side + 0.26))
+        scale_y = float(cfg.get("scale_y", -0.14))
         scale_id = int(cfg.get("scale_id", 0))
         self.scale = create_actor(
             scene=self,
@@ -692,15 +719,44 @@ class measure_ingredient(KitchenS_base_task):
                         pass
 
     def _build_baking_props(self):
-        """Static bread, flour sack, and a bowl with orange eggs (decorative)."""
+        """Static baking clutter: board+bread, flour, chocolate chips, bowl+eggs."""
         cfg = self._cfg
         z0 = self.table_top + 0.001
         q = self.YUP_Q
 
+        # Cutting board with bread on top.
         bread_xy = cfg.get("bread_xy", [0.22, -0.10])
+        board_scale = float(cfg.get("board_scale_mult", self.BOARD_SCALE_DEFAULT))
+        with open("assets/objects/104_board/model_data0.json", encoding="utf-8") as f:
+            board_data = json.load(f)
+        board_th = float(board_data["extents"][1]) * board_scale
+        board_pose = sapien.Pose(
+            [float(bread_xy[0]), float(bread_xy[1]), z0 + 0.5 * board_th],
+            list(self.BOARD_QPOS),
+        )
+        self.board = create_actor(
+            scene=self,
+            pose=board_pose,
+            modelname="104_board",
+            model_id=0,
+            convex=True,
+            is_static=True,
+            scale_mult=board_scale,
+        )
+        self.board.set_name("104_board")
+        self.board.config = {
+            "scale": [board_scale, board_scale, board_scale],
+            "extents": board_data["extents"],
+            "center": board_data["center"],
+        }
+        board_top_z = z0 + board_th
+
         self.bread = create_actor(
             scene=self,
-            pose=sapien.Pose([float(bread_xy[0]), float(bread_xy[1]), z0], q),
+            pose=sapien.Pose(
+                [float(bread_xy[0]), float(bread_xy[1]), board_top_z + 0.001],
+                q,
+            ),
             modelname="075_bread",
             model_id=int(cfg.get("bread_id", 0)),
             convex=True,
@@ -712,6 +768,16 @@ class measure_ingredient(KitchenS_base_task):
             scene=self,
             pose=sapien.Pose([float(flour_xy[0]), float(flour_xy[1]), z0], q),
             modelname="261_flour_sack",
+            model_id=0,
+            convex=True,
+            is_static=True,
+        )
+
+        chips_xy = cfg.get("chips_xy", [0.18, 0.08])
+        self.chocolate_chips = create_actor(
+            scene=self,
+            pose=sapien.Pose([float(chips_xy[0]), float(chips_xy[1]), z0], q),
+            modelname="263_chocolate_chips_bag",
             model_id=0,
             convex=True,
             is_static=True,
@@ -763,17 +829,28 @@ class measure_ingredient(KitchenS_base_task):
         self.jar_bottom_z = float(pose.p[2]) + self.JAR_BOTTOM_T
 
     # ------------------------------------------------------------------ oil visuals / dynamics
-    def _set_tab_open(self, open_: bool):
-        open_ = bool(open_)
-        if open_ == self.tab_open:
-            return
-        self.tab_open = open_
-        if open_:
+    def _set_tab_angle(self, angle: float):
+        """Set continuous valve yaw; stream follows whether angle is near-open."""
+        angle = float(np.clip(angle, self.VALVE_CLOSED_ANGLE, self.VALVE_OPEN_ANGLE))
+        was_open = bool(self.tab_open)
+        self.tab_angle = angle
+        # Flow only when nearly fully open; closes/stops early in the return turn.
+        self.tab_open = bool(
+            angle >= float(self.VALVE_FLOW_FRAC) * self.VALVE_OPEN_ANGLE
+        )
+        if self.tab_open and not was_open:
             self.opened_once = True
-        elif self.opened_once and self.liquid_level > 0.05:
+        if was_open and not self.tab_open and self.liquid_level > 0.05:
             self.closed_after_pour = True
         self._rebuild_tab()
         self._sync_stream()
+
+    def _set_tab_open(self, open_: bool):
+        open_ = bool(open_)
+        target = self.VALVE_OPEN_ANGLE if open_ else self.VALVE_CLOSED_ANGLE
+        if open_ == self.tab_open and abs(self.tab_angle - target) < 1e-3:
+            return
+        self._set_tab_angle(target)
 
     def _sync_stream(self):
         """Narrow oil cylinder from nozzle outlet down to the table (tab-gated)."""
@@ -794,7 +871,7 @@ class measure_ingredient(KitchenS_base_task):
         )
 
     def _rebuild_liquid(self, force: bool = False):
-        """Rising oil column in the jar (transparent amber or solid dark-green)."""
+        """Rising oil column in the jar (opaque sunflower yellow or transparent)."""
         if not getattr(self, "jar_fillable_h", None):
             return
         liq_h = max(0.0, float(self.liquid_level)) * self.jar_fillable_h
@@ -852,7 +929,8 @@ class measure_ingredient(KitchenS_base_task):
         self._liquid_entity = ent
 
     def _step_oil(self):
-        if self.tab_open and not getattr(self, "_pour_halted", False):
+        # Natural pour: oil rises whenever the valve is open (no early halt).
+        if self.tab_open:
             self.liquid_level = min(1.0, self.liquid_level + self.pour_rate)
             if self.liquid_level >= self.overflow_level - 1e-4:
                 self.overflowed = True
@@ -879,19 +957,19 @@ class measure_ingredient(KitchenS_base_task):
 
     def _clear_tab_collision(self):
         """Drop valve collision after the pour so the jar is reachable."""
+        angle = float(getattr(self, "tab_angle", self.VALVE_CLOSED_ANGLE))
         for part in list(getattr(self, "_tab_parts", []) or []):
             self._remove_entity(part)
         self._tab_parts = []
-        # Keep a visual-only lever so the closed state remains readable.
-        hx, hy, hz = self.tab_hinge_xyz
+        # Keep a visual-only lever in the current (closed) pose.
         silver = self._metallic_material([0.85, 0.87, 0.90], roughness=0.15, metallic=0.97)
         half_l = self.TAB_LEN * 0.5
         half_w = self.TAB_WIDTH * 0.5
         half_t = self.TAB_THICK * 0.5
-        lever_z = hz + self.TAB_STEM_H + half_t
-        root = self.TAB_STEM_R * 0.6
+        center = self._valve_lever_center(angle)
+        yaw_q = t3d.euler.euler2quat(0.0, 0.0, -angle, axes="sxyz")
         self._add_static_box(
-            pose=sapien.Pose([hx + root + half_l, hy, lever_z]),
+            pose=sapien.Pose(center.tolist(), list(yaw_q)),
             half_size=[half_l, half_w, half_t],
             material=silver,
             name="oil_valve_lever_visual",
@@ -991,41 +1069,66 @@ class measure_ingredient(KitchenS_base_task):
                 self._take_picture()
 
     # ------------------------------------------------------------------ expert
-    def _tab_press_pose(self, tip_z_above: float):
-        """Top-down EE pose above the ball-valve lever (stem top)."""
-        hx, hy, hz = self.tab_hinge_xyz
-        tip_z = hz + self.TAB_STEM_H + self.TAB_THICK
-        tcp_z = tip_z + tip_z_above
-        ee_z = tcp_z + self.EE_TO_TCP
+    def _valve_ee_pose(self, angle: float, tip_z_above: float):
+        """Top-down EE pose above the lever tip at the given valve angle."""
+        tip = self._valve_lever_tip(angle)
+        ee_z = float(tip[2] + tip_z_above + self.EE_TO_TCP)
         return [
-            float(hx),
-            float(hy),
-            float(ee_z),
+            float(tip[0]),
+            float(tip[1]),
+            ee_z,
             *GRASP_DIRECTION_DIC["top_down"],
         ]
 
-    def _press_tab(self, arm_tag: ArmTag, want_open: bool):
-        """Hover then press the nozzle tab; force desired open/closed state."""
+    def _turn_valve(self, arm_tag: ArmTag, want_open: bool):
+        """Grasp the lever tip and sweep it 90° about the stem (open/close)."""
         was = self.tab_open
+        start = float(self.tab_angle)
+        end = float(self.VALVE_OPEN_ANGLE if want_open else self.VALVE_CLOSED_ANGLE)
         self._ignore_tab = True
-        self.move(self.move_to_pose(arm_tag, self._tab_press_pose(self.KEY_HOVER_DIS)))
+
+        self.move(self.open_gripper(arm_tag))
         if not self.plan_success:
-            print(f"[measure_ingredient] tab hover failed want_open={want_open}")
             self._ignore_tab = False
             return False
-        self.move(self.move_by_displacement(arm_tag, z=-self.KEY_PRESS_DEPTH))
-        self._idle_steps(8)
-        # Deterministic expert: always apply the intended state after the press.
+
+        # Approach above the tip, then pinch the lever.
+        self.move(
+            self.move_to_pose(arm_tag, self._valve_ee_pose(start, self.VALVE_HOVER_Z))
+        )
+        if not self.plan_success:
+            print(f"[measure_ingredient] valve hover failed want_open={want_open}")
+            self._ignore_tab = False
+            return False
+        self.move(
+            self.move_to_pose(arm_tag, self._valve_ee_pose(start, self.VALVE_GRASP_Z))
+        )
+        self.move(self.close_gripper(arm_tag))
+        self._idle_steps(4)
+
+        # Sweep the lever; valve visual + oil stream follow each waypoint.
+        n = int(self.VALVE_TURN_STEPS)
+        for i in range(1, n + 1):
+            if not self.plan_success:
+                break
+            a = start + (end - start) * (i / float(n))
+            self._set_tab_angle(a)
+            self.move(
+                self.move_to_pose(arm_tag, self._valve_ee_pose(a, self.VALVE_GRASP_Z))
+            )
+
+        # Snap to the exact end state.
         self._set_tab_open(want_open)
-        self.move(self.move_by_displacement(arm_tag, z=self.KEY_PRESS_DEPTH))
-        self._idle_steps(6)
+        self.move(self.open_gripper(arm_tag))
+        if self.plan_success:
+            self.move(self.move_by_displacement(arm_tag, z=0.06))
         self._touch_latched = False
         self._ignore_tab = False
         print(
-            f"[measure_ingredient] press tab {was}→{self.tab_open} "
-            f"(want={want_open}) liq={self.liquid_level:.2f}"
+            f"[measure_ingredient] turn valve {was}→{self.tab_open} "
+            f"(want={want_open}) angle={self.tab_angle:.2f} liq={self.liquid_level:.2f}"
         )
-        return True
+        return bool(self.plan_success)
 
     def play_once(self):
         arm = self.arm
@@ -1034,37 +1137,39 @@ class measure_ingredient(KitchenS_base_task):
             print("[measure_ingredient] close_gripper failed")
             return self.info
 
-        # 1) Open the nozzle tab → stream appears, oil starts filling.
-        if not self._press_tab(arm, want_open=True):
+        # 1) Turn the nozzle valve open → stream appears, oil starts filling.
+        if not self._turn_valve(arm, want_open=True):
             return self.info
         if not self.tab_open:
-            print("[measure_ingredient] tab failed to open")
+            print("[measure_ingredient] valve failed to open")
             self.plan_success = False
             return self.info
 
-        # Keep tab detection off while waiting so a lingering EE cannot re-toggle.
+        # Keep touch-toggle off while waiting / approaching the close turn.
         self._ignore_tab = True
 
-        # 2) Wait until the jar reaches the target red ring.
-        max_wait = int(self.target_fill / max(1e-6, self.pour_rate)) + 80
+        # 2) Wait until the jar nears the target ring — oil keeps flowing the
+        #    whole time the valve stays open (including during the close turn).
+        # Start the close-turn a bit early so oil that keeps flowing during the
+        # approach lands near the target mark.
+        close_start = max(0.05, float(self.target_fill) - 0.06)
+        max_wait = int(close_start / max(1e-6, self.pour_rate)) + 120
         self._idle_steps(
             max_wait,
             until=lambda: (
-                self.liquid_level >= self.target_fill or self.overflowed
+                self.liquid_level >= close_start or self.overflowed
             ),
         )
-        # Halt fill level but keep tab visually open (alongside) + stream until close.
-        self._pour_halted = True
         print(
             f"[measure_ingredient] after pour liq={self.liquid_level:.2f} "
             f"target={self.target_fill:.2f} overflow={self.overflowed} "
             f"tab_open={self.tab_open}"
         )
 
-        # 3) Close the tab (crosswise) → stream disappears.
+        # 3) Turn the valve closed → stream stops when the lever finishes.
         self._ignore_tab = False
         if self.plan_success:
-            self._press_tab(arm, want_open=False)
+            self._turn_valve(arm, want_open=False)
 
         if self.plan_success:
             self.move(self.move_by_displacement(arm, z=0.08))

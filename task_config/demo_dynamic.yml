@@ -857,16 +857,17 @@ task_args:
     full_liquid_tol: 0.05
   measure_ingredient:
     # KitchenS baking counter: pour oil, then place jar on electronic scale.
-    # oil_style: transparent (see-through amber) | solid (previous dark-green)
+    # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
     scene_id: 0
     target_fill: 0.25
-    pour_rate: 0.0015
+    pour_rate: 0.00022
     fill_tol: 0.02
     overflow_level: 1.02
-    oil_style: transparent
+    oil_style: solid
     scale_id: 0
-    scale_x: -0.20
+    scale_x: -0.32
     scale_y: -0.14
+    chips_xy: [0.16, 0.08]
   make_soup:
     # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
     # Lift board level, pour into pot (physics), then turn stove on. No spills.
