@@ -32,6 +32,15 @@ class KitchenS_base_task(Base_Task):
     RANGE_KNOB_LOCAL_X = 0.10       # right-hand control of the three-knob row
     RANGE_KNOB_LOCAL_Y = 0.744      # knob row height above the cabinet base
     RANGE_KNOB_LENGTH = 0.055       # world m; deep enough for the gripper to wrap
+    # Four cooktop burners as (dx, dy) from ``range_xy``.
+    # Seeded from red-grate texture clusters on ``254_kitchen_stove``, then
+    # nudged so a skillet bowl lands on the visible X-grate centers.
+    RANGE_BURNER_OFFSETS = {
+        "left_rear": (-0.050, 0.062),
+        "right_rear": (0.050, 0.062),
+        "left_front": (-0.050, -0.042),
+        "right_front": (0.050, -0.042),
+    }
 
     def setup_demo(self, **kwags):
         # scene_id before init so create_table_and_wall can place fixtures.
@@ -467,10 +476,16 @@ class KitchenS_base_task(Base_Task):
         model_depth = float(extents[2] * scale[2])
         model_height = float(extents[1] * scale[1])
         self.range_xy = (float(x), float(y))
+        self.range_half_size = (0.5 * model_width, 0.5 * model_depth)
         self.range_top_z = float(table_height + model_height)
 
-        # The pot uses the left-rear burner of the imported four-burner range.
-        self.burner_xy = (float(x - 0.055), float(y + 0.052))
+        # World XY of each of the four burners (grate centers).
+        self.burner_positions = {
+            name: (float(x + dx), float(y + dy))
+            for name, (dx, dy) in self.RANGE_BURNER_OFFSETS.items()
+        }
+        # Default active burner: left-rear (boil_milk pot / cook_food pan).
+        self.burner_xy = self.burner_positions["left_rear"]
 
         # Dark overlay on the active burner; the task changes it to orange while on.
         burner_mat = sapien.render.RenderMaterial(

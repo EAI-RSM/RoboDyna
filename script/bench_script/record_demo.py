@@ -45,9 +45,9 @@ from envs.utils.pkl2hdf5 import load_pkl_file
 from script.collect_data import class_decorator, get_embodiment_config, run
 
 # Bird's-eye framing: above table center, looking straight down.
-TOPDOWN_POS = np.array([0.0, 0.0, 1.72], dtype=np.float64)
-TOPDOWN_LOOK_AT = np.array([0.0, 0.0, 0.78], dtype=np.float64)
-TOPDOWN_FOVY_DEG = 55.0
+TOPDOWN_POS = np.array([0.0, 0.05, 1.85], dtype=np.float64)
+TOPDOWN_LOOK_AT = np.array([0.0, 0.05, 0.78], dtype=np.float64)
+TOPDOWN_FOVY_DEG = 70.0
 TOPDOWN_WH = (640, 480)  # (w, h)
 
 

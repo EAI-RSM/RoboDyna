@@ -50,3 +50,53 @@ task_args:
     expert_shutoff_level: 0.62  # level at which the expert starts reaching back
     overflow_level: 0.95
     knob_contact_radius: 0.06
+  cook_food:
+    scene_id: 0
+    # food_type: meat | chicken | sausage | random
+    # Food starts in the pan; expert cooks via knob (0–180°), then picks onto plate.
+    food_type: random
+    # burner: left_front | left_rear | right_front | right_rear
+    burner: left_front
+    cook_steps: 2000            # steps for doneness 0→1 while stove is on
+    cook_speed_jitter: 0.0
+    shutoff_lead: 0.04
+    cook_intensity: 0.75        # expert knob turn as fraction of 180°
+    pan_scale: 0.60
+    plate_scale: 0.55
+    knob_contact_radius: 0.06
+  pour_beer:
+    scene_id: 0
+    bottle_beer_frac: 0.90
+    pour_rate: 0.004
+    foam_gain: 1.8
+    foam_decay: 0.0035
+    expert_foam_stop: 0.82
+    expert_foam_resume: 0.55
+    target_liquid: 0.90
+    full_liquid_tol: 0.05
+  measure_ingredient:
+    # Silver oil dispenser: open tab to pour, close when jar hits target ring.
+    scene_id: 0
+    target_fill: 0.25
+    pour_rate: 0.0015
+    fill_tol: 0.02
+    # oil_style: transparent (see-through amber) | solid (previous dark-green)
+    oil_style: transparent
+  empty_bag:
+    # Kitchen Large scene (fridge + microwave + basket + cabinet).
+    scene_id: 0
+    bag_side: left              # left | right | random — emptying arm side
+    bag_x_abs: 0.20
+    bag_y: -0.12
+    bag_scale_mult: 1.0
+    # rolling_choice: apple | jam | can | bottle | null(=random)
+    rolling_choice: null
+    apple_color: random         # green | red | random (apple only)
+    veg_scale_mult: 0.035       # 069_vagetable raw meshes are ~2m; ~7cm when scaled
+    roll_speed: 0.10
+    table_edge_y: -0.30
+    intercept_frac: 0.35
+    grasp_tol: 0.08
+    grasp_hover_z: 0.16
+    grasp_tcp_dz: 0.025
+    post_catch_lift: 0.10

@@ -91,7 +91,10 @@ class Office_base_task(Base_Task):
 
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):
         """Build the complete basic office scene with Robotwin dimensions."""
-        self.arr_v = int(np.random.choice([0, 1, 2]))
+        # Subclasses may restrict layouts via `_office_arr_choices` (e.g. skip the
+        # centered-shelf arrangement when an arm needs a clear side lane).
+        choices = getattr(self, "_office_arr_choices", [0, 1, 2])
+        self.arr_v = int(np.random.choice(list(choices)))
         self.table_xy_bias = list(table_xy_bias)
         table_height = float(self.office_info["table_height"])
         self.table_z_bias = 0.0

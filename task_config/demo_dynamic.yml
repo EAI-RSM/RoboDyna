@@ -135,18 +135,36 @@ task_args:
     pop_steps: 90               # sim steps rat stays raised per pop
     grasp_tol: 0.05             # m; catch offset scale (success uses ~2.5×)
   catch_rolling_cup:
-    # Cup starts on its side on the office wall-shelf, rolls like a wheel off onto
-    # the table, then toward the near edge; robot grasps at the intercept timing.
+    # Full office scene (wall-shelf, drawer cabinet, file holder). Cup starts on its
+    # side on the shelf, rolls like a wheel onto the table toward the near edge;
+    # robot closes onto it mid-roll (never parks the cup before the catch).
     cup_ids: [0, 1, 2, 5, 6, 3]  # 021_cup variants used by this task
     roll_speed: 0.14            # m/s; shelf + table roll speed (arm pre-positions first)
     fall_speed_xy: 0.07         # m/s; retained horizontal speed during shelf→table fall
     table_edge_y: -0.30         # m; near table edge (past this without catch = fail)
     intercept_frac: 0.40        # fraction along table-roll leg for the catch point
-    grasp_tol: 0.06             # m; TCP-to-cup tolerance to count a catch
-    grasp_hover_z: 0.16         # m; TCP staging height above table before dropping in
-    grasp_tcp_dz: 0.022         # m; TCP height above the cup centre when the jaws close
-    jaw_clearance: 0.001        # m; pads stop this far short of the cup surface
-    post_catch_lift: 0.10       # m; lift after welding the caught cup
+    grasp_tol: 0.08             # m; TCP-to-cup tolerance to count a catch
+    grasp_z_above: 0.055        # m; TCP height above table at the catch
+    jaw_clearance: 0.002        # m; pads stop this far short of the cup surface
+    post_catch_lift: 0.12       # m; lift after welding the caught cup
+  empty_bag:
+    # Kitchen Large: grasp+tilt hollow paper bag; catch rolling grocery
+    # (apple/jam/can/bottle). Two vegetables fall out and stay put.
+    scene_id: 0
+    bag_side: left
+    bag_x_abs: 0.20
+    bag_y: -0.10
+    bag_scale_mult: 1.0
+    rolling_choice: null
+    apple_color: random
+    veg_scale_mult: 0.035
+    roll_speed: 0.10
+    table_edge_y: -0.30
+    intercept_frac: 0.35
+    grasp_tol: 0.08
+    grasp_hover_z: 0.16
+    grasp_tcp_dz: 0.025
+    post_catch_lift: 0.10
   catch_shelf_marble:
     # Options (independent toggles; Opt 1+2 can both be on):
     #   Default — marble pauses on the top shelf until a bowl key is pressed
@@ -812,7 +830,19 @@ task_args:
     overflow_level: 0.95        # spill / failure threshold
     pot_id: 0                   # unused (procedural pot); kept for schema compat
     knob_contact_radius: 0.06   # m; pinch-to-knob distance that counts as held
-  pour_beer_with_foam:
+  cook_food:
+    # KitchenS: pan on stove with food already in it. Cook via stove knob (not a
+    # key), then pour onto plate. food_type: meat|chicken|sausage|random
+    scene_id: 0
+    food_type: random
+    cook_steps: 2000
+    cook_speed_jitter: 0.0
+    shutoff_lead: 0.04
+    cook_intensity: 0.75
+    pan_scale: 0.70
+    plate_scale: 0.55
+    knob_contact_radius: 0.06
+  pour_beer:
     # KitchenS: pour beer from bottle into glass; foam rises while pouring.
     # Pause so foam settles; foam over the rim = fail. Fill glass (~90% beer) to succeed.
     scene_id: 0
@@ -824,3 +854,13 @@ task_args:
     expert_foam_resume: 0.55
     target_liquid: 0.90
     full_liquid_tol: 0.05
+  measure_ingredient:
+    # KitchenS: silver cylindrical olive-oil dispenser with nozzle tab.
+    # Open tab → oil stream + rising liquid in marked glass jar; close tab to stop.
+    # oil_style: transparent (see-through amber) | solid (previous dark-green)
+    scene_id: 0
+    target_fill: 0.25
+    pour_rate: 0.0015
+    fill_tol: 0.02
+    overflow_level: 1.02
+    oil_style: transparent

@@ -48,7 +48,15 @@ task_args:
     beans_per_press_min: 2
     beans_per_press: 12
     fill_tol: 0.02
-  pour_beer_with_foam:
+  measure_ingredient:
+    # Open nozzle tab → olive oil fills marked jar; close tab to stop.
+    target_fill: 0.25
+    scene_id: 0
+    pour_rate: 0.0015
+    fill_tol: 0.02
+    # oil_style: transparent (see-through amber) | solid (previous dark-green)
+    oil_style: transparent
+  pour_beer:
     scene_id: 0
     bottle_beer_frac: 0.90
     pour_rate: 0.004

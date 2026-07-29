@@ -72,7 +72,7 @@ Household scenes built on the robotwin_bench office / KitchenS environments. Eac
 | Task | Demo |
 |---|---|
 | **`trap_bug`**<br><sub>Trap a scurrying cockroach, spider, or ant under the office bookshelf by placing a transparent glass box over it while it is still moving.</sub> | <div align="center"><img src="final_task_demos/trap_bug/default_sidebyside.gif" width="320" height="120"/><br><sub>Office wall-shelf; live bug run (roach/spider/ant).</sub></div> |
-| **`pour_beer_with_foam`**<br><sub>Pour beer into a glass in bursts so the foam can settle; overflow fails, a full glass succeeds.</sub> | <div align="center"><img src="final_task_demos/pour_beer_with_foam/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS counter; pause between pours.</sub></div> |
+| **`pour_beer`**<br><sub>Pour beer into a glass in bursts so the foam can settle; overflow fails, a full glass succeeds.</sub> | <div align="center"><img src="final_task_demos/pour_beer/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS counter; pause between pours.</sub></div> |
 | **`fill_coffee_jar`**<br><sub>Press the coffee dispenser's lid to fill a marked glass jar to the target fill line.</sub> | <div align="center"><img src="final_task_demos/fill_coffee_jar/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS counter; 50% fill target.</sub></div> |
 
 ## 🛠️ Adding a task
