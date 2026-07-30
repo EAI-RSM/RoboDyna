@@ -148,6 +148,20 @@ task_args:
     grasp_z_above: 0.055        # m; TCP height above table at the catch
     jaw_clearance: 0.002        # m; pads stop this far short of the cup surface
     post_catch_lift: 0.12       # m; lift after welding the caught cup
+  prevent_breakage:
+    # Deep wall shelf with random cup/wineglass/beer/wine bottles + plant/mug
+    # décor. Robot pick-places a custom cushioned basket under the shelf lip
+    # (no teleports — carried and released by the gripper). Then a kinematic
+    # mouse runs an obstacle-free arc-length route, physically shoves ONE
+    # target over the lip, and PhysX owns the fall/catch. Success is read off
+    # the resting pose inside the basket.
+    n_objects: 4
+    mouse_speed: 0.10           # m/s; continuous shelf scurry speed
+    mouse_start_gap_min: 0.15   # m; prefer a start end this far from the target
+    basket_start_y: -0.28       # m; basket spawn near the robot
+    basket_drop_sep: 0.16       # m; min |basket_x − drop_x| at spawn
+    catch_xy_tol: 0.035         # m; XY pad for object-in-basket success
+    post_place_dwell: 14        # sim steps after catch/miss before episode ends
   empty_bag:
     # Kitchen Large: knock over kraft grocery bag; catch rolling apple.
     scene_id: 0

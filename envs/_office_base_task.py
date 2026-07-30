@@ -73,18 +73,23 @@ class Office_base_task(Base_Task):
         actor = builder.build(name=model_name)
         return actor
 
-    def _create_scaled_static_object(self, model_name, model_id, pose, scale):
+    def _create_scaled_static_object(self, model_name, model_id, pose, scale, collision=True):
         """Load a regular object with an explicit non-uniform scale.
 
         ``042_wooden_box/model_data0.json`` has no authored scale, so this
         direct builder preserves the exact office-base scale.
         """
         model_dir = Path("assets/objects") / model_name
-        collision = model_dir / "collision" / f"base{model_id}.glb"
+        collision_path = model_dir / "collision" / f"base{model_id}.glb"
         visual = model_dir / "visual" / f"base{model_id}.glb"
+        if not visual.exists():
+            visual = model_dir / f"base{model_id}.glb"
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
-        builder.add_nonconvex_collision_from_file(filename=str(collision), scale=scale)
+        if collision and collision_path.exists():
+            builder.add_nonconvex_collision_from_file(
+                filename=str(collision_path), scale=scale,
+            )
         builder.add_visual_from_file(filename=str(visual), scale=scale)
         builder.set_initial_pose(pose)
         return builder.build(name=model_name)
