@@ -865,6 +865,9 @@ task_args:
     overflow_level: 1.02
     oil_style: solid
     scale_id: 0
+    station_x: -0.08
+    disp_y: 0.08
+    jar_y: -0.06
     scale_x: -0.32
     scale_y: -0.14
     chips_xy: [0.16, 0.08]

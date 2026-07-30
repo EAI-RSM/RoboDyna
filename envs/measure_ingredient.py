@@ -2,9 +2,9 @@
 
 KitchenS prep-counter scene (no sink / tap / stove): silver oil dispenser, marked
 glass jar, electronic scale, and baking props (bread on a cutting board, flour
-sack, chocolate chips, bowl of eggs). Turn the nozzle valve open to pour; oil
-flows while the valve stays open. Turn it closed at the target ring, then place
-the jar on ``072_electronicscale``.
+sack, chocolate chips, bowl of eggs). Click the red nozzle switch to start the
+pour; oil flows while the switch stays on. Click again to stop at the target
+ring, then place the jar on ``072_electronicscale``.
 """
 
 from __future__ import annotations
@@ -44,31 +44,23 @@ class measure_ingredient(KitchenS_base_task):
     PLATFORM_HALF = (0.055, 0.055, 0.007)
 
     NOZZLE_R = 0.006
-    # Ball-valve lever (Desktop/images/valve.jpg): flat handle on a stem.
-    # Stays horizontal; rotates 90° about the vertical stem.
-    # Closed = crosswise (⊥ nozzle); open = alongside (∥ nozzle).
-    TAB_LEN = 0.036          # how far the lever sticks out from the stem
-    TAB_THICK = 0.004
-    TAB_WIDTH = 0.010
-    TAB_STEM_H = 0.015
-    TAB_STEM_R = 0.005
+    # Tiny red push-switch on the nozzle arm (click = toggle on/off).
+    SWITCH_BASE_HALF = (0.007, 0.007, 0.0035)   # dark housing
+    SWITCH_BTN_HALF = (0.0045, 0.0045, 0.0025)  # red button cap
+    SWITCH_BTN_UP = 0.0045     # button stick-out when OFF
+    SWITCH_BTN_DOWN = 0.0010   # depressed when ON
+    SWITCH_RED = [0.90, 0.08, 0.08]
 
     EE_TO_TCP = 0.12
-    VALVE_HOVER_Z = 0.07
-    VALVE_GRASP_Z = 0.012
-    VALVE_TURN_STEPS = 8
+    SWITCH_HOVER_Z = 0.07
+    SWITCH_PRESS_Z = 0.008     # EE above button top when pressing
 
     FILL_LEVELS = (0.25,)
     FILL_TOL = 0.02
-    # Slow enough that opening the valve does not already overshoot the mark;
-    # oil still rises continuously while the valve stays open (incl. close approach).
-    POUR_RATE = 0.00022         # fill fraction per physics step while valve open
+    # Slow enough that opening the switch does not already overshoot the mark;
+    # oil still rises continuously while the switch stays on.
+    POUR_RATE = 0.00022         # fill fraction per physics step while switch on
     OVERFLOW_LEVEL = 1.02
-    # Closed = 0 (lever +x); open = π/2 (lever −y, along nozzle).
-    VALVE_CLOSED_ANGLE = 0.0
-    VALVE_OPEN_ANGLE = 0.5 * np.pi
-    # Flow only when the lever is nearly fully open (ball-valve style).
-    VALVE_FLOW_FRAC = 0.85
 
     # Oil look (``oil_style`` task_arg):
     #   solid       — opaque sunflower-yellow oil (default)
@@ -98,7 +90,6 @@ class measure_ingredient(KitchenS_base_task):
         # Per-step state before early _update_kinematic_tasks (camera init).
         self._loaded = False
         self.tab_open = False
-        self.tab_angle = float(self.VALVE_CLOSED_ANGLE)
         self.liquid_level = 0.0
         self.overflowed = False
         self.opened_once = False
@@ -109,13 +100,15 @@ class measure_ingredient(KitchenS_base_task):
         self._liquid_entity = None
         self._stream_entity = None
         self._liquid_half_h_cached = -1.0
-        self._tab_parts = []
+        self._switch_parts = []
+        self._switch_btn = None
         self._ring_entities = []
         self._touch_latched = False
         self._ignore_tab = False
         self._jar_locked = True
         self._jar_carry = False
         self._jar_carry_offset = None
+        self._jar_seated_pose = None
         self.jar = None
         self.jar_visual = None
         self.scale = None
@@ -321,7 +314,6 @@ class measure_ingredient(KitchenS_base_task):
         self._apply_oil_style(self._parse_oil_style(cfg))
 
         self.tab_open = False
-        self.tab_angle = float(self.VALVE_CLOSED_ANGLE)
         self.liquid_level = 0.0
         self.overflowed = False
         self.opened_once = False
@@ -330,18 +322,21 @@ class measure_ingredient(KitchenS_base_task):
         self._liquid_entity = None
         self._stream_entity = None
         self._liquid_half_h_cached = -1.0
-        self._tab_parts = []
+        self._switch_parts = []
+        self._switch_btn = None
         self._ring_entities = []
         self._touch_latched = False
         self._ignore_tab = False
         self._jar_locked = True
         self._jar_carry = False
         self._jar_carry_offset = None
+        self._jar_seated_pose = None
 
         # Front workspace toward robot (−y), mid-left (clear of MW).
+        # Dispenser + jar sit farther back (+y) so the left arm can reach cleanly.
         side_x = float(cfg.get("station_x", -0.08))
-        disp_y = float(cfg.get("disp_y", -0.02))
-        jar_y = float(cfg.get("jar_y", -0.16))
+        disp_y = float(cfg.get("disp_y", 0.08))
+        jar_y = float(cfg.get("jar_y", -0.06))
         self.dispenser_xy = np.array([side_x, disp_y], dtype=float)
         self.jar_xy = np.array([side_x, jar_y], dtype=float)
         self.arm = ArmTag("left" if side_x <= 0 else "right")
@@ -488,88 +483,75 @@ class measure_ingredient(KitchenS_base_task):
         )
 
         self.nozzle_outlet_xyz = np.array([jar_x, tip_y, nozzle_outlet_z], dtype=float)
-        # Valve stem sits on TOP of the horizontal nozzle arm near the tip.
-        # Nozzle runs along −y (toward jar); top face is at joint_z + 0.006.
-        self.tab_hinge_xyz = np.array(
-            [jar_x, tip_y + 0.014, nozzle_joint_z + 0.006], dtype=float
+        # Tiny red switch on TOP of the nozzle arm near the tip.
+        self.switch_base_xyz = np.array(
+            [jar_x, tip_y + 0.012, nozzle_joint_z + 0.006], dtype=float
         )
-        self._rebuild_tab()
+        self._build_switch()
 
-    def _valve_lever_center(self, angle: float):
-        """World XYZ of the lever box center at the given stem yaw (rad)."""
-        hx, hy, hz = self.tab_hinge_xyz
-        half_l = self.TAB_LEN * 0.5
-        half_t = self.TAB_THICK * 0.5
-        root = self.TAB_STEM_R * 0.6
-        reach = root + half_l
-        # angle=0 → +x (closed); angle=π/2 → −y (open, along nozzle).
-        cx = hx + reach * float(np.cos(angle))
-        cy = hy - reach * float(np.sin(angle))
-        cz = hz + self.TAB_STEM_H + half_t
-        return np.array([cx, cy, cz], dtype=float)
+    def _switch_button_center(self, open_: bool | None = None):
+        """World XYZ of the red button center (depressed when ON)."""
+        if open_ is None:
+            open_ = bool(getattr(self, "tab_open", False))
+        bx, by, bz = self.switch_base_xyz
+        base_top = bz + float(self.SWITCH_BASE_HALF[2])
+        stick = self.SWITCH_BTN_DOWN if open_ else self.SWITCH_BTN_UP
+        half_t = float(self.SWITCH_BTN_HALF[2])
+        return np.array([bx, by, base_top + stick + half_t], dtype=float)
 
-    def _valve_lever_tip(self, angle: float):
-        """World XYZ of the graspable tip of the lever."""
-        hx, hy, hz = self.tab_hinge_xyz
-        half_t = self.TAB_THICK * 0.5
-        root = self.TAB_STEM_R * 0.6
-        tip_r = root + self.TAB_LEN
-        tx = hx + tip_r * float(np.cos(angle))
-        ty = hy - tip_r * float(np.sin(angle))
-        tz = hz + self.TAB_STEM_H + half_t
-        return np.array([tx, ty, tz], dtype=float)
+    def _switch_top_z(self, open_: bool | None = None):
+        c = self._switch_button_center(open_)
+        return float(c[2] + float(self.SWITCH_BTN_HALF[2]))
 
-    def _rebuild_tab(self):
-        """Ball-valve lever on a stem: continuous yaw about the vertical stem.
+    def _sync_switch_touch_points(self):
+        top = self._switch_button_center()
+        top[2] = self._switch_top_z()
+        self.tab_touch_xyz = top.copy()
+        self.touch_xy = top[:2].copy()
+        self.touch_top_z = float(top[2])
 
-        angle=0 (closed) → lever along +x; angle=π/2 (open) → along −y (nozzle).
-        """
-        for part in getattr(self, "_tab_parts", []) or []:
+    def _clear_switch_parts(self):
+        for part in list(getattr(self, "_switch_parts", []) or []):
             self._remove_entity(part)
-        self._tab_parts = []
+        self._switch_parts = []
+        self._switch_btn = None
 
-        hx, hy, hz = self.tab_hinge_xyz
-        angle = float(getattr(self, "tab_angle", self.VALVE_CLOSED_ANGLE))
-        silver = self._metallic_material([0.85, 0.87, 0.90], roughness=0.15, metallic=0.97)
-        silver_stem = self._metallic_material([0.75, 0.77, 0.80], roughness=0.20, metallic=0.94)
-
-        # Vertical stem post.
-        stem_half = self.TAB_STEM_H * 0.5
-        stem_builder = self.scene.create_actor_builder()
-        stem_builder.set_physx_body_type("static")
-        stem_builder.add_cylinder_collision(
-            pose=sapien.Pose([0, 0, 0], self.VERTICAL_CYL_Q),
-            radius=self.TAB_STEM_R,
-            half_length=stem_half,
-            material=self.scene.default_physical_material,
-        )
-        stem_builder.add_cylinder_visual(
-            pose=sapien.Pose([0, 0, 0], self.VERTICAL_CYL_Q),
-            radius=self.TAB_STEM_R,
-            half_length=stem_half,
-            material=silver_stem,
-        )
-        stem_builder.set_initial_pose(sapien.Pose([hx, hy, hz + stem_half]))
-        self._tab_parts.append(stem_builder.build(name="oil_valve_stem"))
-
-        # Flat lever: long axis along local +X, yawed by −angle about world Z.
-        half_l = self.TAB_LEN * 0.5
-        half_w = self.TAB_WIDTH * 0.5
-        half_t = self.TAB_THICK * 0.5
-        center = self._valve_lever_center(angle)
-        yaw_q = t3d.euler.euler2quat(0.0, 0.0, -angle, axes="sxyz")
-        lever = self._add_static_box(
-            pose=sapien.Pose(center.tolist(), list(yaw_q)),
-            half_size=[half_l, half_w, half_t],
-            material=silver,
-            name="oil_valve_lever",
+    def _build_switch(self):
+        """Dark housing + red push button; click toggles pour on/off."""
+        self._clear_switch_parts()
+        bx, by, bz = self.switch_base_xyz
+        housing = self._metallic_material([0.18, 0.18, 0.20], roughness=0.45, metallic=0.55)
+        base = self._add_static_box(
+            pose=sapien.Pose([bx, by, bz + float(self.SWITCH_BASE_HALF[2])]),
+            half_size=list(self.SWITCH_BASE_HALF),
+            material=housing,
+            name="oil_switch_base",
             collision=True,
         )
-        self._tab_parts.append(lever)
-        tip = self._valve_lever_tip(angle)
-        self.tab_touch_xyz = tip.copy()
-        self.touch_xy = tip[:2].copy()
-        self.touch_top_z = float(tip[2] + 0.004)
+        self._switch_parts.append(base)
+        self._rebuild_switch_button()
+        self._sync_switch_touch_points()
+
+    def _rebuild_switch_button(self):
+        """Recreate the red button at the raised (OFF) or depressed (ON) height."""
+        if getattr(self, "_switch_btn", None) is not None:
+            self._remove_entity(self._switch_btn)
+            if self._switch_btn in (self._switch_parts or []):
+                self._switch_parts.remove(self._switch_btn)
+            self._switch_btn = None
+
+        center = self._switch_button_center()
+        red = self._opaque_material(self.SWITCH_RED)
+        btn = self._add_static_box(
+            pose=sapien.Pose(center.tolist()),
+            half_size=list(self.SWITCH_BTN_HALF),
+            material=red,
+            name="oil_switch_button",
+            collision=True,
+        )
+        self._switch_btn = btn
+        self._switch_parts.append(btn)
+        self._sync_switch_touch_points()
 
     def _build_jar(self):
         """See-through coffee-task jar: dynamic convex collision + cylinder visual.
@@ -829,28 +811,21 @@ class measure_ingredient(KitchenS_base_task):
         self.jar_bottom_z = float(pose.p[2]) + self.JAR_BOTTOM_T
 
     # ------------------------------------------------------------------ oil visuals / dynamics
-    def _set_tab_angle(self, angle: float):
-        """Set continuous valve yaw; stream follows whether angle is near-open."""
-        angle = float(np.clip(angle, self.VALVE_CLOSED_ANGLE, self.VALVE_OPEN_ANGLE))
+    def _set_tab_open(self, open_: bool):
+        """Toggle pour state; red button depresses when ON."""
+        open_ = bool(open_)
+        if open_ == bool(self.tab_open):
+            self._rebuild_switch_button()
+            self._sync_stream()
+            return
         was_open = bool(self.tab_open)
-        self.tab_angle = angle
-        # Flow only when nearly fully open; closes/stops early in the return turn.
-        self.tab_open = bool(
-            angle >= float(self.VALVE_FLOW_FRAC) * self.VALVE_OPEN_ANGLE
-        )
+        self.tab_open = open_
         if self.tab_open and not was_open:
             self.opened_once = True
         if was_open and not self.tab_open and self.liquid_level > 0.05:
             self.closed_after_pour = True
-        self._rebuild_tab()
+        self._rebuild_switch_button()
         self._sync_stream()
-
-    def _set_tab_open(self, open_: bool):
-        open_ = bool(open_)
-        target = self.VALVE_OPEN_ANGLE if open_ else self.VALVE_CLOSED_ANGLE
-        if open_ == self.tab_open and abs(self.tab_angle - target) < 1e-3:
-            return
-        self._set_tab_angle(target)
 
     def _sync_stream(self):
         """Narrow oil cylinder from nozzle outlet down to the table (tab-gated)."""
@@ -876,9 +851,12 @@ class measure_ingredient(KitchenS_base_task):
             return
         liq_h = max(0.0, float(self.liquid_level)) * self.jar_fillable_h
         liq_half = max(0.002, 0.5 * liq_h) if self.liquid_level > 1e-4 else 0.0
+        # While pouring, refresh a bit more often so the level keeps visibly
+        # rising through the off-click approach (not an early halt).
+        min_dh = 0.0008 if bool(getattr(self, "tab_open", False)) else 0.002
         if (
             not force
-            and abs(liq_half - self._liquid_half_h_cached) < 0.002
+            and abs(liq_half - self._liquid_half_h_cached) < min_dh
         ):
             return
         self._liquid_half_h_cached = liq_half
@@ -929,11 +907,16 @@ class measure_ingredient(KitchenS_base_task):
         self._liquid_entity = ent
 
     def _step_oil(self):
-        # Natural pour: oil rises whenever the valve is open (no early halt).
+        # Natural pour: oil rises whenever the switch is on — including the
+        # whole approach to the off-click. Never halt on fill target alone.
         if self.tab_open:
             self.liquid_level = min(1.0, self.liquid_level + self.pour_rate)
             if self.liquid_level >= self.overflow_level - 1e-4:
                 self.overflowed = True
+            # Keep the stream alive every step while ON (only the off-click
+            # flips tab_open and removes it via _set_tab_open).
+            if getattr(self, "_stream_entity", None) is None:
+                self._sync_stream()
         self._rebuild_liquid(force=False)
 
     def _update_kinematic_tasks(self):
@@ -942,6 +925,16 @@ class measure_ingredient(KitchenS_base_task):
             return
         if getattr(self, "_jar_carry", False) and self.jar is not None:
             self._apply_jar_carry()
+        elif getattr(self, "_jar_seated_pose", None) is not None and self.jar is not None:
+            # Firm seat on the scale — no slow PhysX drop after release.
+            try:
+                self.jar.actor.set_pose(self._jar_seated_pose)
+                for component in self.jar.actor.get_components():
+                    if isinstance(component, sapien.physx.PhysxRigidDynamicComponent):
+                        component.set_linear_velocity(np.zeros(3))
+                        component.set_angular_velocity(np.zeros(3))
+            except Exception:
+                pass
         elif getattr(self, "_jar_locked", False) and self.jar is not None:
             try:
                 self.jar.actor.set_pose(self._jar_home_pose)
@@ -956,25 +949,32 @@ class measure_ingredient(KitchenS_base_task):
         self._sync_jar_followers()
 
     def _clear_tab_collision(self):
-        """Drop valve collision after the pour so the jar is reachable."""
-        angle = float(getattr(self, "tab_angle", self.VALVE_CLOSED_ANGLE))
-        for part in list(getattr(self, "_tab_parts", []) or []):
-            self._remove_entity(part)
-        self._tab_parts = []
-        # Keep a visual-only lever in the current (closed) pose.
-        silver = self._metallic_material([0.85, 0.87, 0.90], roughness=0.15, metallic=0.97)
-        half_l = self.TAB_LEN * 0.5
-        half_w = self.TAB_WIDTH * 0.5
-        half_t = self.TAB_THICK * 0.5
-        center = self._valve_lever_center(angle)
-        yaw_q = t3d.euler.euler2quat(0.0, 0.0, -angle, axes="sxyz")
-        self._add_static_box(
-            pose=sapien.Pose(center.tolist(), list(yaw_q)),
-            half_size=[half_l, half_w, half_t],
-            material=silver,
-            name="oil_valve_lever_visual",
+        """Drop switch collision after the pour so the jar is reachable."""
+        self._ignore_tab = True
+        open_ = bool(self.tab_open)
+        self._clear_switch_parts()
+        # Keep a visual-only housing + button (no collision).
+        bx, by, bz = self.switch_base_xyz
+        housing = self._metallic_material([0.18, 0.18, 0.20], roughness=0.45, metallic=0.55)
+        self._switch_parts.append(
+            self._add_static_box(
+                pose=sapien.Pose([bx, by, bz + float(self.SWITCH_BASE_HALF[2])]),
+                half_size=list(self.SWITCH_BASE_HALF),
+                material=housing,
+                name="oil_switch_base_visual",
+                collision=False,
+            )
+        )
+        center = self._switch_button_center(open_)
+        self._switch_btn = self._add_static_box(
+            pose=sapien.Pose(center.tolist()),
+            half_size=list(self.SWITCH_BTN_HALF),
+            material=self._opaque_material(self.SWITCH_RED),
+            name="oil_switch_button_visual",
             collision=False,
         )
+        self._switch_parts.append(self._switch_btn)
+        self._sync_switch_touch_points()
 
     def _start_jar_carry(self, arm_tag: ArmTag):
         """Kinematically attach the jar under the EE (physics grasp is flaky here)."""
@@ -990,6 +990,7 @@ class measure_ingredient(KitchenS_base_task):
         self._apply_jar_carry()
 
     def _stop_jar_carry(self, place_xyz=None):
+        """Release the kinematic attach. Optionally settle at ``place_xyz``."""
         self._jar_carry = False
         self._jar_carry_offset = None
         if place_xyz is not None and self.jar is not None:
@@ -1025,8 +1026,90 @@ class measure_ingredient(KitchenS_base_task):
         except Exception:
             pass
 
+    def _ee_pose_for_carried_jar(self, jar_xyz):
+        """Top-down EE pose that puts the carried jar at ``jar_xyz``."""
+        offset = np.asarray(self._jar_carry_offset, dtype=float)
+        ee = np.asarray(jar_xyz, dtype=float) - offset
+        return [
+            float(ee[0]),
+            float(ee[1]),
+            float(ee[2]),
+            *GRASP_DIRECTION_DIC["top_down"],
+        ]
+
+    def _carry_jar_to(self, arm_tag: ArmTag, dest_xyz, tol: float = 0.018):
+        """Drive the arm (absolute pose, then axis tweaks) until jar is at dest."""
+        dest = np.asarray(dest_xyz, dtype=float)
+        if self.jar is None or self._jar_carry_offset is None:
+            return False
+
+        self.move(self.move_to_pose(arm_tag, self._ee_pose_for_carried_jar(dest)))
+        if not self.plan_success:
+            self.plan_success = True
+
+        # Axis-separated nudges until the jar is actually there (no end snap).
+        for _ in range(8):
+            self._apply_jar_carry()
+            jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
+            err = dest - jar_p
+            if float(np.linalg.norm(err)) <= tol:
+                return True
+            moved = False
+            for axis, val in (("x", err[0]), ("y", err[1]), ("z", err[2])):
+                if abs(float(val)) < 0.008:
+                    continue
+                kw = {axis: float(val)}
+                self.move(self.move_by_displacement(arm_tag, **kw))
+                moved = True
+                if not self.plan_success:
+                    self.plan_success = True
+            if not moved:
+                break
+        self._apply_jar_carry()
+        jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
+        return float(np.linalg.norm(dest - jar_p)) <= tol * 1.5
+
+    def _seat_jar_on_scale(self, place_xyz):
+        """Release carry and lock the jar where it already is (plate height)."""
+        self._jar_carry = False
+        self._jar_carry_offset = None
+        self._jar_locked = False
+        # Use current XY (arm already delivered it); only set Z to the plate.
+        if self.jar is not None:
+            cur = np.asarray(self.jar.get_pose().p, dtype=float)
+            target = np.asarray(place_xyz, dtype=float)
+            # Tiny XY blend only if already near center — never a long snap.
+            dist_xy = float(np.linalg.norm(cur[:2] - target[:2]))
+            if dist_xy < 0.025:
+                xy = target[:2]
+            else:
+                xy = cur[:2]
+                print(
+                    f"[measure_ingredient] seat without snap "
+                    f"(jar still {dist_xy:.3f}m from center)"
+                )
+            pose = sapien.Pose([float(xy[0]), float(xy[1]), float(target[2])])
+        else:
+            pose = sapien.Pose(
+                [float(place_xyz[0]), float(place_xyz[1]), float(place_xyz[2])]
+            )
+        self._jar_seated_pose = pose
+        if self.jar is None:
+            return
+        self.jar.actor.set_pose(pose)
+        for component in self.jar.actor.get_components():
+            if isinstance(component, sapien.physx.PhysxRigidDynamicComponent):
+                try:
+                    component.set_linear_velocity(np.zeros(3))
+                    component.set_angular_velocity(np.zeros(3))
+                    component.set_linear_damping(50.0)
+                    component.set_angular_damping(50.0)
+                except Exception:
+                    pass
+        self._sync_jar_followers()
+
     def _detect_tab_touch(self):
-        """Edge-trigger: fingertip on the tab toggles open/closed."""
+        """Edge-trigger: fingertip on the red switch toggles on/off."""
         if getattr(self, "_ignore_tab", False):
             self._touch_latched = False
             return
@@ -1042,13 +1125,13 @@ class measure_ingredient(KitchenS_base_task):
                 ee = np.asarray(self.robot.get_right_ee_pose()[:3], dtype=float)
         except Exception:
             return
-        # Compare against a fixed hinge XY so rebuilding the tab mid-press
-        # cannot immediately re-trigger a toggle on the new touch point.
-        hinge = getattr(self, "tab_hinge_xyz", None)
-        if hinge is None:
+        # Fixed switch XY so rebuilding the button mid-press cannot re-trigger.
+        base = getattr(self, "switch_base_xyz", None)
+        if base is None:
             return
-        xy_ok = float(np.linalg.norm(ee[:2] - hinge[:2])) <= 0.04
-        z_ok = ee[2] <= float(hinge[2]) + self.EE_TO_TCP + 0.02
+        top_z = self._switch_top_z()
+        xy_ok = float(np.linalg.norm(ee[:2] - base[:2])) <= 0.035
+        z_ok = ee[2] <= float(top_z) + self.EE_TO_TCP + 0.015
         touching = bool(xy_ok and z_ok)
         if touching and not self._touch_latched:
             self._set_tab_open(not self.tab_open)
@@ -1069,64 +1152,55 @@ class measure_ingredient(KitchenS_base_task):
                 self._take_picture()
 
     # ------------------------------------------------------------------ expert
-    def _valve_ee_pose(self, angle: float, tip_z_above: float):
-        """Top-down EE pose above the lever tip at the given valve angle."""
-        tip = self._valve_lever_tip(angle)
-        ee_z = float(tip[2] + tip_z_above + self.EE_TO_TCP)
+    def _switch_ee_pose(self, tip_z_above: float):
+        """Top-down EE pose above the red switch button."""
+        c = self._switch_button_center()
+        top_z = self._switch_top_z()
         return [
-            float(tip[0]),
-            float(tip[1]),
-            ee_z,
+            float(c[0]),
+            float(c[1]),
+            float(top_z + tip_z_above + self.EE_TO_TCP),
             *GRASP_DIRECTION_DIC["top_down"],
         ]
 
-    def _turn_valve(self, arm_tag: ArmTag, want_open: bool):
-        """Grasp the lever tip and sweep it 90° about the stem (open/close)."""
+    def _press_switch(self, arm_tag: ArmTag, want_open: bool):
+        """Click the red switch (hover → press → release) to the desired state.
+
+        Oil keeps flowing for the entire approach when turning OFF; ``tab_open``
+        flips only at the depress/click instant below.
+        """
         was = self.tab_open
-        start = float(self.tab_angle)
-        end = float(self.VALVE_OPEN_ANGLE if want_open else self.VALVE_CLOSED_ANGLE)
+        # Ignore ambient touch; expert sets the state only at the click.
         self._ignore_tab = True
 
-        self.move(self.open_gripper(arm_tag))
-        if not self.plan_success:
-            self._ignore_tab = False
-            return False
-
-        # Approach above the tip, then pinch the lever.
-        self.move(
-            self.move_to_pose(arm_tag, self._valve_ee_pose(start, self.VALVE_HOVER_Z))
-        )
-        if not self.plan_success:
-            print(f"[measure_ingredient] valve hover failed want_open={want_open}")
-            self._ignore_tab = False
-            return False
-        self.move(
-            self.move_to_pose(arm_tag, self._valve_ee_pose(start, self.VALVE_GRASP_Z))
-        )
         self.move(self.close_gripper(arm_tag))
-        self._idle_steps(4)
+        if not self.plan_success:
+            return False
 
-        # Sweep the lever; valve visual + oil stream follow each waypoint.
-        n = int(self.VALVE_TURN_STEPS)
-        for i in range(1, n + 1):
-            if not self.plan_success:
-                break
-            a = start + (end - start) * (i / float(n))
-            self._set_tab_angle(a)
-            self.move(
-                self.move_to_pose(arm_tag, self._valve_ee_pose(a, self.VALVE_GRASP_Z))
-            )
+        self.move(
+            self.move_to_pose(arm_tag, self._switch_ee_pose(self.SWITCH_HOVER_Z))
+        )
+        if not self.plan_success:
+            print(f"[measure_ingredient] switch hover failed want_open={want_open}")
+            return False
 
-        # Snap to the exact end state.
+        self.move(
+            self.move_to_pose(arm_tag, self._switch_ee_pose(self.SWITCH_PRESS_Z))
+        )
+        self._idle_steps(2)
+        # Depress to "click" — this is the moment the switch state changes.
+        self.move(self.move_by_displacement(arm_tag, z=-0.012))
+        if not self.plan_success:
+            self.plan_success = True
+        self._idle_steps(2)
         self._set_tab_open(want_open)
-        self.move(self.open_gripper(arm_tag))
-        if self.plan_success:
-            self.move(self.move_by_displacement(arm_tag, z=0.06))
+        self._idle_steps(2)
+        self.move(self.move_by_displacement(arm_tag, z=0.06))
         self._touch_latched = False
-        self._ignore_tab = False
+        self._ignore_tab = True
         print(
-            f"[measure_ingredient] turn valve {was}→{self.tab_open} "
-            f"(want={want_open}) angle={self.tab_angle:.2f} liq={self.liquid_level:.2f}"
+            f"[measure_ingredient] click switch {was}→{self.tab_open} "
+            f"(want={want_open}) liq={self.liquid_level:.2f}"
         )
         return bool(self.plan_success)
 
@@ -1137,21 +1211,19 @@ class measure_ingredient(KitchenS_base_task):
             print("[measure_ingredient] close_gripper failed")
             return self.info
 
-        # 1) Turn the nozzle valve open → stream appears, oil starts filling.
-        if not self._turn_valve(arm, want_open=True):
+        # 1) Click the red switch ON → stream appears, oil starts filling.
+        if not self._press_switch(arm, want_open=True):
             return self.info
         if not self.tab_open:
-            print("[measure_ingredient] valve failed to open")
+            print("[measure_ingredient] switch failed to open")
             self.plan_success = False
             return self.info
 
-        # Keep touch-toggle off while waiting / approaching the close turn.
         self._ignore_tab = True
 
-        # 2) Wait until the jar nears the target ring — oil keeps flowing the
-        #    whole time the valve stays open (including during the close turn).
-        # Start the close-turn a bit early so oil that keeps flowing during the
-        # approach lands near the target mark.
+        # 2) Wait near the target ring. Oil (and the stream) keep going for the
+        # whole off-click approach; only the button press stops the pour.
+        # Start the approach a little early so fill lands near the mark.
         close_start = max(0.05, float(self.target_fill) - 0.06)
         max_wait = int(close_start / max(1e-6, self.pour_rate)) + 120
         self._idle_steps(
@@ -1166,10 +1238,13 @@ class measure_ingredient(KitchenS_base_task):
             f"tab_open={self.tab_open}"
         )
 
-        # 3) Turn the valve closed → stream stops when the lever finishes.
-        self._ignore_tab = False
+        # 3) Click the switch OFF → stream stops only when the button clicks.
+        self._ignore_tab = True
         if self.plan_success:
-            self._turn_valve(arm, want_open=False)
+            if not self.tab_open:
+                print("[measure_ingredient] WARNING: switch already off before off-click")
+            self._press_switch(arm, want_open=False)
+        self._ignore_tab = True
 
         if self.plan_success:
             self.move(self.move_by_displacement(arm, z=0.08))
@@ -1228,55 +1303,66 @@ class measure_ingredient(KitchenS_base_task):
         self.info["info"] = {
             "{A}": "olive oil dispenser",
             "{B}": f"glass jar ({level_pct}% line)",
-            "{C}": "nozzle tab",
+            "{C}": "red nozzle switch",
             "{D}": f"072_electronicscale/base{getattr(self, 'scale_id', 0)}",
             "{a}": str(arm),
             "{L}": f"{level_pct}%",
         }
         return self.info
 
-    def _place_jar_on_scale(self, arm_tag: ArmTag):
-        """Carry the jar (kinematic attach) onto the scale plate and release."""
+    def _scale_place_xyz(self):
+        """Jar-bottom target on the scale plate center (functional point)."""
         scale_fp = self.scale.get_functional_point(0)
         if isinstance(scale_fp, sapien.Pose):
             target = np.asarray(scale_fp.p, dtype=float)
         else:
             target = np.asarray(scale_fp[:3], dtype=float)
-        # Jar origin ≈ bottom; functional point is the plate surface.
-        place_xyz = np.array(
+        return np.array(
             [float(target[0]), float(target[1]), float(target[2]) + 0.002],
             dtype=float,
         )
 
-        def _delta_to(axis: str):
-            jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
-            if axis == "x":
-                return float(place_xyz[0] - jar_p[0])
-            if axis == "y":
-                return float(place_xyz[1] - jar_p[1])
-            return float(place_xyz[2] + 0.05 - jar_p[2])
+    def _place_jar_on_scale(self, arm_tag: ArmTag):
+        """Carry the jar over the scale center with the arm, then release."""
+        place_xyz = self._scale_place_xyz()
+        jar_now = np.asarray(self.jar.get_pose().p, dtype=float)
 
-        # Best-effort arm motion; final pose is forced onto the scale plate.
-        if self.plan_success:
-            self.move(self.move_by_displacement(arm_tag, x=_delta_to("x")))
-            if not self.plan_success:
-                self.plan_success = True
-        if self.plan_success:
-            self.move(self.move_by_displacement(arm_tag, y=_delta_to("y")))
-            if not self.plan_success:
-                self.plan_success = True
-        if self.plan_success:
-            self.move(self.move_by_displacement(arm_tag, z=_delta_to("z")))
-            if not self.plan_success:
-                self.plan_success = True
+        # Waypoints: lift → mid → hover over plate center → lower. Absolute EE
+        # poses keep the jar in the gripper and over the center before release.
+        lift_xyz = np.array(
+            [jar_now[0], jar_now[1], float(place_xyz[2] + 0.18)], dtype=float
+        )
+        mid_xyz = np.array(
+            [
+                0.5 * (jar_now[0] + place_xyz[0]),
+                0.5 * (jar_now[1] + place_xyz[1]),
+                float(place_xyz[2] + 0.18),
+            ],
+            dtype=float,
+        )
+        hover_xyz = place_xyz + np.array([0.0, 0.0, 0.14], dtype=float)
+        lower_xyz = place_xyz + np.array([0.0, 0.0, 0.02], dtype=float)
+
+        self._carry_jar_to(arm_tag, lift_xyz, tol=0.03)
+        self._carry_jar_to(arm_tag, mid_xyz, tol=0.03)
+        ok_hover = self._carry_jar_to(arm_tag, hover_xyz, tol=0.02)
+        ok_lower = self._carry_jar_to(arm_tag, lower_xyz, tol=0.015)
+        jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
+        dist_xy = float(np.linalg.norm(jar_p[:2] - place_xyz[:2]))
+        print(
+            f"[measure_ingredient] pre-release jar xy err={dist_xy:.3f}m "
+            f"hover_ok={ok_hover} lower_ok={ok_lower}"
+        )
+
+        # Open only once the jar is over the plate; seat without a long snap.
         self.move(self.open_gripper(arm_tag))
-        self._stop_jar_carry(place_xyz=place_xyz)
-        self._idle_steps(20)
+        self._seat_jar_on_scale(place_xyz)
+        self._idle_steps(6)
         if self.plan_success:
             self.move(self.move_by_displacement(arm_tag, z=0.10))
             if not self.plan_success:
                 self.plan_success = True
-            self._idle_steps(10)
+            self._idle_steps(6)
 
     def check_success(self):
         """Filled to the target ring, tab closed, and jar resting on the scale."""
