@@ -1,0 +1,27 @@
+{
+  "full_description": "A table-tennis ball rolls off a wall shelf onto the table and toward the edge; stop it with the matching hand before it falls off.",
+  "schema": "{A} notifies the ball, {B} notifies the shelf, {a} notifies the arm used",
+  "preference": "num of words should not exceed 14. Degree of detail avg is 6",
+  "seen": [
+    "Stop {A} before it falls off the table",
+    "Use {a} to stop the rolling {A}",
+    "Block {A} before the table edge",
+    "Stop {A} after it leaves {B}",
+    "Halt the rolling ball with {a}",
+    "Intercept {A} before it falls off",
+    "Stop {A} with {a} on the table",
+    "Block the ball before the edge",
+    "Use {a} to stop {A} mid-roll",
+    "Stop {A} from falling off the table",
+    "Catch {A} with {a} before the edge",
+    "Halt {A} after the shelf drop",
+    "Block {A} rolling toward the edge",
+    "Stop the ball with {a}",
+    "Intercept {A} and keep it on the table"
+  ],
+  "unseen": [
+    "Stop the rolling ball with {a} before it falls off",
+    "Block {A} mid-roll after it leaves {B}",
+    "Halt {A} on the table before the near edge"
+  ]
+}

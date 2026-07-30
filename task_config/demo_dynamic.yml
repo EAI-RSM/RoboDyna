@@ -148,6 +148,33 @@ task_args:
     grasp_z_above: 0.055        # m; TCP height above table at the catch
     jaw_clearance: 0.002        # m; pads stop this far short of the cup surface
     post_catch_lift: 0.12       # m; lift after welding the caught cup
+  stop_ball:
+    # Full-width shelf; 1.6× 027_table-tennis rolls off from episode start
+    # (reactive) on a randomized heading — may exit front or a side edge.
+    # Matching left/right arm blocks the ball (no grasp).
+    # Clock/screen/speaker face robot. Desk-sized trophy; screen 1.05×.
+    ball_ids: [0, 1]
+    ball_scale_mult: 1.6        # 2× then −20% (~6.4 cm diameter)
+    trophy_scale_mult: 1.00     # 100% larger than the previous 0.50 scale
+    screen_scale_mult: 1.05     # 30% smaller than prior 1.5×
+    roll_speed: 0.15            # m/s; table roll (slow enough for reactive approach)
+    fall_speed_xy: 0.07         # m/s; retained horizontal speed during shelf→table fall
+    shelf_roll_duration: 1.00   # s; ball rolls to shelf lip from episode start
+    table_edge_y: -0.30         # m; front edge (past this without stop = fail)
+    table_x_edge: 0.52          # m; |x| past this = fallen off a side
+    roll_angle_max: 0.70        # rad; heading spread from −Y (side exits possible)
+    intercept_frac: 0.55        # fraction along table-roll for the block
+    catch_shelf_clearance: 0.12 # m; min gap between hand and shelf front lip
+    upright_hold: 0.0           # unused; ball releases at play_once start
+    handoff_distance: 0.12      # m; scripted roll ends here, PhysX takes over
+    live_linear_damping: 0.12   # bleeds off the post-contact roll (no bouncing)
+    live_angular_damping: 0.3
+    live_friction: 0.006        # convex-hull ball slides; low mu emulates rolling
+    live_restitution: 0.12      # slight liveliness, no rattling off the gripper
+    settle_speed: 0.025         # m/s; below this the ball counts as at rest
+    settle_hold_steps: 12       # consecutive slow steps required to call it settled
+    max_live_steps: 420         # sim-step budget for the contact + roll-out
+    arm_side: random            # random | left | right
   prevent_breakage:
     # Deep wall shelf with random cup/wineglass/beer/wine bottles + plant/mug
     # décor. Robot pick-places a custom cushioned basket under the shelf lip
