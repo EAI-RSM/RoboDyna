@@ -255,7 +255,11 @@ def build_args(
 
     # Failure demos (e.g. force_platform_miss stick) still need a rendered trajectory.
     targs = args["task_args"][task_name]
-    if bool(targs.get("force_platform_miss", False)) or bool(targs.get("allow_fail", False)):
+    if (
+        bool(targs.get("force_platform_miss", False))
+        or bool(targs.get("allow_fail", False))
+        or bool(targs.get("force_overflow", False))
+    ):
         args["save_failed_cases"] = True
         args["check_render_success"] = False
 

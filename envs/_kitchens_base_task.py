@@ -352,7 +352,7 @@ class KitchenS_base_task(Base_Task):
         y += table_xy_bias[1]
 
         visual_path = "assets/objects/044_microwave/visual/base0.glb"
-        scale = 0.15
+        scale = 0.15 * float(getattr(self, "microwave_scale_mult", 1.0))
         bounds_min = np.array([-0.761475, -0.495360, -0.567261], dtype=float)
         bounds_max = np.array([0.795292, 0.435315, 0.630773], dtype=float)
         center = 0.5 * (bounds_min + bounds_max) * scale
@@ -455,7 +455,8 @@ class KitchenS_base_task(Base_Task):
         )
         with open(os.path.join(asset_dir, "model_data0.json"), "r") as f:
             model_data = json.load(f)
-        scale = np.asarray(model_data["scale"], dtype=float)
+        scale_mult = float(getattr(self, "range_scale_mult", 1.0))
+        scale = np.asarray(model_data["scale"], dtype=float) * scale_mult
         center = np.asarray(model_data["center"], dtype=float)
         extents = np.asarray(model_data["extents"], dtype=float)
 
@@ -505,25 +506,27 @@ class KitchenS_base_task(Base_Task):
         self.range_half_size = (0.5 * model_width, 0.5 * model_depth)
         self.range_top_z = float(table_height + model_height)
 
-        # World XY of each of the four burners (grate centers).
+        # World XY of each of the four burners (grate centers). Offsets grow with
+        # ``range_scale_mult`` so pots/pans stay centered on the scaled grates.
         self.burner_positions = {
-            name: (float(x + dx), float(y + dy))
+            name: (float(x + dx * scale_mult), float(y + dy * scale_mult))
             for name, (dx, dy) in self.RANGE_BURNER_OFFSETS.items()
         }
         # Default active burner: left-rear (boil_milk pot / cook_food pan).
         self.burner_xy = self.burner_positions["left_rear"]
 
-        # Dark overlay on the active burner; the task changes it to orange while on.
+        # Dark overlay on the active burner; tasks light it bright blue while on.
         burner_mat = sapien.render.RenderMaterial(
             base_color=[0.20, 0.20, 0.22, 1.0]
         )
+        burner_r = 0.030 * scale_mult
         burner_builder = self.scene.create_actor_builder()
         burner_builder.add_cylinder_visual(
             pose=sapien.Pose(
                 [0, 0, 0], [0.70710678, 0.0, 0.70710678, 0.0]
             ),
-            radius=0.030,
-            half_length=0.0015,
+            radius=burner_r,
+            half_length=0.0015 * scale_mult,
             material=burner_mat,
         )
         burner_builder.set_initial_pose(
@@ -547,8 +550,8 @@ class KitchenS_base_task(Base_Task):
         panel_y = float(origin_y - body_front_z * scale[2])
         knob_x = float(x + self.RANGE_KNOB_LOCAL_X * scale[0])
         knob_z = float(table_height + self.RANGE_KNOB_LOCAL_Y * scale[1])
-        knob_r = 0.019
-        knob_half_length = float(self.RANGE_KNOB_LENGTH / 2)
+        knob_r = 0.019 * scale_mult
+        knob_half_length = float(self.RANGE_KNOB_LENGTH * scale_mult / 2)
         knob_y = float(panel_y - knob_half_length)
         knob_mat = sapien.render.RenderMaterial(
             base_color=[0.07, 0.07, 0.08, 1.0]
@@ -598,6 +601,164 @@ class KitchenS_base_task(Base_Task):
             x + model_width / 2 + pad,
             y + model_depth / 2 + pad,
         ])
+        # Shared stove-fire state (blue ring/disc; hidden when off).
+        self._ring_parts = getattr(self, "_ring_parts", []) or []
+        self._ring_shapes = getattr(self, "_ring_shapes", []) or []
+        self._ring_home_poses = getattr(self, "_ring_home_poses", []) or []
+        self._disc_parts = getattr(self, "_disc_parts", []) or []
+        self._disc_home_poses = getattr(self, "_disc_home_poses", []) or []
+        self._burner_home_pose = sapien.Pose(
+            p=[
+                self.burner_xy[0],
+                self.burner_xy[1],
+                self.range_top_z + 0.002,
+            ]
+        )
+
+    # ------------------------------------------------------------------ stove fire
+    # Shared blue gas-flame look across KitchenS tasks. When the stove is off the
+    # ring/disc are moved underground so nothing reads as residual heat/sauce.
+    FIRE_BLUE = [0.12, 0.72, 1.0, 1.0]
+    FIRE_DISC_BLUE = [0.08, 0.55, 0.95, 1.0]
+
+    def _fire_hidden_pose(self) -> sapien.Pose:
+        return sapien.Pose(p=[0.0, 0.0, -1.0])
+
+    def _clear_stove_fire_ring(self) -> None:
+        for part in getattr(self, "_ring_parts", []) or []:
+            try:
+                self.scene.remove_entity(part)
+            except Exception:
+                pass
+        self._ring_parts = []
+        self._ring_shapes = []
+        self._ring_home_poses = []
+
+    def _build_stove_fire_ring(
+        self,
+        cx: float,
+        cy: float,
+        cz: float,
+        radius: float,
+        *,
+        n: int = 28,
+        half_size: list[float] | None = None,
+    ) -> None:
+        """Build a blue fire halo; starts hidden until ``_set_stove_fire(True)``."""
+        self._clear_stove_fire_ring()
+        hs = list(half_size) if half_size is not None else [0.008, 0.004, 0.003]
+        for i in range(int(n)):
+            ang = 2.0 * np.pi * i / n
+            home = sapien.Pose(
+                p=[
+                    float(cx + radius * np.cos(ang)),
+                    float(cy + radius * np.sin(ang)),
+                    float(cz),
+                ]
+            )
+            part = create_visual_box(
+                self.scene,
+                self._fire_hidden_pose(),
+                half_size=hs,
+                color=tuple(self.FIRE_BLUE[:3]),
+                name=f"stove_fire_ring_{i}",
+            )
+            self._ring_parts.append(part)
+            self._ring_home_poses.append(home)
+            try:
+                comps = part.get_components()
+            except Exception:
+                comps = getattr(part, "components", [])
+            for c in comps:
+                if isinstance(c, sapien.render.RenderBodyComponent):
+                    self._ring_shapes.extend(list(c.render_shapes))
+
+    def _set_stove_fire(self, on: bool, intensity: float = 1.0) -> None:
+        """Bright blue flame when on; fully hide disc + ring when off (no gray)."""
+        inten = float(np.clip(intensity, 0.0, 1.0))
+        lit = bool(on) and inten > 0.02
+        # Lit: bright blue. Off: transparent + buried — never leave a gray halo.
+        ring_col = [0.10, 0.55 + 0.35 * inten, 1.0, 1.0] if lit else [0.0, 0.0, 0.0, 0.0]
+        disc_col = [0.06, 0.40 + 0.30 * inten, 0.95, 1.0] if lit else [0.0, 0.0, 0.0, 0.0]
+        hidden = self._fire_hidden_pose()
+
+        for part, home in zip(
+            getattr(self, "_ring_parts", []) or [],
+            getattr(self, "_ring_home_poses", []) or [],
+        ):
+            try:
+                part.set_pose(home if lit else hidden)
+            except Exception:
+                pass
+        for s in getattr(self, "_ring_shapes", []) or []:
+            try:
+                mat = s.material
+                mat.set_base_color(ring_col)
+                if hasattr(mat, "set_emission"):
+                    mat.set_emission(ring_col if lit else [0, 0, 0, 1])
+                elif hasattr(mat, "emission"):
+                    mat.emission = ring_col if lit else [0.0, 0.0, 0.0, 1.0]
+            except Exception:
+                pass
+
+        for part, home in zip(
+            getattr(self, "_disc_parts", []) or [],
+            getattr(self, "_disc_home_poses", []) or [],
+        ):
+            try:
+                part.set_pose(home if lit else hidden)
+            except Exception:
+                pass
+
+        # Only drive the stock burner disc when the task still uses its shapes
+        # (cook_food clears them and keeps the disc permanently hidden).
+        if getattr(self, "active_burner", None) is not None and (
+            getattr(self, "_burner_shapes", None) or []
+        ):
+            try:
+                home = getattr(self, "_burner_home_pose", None)
+                if lit and home is not None:
+                    self.active_burner.set_pose(home)
+                elif not lit:
+                    self.active_burner.set_pose(hidden)
+            except Exception:
+                pass
+        for s in list(getattr(self, "_burner_shapes", []) or []) + list(
+            getattr(self, "_disc_shapes", []) or []
+        ):
+            try:
+                mat = s.material
+                mat.set_base_color(disc_col)
+                if hasattr(mat, "set_emission"):
+                    mat.set_emission(disc_col if lit else [0, 0, 0, 1])
+                elif hasattr(mat, "emission"):
+                    mat.emission = disc_col if lit else [0.0, 0.0, 0.0, 1.0]
+            except Exception:
+                pass
+
+        if getattr(self, "stove_knob_indicator", None) is not None:
+            # cook_food drives a continuous knob_angle; binary tasks use 3 vs 12 o'clock.
+            if hasattr(self, "knob_angle") and hasattr(self, "fire_intensity"):
+                angle = float(self.knob_angle)
+            else:
+                angle = -np.pi / 2 if lit else 0.0
+            radius = float(getattr(self, "_knob_radius", 0.019)) * 0.55
+            kx, _, kz = self.knob_xyz
+            self.stove_knob_indicator.set_pose(
+                sapien.Pose(
+                    p=[
+                        float(kx + radius * np.sin(angle)),
+                        float(self._knob_front_y),
+                        float(kz + radius * np.cos(angle)),
+                    ],
+                    q=[
+                        float(np.cos(angle / 2)),
+                        0.0,
+                        float(np.sin(angle / 2)),
+                        0.0,
+                    ],
+                )
+            )
 
     def _load_faucet(self, x, faucet_y, table_height):
         """KitchenS chrome gooseneck tap: upright post + spout + side handle.

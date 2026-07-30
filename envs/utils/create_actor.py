@@ -749,8 +749,14 @@ def create_actor(
         with open(json_file_path, "r") as file:
             model_data = json.load(file)
         scale = model_data["scale"]
+        # Some assets (e.g. 038_milk-box) ship ``scale: null`` — treat as unit.
+        if scale is None:
+            scale = [1.0, 1.0, 1.0]
+            model_data = dict(model_data)
+            model_data["scale"] = list(scale)
     except:
         model_data = None
+        scale = [1.0, 1.0, 1.0]
 
     # scale_mult: float (uniform) OR a 3-sequence (per-axis, e.g. (1,1.6,1) to thicken one axis).
     try:
