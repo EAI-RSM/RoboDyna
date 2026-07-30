@@ -97,23 +97,21 @@ task_args:
     bowl_xy: [0.30, 0.05]
     board_scale_mult: 0.07
   empty_bag:
-    # Kitchen Large scene (fridge + microwave + basket + cabinet).
+    # Kitchen Large: knock over kraft grocery bag; catch rolling apple.
+    # Center microwave removed; no fridge decor (clear workspace).
     scene_id: 0
-    bag_side: left              # left | right | random — emptying arm side
-    bag_x_abs: 0.20
-    bag_y: -0.12
+    bag_side: left              # left | right | random — knock arm side
+    bag_x_abs: 0.16
+    bag_y: -0.05
     bag_scale_mult: 1.0
-    # rolling_choice: apple | jam | can | bottle | null(=random)
-    rolling_choice: null
-    apple_color: random         # green | red | random (apple only)
-    veg_scale_mult: 0.035       # 069_vagetable raw meshes are ~2m; ~7cm when scaled
-    roll_speed: 0.10
+    apple_color: random         # green | red | random
+    veg_scale_mult: 0.035
     table_edge_y: -0.30
-    intercept_frac: 0.35
     grasp_tol: 0.08
-    grasp_hover_z: 0.16
-    grasp_tcp_dz: 0.025
-    post_catch_lift: 0.10
+    grasp_hover_z: 0.14
+    grasp_tcp_dz: 0.02
+    post_catch_lift: 0.08
+
   make_soup:
     # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
     # Lift board level, pour into pot (physics), then turn stove on. No spills.

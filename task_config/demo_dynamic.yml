@@ -149,23 +149,20 @@ task_args:
     jaw_clearance: 0.002        # m; pads stop this far short of the cup surface
     post_catch_lift: 0.12       # m; lift after welding the caught cup
   empty_bag:
-    # Kitchen Large: grasp+tilt hollow paper bag; catch rolling grocery
-    # (apple/jam/can/bottle). Two vegetables fall out and stay put.
+    # Kitchen Large: knock over kraft grocery bag; catch rolling apple.
     scene_id: 0
     bag_side: left
-    bag_x_abs: 0.20
-    bag_y: -0.10
+    bag_x_abs: 0.16
+    bag_y: -0.05
     bag_scale_mult: 1.0
-    rolling_choice: null
     apple_color: random
     veg_scale_mult: 0.035
-    roll_speed: 0.10
     table_edge_y: -0.30
-    intercept_frac: 0.35
     grasp_tol: 0.08
-    grasp_hover_z: 0.16
-    grasp_tcp_dz: 0.025
-    post_catch_lift: 0.10
+    grasp_hover_z: 0.14
+    grasp_tcp_dz: 0.02
+    post_catch_lift: 0.08
+
   catch_shelf_marble:
     # Options (independent toggles; Opt 1+2 can both be on):
     #   Default — marble pauses on the top shelf until a bowl key is pressed
