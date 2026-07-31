@@ -974,6 +974,38 @@ task_args:
     glass_x: -0.22
     glass_y: -0.16
     glass_scale: 0.585           # prior 0.45 × 1.3
+  make_soup_test:
+    # Same as make_soup, but flush 4-burner gas cooktop + top-facing knob.
+    scene_id: 0
+    burner: left_front
+    range_xy: [0.18, 0.14]
+    range_scale_mult: 1.0
+    microwave_scale_mult: 1.3
+    water_level: 0.45
+    pot_radius: 0.058
+    pot_height: 0.0735
+    pot_wall: 0.005
+    board_half: [0.095, 0.065, 0.010]
+    handle_half: [0.022, 0.024, 0.022]
+    board_x: 0.16
+    board_y: -0.14
+    cube_half: 0.012
+    tomato_radius: 0.015
+    tilt_hold_dot: 0.82
+    tilt_spill_dot: 0.50
+    pour_tip_rad: 0.70
+    knob_contact_radius: 0.06
+    grasp_tcp_tol: 0.045
+    plate_x: -0.18
+    plate_y: -0.08
+    plate_scale: 0.55
+    bread_scale: 1.0
+    wine_x: -0.30
+    wine_y: -0.02
+    wine_scale: 1.0
+    glass_x: -0.22
+    glass_y: -0.16
+    glass_scale: 0.585
   serve_dinner:
     # KitchenS: pan with meatballs in sauce on a lit burner; serve onto a plate.
     # Turn stove off, tip pan carefully; any meatball off the plate = fail.
