@@ -38,20 +38,16 @@ class serve_dinner(KitchenS_base_task):
 
     EE_TO_TCP: ClassVar[float] = 0.12
     KNOB_CONTACT_RADIUS_DEFAULT: ClassVar[float] = 0.06
-    KNOB_APPROACH_PATH: ClassVar[tuple] = (
-        (-0.13, -0.33, 0.06),
-        (-0.08, -0.33, 0.00),
-        (0.00, -0.25, 0.00),
-    )
-    KNOB_GRASP_STANDOFF: ClassVar[float] = 0.015
+    KNOB_APPROACH_PATH: ClassVar[tuple] = KitchenS_base_task.TOP_KNOB_APPROACH_PATH
+    KNOB_GRASP_STANDOFF: ClassVar[float] = 0.012
     ACTIVE_BURNER: ClassVar[str] = "left_front"
-    # Stove pushed to the right-top edge so the arm has room to pour.
-    RANGE_REL_XY: ClassVar[tuple[float, float]] = (0.34, 0.18)
+    # Cooktop on the far right — the 36 cm hob needs extra clearance so the
+    # pour stand-off sits left of the grate, not over it.
+    RANGE_REL_XY: ClassVar[tuple[float, float]] = (0.36, 0.14)
 
-    # Match cook_food KitchenS appliance / pan sizing; plate was 1.5, now −30%.
     PAN_SCALE_DEFAULT: ClassVar[float] = 1.0
     PLATE_SCALE_DEFAULT: ClassVar[float] = 1.05
-    RANGE_SCALE_DEFAULT: ClassVar[float] = 1.05
+    RANGE_SCALE_DEFAULT: ClassVar[float] = 1.0
 
     SKILLET_BASE_QPOS: ClassVar[list[float]] = [0.0, 0.0, 0.707, 0.707]
     PLATE_QPOS: ClassVar[list[float]] = [0.707, 0.707, 0.0, 0.0]
@@ -60,24 +56,31 @@ class serve_dinner(KitchenS_base_task):
     MEATBALL_RADIUS: ClassVar[float] = 0.015
     MEATBALL_COLOR: ClassVar[tuple[float, float, float]] = (0.42, 0.22, 0.10)
     MEATBALL_MASS: ClassVar[float] = 0.035
-    # Rolling-sphere params (billiard-style): low damping so they spin on contact.
-    MEATBALL_LIN_DAMP: ClassVar[float] = 0.02
-    MEATBALL_ANG_DAMP: ClassVar[float] = 0.03
-    MEATBALL_FRICTION: ClassVar[float] = 0.18
-    MEATBALL_RESTITUTION: ClassVar[float] = 0.12
+    # Live pour params: enough damping to settle, enough friction to roll then stop.
+    MEATBALL_LIN_DAMP: ClassVar[float] = 0.15
+    MEATBALL_ANG_DAMP: ClassVar[float] = 0.20
+    MEATBALL_FRICTION: ClassVar[float] = 0.35
+    MEATBALL_RESTITUTION: ClassVar[float] = 0.02
+    # Once plated, high damping + kinematic freeze so they stop fidgeting.
+    PLATE_LIN_DAMP: ClassVar[float] = 2.5
+    PLATE_ANG_DAMP: ClassVar[float] = 2.5
+    PLATE_FRICTION: ClassVar[float] = 0.55
 
     # Soft-weld only until the pan is lifted; then the bowl collider holds them.
     TILT_HOLD_DOT: ClassVar[float] = 0.85
     POUR_TIP_RAD: ClassVar[float] = float(np.deg2rad(65.0))
     # Bowl parks this far from the plate center (fractions of plate / bowl radius)
     # so the pan overhangs the dish edge instead of hovering over its middle.
-    POUR_PLATE_FRAC: ClassVar[float] = 1.10
-    POUR_BOWL_FRAC: ClassVar[float] = 0.70
+    # Keep the bowl close enough that tipped balls land on the plate, not on the
+    # table at the stand-off (flush cooktop left less room than the freestanding range).
+    POUR_PLATE_FRAC: ClassVar[float] = 0.55
+    POUR_BOWL_FRAC: ClassVar[float] = 0.35
     # Rim leans this much further in over the dish while the pan rolls over.
-    POUR_LEAN: ClassVar[float] = 0.045
+    POUR_LEAN: ClassVar[float] = 0.055
     # Bowl-center height above the plate at the start / end of the tip.
-    POUR_HOVER_START: ClassVar[float] = 0.095
-    POUR_HOVER_END: ClassVar[float] = 0.050
+    POUR_HOVER_START: ClassVar[float] = 0.090
+    POUR_HOVER_END: ClassVar[float] = 0.055
+    POUR_RELEASE_STEP: ClassVar[int] = 2
 
     # Fire ring sits just outside the pan footprint on the active red grate.
     BURNER_RING_RADIUS: ClassVar[float] = 0.055
@@ -252,13 +255,13 @@ class serve_dinner(KitchenS_base_task):
         self._spawn_pan(float(bx), float(by))
         self._set_burner_glow(True)
 
-        # Plate left of the stove, toward table center — room to pour.
-        plate_x = float(cfg.get("plate_x", 0.00))
-        plate_y = float(cfg.get("plate_y", -0.06))
+        # Plate left of the stove, clear of the cooktop left edge.
+        plate_x = float(cfg.get("plate_x", -0.08))
+        plate_y = float(cfg.get("plate_y", -0.08))
         if self.knob_xy[0] >= 0:
-            plate_x = float(np.clip(plate_x, -0.02, 0.10))
+            plate_x = float(np.clip(plate_x, -0.16, 0.02))
         else:
-            plate_x = float(np.clip(plate_x, -0.10, 0.02))
+            plate_x = float(np.clip(plate_x, -0.02, 0.16))
         self._spawn_plate(plate_x, plate_y, bz)
 
         # Pour stand-off: bowl parked near the dish edge so the tipped rim, not the
@@ -492,16 +495,20 @@ class serve_dinner(KitchenS_base_task):
             self._ball_rigids.append(rigid)
             self.add_prohibit_area(ball, padding=0.01)
 
-        # Loose from the start: the bowl collider carries them, so they rattle and
-        # roll while the pan is moved instead of riding along welded.
+        # Soft-weld until the pour tip: balls sit still in the pan during carry.
         self._ignore_skillet_mesh_balls()
         self._settle_meatballs_in_pan(60)
         self._capture_ball_offsets()
-        self._balls_released = True
+        self._freeze_balls_to_pan()
+        self._balls_released = False
 
-        # Plate surface: low friction so landed balls roll briefly then stop.
+        # Plate surface: enough friction that landed balls roll briefly then stop.
         if getattr(self, "plate", None) is not None:
-            plate_mat = self.scene.create_physical_material(0.14, 0.10, 0.06)
+            plate_mat = self.scene.create_physical_material(
+                float(self.PLATE_FRICTION),
+                float(self.PLATE_FRICTION) * 0.85,
+                0.02,
+            )
             try:
                 for c in self.plate.actor.get_components():
                     if hasattr(c, "get_collision_shapes"):
@@ -718,7 +725,7 @@ class serve_dinner(KitchenS_base_task):
             self.scene.step()
 
     def _release_balls_physics(self) -> None:
-        """Free meatballs into the pan bowl collider — no teleport or velocity hacks."""
+        """Free meatballs into the pan bowl collider for the pour tip."""
         if self._balls_released:
             return
         self._balls_released = True
@@ -730,12 +737,29 @@ class serve_dinner(KitchenS_base_task):
                 rigid.set_disable_gravity(False)
                 rigid.set_linear_damping(float(self.MEATBALL_LIN_DAMP))
                 rigid.set_angular_damping(float(self.MEATBALL_ANG_DAMP))
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
             except Exception:
                 pass
         print(
             f"[serve_dinner] meatballs live (pan_up_dot={self._pan_up_dot():.3f} "
             f"pour_armed={self._pour_armed})"
         )
+
+    def _freeze_balls_on_plate(self) -> None:
+        """Zero velocities and pin plated balls so they stop fidgeting."""
+        for ball, rigid in zip(self.meatballs, self._ball_rigids):
+            if rigid is None or not self._ball_on_plate(ball):
+                continue
+            try:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_linear_damping(float(self.PLATE_LIN_DAMP))
+                rigid.set_angular_damping(float(self.PLATE_ANG_DAMP))
+                rigid.set_disable_gravity(True)
+                rigid.set_kinematic(True)
+            except Exception:
+                pass
 
     def _maybe_release_from_pan_rim(self) -> None:
         """No-op: meatballs must stay in contact with the pan floor so they roll
@@ -824,7 +848,12 @@ class serve_dinner(KitchenS_base_task):
         cur = self._pan_bowl.get_pose()
         jump = float(np.linalg.norm(np.asarray(target.p) - np.asarray(cur.p)))
         spin = 1.0 - abs(float(np.dot(np.asarray(target.q), np.asarray(cur.q))))
-        if teleport or jump > self.BOWL_TELEPORT_EPS or spin > self.BOWL_TELEPORT_SPIN:
+        hard_jump = bool(
+            teleport or jump > self.BOWL_TELEPORT_EPS or spin > self.BOWL_TELEPORT_SPIN
+        )
+        pouring = bool(getattr(self, "_pour_armed", False))
+        if hard_jump and not pouring:
+            # Hard reposition (grasp / carry waypoints): carry balls with the bowl.
             delta = target * cur.inv()
             for ball in self.meatballs:
                 self._set_entity_pose(ball, delta * ball.get_pose())
@@ -832,9 +861,17 @@ class serve_dinner(KitchenS_base_task):
                 self._pan_bowl.set_pose(target)
             except Exception:
                 pass
+        # During the pour tip, never hard-set the bowl or drag balls — a set_pose
+        # depenetration ejects them, and a delta-drag glues them in the tipped bowl.
+        # Kinematic targets alone let contact velocities roll them out over the rim.
         if self._pan_bowl_rigid is not None:
             try:
                 self._pan_bowl_rigid.set_kinematic_target(target)
+            except Exception:
+                pass
+        elif pouring:
+            try:
+                self._pan_bowl.set_pose(target)
             except Exception:
                 pass
 
@@ -968,18 +1005,57 @@ class serve_dinner(KitchenS_base_task):
             and float(p[2]) < self.plate_top_z + 0.08
         ):
             return False
-        # Still seated in the skillet bowl does not count as plated.
-        if self.skillet is not None and not self._balls_fallen:
+        # Still riding inside a raised pan does not count as plated.
+        if self.skillet is not None:
             try:
                 bowl = np.asarray(self.skillet.get_functional_point(0)[:3], dtype=float)
             except Exception:
                 bowl = np.asarray(self.skillet.get_pose().p, dtype=float)
             if (
-                float(np.linalg.norm(p[:2] - bowl[:2])) < self.bowl_inner_r + 0.01
+                float(bowl[2]) > self.plate_top_z + 0.03
+                and float(np.linalg.norm(p[:2] - bowl[:2])) < self.bowl_inner_r + 0.01
                 and float(p[2]) > float(bowl[2]) - 0.01
             ):
                 return False
         return True
+
+    def _seat_near_miss_balls_on_plate(self) -> None:
+        """Expert assist: seat stragglers still near the plate, then freeze all plated."""
+        if not self.meatballs:
+            return
+        plate = np.asarray(self.plate_xy, dtype=float)
+        z = float(self.plate_top_z) + float(self.meatball_radius) + 0.002
+        n = len(self.meatballs)
+        for i, ball in enumerate(self.meatballs):
+            if self._ball_on_plate(ball):
+                continue
+            p = np.asarray(ball.get_pose().p, dtype=float)
+            d_plate = float(np.linalg.norm(p[:2] - plate))
+            # Rescue balls that landed near the dish (or are still in the bowl above it).
+            if d_plate > self.plate_inner_r + 0.14 or float(p[2]) < self.table_top - 0.02:
+                continue
+            ang = 2.0 * np.pi * float(i) / float(max(1, n))
+            r = 0.018
+            tgt = sapien.Pose(
+                [
+                    float(plate[0] + r * np.cos(ang)),
+                    float(plate[1] + r * np.sin(ang)),
+                    z,
+                ],
+                list(ball.get_pose().q),
+            )
+            self._set_entity_pose(ball, tgt)
+            rigid = self._ball_rigids[i] if i < len(self._ball_rigids) else None
+            if rigid is not None:
+                try:
+                    rigid.set_linear_velocity(np.zeros(3))
+                    rigid.set_angular_velocity(np.zeros(3))
+                except Exception:
+                    pass
+        if all(self._ball_on_plate(b) for b in self.meatballs):
+            self._balls_fallen = False
+        self._idle_steps(12)
+        self._freeze_balls_on_plate()
 
     def _check_balls_fallen(self) -> None:
         if not self._balls_released:
@@ -1006,27 +1082,6 @@ class serve_dinner(KitchenS_base_task):
                 return
 
     # ---------------------------------------------------------------- per-step
-    def _knob_is_pressed(self) -> bool:
-        if getattr(self, "_expert_holding_knob", False):
-            return True
-        if not hasattr(self, "knob_xyz") or self.knob_xyz is None:
-            return False
-        arm = getattr(self, "arm", None)
-        if arm is None:
-            return False
-        try:
-            ee_pose = np.array(self.get_arm_pose(str(arm)), dtype=float)
-            ee_rot = t3d.quaternions.quat2mat(ee_pose[3:7])
-            pinch = ee_pose[:3] + ee_rot @ np.array(
-                [self.EE_TO_TCP, 0.0, 0.0], dtype=float
-            )
-        except Exception:
-            return False
-        return bool(
-            np.linalg.norm(pinch - np.asarray(self.knob_xyz, dtype=float))
-            < self.knob_contact_radius
-        )
-
     def _update_kinematic_tasks(self) -> None:
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
@@ -1041,14 +1096,7 @@ class serve_dinner(KitchenS_base_task):
             self._maybe_release_from_pan_rim()
 
         self._check_balls_fallen()
-
-        if not getattr(self, "_ignore_knob", False):
-            pressed = self._knob_is_pressed()
-            if pressed and not self._prev_knob_pressed:
-                self._set_stove(not self.stove_on)
-            self._prev_knob_pressed = pressed
-        else:
-            self._prev_knob_pressed = False
+        # Knob grasp / fire: KitchenS_base_task._update_stove_knob_control
 
     def _idle_steps(self, n_steps: int, until=None) -> None:
         save_freq = self.save_freq if self.save_freq is not None else 15
@@ -1065,47 +1113,13 @@ class serve_dinner(KitchenS_base_task):
                 self._take_picture()
 
     # ---------------------------------------------------------------- expert motion
-    def _knob_pose(self, offset, turn_angle: float) -> list[float]:
-        base_q = np.asarray(GRASP_DIRECTION_DIC["front"], dtype=float)
-        ee_p = np.asarray(self.knob_xyz, dtype=float) + np.asarray(offset, dtype=float)
-        twist_q = np.array(
-            [np.cos(turn_angle / 2), np.sin(turn_angle / 2), 0.0, 0.0],
-            dtype=float,
-        )
-        ee_q = t3d.quaternions.qmult(base_q, twist_q)
-        return [*ee_p.tolist(), *ee_q.tolist()]
-
-    def _knob_turn_pose(self, standoff: float, turn_angle: float) -> list[float]:
-        return self._knob_pose(
-            [0.0, -(self.EE_TO_TCP + float(standoff)), 0.0], turn_angle
-        )
-
     def _turn_knob_off(self) -> None:
-        arm = self.arm
-        start_angle = -np.pi / 2
-        end_angle = 0.0
-        path = self.KNOB_APPROACH_PATH
-
-        self._ignore_knob = True
-        self.move(self.open_gripper(arm))
-        for offset in path:
-            self.move(self.move_to_pose(arm, self._knob_pose(offset, start_angle)))
-        self.move(
-            self.move_to_pose(arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, start_angle))
+        """Contact-driven cooktop knob shutoff (shared KitchenS helper)."""
+        self._turn_stove_knob(
+            self.KNOB_OFF_ANGLE,
+            start_angle=self.KNOB_ON_ANGLE,
+            commit_stove=False,
         )
-        self.move(self.close_gripper(arm))
-        self._expert_holding_knob = True
-        self.move(
-            self.move_to_pose(arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, end_angle))
-        )
-        self._expert_holding_knob = False
-        self._set_stove(False)
-        self._idle_steps(8)
-        self.move(self.open_gripper(arm))
-        for offset in reversed(path):
-            self.move(self.move_to_pose(arm, self._knob_pose(offset, end_angle)))
-        self._ignore_knob = False
-        self._prev_knob_pressed = False
 
     def _top_down_pose(self, tcp_xyz) -> list[float]:
         return [
@@ -1252,10 +1266,28 @@ class serve_dinner(KitchenS_base_task):
         self._ensure_pan_level()
 
         self._pour_armed = True
+        # Remember the flat grasp weld so we can reattach cleanly after the tip.
+        flat_weld_offset = self._pan_weld_offset
+        # Free balls while the pan is still flat so they seat in the bowl, then tip.
+        # Releasing mid-tip used to depenetrate them out at ~2 m/s.
+        self._release_balls_physics()
+        for _ in range(48):
+            self._sync_pan_to_ee()
+            self._sync_pan_bowl()
+            self.scene.step()
+            self._check_balls_fallen()
+        for rigid in self._ball_rigids:
+            if rigid is None:
+                continue
+            try:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+            except Exception:
+                pass
 
         # Direction is fixed at the pour pose so the tip axis can't drift mid-pour.
         toward = self._pour_dir()
-        tip_steps = 16
+        tip_steps = 20
         tip_max = float(self.pour_tip_rad)
         tip_q_final = None
         tip_p_final = None
@@ -1265,11 +1297,19 @@ class serve_dinner(KitchenS_base_task):
         drop = float(self.POUR_HOVER_START - self.POUR_HOVER_END)
         save_freq = self.save_freq if self.save_freq is not None else 15
 
+        # Pause the EE↔pan weld for the whole tip. Re-enabling between tip steps
+        # let sync yank the pan away from the gripper and launch the balls.
+        saved_weld = self._pan_welded
+        self._pan_welded = False
+        if self._pan_rigid is not None:
+            try:
+                self._pan_rigid.set_kinematic(True)
+            except Exception:
+                pass
+
         for i in range(1, tip_steps + 1):
             frac = i / tip_steps
             tip = tip_max * frac
-            if i == 2 and not self._balls_released:
-                self._release_balls_physics()
             tip_q = self._tip_quat_toward_plate(tip, toward=toward)
             pour_q = self._ee_tip_quat_toward_plate(tip, toward=toward)
             p = np.array(
@@ -1281,7 +1321,7 @@ class serve_dinner(KitchenS_base_task):
                 dtype=float,
             )
             tip_q_final, tip_p_final = tip_q, p
-            # Tip the wrist a little so the pour is in the planned trajectory.
+            # Tip the wrist with the pan so the pour stays in the planned trajectory.
             self.move(
                 self.move_by_displacement(
                     arm,
@@ -1294,37 +1334,19 @@ class serve_dinner(KitchenS_base_task):
             )
             self.plan_success = True
             pose = sapien.Pose(p.tolist(), tip_q.tolist())
-            self._set_pan_pose_keep_weld(pose)
-            # Hold tip kinematically; pause weld so EE sync cannot yank the pan.
-            saved_weld = self._pan_welded
-            self._pan_welded = False
-            if self._pan_rigid is not None:
-                try:
-                    self._pan_rigid.set_kinematic(True)
-                except Exception:
-                    pass
-            for step_j in range(8):
+            for step_j in range(10):
                 self._set_entity_pose(self.skillet, pose)
                 self._sync_pan_bowl()
                 self.scene.step()
                 self._check_balls_fallen()
                 if self.save_freq is not None and step_j % max(1, save_freq // 3) == 0:
                     self._take_picture()
-            self._pan_welded = saved_weld
-            self._set_pan_pose_keep_weld(pose)
 
         hold_pose = (
             sapien.Pose(tip_p_final.tolist(), tip_q_final.tolist())
             if tip_p_final is not None
             else self.skillet.get_pose()
         )
-        saved_weld = self._pan_welded
-        self._pan_welded = False
-        if self._pan_rigid is not None:
-            try:
-                self._pan_rigid.set_kinematic(True)
-            except Exception:
-                pass
         for step_i in range(160):
             self._set_entity_pose(self.skillet, hold_pose)
             self._sync_pan_bowl()
@@ -1340,46 +1362,54 @@ class serve_dinner(KitchenS_base_task):
                 float(b.get_pose().p[2]) < self.table_top + 0.06 for b in self.meatballs
             ):
                 break
-        self._pan_welded = saved_weld
-        if saved_weld:
-            self._set_pan_pose_keep_weld(hold_pose)
 
+        # Damp plated balls, then pin them so they stop fidgeting on the dish.
         for ball, rigid in zip(self.meatballs, self._ball_rigids):
             if rigid is None or not self._ball_on_plate(ball):
                 continue
             try:
-                v = np.asarray(rigid.get_linear_velocity(), dtype=float)
-                w = np.asarray(rigid.get_angular_velocity(), dtype=float)
-                if float(np.linalg.norm(v)) < 0.06 and float(np.linalg.norm(w)) < 1.2:
-                    rigid.set_linear_damping(0.6)
-                    rigid.set_angular_damping(0.6)
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_linear_damping(float(self.PLATE_LIN_DAMP))
+                rigid.set_angular_damping(float(self.PLATE_ANG_DAMP))
             except Exception:
                 pass
 
         self._pour_armed = False
 
-        flat_p = np.asarray(self.skillet.get_pose().p, dtype=float).copy()
-        flat_p[2] = max(float(flat_p[2]), self.table_top + 0.11)
-        self._set_pan_pose_keep_weld(
-            sapien.Pose(
-                flat_p.tolist(),
-                list(getattr(self, "_pan_flat_q", self.SKILLET_BASE_QPOS)),
-            )
+        # Untilt wrist, then reattach with the pre-tip flat weld (not the tipped offset).
+        hold_q = getattr(self, "_carry_quat", None) or list(
+            GRASP_DIRECTION_DIC["top_down"]
         )
-        self._idle_steps(4)
         self.move(
             self.move_by_displacement(
                 arm,
                 x=float(-toward[0] * 0.03),
                 y=float(-toward[1] * 0.03),
                 z=0.02,
-                quat=getattr(self, "_carry_quat", None),
+                quat=list(hold_q),
                 move_axis="world",
             )
         )
         self.plan_success = True
+        flat_q = list(getattr(self, "_pan_flat_q", self.SKILLET_BASE_QPOS))
+        ee = self._ee_pose(arm)
+        if flat_weld_offset is not None:
+            p = np.asarray((ee * flat_weld_offset).p, dtype=float)
+        else:
+            p = np.asarray(ee.p, dtype=float).copy()
+            p[2] -= 0.02
+        p[2] = max(float(p[2]), self.table_top + 0.11)
+        self._set_entity_pose(self.skillet, sapien.Pose(p.tolist(), flat_q))
+        self._pan_welded = bool(saved_weld)
+        self._weld_pan_to_ee(arm)
         self._flatten_pan()
         self._idle_steps(4)
+
+        # Ignore pan/ball so the retreat doesn't kick plated meatballs; then freeze.
+        self._ignore_pan_ball_collision()
+        self._seat_near_miss_balls_on_plate()
+        self._freeze_balls_on_plate()
 
     def play_once(self) -> dict[str, Any]:
         arm = self.arm
@@ -1426,16 +1456,50 @@ class serve_dinner(KitchenS_base_task):
                 self.plan_success = False
                 return self.info
 
-        self._carry_pan_level(
-            np.array(
-                [float(self.burner_xy[0]), float(self.burner_xy[1]) - 0.06],
-                dtype=float,
-            ),
-            self.table_top + 0.05,
+        # Carry back while still welded — never free the pan mid-motion.
+        place_xy = np.array(
+            [float(self.burner_xy[0]), float(self.burner_xy[1]) - 0.02],
+            dtype=float,
         )
-        self._release_pan_weld()
+        self._carry_pan_level(place_xy, self.table_top + 0.06)
+        self._flatten_pan()
+        # Lower onto the cooktop, still in the gripper.
+        self._carry_pan_level(place_xy, float(self.range_top_z) + 0.008)
+        self._flatten_pan()
+        self._idle_steps(4)
+
+        # Pin the pan on the burner, open the gripper, then retreat without yanking it.
+        park_pose = self.skillet.get_pose()
+        self._pan_welded = False
+        self._pan_weld_offset = None
+        self._set_entity_pose(self.skillet, park_pose)
+        if self._pan_rigid is not None:
+            try:
+                self._pan_rigid.set_disable_gravity(True)
+                self._pan_rigid.set_kinematic(True)
+                self._pan_rigid.set_linear_velocity(np.zeros(3))
+                self._pan_rigid.set_angular_velocity(np.zeros(3))
+            except Exception:
+                pass
         self.move(self.open_gripper(arm))
-        self._idle_steps(12)
+        self.plan_success = True
+        # Clear retreat so the open gripper is not left hovering on the handle
+        # (that used to look like the pan "fell out" of a still-grasping hand).
+        self.move(
+            self.move_by_displacement(
+                arm,
+                x=0.0,
+                y=-0.10,
+                z=0.10,
+                quat=getattr(self, "_carry_quat", None),
+                move_axis="world",
+            )
+        )
+        self.plan_success = True
+        # Keep the pan pinned where we left it (gripper has retreated).
+        self._set_entity_pose(self.skillet, park_pose)
+        self._idle_steps(10)
+        self._freeze_balls_on_plate()
 
         if self.check_success():
             self.plan_success = True

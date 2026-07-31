@@ -1,11 +1,11 @@
-"""Boil milk on a KitchenS cooking range without letting it overflow.
+"""Boil milk on a KitchenS cooking range up to a marked red target ring.
 
 KitchenS scene with microwave + cooking range (no sink/tap). A stainless
 saucepan of milk sits on a burner; a milk carton and mug rest on the open
-counter (ready for a pour afterward). The robot turns the stove on; the milk
-level rises while boiling. Shut the stove off as the milk reaches the rim.
-If left on past the rim, milk spills onto the cooktop (white puddle), the
-flame goes out, the pot level drops back to baseline, and the episode fails.
+counter. The robot turns the stove on; white milk rises while boiling. Shut
+the stove off once the milk reaches the red ring inside the pot.
+Success = milk reached the ring, then stove off before spill.
+Failure = spill over the rim, or shutoff before the milk hits the ring.
 """
 from __future__ import annotations
 
@@ -26,27 +26,26 @@ from .utils.create_actor import create_actor, create_box, UnStableError
 
 
 class boil_milk(KitchenS_base_task):
-    """Turn the range on, let the milk rise to the rim, then shut it off in time."""
+    """Turn the range on, let milk rise to the red ring, then shut it off."""
 
     BOIL_STEPS_DEFAULT = 6000         # steps for liquid_level 0→1 while stove is on
     SETTLE_STEPS_DEFAULT = 1200       # steps for liquid_level → baseline while stove is off
     BASELINE_LEVEL_DEFAULT = 0.35     # resting fill fraction of pot height
-    # The milk keeps rising for the whole knob reach (including the shutoff
-    # approach), so commit early enough that the off-twist still lands under the rim.
-    EXPERT_SHUTOFF_LEVEL_DEFAULT = 0.55
+    # Red ring fill mark: 100 = pot rim, 0 = pot floor (see ``target_ring``).
+    TARGET_RING_DEFAULT = 80
+    # Start the shutoff reach this far below the ring (milk keeps rising en route).
+    SHUTOFF_LEAD_DEFAULT = 0.08
     OVERFLOW_LEVEL_DEFAULT = 0.98     # rim / spill threshold (failure if reached while on)
     KNOB_CONTACT_RADIUS_DEFAULT = 0.06   # pinch-to-knob distance that counts as held
     EE_TO_TCP = 0.12                  # EE frame → TCP offset (cook_meat / dispense_gummy)
     # Y-up meshes stood upright: target world heights for realistic counter props.
-    MUG_TARGET_HEIGHT = 0.105         # ~10.5 cm coffee mug
+    MUG_TARGET_HEIGHT = 0.0735        # prior 10.5 cm, then −30%
     MILK_TARGET_HEIGHT = 0.200        # ~20 cm 1 L carton
-    # Same corridor / grasp as make_soup — that grasp seats the jaws cleanly.
-    KNOB_APPROACH_PATH = (
-        (-0.13, -0.33, 0.06),
-        (-0.08, -0.33, 0.00),
-        (0.00, -0.25, 0.00),
-    )
-    KNOB_GRASP_STANDOFF = 0.015
+    # Straight-down approach onto the top-facing cooktop knob.
+    KNOB_APPROACH_PATH = KitchenS_base_task.TOP_KNOB_APPROACH_PATH
+    KNOB_GRASP_STANDOFF = 0.012
+    MILK_COLOR = [0.96, 0.96, 0.93, 0.92]
+    TARGET_RING_COLOR = (0.92, 0.08, 0.08)
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("boil_milk", {})
@@ -60,9 +59,8 @@ class boil_milk(KitchenS_base_task):
         # Stove was 1.5× default, then cut 30% → 1.05×. Microwave +30%.
         self.range_scale_mult = float(self._cfg.get("range_scale_mult", 1.05))
         self.microwave_scale_mult = float(self._cfg.get("microwave_scale_mult", 1.3))
-        # Range pulled forward off the backsplash so the right arm can reach the
-        # front knob panel without over-extending.
-        rel = self._cfg.get("range_xy", [0.42, 0.13])
+        # Cooktop on the right half; top-facing knob stays in right-arm reach.
+        rel = self._cfg.get("range_xy", [0.28, 0.14])
         self.range_position_override = [float(rel[0]), float(rel[1])]
 
         # Per-step state must exist before any early _update_kinematic_tasks call.
@@ -71,10 +69,12 @@ class boil_milk(KitchenS_base_task):
         self.baseline_level = float(self.liquid_level)
         self.max_liquid_level = float(self.liquid_level)
         self.overflowed = False
+        self.reached_target = False
         self.turned_on_once = False
         self.turned_off_after_boil = False
         self._liquid_entity = None
         self._spill_entity = None
+        self._target_ring_parts = []
         self._spill_amount = 0.0
         self._burner_shapes = []
         self._knob_press_latched = False
@@ -82,6 +82,10 @@ class boil_milk(KitchenS_base_task):
         self._ignore_knob = False
         self._expert_holding_knob = False
         self.force_overflow = bool(self._cfg.get("force_overflow", False))
+        # 100 = rim, 0 = pot floor.
+        ring = float(self._cfg.get("target_ring", self.TARGET_RING_DEFAULT))
+        self.target_ring = float(np.clip(ring, 0.0, 100.0))
+        self.target_level = self.target_ring / 100.0
 
         super().setup_demo(**kwags)
 
@@ -91,9 +95,17 @@ class boil_milk(KitchenS_base_task):
         self.boil_steps = int(cfg.get("boil_steps", self.BOIL_STEPS_DEFAULT))
         self.settle_steps = int(cfg.get("settle_steps", self.SETTLE_STEPS_DEFAULT))
         self.baseline_level = float(cfg.get("baseline_level", self.BASELINE_LEVEL_DEFAULT))
-        self.expert_shutoff_level = float(
-            cfg.get("expert_shutoff_level", self.EXPERT_SHUTOFF_LEVEL_DEFAULT)
-        )
+        ring = float(cfg.get("target_ring", self.TARGET_RING_DEFAULT))
+        self.target_ring = float(np.clip(ring, 0.0, 100.0))
+        self.target_level = self.target_ring / 100.0
+        lead = float(cfg.get("shutoff_lead", self.SHUTOFF_LEAD_DEFAULT))
+        # Prefer explicit expert_shutoff_level if set; else ring minus lead.
+        if "expert_shutoff_level" in cfg:
+            self.expert_shutoff_level = float(cfg["expert_shutoff_level"])
+        else:
+            self.expert_shutoff_level = max(
+                self.baseline_level + 0.02, self.target_level - lead
+            )
         self.overflow_level = float(cfg.get("overflow_level", self.OVERFLOW_LEVEL_DEFAULT))
         self.knob_contact_radius = float(
             cfg.get("knob_contact_radius", self.KNOB_CONTACT_RADIUS_DEFAULT)
@@ -103,6 +115,7 @@ class boil_milk(KitchenS_base_task):
         self.max_liquid_level = self.baseline_level
         self.stove_on = False
         self.overflowed = False
+        self.reached_target = False
         self.turned_on_once = False
         self.turned_off_after_boil = False
         self._knob_press_latched = False
@@ -117,6 +130,7 @@ class boil_milk(KitchenS_base_task):
             except Exception:
                 pass
             self._spill_entity = None
+        self._clear_target_ring()
 
         if not hasattr(self, "burner_xy"):
             raise UnStableError("cooking range missing — KitchenS base did not load a range")
@@ -255,6 +269,7 @@ class boil_milk(KitchenS_base_task):
             half_size=[0.007, 0.0035, 0.002],
         )
         self._rebuild_liquid(force=True)
+        self._build_target_ring()
         self._set_stove_fire(False)
 
         # Milk carton + mug on the open counter between microwave and stove.
@@ -275,14 +290,26 @@ class boil_milk(KitchenS_base_task):
         return x_lo, x_hi, y_lo, y_hi
 
     @staticmethod
-    def _yup_authored_height(modelname: str, model_id: int) -> float:
-        """World height (Y) of a Y-up mesh at ``scale_mult=1``."""
+    def _model_data(modelname: str, model_id: int) -> dict:
         path = Path("assets/objects") / modelname / f"model_data{model_id}.json"
         with open(path) as f:
-            data = json.load(f)
+            return json.load(f)
+
+    @classmethod
+    def _yup_authored_height(cls, modelname: str, model_id: int) -> float:
+        """World height (Y) of a Y-up mesh at ``scale_mult=1``."""
+        data = cls._model_data(modelname, model_id)
         sc = data.get("scale") or [1.0, 1.0, 1.0]
         ext = data["extents"]
         return float(sc[1]) * float(ext[1])
+
+    @classmethod
+    def _yup_authored_half_xy(cls, modelname: str, model_id: int) -> tuple[float, float]:
+        """Half footprint (X, Z) of an upright Y-up mesh at ``scale_mult=1``."""
+        data = cls._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        ext = data["extents"]
+        return 0.5 * float(sc[0]) * float(ext[0]), 0.5 * float(sc[2]) * float(ext[2])
 
     def _scale_for_target_height(
         self, modelname: str, model_id: int, target_h: float, override=None
@@ -295,8 +322,96 @@ class boil_milk(KitchenS_base_task):
             return 1.0
         return float(target_h) / authored
 
+    def _place_upright_prop(
+        self,
+        modelname: str,
+        model_id: int,
+        xy: tuple[float, float],
+        scale: float,
+        yaw: float,
+        name: str,
+    ):
+        upright = np.array([0.70710678, 0.70710678, 0.0, 0.0], dtype=np.float64)
+        q = qmult(euler2quat(0.0, 0.0, yaw, axes="sxyz"), upright)
+        z = 0.74 + float(self.table_z_bias) + 0.001
+        pose = sapien.Pose([float(xy[0]), float(xy[1]), z], q.tolist())
+        actor = create_actor(
+            self,
+            pose=pose,
+            modelname=modelname,
+            model_id=model_id,
+            convex=True,
+            is_static=True,
+            scale_mult=scale,
+        )
+        if actor is not None:
+            actor.set_name(name)
+            if getattr(actor, "config", None) is None:
+                hx, hz = self._yup_authored_half_xy(modelname, model_id)
+                actor.config = {
+                    "scale": [scale, scale, scale],
+                    "center": [0.0, 0.0, 0.0],
+                    "extents": [2.0 * hx, 0.20, 2.0 * hz],
+                }
+            try:
+                self.add_prohibit_area(actor, padding=0.02)
+            except Exception:
+                pad = 0.06
+                self.prohibited_area.append(
+                    [xy[0] - pad, xy[1] - pad, xy[0] + pad, xy[1] + pad]
+                )
+        return actor
+
+    def _apron_prop_slots(self, milk_half, mug_half, gap: float):
+        """Two non-overlapping apron slots stacked in Y (apron is too narrow in X).
+
+        Returns ``(milk_xy, mug_xy)`` visual-center positions with ≥ ``gap`` clearance
+        between body radii. Mug uses a cavity-focused radius (handle excluded), matching
+        ``clean_table``'s ``0.42 * width`` heuristic for ``039_mug``.
+        """
+        x_lo, x_hi, y_lo, y_hi = self._counter_apron_bounds()
+        milk_hx, milk_hz = float(milk_half[0]), float(milk_half[1])
+        mug_hx, mug_hz = float(mug_half[0]), float(mug_half[1])
+        milk_r = float(max(milk_hx, milk_hz))
+        # 039_mug extents include the handle; body/cavity is much smaller.
+        mug_r = 0.42 * float(max(2.0 * mug_hx, 2.0 * mug_hz))
+        pad = max(milk_r, mug_r)
+        x_mid = float(np.clip(
+            0.5 * (x_lo + min(x_hi, 0.06)),
+            x_lo + pad + 0.005,
+            x_hi - pad - 0.005,
+        ))
+        y_floor = float(y_lo + 0.01)
+        y_ceil = float(y_hi - 0.01)
+        need = milk_r + mug_r + float(gap)
+        # Pack to opposite Y extremes so the narrow apron still clears.
+        milk_y = float(y_ceil - milk_r)
+        mug_y = float(y_floor + mug_r)
+        if milk_y - mug_y < need:
+            # Stretch: pin to bounds even if padding is tight.
+            milk_y = float(y_hi - milk_r)
+            mug_y = float(y_lo + mug_r)
+        if milk_y < mug_y:
+            milk_y, mug_y = mug_y, milk_y
+        jitter = float(np.random.uniform(-0.012, 0.012))
+        milk_x = float(np.clip(x_mid + jitter, x_lo + milk_r, x_hi - milk_r))
+        mug_x = float(np.clip(x_mid - jitter, x_lo + mug_r, x_hi - mug_r))
+        return (milk_x, milk_y), (mug_x, mug_y)
+
+    def _yup_visual_center_offset(self, modelname: str, model_id: int, scale: float, q):
+        """World offset from actor pose → mesh geometric center (upright Y-up props)."""
+        data = self._model_data(modelname, model_id)
+        center = np.array(data.get("center", [0.0, 0.0, 0.0]), dtype=np.float64)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        # ``scale`` arg is scale_mult; authored scale already in model_data.
+        # create_actor applies authored*scale_mult; center metadata is in mesh units
+        # and is multiplied by the final world scale (authored * mult).
+        final_sc = float(sc[0]) * float(scale)
+        R = t3d.quaternions.quat2mat(np.asarray(q, dtype=float))
+        return (R @ (center * final_sc)).astype(float)
+
     def _load_milk_box(self, cfg):
-        """Place a random ``038_milk-box`` variant on the bare counter (decorative)."""
+        """Place a random ``038_milk-box`` on the apron (paired slots with mug)."""
         n_variants = 4
         mid = int(cfg.get("milk_box_id", -1))
         if mid < 0 or mid >= n_variants:
@@ -307,118 +422,117 @@ class boil_milk(KitchenS_base_task):
             "038_milk-box", mid, target_h, cfg.get("milk_box_scale")
         )
         self.milk_box_scale = scale
+        hx, hz = self._yup_authored_half_xy("038_milk-box", mid)
+        self._milk_half_xy = (hx * scale, hz * scale)
 
-        x_lo, x_hi, y_lo, y_hi = self._counter_apron_bounds()
-        # Mid apron — leave the front clear for the right-arm knob approach.
-        mx = float(np.random.uniform(x_lo, min(x_hi, 0.16)))
-        my = float(np.random.uniform(max(y_lo + 0.04, -0.06), y_hi))
+        # Mug sizing needed for joint slot placement (same defaults as _load_mug).
+        mug_mid = int(cfg.get("mug_id", 0))
+        if mug_mid < 0 or mug_mid >= 10:
+            mug_mid = 0
+        mug_target_h = float(cfg.get("mug_height", self.MUG_TARGET_HEIGHT))
+        mug_scale = self._scale_for_target_height(
+            "039_mug", mug_mid, mug_target_h, cfg.get("mug_scale")
+        )
+        mhx, mhz = self._yup_authored_half_xy("039_mug", mug_mid)
+        mug_half = (mhx * mug_scale, mhz * mug_scale)
+        gap = float(cfg.get("mug_gap", 0.03))
+        milk_xy, mug_xy = self._apron_prop_slots(self._milk_half_xy, mug_half, gap)
+        self._planned_mug_xy = mug_xy
+        self._planned_mug_scale = mug_scale
+        self._planned_mug_id = mug_mid
+
         yaw = float(np.random.uniform(-0.6, 0.6))
-        # Mesh is Y-up; stand upright on the counter then apply yaw.
-        upright = np.array([0.70710678, 0.70710678, 0.0, 0.0], dtype=np.float64)
-        q = qmult(euler2quat(0.0, 0.0, yaw, axes="sxyz"), upright)
-        z = 0.74 + float(self.table_z_bias) + 0.001
-        pose = sapien.Pose([mx, my, z], q.tolist())
         try:
-            self.milk_box = create_actor(
-                self,
-                pose=pose,
-                modelname="038_milk-box",
-                model_id=mid,
-                convex=True,
-                is_static=True,
-                scale_mult=scale,
+            self.milk_box = self._place_upright_prop(
+                "038_milk-box", mid, milk_xy, scale, yaw, f"038_milk-box/base{mid}"
             )
-            if self.milk_box is not None:
-                self.milk_box.set_name(f"038_milk-box/base{mid}")
-                # Some milk-box variants ship without model_data["scale"]; ensure
-                # prohibit-area math has a config dict.
-                if getattr(self.milk_box, "config", None) is None:
-                    self.milk_box.config = {
-                        "scale": [scale, scale, scale],
-                        "center": [0.0, 0.0, 0.0],
-                        "extents": [0.10, 0.22, 0.10],
-                    }
-                try:
-                    self.add_prohibit_area(self.milk_box, padding=0.02)
-                except Exception:
-                    self.prohibited_area.append(
-                        [mx - 0.06, my - 0.06, mx + 0.06, my + 0.06]
-                    )
         except Exception as e:
             print(f"[boil_milk] failed to load milk box: {e}")
             self.milk_box = None
-        self.milk_box_xy = (mx, my)
+        self.milk_box_xy = milk_xy
 
     def _load_mug(self, cfg):
-        """Place a proper upright ``039_mug`` near the milk (not touching)."""
-        # Prefer classic ceramic variants 0–9 (hanging_mug / pour_beer).
-        n_variants = 10
-        mid = int(cfg.get("mug_id", 0))
-        if mid < 0 or mid >= n_variants:
-            mid = int(np.random.randint(0, n_variants))
+        """Place an upright ``039_mug`` in the pre-planned non-overlapping apron slot."""
+        mid = int(cfg.get("mug_id", getattr(self, "_planned_mug_id", 0)))
+        if mid < 0 or mid >= 10:
+            mid = int(getattr(self, "_planned_mug_id", 0))
         self.mug_id = mid
         target_h = float(cfg.get("mug_height", self.MUG_TARGET_HEIGHT))
-        scale = self._scale_for_target_height(
-            "039_mug", mid, target_h, cfg.get("mug_scale")
+        scale = float(
+            getattr(self, "_planned_mug_scale", None)
+            or self._scale_for_target_height(
+                "039_mug", mid, target_h, cfg.get("mug_scale")
+            )
         )
         self.mug_scale = scale
-
-        mx, my = self.milk_box_xy
-        x_lo, x_hi, y_lo, y_hi = self._counter_apron_bounds()
-        # Nearby but clear of the right-arm knob approach corridor (−Y near +X).
-        gap = float(cfg.get("mug_gap", 0.16))
-        candidates = [
-            (mx - gap, my),           # toward microwave
-            (mx - gap, my + 0.03),
-            (mx + gap, my + 0.03),    # toward stove but back on the apron
-            (mx + gap, my),
-            (mx - 0.5 * gap, my + 0.05),
-            (mx, my + gap * 0.5),
-        ]
-        ux, uy = mx - gap, my
-        for cx_, cy_ in candidates:
-            # Keep mug off the front apron so the knob reach stays clear.
-            if x_lo <= cx_ <= x_hi and max(y_lo + 0.04, -0.08) <= cy_ <= y_hi:
-                ux, uy = float(cx_), float(cy_)
-                break
-        else:
-            ux = float(np.clip(mx - gap, x_lo, x_hi))
-            uy = float(np.clip(my, max(y_lo + 0.04, -0.08), y_hi))
+        ux, uy = getattr(self, "_planned_mug_xy", None) or (
+            self.milk_box_xy[0],
+            self.milk_box_xy[1] - 0.14,
+        )
 
         yaw = float(np.random.uniform(-0.5, 0.5))
-        # Y-up mesh → stand upright (same as hanging_mug / pour_beer).
         upright = np.array([0.70710678, 0.70710678, 0.0, 0.0], dtype=np.float64)
         q = qmult(euler2quat(0.0, 0.0, yaw, axes="sxyz"), upright)
-        z = 0.74 + float(self.table_z_bias) + 0.001
-        pose = sapien.Pose([ux, uy, z], q.tolist())
+        # Compensate 039_mug origin ≠ cavity center so the cup body lands on the slot.
         try:
-            self.mug = create_actor(
-                self,
-                pose=pose,
-                modelname="039_mug",
-                model_id=mid,
-                convex=True,
-                is_static=True,
-                scale_mult=scale,
+            off = self._yup_visual_center_offset("039_mug", mid, scale, q)
+            pose_xy = (float(ux - off[0]), float(uy - off[1]))
+        except Exception:
+            pose_xy = (float(ux), float(uy))
+        try:
+            self.mug = self._place_upright_prop(
+                "039_mug", mid, pose_xy, scale, yaw, f"039_mug/base{mid}"
             )
-            if self.mug is not None:
-                self.mug.set_name(f"039_mug/base{mid}")
-                if getattr(self.mug, "config", None) is None:
-                    self.mug.config = {
-                        "scale": [scale, scale, scale],
-                        "center": [0.0, 0.0, 0.0],
-                        "extents": [0.14, 0.12, 0.14],
-                    }
-                try:
-                    self.add_prohibit_area(self.mug, padding=0.02)
-                except Exception:
-                    self.prohibited_area.append(
-                        [ux - 0.05, uy - 0.05, ux + 0.05, uy + 0.05]
-                    )
         except Exception as e:
             print(f"[boil_milk] failed to load mug: {e}")
             self.mug = None
-        self.mug_xy = (ux, uy)
+        self.mug_xy = (float(ux), float(uy))
+
+    # ---------------------------------------------------------------- target ring
+    # Same thin torus mesh as measure_ingredient / fill_coffee_jar (native R≈0.0388).
+    _RING_MESH = Path("assets/objects/253_glass_jar/rings/thin_ring.glb")
+    _RING_MESH_RADIUS = 0.0388
+
+    def _clear_target_ring(self):
+        for part in getattr(self, "_target_ring_parts", []) or []:
+            try:
+                self.scene.remove_entity(part)
+            except Exception:
+                pass
+        self._target_ring_parts = []
+
+    def _build_target_ring(self):
+        """Single red circle inside the pot (same thin_ring mesh as measure_ingredient).
+
+        ``target_ring`` is 0–100: 100 = pot rim, 0 = pot floor.
+        """
+        self._clear_target_ring()
+        if not getattr(self, "pot_inner_height", None):
+            return
+        frac = float(np.clip(getattr(self, "target_level", 0.8), 0.0, 1.0))
+        cx, cy = float(self.pot_xy[0]), float(self.pot_xy[1])
+        z = float(self.pot_bottom_z) + frac * float(self.pot_inner_height)
+        # Just inside the inner wall so the mark stays visible above the milk.
+        target_r = float(self.pot_inner_radius) * 0.96
+        scale = float(target_r / self._RING_MESH_RADIUS)
+        rgba = list(self.TARGET_RING_COLOR[:3]) + [0.92]
+        mat = sapien.render.RenderMaterial(base_color=rgba)
+        try:
+            mat.set_roughness(0.45)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.45
+            mat.metallic = 0.0
+        builder = self.scene.create_actor_builder()
+        builder.set_physx_body_type("static")
+        builder.add_visual_from_file(
+            filename=str(self._RING_MESH.resolve()),
+            scale=[scale, scale, scale],
+            material=mat,
+        )
+        builder.set_initial_pose(sapien.Pose([cx, cy, z]))
+        ent = builder.build(name="milk_target_ring")
+        self._target_ring_parts.append(ent)
 
     # ---------------------------------------------------------------- liquid / stove visuals
     def _liquid_half_height(self) -> float:
@@ -446,17 +560,12 @@ class boil_milk(KitchenS_base_task):
         # Visual-only static cylinder (no collision). Sapien cylinder axis = local +X;
         # VERTICAL_CYL_Q rotates it to world +Z (same as pick_ripe_apple trunk).
         radius = self.pot_inner_radius
-        t = float(np.clip(
-            (self.liquid_level - self.baseline_level)
-            / max(1e-6, self.overflow_level - self.baseline_level),
-            0.0, 1.0,
-        ))
-        color = [0.20 + 0.35 * t, 0.42 + 0.18 * t, 0.90 - 0.25 * t, 0.88]
+        color = list(self.MILK_COLOR)
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
         mat = sapien.render.RenderMaterial(base_color=color)
         mat.metallic = 0.0
-        mat.roughness = 0.15
+        mat.roughness = 0.35
         vertical_cyl_q = [0.70710678, 0.0, 0.70710678, 0.0]  # 90° about Y
         local_pose = sapien.Pose([0, 0, 0], vertical_cyl_q)
         builder.add_cylinder_visual(
@@ -477,13 +586,10 @@ class boil_milk(KitchenS_base_task):
         self.stove_on = on
         if on:
             self.turned_on_once = True
-        elif (
-            self.turned_on_once
-            and self.max_liquid_level > self.baseline_level + 0.05
-            and not self.overflowed
-        ):
-            # Intentional shutoff before spill — not an overflow auto-kill.
-            self.turned_off_after_boil = True
+        elif self.turned_on_once and not self.overflowed:
+            # Count as a boil shutoff only if milk already hit the red ring.
+            if self.reached_target or self.max_liquid_level >= self.target_level - 1e-3:
+                self.turned_off_after_boil = True
         self._set_burner_glow(on)
 
     def _spawn_spill_puddle(self, scale: float = 1.0):
@@ -536,28 +642,6 @@ class boil_milk(KitchenS_base_task):
         self._rebuild_liquid(force=True)
 
     # ---------------------------------------------------------------- per-step dynamics
-    def _knob_is_pressed(self) -> bool:
-        """True when the gripper pinch point is on the rotary knob."""
-        if getattr(self, "_expert_holding_knob", False):
-            return True
-        if not hasattr(self, "knob_xyz") or self.knob_xyz is None:
-            return False
-        arm = getattr(self, "arm", None)
-        if arm is None:
-            return False
-        try:
-            ee_pose = np.array(self.get_arm_pose(str(arm)), dtype=float)
-            ee_rot = t3d.quaternions.quat2mat(ee_pose[3:7])
-            pinch = ee_pose[:3] + ee_rot @ np.array(
-                [self.EE_TO_TCP, 0.0, 0.0], dtype=float
-            )
-        except Exception:
-            return False
-        return bool(
-            np.linalg.norm(pinch - np.asarray(self.knob_xyz, dtype=float))
-            < self.knob_contact_radius
-        )
-
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
         # Guard: _update_kinematic_tasks runs during camera init BEFORE load_actors.
@@ -566,15 +650,8 @@ class boil_milk(KitchenS_base_task):
         if not hasattr(self, "liquid_level"):
             return
 
-        # Edge-trigger: each grasp-and-twist toggles the stove. Suppressed while
-        # the arm is merely travelling so a fly-by cannot flip the burner.
-        if not getattr(self, "_ignore_knob", False):
-            pressed = self._knob_is_pressed()
-            if pressed and not self._prev_knob_pressed:
-                self._set_stove(not self.stove_on)
-            self._prev_knob_pressed = pressed
-        else:
-            self._prev_knob_pressed = False
+        # Knob grasp / fire: KitchenS_base_task._update_stove_knob_control
+        # (contact-driven joint; stove follows angle — no proximity toggle).
 
         # Boiling continues for every sim step while the burner is on — including
         # the entire shutoff reach. It must NOT pause for ``_ignore_knob`` or any
@@ -587,6 +664,8 @@ class boil_milk(KitchenS_base_task):
                 1.0, self.liquid_level + 1.0 / max(1, self.boil_steps)
             )
             self.max_liquid_level = max(self.max_liquid_level, self.liquid_level)
+            if self.liquid_level >= self.target_level - 1e-3:
+                self.reached_target = True
             # Do not kill the flame mid-knob-turn: the expert is still reaching
             # to shut off. Overflow commits only once the hand is free again.
             if (
@@ -626,57 +705,26 @@ class boil_milk(KitchenS_base_task):
 
     def _idle_until_level(self, level: float, max_steps: int = 4000):
         """Watch the pot until the liquid reaches ``level`` (or it stops rising)."""
+        # Replay pass follows recorded joints; a long level-wait stalls rendering.
+        if not getattr(self, "need_plan", True):
+            self._idle_steps(30)
+            self.liquid_level = max(float(self.liquid_level), float(level))
+            return
         self._idle_steps(
             max_steps,
             until=lambda: self.liquid_level >= float(level) or self.overflowed,
         )
 
     # ---------------------------------------------------------------- expert motion
-    def _knob_pose(self, offset, turn_angle: float) -> list[float]:
-        """Front-facing EE pose at ``knob_center + offset``, wrist twisted by angle."""
-        base_q = np.asarray(GRASP_DIRECTION_DIC["front"], dtype=float)
-        ee_p = np.asarray(self.knob_xyz, dtype=float) + np.asarray(offset, dtype=float)
-        twist_q = np.array(
-            [np.cos(turn_angle / 2), np.sin(turn_angle / 2), 0.0, 0.0],
-            dtype=float,
-        )
-        ee_q = t3d.quaternions.qmult(base_q, twist_q)
-        return [*ee_p.tolist(), *ee_q.tolist()]
-
-    def _knob_turn_pose(self, standoff: float, turn_angle: float) -> list[float]:
-        """Grasp pose whose jaws close around the knob (same as make_soup)."""
-        return self._knob_pose(
-            [0.0, -(self.EE_TO_TCP + float(standoff)), 0.0], turn_angle
-        )
-
     def _turn_knob(self, want_on: bool):
-        """Reach / grasp / twist the knob — same action as make_soup._turn_knob_on."""
-        arm = self.arm
-        start_angle = -np.pi / 2 if self.stove_on else 0.0
-        end_angle = -np.pi / 2 if bool(want_on) else 0.0
-        path = self.KNOB_APPROACH_PATH
-
-        self._ignore_knob = True
-        self.move(self.open_gripper(arm))
-        for offset in path:
-            self.move(self.move_to_pose(arm, self._knob_pose(offset, start_angle)))
-        self.move(
-            self.move_to_pose(arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, start_angle))
+        """Contact-driven cooktop knob twist (shared KitchenS helper)."""
+        self._turn_stove_knob(
+            self.KNOB_ON_ANGLE if bool(want_on) else self.KNOB_OFF_ANGLE,
+            start_angle=(
+                self.KNOB_ON_ANGLE if self.stove_on else self.KNOB_OFF_ANGLE
+            ),
+            commit_stove=bool(want_on),
         )
-        self.move(self.close_gripper(arm))
-        self._expert_holding_knob = True
-        self.move(
-            self.move_to_pose(arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, end_angle))
-        )
-        self._expert_holding_knob = False
-        # Stove state commits only here — boiling keeps rising until this twist.
-        self._set_stove(bool(want_on))
-        self._idle_steps(8)
-        self.move(self.open_gripper(arm))
-        for offset in reversed(path):
-            self.move(self.move_to_pose(arm, self._knob_pose(offset, end_angle)))
-        self._ignore_knob = False
-        self._prev_knob_pressed = False
         # If the milk crested the rim during the reach and the stove is STILL on
         # (missed shutoff), commit the overflow now that the hand is clear.
         if (
@@ -731,16 +779,18 @@ class boil_milk(KitchenS_base_task):
         return self.info
 
     def check_success(self):
-        """Success: stove on (milk rose toward rim), then off before spill, stove off."""
+        """Success: milk reached the red ring, then stove off before spill."""
         if self.overflowed:
             return False
         if not self.turned_on_once:
+            return False
+        # Fail if shutoff happened without the milk ever hitting the mark.
+        if not self.reached_target and self.max_liquid_level < self.target_level - 1e-3:
             return False
         if not self.turned_off_after_boil:
             return False
         if self.stove_on:
             return False
-        # Liquid should be heading back / near baseline (permissive).
         if self.liquid_level > self.overflow_level - 0.05:
             return False
         return True
@@ -752,6 +802,9 @@ class boil_milk(KitchenS_base_task):
             "liquid_level": float(self.liquid_level),
             "max_liquid_level": float(self.max_liquid_level),
             "overflowed": bool(self.overflowed),
+            "reached_target": bool(self.reached_target),
+            "target_ring": float(self.target_ring),
+            "target_level": float(self.target_level),
             "baseline_level": float(self.baseline_level),
             "spill_amount": float(getattr(self, "_spill_amount", 0.0)),
         }

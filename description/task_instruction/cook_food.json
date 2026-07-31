@@ -1,5 +1,5 @@
 {
-  "full_description": "In the KitchenS scene (no sink), raw food starts on a chopping board. Put the food into the pan on the stove, turn the stove knob up to 180 degrees to cook to the food's ideal doneness (meat medium, chicken dark-yellow, sausage dark-red), turn the knob back to zero, then pick the cooked food from the pan and place it on the plate.",
+  "full_description": "In the KitchenS scene (no sink or microwave), raw food starts on a chopping board. Put the food into the pan on the stove, turn the stove knob up to 180 degrees to cook to the food's ideal doneness (meat medium, chicken dark-yellow, sausage dark-red), turn the knob back to zero, then pick the cooked food from the pan and place it on the plate.",
   "schema": "{A} notifies the food, {B} notifies the pan, {C} notifies the plate, {D} notifies the cooking range, {E} notifies the stove knob, {F} notifies the food type (meat/chicken/sausage), {G} notifies the chopping board, {a} notifies the arm used",
   "preference": "num of words should not exceed 25. Degree of detail avg is 6",
   "seen": [

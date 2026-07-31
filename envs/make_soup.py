@@ -31,18 +31,12 @@ class make_soup(KitchenS_base_task):
 
     EE_TO_TCP: ClassVar[float] = 0.12
     KNOB_CONTACT_RADIUS_DEFAULT: ClassVar[float] = 0.06
-    KNOB_APPROACH_PATH: ClassVar[tuple] = (
-        (-0.13, -0.33, 0.06),
-        (-0.08, -0.33, 0.00),
-        (0.00, -0.25, 0.00),
-    )
-    KNOB_GRASP_STANDOFF: ClassVar[float] = 0.015
+    KNOB_APPROACH_PATH: ClassVar[tuple] = KitchenS_base_task.TOP_KNOB_APPROACH_PATH
+    KNOB_GRASP_STANDOFF: ClassVar[float] = 0.012
     ACTIVE_BURNER: ClassVar[str] = "left_front"
-    # Stove at the back of the counter: the front knob then sits inside the
-    # right arm's comfortable reach, so the expert can grasp and twist it.
-    RANGE_REL_XY: ClassVar[tuple[float, float]] = (0.18, 0.22)
-    # boil_milk appliance scale.
-    RANGE_SCALE_MULT: ClassVar[float] = 1.05
+    # Flush cooktop near the back of the apron; top knob stays in right-arm reach.
+    RANGE_REL_XY: ClassVar[tuple[float, float]] = (0.18, 0.14)
+    RANGE_SCALE_MULT: ClassVar[float] = 1.0
     MICROWAVE_SCALE_MULT: ClassVar[float] = 1.3
     # Original thick-walled soup pot, sized to the boil_milk saucepan
     # (same height, matching inner mouth once the 5 mm wall is accounted for).
@@ -829,27 +823,6 @@ class make_soup(KitchenS_base_task):
                 return
 
     # ---------------------------------------------------------------- per-step
-    def _knob_is_pressed(self) -> bool:
-        if getattr(self, "_expert_holding_knob", False):
-            return True
-        if not hasattr(self, "knob_xyz") or self.knob_xyz is None:
-            return False
-        arm = getattr(self, "arm", None)
-        if arm is None:
-            return False
-        try:
-            ee_pose = np.array(self.get_arm_pose(str(arm)), dtype=float)
-            ee_rot = t3d.quaternions.quat2mat(ee_pose[3:7])
-            pinch = ee_pose[:3] + ee_rot @ np.array(
-                [self.EE_TO_TCP, 0.0, 0.0], dtype=float
-            )
-        except Exception:
-            return False
-        return bool(
-            np.linalg.norm(pinch - np.asarray(self.knob_xyz, dtype=float))
-            < self.knob_contact_radius
-        )
-
     def _update_kinematic_tasks(self) -> None:
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
@@ -869,14 +842,7 @@ class make_soup(KitchenS_base_task):
                 self._sync_veggies_to_board()
 
         self._check_veg_fallen()
-
-        if not getattr(self, "_ignore_knob", False):
-            pressed = self._knob_is_pressed()
-            if pressed and not self._prev_knob_pressed:
-                self._set_stove(not self.stove_on)
-            self._prev_knob_pressed = pressed
-        else:
-            self._prev_knob_pressed = False
+        # Knob grasp / fire: KitchenS_base_task._update_stove_knob_control
 
     def _idle_steps(self, n_steps: int, until=None) -> None:
         save_freq = self.save_freq if self.save_freq is not None else 15
@@ -893,48 +859,15 @@ class make_soup(KitchenS_base_task):
                 self._take_picture()
 
     # ---------------------------------------------------------------- expert motion
-    def _knob_pose(self, offset, turn_angle: float) -> list[float]:
-        base_q = np.asarray(GRASP_DIRECTION_DIC["front"], dtype=float)
-        ee_p = np.asarray(self.knob_xyz, dtype=float) + np.asarray(offset, dtype=float)
-        twist_q = np.array(
-            [np.cos(turn_angle / 2), np.sin(turn_angle / 2), 0.0, 0.0],
-            dtype=float,
-        )
-        ee_q = t3d.quaternions.qmult(base_q, twist_q)
-        return [*ee_p.tolist(), *ee_q.tolist()]
-
-    def _knob_turn_pose(self, standoff: float, turn_angle: float) -> list[float]:
-        return self._knob_pose(
-            [0.0, -(self.EE_TO_TCP + float(standoff)), 0.0], turn_angle
-        )
-
     def _turn_knob_on(self) -> None:
-        """Reach the front knob and twist the stove on (boil_milk corridor)."""
-        arm = self.arm
-        start_angle = -np.pi / 2 if self.stove_on else 0.0
-        end_angle = -np.pi / 2
-        path = self.KNOB_APPROACH_PATH
-
-        self._ignore_knob = True
-        self.move(self.open_gripper(arm))
-        for offset in path:
-            self.move(self.move_to_pose(arm, self._knob_pose(offset, start_angle)))
-        self.move(
-            self.move_to_pose(arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, start_angle))
+        """Contact-driven cooktop knob twist (shared KitchenS helper)."""
+        self._turn_stove_knob(
+            self.KNOB_ON_ANGLE,
+            start_angle=(
+                self.KNOB_ON_ANGLE if self.stove_on else self.KNOB_OFF_ANGLE
+            ),
+            commit_stove=True,
         )
-        self.move(self.close_gripper(arm))
-        self._expert_holding_knob = True
-        self.move(
-            self.move_to_pose(arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, end_angle))
-        )
-        self._expert_holding_knob = False
-        self._set_stove(True)
-        self._idle_steps(8)
-        self.move(self.open_gripper(arm))
-        for offset in reversed(path):
-            self.move(self.move_to_pose(arm, self._knob_pose(offset, end_angle)))
-        self._ignore_knob = False
-        self._prev_knob_pressed = False
 
     def _top_down_pose(self, tcp_xyz) -> list[float]:
         return [
@@ -1057,13 +990,19 @@ class make_soup(KitchenS_base_task):
             self._sync_veggies_to_board()
 
     def _carry_board_level(self, target_xy, z: float) -> None:
-        """Translate with top-down EE; board stays welded and level in-hand."""
+        """Translate with top-down EE; board stays welded and follows the hand."""
         arm = self.arm
+        if self.board is None:
+            return
+        if not self._board_welded:
+            self._weld_board_to_ee(arm)
         bp = np.asarray(self.board.get_pose().p, dtype=float)
         dx = float(target_xy[0] - bp[0])
         dy = float(target_xy[1] - bp[1])
         dz = float(z - bp[2])
-        steps = 5
+        # More steps for long returns (pour → table) so the motion reads clearly.
+        dist = float(np.linalg.norm([dx, dy, dz]))
+        steps = int(np.clip(np.ceil(dist / 0.04), 4, 10))
         for _ in range(steps):
             self.plan_success = True
             self.move(
@@ -1076,9 +1015,9 @@ class make_soup(KitchenS_base_task):
                     move_axis="world",
                 )
             )
+            # Board tracks the EE via the weld — never pose-snap it mid-carry.
             self._sync_board_to_ee()
-            self._flatten_board()
-            if self._veg_released:
+            if self._veg_fallen and not self._pour_armed:
                 break
 
     def _nudge_board_to(self, target_xy, z: float, tol: float = 0.004) -> None:
@@ -1106,7 +1045,6 @@ class make_soup(KitchenS_base_task):
             )
             self.plan_success = True
             self._sync_board_to_ee()
-            self._flatten_board()
 
     @staticmethod
     def _rot_about_y(pose: sapien.Pose, pivot, angle: float) -> sapien.Pose:
@@ -1210,7 +1148,9 @@ class make_soup(KitchenS_base_task):
             except Exception:
                 pass
 
+        tip_i = 0
         for i in range(1, tip_steps + 1):
+            tip_i = i
             hold_pose, ee_target = _roll(i / tip_steps)
             self._set_entity_pose(self.board, hold_pose)
             if i in wrist_at:
@@ -1236,16 +1176,33 @@ class make_soup(KitchenS_base_task):
         )
         self._ignore_board_veg_collision()
 
-        # Hand the board back to the weld (its pose already matches the tilted
-        # EE exactly) and roll level on the same axis, so the arm reverses the
-        # tip instead of hunting for a new configuration.
-        self._board_weld_offset = weld_offset
-        self._board_welded = True
-        _, ee_level = _roll(0.0)
+        # Untilt the same way we tipped: step the board + wrist back to flat so
+        # the board never jumps to a new pose.
+        untilt_steps = max(1, tip_i // 15)
+        for j in range(tip_i, -1, -untilt_steps):
+            hold_pose, ee_target = _roll(j / tip_steps)
+            self._set_entity_pose(self.board, hold_pose)
+            self.plan_success = True
+            self.move(self.move_to_pose(arm, ee_target))
+            self.plan_success = True
+            self._set_entity_pose(self.board, hold_pose)
+        hold_pose, ee_level = _roll(0.0)
+        self._set_entity_pose(self.board, hold_pose)
         self.plan_success = True
         self.move(self.move_to_pose(arm, ee_level))
         self.plan_success = True
-        self._set_board_pose_keep_weld(pour_flat)
+        self._set_entity_pose(self.board, hold_pose)
+
+        # Re-weld at the level pour pose, then step clear with the arm.
+        self._board_weld_offset = weld_offset
+        self._board_welded = True
+        if self._board_rigid is not None:
+            try:
+                self._board_rigid.set_kinematic(True)
+                self._board_rigid.set_disable_gravity(True)
+            except Exception:
+                pass
+        self._sync_board_to_ee()
         self._idle_steps(4)
         self.move(
             self.move_by_displacement(
@@ -1257,50 +1214,68 @@ class make_soup(KitchenS_base_task):
             )
         )
         self.plan_success = True
-        self._flatten_board()
+        self._sync_board_to_ee()
         self._pour_armed = False
         self._force_veg_hold = False
 
     def _place_board_on_table(self) -> None:
-        """Set the board down on the table away from the pot, then release."""
+        """Carry the board back and set it down with the arm — no pose teleport."""
         arm = self.arm
+        if self.board is None:
+            return
+        if not self._board_welded:
+            self._weld_board_to_ee(arm)
+
         place_xy = np.array(
             [float(self.board_xy[0]), float(self.board_xy[1])], dtype=float
         )
-        # Keep clear of the pot / stove apron.
+        # Keep clear of the pot / cooktop apron.
         pot = np.asarray(self.pot_xy, dtype=float)
         if float(np.linalg.norm(place_xy - pot)) < 0.18:
-            place_xy[1] = min(float(place_xy[1]), -0.10)
-        self._carry_board_level(place_xy, self.table_top + 0.06)
-        self._flatten_board()
-        # Lower onto the table surface.
-        self._carry_board_level(
-            place_xy, self.table_top + float(self.board_half[2]) + 0.002
-        )
-        self._release_board_weld()
-        # Pin board flat on the table so it does not bounce into the pot.
-        if self.board is not None:
-            pz = self.table_top + float(self.board_half[2])
-            self._set_entity_pose(
-                self.board,
-                sapien.Pose(
-                    [float(place_xy[0]), float(place_xy[1]), float(pz)],
-                    [1, 0, 0, 0],
-                ),
-            )
-            if self._board_rigid is not None:
-                try:
-                    self._board_rigid.set_kinematic(True)
-                    self._board_rigid.set_disable_gravity(True)
-                except Exception:
-                    pass
+            place_xy[1] = min(float(place_xy[1]), -0.12)
+
+        hover_z = float(self.table_top) + 0.08
+        place_z = float(self.table_top) + float(self.board_half[2]) + 0.003
+
+        # 1) Carry to a hover above the original board spot (arm-driven).
+        self._carry_board_level(place_xy, hover_z)
+        self._nudge_board_to(place_xy, hover_z)
+        self._sync_board_to_ee()
+        self._idle_steps(4)
+
+        # 2) Lower onto the table surface while still grasping.
+        self._carry_board_level(place_xy, place_z)
+        self._nudge_board_to(place_xy, place_z)
+        self._sync_board_to_ee()
+        self._idle_steps(6)
+
+        # 3) Open the gripper, then drop the weld — board stays where the hand left it.
         self.move(self.open_gripper(arm))
-        self._idle_steps(8)
-        # Retract so the knob reach is clear.
+        self._idle_steps(4)
+        self._release_board_weld()
+        if self._board_rigid is not None:
+            try:
+                self._board_rigid.set_linear_velocity(np.zeros(3))
+                self._board_rigid.set_angular_velocity(np.zeros(3))
+                self._board_rigid.set_kinematic(True)
+                self._board_rigid.set_disable_gravity(True)
+            except Exception:
+                pass
+
+        # 4) Retract so the top-knob reach is clear.
         self.move(
-            self.move_by_displacement(arm, z=0.10, move_axis="world")
+            self.move_by_displacement(
+                arm,
+                z=0.12,
+                quat=list(GRASP_DIRECTION_DIC["top_down"]),
+                move_axis="world",
+            )
         )
         self.plan_success = True
+        print(
+            f"[make_soup] placed board at "
+            f"{np.round(np.asarray(self.board.get_pose().p), 3)} arm={arm}"
+        )
 
     def play_once(self) -> dict[str, Any]:
         arm = self.arm

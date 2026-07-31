@@ -43,25 +43,27 @@ task_args:
   boil_milk:
     scene_id: 0
     # Stove pulled forward off the backsplash so the knob is in easy arm reach.
-    range_xy: [0.42, 0.13]
+    range_xy: [0.28, 0.14]
     # The pot boils through the whole reach for the knob (~960 steps), so the
     # rise is slow enough that the shutoff motion still lands under overflow.
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
     settle_steps: 1200          # steps for liquid to return toward baseline when off
     baseline_level: 0.35
-    expert_shutoff_level: 0.55  # milk keeps rising during the reach; leave lead time
+    # Red ring mark: 100 = pot rim, 0 = pot floor. Success = reach ring, then off.
+    target_ring: 80
+    shutoff_lead: 0.08          # start shutoff this far below the ring (keeps rising)
     overflow_level: 0.98        # rim; spill + fail if reached while stove on
     # force_overflow: true      # demo failure: leave burner on until spill
     pot_radius: 0.054           # m; prior teapot then −30%
     pot_height: 0.0735          # m; prior teapot then −30%
     handle_length: 0.091        # m; saucepan dual-rod handle (−30%)
-    range_scale_mult: 1.05      # 1.5× stove then −30%
+    range_scale_mult: 1.0
     microwave_scale_mult: 1.3   # +30% microwave
     milk_box_id: -1             # -1 = random 038_milk-box variant
     milk_box_height: 0.20       # m; ~1 L carton
     mug_id: 0                   # 039_mug/base0 (classic ceramic)
-    mug_height: 0.105           # m; ~10.5 cm coffee mug
-    mug_gap: 0.16               # m; beside milk, clear of knob approach
+    mug_height: 0.0735          # m; prior 10.5 cm then −30%
+    mug_gap: 0.03               # m; air gap between milk/mug footprints (Y-stacked)
     knob_contact_radius: 0.06
   cook_food:
     scene_id: 0
@@ -70,15 +72,27 @@ task_args:
     food_type: random
     # burner: left_front | left_rear | right_front | right_rear
     burner: left_front
-    # Counter-local stove XY (shifted left vs default +0.42).
-    range_xy: [0.02, 0.08]
+    # Left + nudged toward the back so arms have room in front.
+    range_xy: [0.10, 0.14]
+    board_y: -0.02
+    plate_y: -0.12
+
     cook_steps: 2000            # steps for doneness 0→1 while stove is on
     cook_speed_jitter: 0.0
-    shutoff_lead: 0.04
-    cook_intensity: 0.75        # expert knob turn as fraction of 180°
-    pan_scale: 0.60
-    plate_scale: 0.55
-    board_scale_mult: 0.07
+    # Top-down knob shutoff is a longer reach than the old front knobs — leave
+    # more lead so doneness doesn't race past the target during the twist off.
+    shutoff_lead: 0.22
+    cook_intensity: 0.70        # expert knob turn as fraction of 180°
+    # Same cooktop scale as the other KitchenS stove tasks.
+    range_scale_mult: 1.0
+    pan_scale: 1.0
+    skillet_id: 2
+    skillet_handle_yaw: 1.5708   # +90° → handle on +X (right side of stove)
+    # Left-arm board→pan undershoots −X; bias release toward bowl +X.
+    place_dx: 0.05
+    place_dy: 0.05
+    plate_scale: 0.715
+    board_scale_mult: 0.0975
     knob_contact_radius: 0.06
   pour_beer:
     scene_id: 0
@@ -93,29 +107,44 @@ task_args:
   measure_ingredient:
     # Baking counter (no sink/tap/stove): pour oil, then place jar on scale.
     scene_id: 0
+    # target_fill: 0.25 | 0.50 | 0.75 | 1.0 | random  (±fill_tol)
     target_fill: 0.25
+    fill_levels: [0.25, 0.50, 0.75, 1.0]
     pour_rate: 0.00022
-    fill_tol: 0.02
+    fill_tol: 0.05
     # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
     oil_style: solid
     scale_id: 0
+    # Layout: jar always under dispenser; scale near jar/arm.
+    # randomize_layout=true samples microwave X, station, scale, decor.
+    randomize_layout: false
+    microwave_y: 0.18
+    microwave_x_range: [-0.42, 0.18]
     station_x: -0.08
+    station_x_range: [-0.20, -0.02]
     disp_y: 0.08
     jar_y: -0.06
     scale_x: -0.32
     scale_y: -0.14
-    bread_xy: [0.22, -0.10]
-    flour_xy: [0.08, 0.06]
-    chips_xy: [0.16, 0.08]
-    bowl_xy: [0.30, 0.05]
-    board_scale_mult: 0.07
+    scale_near_dx_range: [-0.28, -0.16]
+    scale_near_dy_range: [-0.12, -0.02]
+    decor_on_microwave_prob: 0.35
+    decor_x_range: [-0.45, 0.48]
+    decor_y_range: [-0.26, 0.20]
+    # Sparse baking decor (used when randomize_layout=false).
+    bread_xy: [0.28, -0.20]
+    flour_xy: [0.38, 0.14]
+    chips_xy: [0.12, -0.22]
+    bowl_xy: [0.40, -0.02]
+    board_scale_mult: 0.091     # +30% cutting board
+    microwave_scale_mult: 1.3   # +30% microwave
   empty_bag:
-    # Kitchen Large: knock over kraft grocery bag; catch rolling apple.
-    # Center microwave removed; no fridge decor (clear workspace).
+    # Kitchen Large: left bag tips +X; apple rolls right; right arm grasps after exit.
     scene_id: 0
-    bag_side: left              # left | right | random — knock arm side
+    bag_side: left
     bag_x_abs: 0.16
-    bag_y: -0.05
+    bag_y: -0.06
+    bag_yaw_deg: 0.0
     bag_scale_mult: 1.0
     apple_color: random         # green | red | random
     veg_scale_mult: 0.035
@@ -124,14 +153,13 @@ task_args:
     grasp_hover_z: 0.14
     grasp_tcp_dz: 0.02
     post_catch_lift: 0.08
-
   make_soup:
     # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
     # Lift board level, tip so pieces slide into pot (PhysX), then turn stove on.
     scene_id: 0
     burner: left_front
-    range_xy: [0.18, 0.22]       # back of the counter, knob still in arm reach
-    range_scale_mult: 1.05       # boil_milk appliance scale
+    range_xy: [0.18, 0.14]
+    range_scale_mult: 1.0
     microwave_scale_mult: 1.3
     water_level: 0.45
     # Original two-handled pot, sized to the boil_milk saucepan.
@@ -197,11 +225,11 @@ task_args:
     # Turn stove off, tip pan so meatballs land on plate. Salad bowl + bottle + cup decor.
     scene_id: 0
     burner: left_front
-    range_xy: [0.34, 0.18]
-    plate_x: 0.00
-    plate_y: -0.06
+    range_xy: [0.36, 0.14]
+    plate_x: -0.08
+    plate_y: -0.08
     pan_scale: 1.0
-    range_scale_mult: 1.05
+    range_scale_mult: 1.0
     plate_scale: 1.05          # prior 1.5 × 0.7 (−30%)
     meatball_radius: 0.015
     tilt_hold_dot: 0.78
