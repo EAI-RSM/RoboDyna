@@ -127,20 +127,39 @@ task_args:
 
   make_soup:
     # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
-    # Lift board level, pour into pot (physics), then turn stove on. No spills.
+    # Lift board level, tip so pieces slide into pot (PhysX), then turn stove on.
     scene_id: 0
     burner: left_front
-    range_xy: [0.20, 0.06]
+    range_xy: [0.18, 0.22]       # back of the counter, knob still in arm reach
+    range_scale_mult: 1.05       # boil_milk appliance scale
+    microwave_scale_mult: 1.3
     water_level: 0.45
-    pot_radius: 0.055
-    pot_height: 0.075
+    # Original two-handled pot, sized to the boil_milk saucepan.
+    pot_radius: 0.058
+    pot_height: 0.0735
+    pot_wall: 0.005
     board_half: [0.095, 0.065, 0.010]
+    handle_half: [0.022, 0.024, 0.022]
+    board_x: 0.16                # clear of the range apron / knob panel
+    board_y: -0.14
     cube_half: 0.012
     tomato_radius: 0.015
-    tilt_hold_dot: 0.82          # soft friction break during pour ≈35° tip
-    tilt_spill_dot: 0.50         # accidental spill during carry ≈60° tip
-    pour_tip_rad: 0.96           # expert pour tip (~55°)
+    tilt_hold_dot: 0.82
+    tilt_spill_dot: 0.50
+    pour_tip_rad: 0.70           # wrist roll for the pour (~40°)
     knob_contact_radius: 0.06
+    grasp_tcp_tol: 0.045
+    # Left-side decor
+    plate_x: -0.18
+    plate_y: -0.08
+    plate_scale: 0.55
+    bread_scale: 1.0
+    wine_x: -0.30
+    wine_y: -0.02
+    wine_scale: 1.0
+    glass_x: -0.22
+    glass_y: -0.16
+    glass_scale: 0.585           # prior 0.45 × 1.3
   serve_dinner:
     # KitchenS: pan with 3–4 meatballs in sauce on a lit burner; plate in front.
     # Turn stove off, lift pan level, tip so meatballs land on the plate (physics).
