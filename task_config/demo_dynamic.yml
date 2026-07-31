@@ -1007,14 +1007,25 @@ task_args:
     glass_y: -0.16
     glass_scale: 0.585
   serve_dinner:
-    # KitchenS: pan with meatballs in sauce on a lit burner; serve onto a plate.
-    # Turn stove off, tip pan carefully; any meatball off the plate = fail.
+    # KitchenS: pan with meatballs on lit burner (right-top); serve onto plate (left-center).
     scene_id: 0
     burner: left_front
-    range_xy: [0.18, 0.06]
-    pan_scale: 0.60
-    plate_scale: 0.55
-    meatball_radius: 0.016
-    tilt_hold_dot: 0.82
-    pour_tip_rad: 0.87
+    range_xy: [0.34, 0.18]
+    plate_x: 0.00
+    plate_y: -0.06
+    pan_scale: 1.0
+    range_scale_mult: 1.05
+    plate_scale: 1.05          # prior 1.5 × 0.7 (−30%)
+    meatball_radius: 0.015
+    tilt_hold_dot: 0.78
+    pour_tip_rad: 1.13           # ~65° tip so balls roll over the rim
     knob_contact_radius: 0.06
+    salad_x: -0.22
+    salad_y: -0.02
+    bottle_x: -0.32
+    bottle_y: -0.12
+    cup_x: -0.18
+    cup_y: -0.18
+    salad_bowl_scale: 1.15
+    lettuce_scale: 1.35
+    tomato_scale: 1.25
