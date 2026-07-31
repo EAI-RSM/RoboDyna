@@ -40,18 +40,13 @@ class boil_milk(KitchenS_base_task):
     # Y-up meshes stood upright: target world heights for realistic counter props.
     MUG_TARGET_HEIGHT = 0.105         # ~10.5 cm coffee mug
     MILK_TARGET_HEIGHT = 0.200        # ~20 cm 1 L carton
-    # Waypoints relative to the knob centre: drop the wrist beside the counter,
-    # then track in horizontally at knob height. See ``_turn_knob``.
+    # Same corridor / grasp as make_soup — that grasp seats the jaws cleanly.
     KNOB_APPROACH_PATH = (
         (-0.13, -0.33, 0.06),
         (-0.08, -0.33, 0.00),
         (0.00, -0.25, 0.00),
     )
-    # Negative standoff pushes the jaws slightly INTO the knob body so they
-    # actually close around it (cook_food). A positive clearance leaves the
-    # gripper hovering in front of the panel and the knob never turns.
-    KNOB_GRASP_STANDOFF = -0.002
-    KNOB_TCP_TOL = 0.055              # TCP-to-knob distance that counts as seated
+    KNOB_GRASP_STANDOFF = 0.015
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("boil_milk", {})
@@ -649,35 +644,13 @@ class boil_milk(KitchenS_base_task):
         return [*ee_p.tolist(), *ee_q.tolist()]
 
     def _knob_turn_pose(self, standoff: float, turn_angle: float) -> list[float]:
-        """Grasp pose whose jaws close around the knob, ``standoff`` short of it."""
+        """Grasp pose whose jaws close around the knob (same as make_soup)."""
         return self._knob_pose(
             [0.0, -(self.EE_TO_TCP + float(standoff)), 0.0], turn_angle
         )
 
-    def _tcp_near_knob(self, tol: float | None = None) -> bool:
-        """True when the gripper's TCP is actually seated on the knob."""
-        tol = self.KNOB_TCP_TOL if tol is None else float(tol)
-        try:
-            tcp = np.array(
-                self.robot.get_right_tcp_pose()
-                if str(self.arm) == "right"
-                else self.robot.get_left_tcp_pose(),
-                dtype=float,
-            )[:3]
-            return float(np.linalg.norm(tcp - np.asarray(self.knob_xyz))) < tol
-        except Exception:
-            return False
-
     def _turn_knob(self, want_on: bool):
-        """Reach in along the low corridor, grasp the knob, and twist the wrist.
-
-        The knob sits on the range's front panel, below the height the arm can
-        reach by diving straight down onto it: from the home pose the planner
-        bottoms out ~7 cm high. Dropping the wrist clear of the counter first and
-        then sliding in horizontally keeps the elbow in the low branch that can.
-        The full corridor is walked in both directions (as in ``make_soup``) so
-        the gripper actually closes on the knob before twisting.
-        """
+        """Reach / grasp / twist the knob — same action as make_soup._turn_knob_on."""
         arm = self.arm
         start_angle = -np.pi / 2 if self.stove_on else 0.0
         end_angle = -np.pi / 2 if bool(want_on) else 0.0
@@ -687,29 +660,18 @@ class boil_milk(KitchenS_base_task):
         self.move(self.open_gripper(arm))
         for offset in path:
             self.move(self.move_to_pose(arm, self._knob_pose(offset, start_angle)))
-        # Push in until the jaws straddle the knob body, then verify before
-        # closing — a hover leaves the knob untouched (cook_food pattern).
-        self.move(self.move_to_pose(
-            arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, start_angle)
-        ))
-        if not self._tcp_near_knob():
-            self.move(self.move_to_pose(
-                arm, self._knob_turn_pose(-0.010, start_angle)
-            ))
+        self.move(
+            self.move_to_pose(arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, start_angle))
+        )
         self.move(self.close_gripper(arm))
-
-        # The wrist twist is the actual control gesture. Latch contact while
-        # moving so simulator stepping cannot create an accidental extra toggle.
         self._expert_holding_knob = True
-        self.move(self.move_to_pose(
-            arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, end_angle)
-        ))
+        self.move(
+            self.move_to_pose(arm, self._knob_turn_pose(self.KNOB_GRASP_STANDOFF, end_angle))
+        )
         self._expert_holding_knob = False
-        # Stove state commits only here — after the grasp-and-twist — so boiling
-        # keeps rising for the whole approach and only stops on this off-twist.
+        # Stove state commits only here — boiling keeps rising until this twist.
         self._set_stove(bool(want_on))
         self._idle_steps(8)
-
         self.move(self.open_gripper(arm))
         for offset in reversed(path):
             self.move(self.move_to_pose(arm, self._knob_pose(offset, end_angle)))
