@@ -175,6 +175,25 @@ task_args:
     settle_hold_steps: 12       # consecutive slow steps required to call it settled
     max_live_steps: 420         # sim-step budget for the contact + roll-out
     arm_side: random            # random | left | right
+  catch_fragile_object:
+    # Deep shelf: 2× plant + 021_cup row; one random right-side cup tips/rolls.
+    # Closed gripper presses one face of 266_pillow; PhysX force + damping
+    # slides it under the landing on the table (table hit = fail).
+    cup_ids: [0, 1, 2, 3, 5]
+    plant_scale: 0.96           # 2× usual shelf plant (0.48)
+    decor_cup_scale: 0.88       # dynamic companion cups on the shelf
+    rolling_cup_scale: 0.82     # the cup that tips / rolls / falls
+    roll_speed: 0.024           # m/s; shelf roll (time for a physical push)
+    tip_duration: 2.20          # s; upright→on-side lean on the shelf
+    upright_hold: 0.0           # s; reactive — tip starts immediately
+    drop_x_jitter: 0.06         # m; lateral drift of drop-off x vs cup start x
+    land_y_min: -0.07           # m; random landing y band (reachable push target)
+    land_y_max: -0.01           # m; keep clear of shelf lip for the arm push
+    pillow_start_y: -0.20       # m; on the table, with room behind for the gripper
+    push_step: 0.060            # m; length of each gripper stroke against the face
+    pillow_catch_xy_tol: 0.04   # m; XY pad — pillow must cover the landing
+    pillow_mass: 0.35           # kg; cushion the gripper shoves across the table
+    post_place_dwell: 12        # sim steps after catch/miss before episode ends
   prevent_breakage:
     # Deep wall shelf with random cup/wineglass/beer/wine bottles + plant/mug
     # décor. Robot pick-places a custom cushioned basket under the shelf lip

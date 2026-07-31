@@ -1,0 +1,1317 @@
+from ._office_base_task import Office_base_task
+from .utils import *
+from ._GLOBAL_CONFIGS import *
+import json
+import sapien
+import sapien.physx
+import numpy as np
+from pathlib import Path
+from transforms3d.euler import euler2quat
+from transforms3d.quaternions import qmult
+
+
+class catch_fragile_object(Office_base_task):
+    """Catch a tipping/rolling cup by pushing a pillow under its landing.
+
+    Scene: deep wall shelf with a 2× plant and several 021_cup instances. One
+    cup is chosen at random to tip, roll, and drop; the rest are dynamic décor
+    that gets knocked aside rather than passed through. From episode start the
+    robot walks its closed gripper into one face of the pillow and shoves it
+    across the table under the predicted landing — the pillow is an ordinary
+    dynamic body, so it only moves while the hand is on it. Hitting the bare
+    table is a failure.
+    """
+
+    CUP_MODEL = "021_cup"
+    CUP_IDS = [0, 1, 2, 3, 5]
+    KETTLE_IDS = list(range(6))
+    TISSUE_IDS = list(range(7))
+    ALARM_IDS = list(range(6))
+
+    ROLL_SPEED_DEFAULT = 0.048
+    FALL_SPEED_XY_DEFAULT = 0.10
+    FALL_SPEED_XY_JITTER = 0.04
+    TIP_DURATION_DEFAULT = 1.35
+    UPRIGHT_HOLD_DEFAULT = 0.0
+    GRAVITY = 9.81
+
+    TABLE_WIDTH = 0.70
+    SHELF_WIDTH = 1.20
+    SHELF_DEPTH = 0.30
+    SHELF_THICK = 0.02
+    SHELF_Y = 0.26
+    SHELF_Z_ABOVE_TABLE = 0.30
+
+    # Rolling cup stays on the reachable right half of the shelf.
+    CUP_X_ABS_MIN = 0.14
+    CUP_X_ABS_MAX = 0.30
+    DROP_X_JITTER = 0.06
+
+    PILLOW_MODEL = "266_pillow"
+    # Overwritten from the collision hull in _measure_pillow_extents.
+    PILLOW_HALF_XY_DEFAULT = [0.07, 0.09]
+    PILLOW_HEIGHT_DEFAULT = 0.05
+    PILLOW_CATCH_XY_TOL = 0.03
+    PILLOW_MASS_DEFAULT = 0.35
+    PILLOW_COLOR = [0.92, 0.78, 0.72]
+    # Gripper sits this far off the rear face before the push starts.
+    PUSH_CONTACT_GAP = 0.025
+    # Fallback fingertip-below-TCP overhang if the links cannot be measured.
+    PUSH_FINGER_DROP = 0.043
+    # Room left between the near table edge and the gripper's start position.
+    PUSH_EDGE_MARGIN = 0.035
+    # Half-thickness of a closed gripper, so the descent clears the rear face.
+    PUSH_FINGER_HALF_W = 0.020
+    PILLOW_START_Y_DEFAULT = -0.18
+    # Gravity + Coulomb friction on the table do the braking; this is only a
+    # small residual damping so the cushion settles instead of creeping. Cloth on
+    # a desk grips hard, and that high mu is what keeps the cushion tracking the
+    # hand instead of skating out ahead of it.
+    PUSH_LIN_DAMP = 0.6
+    PUSH_MU_STATIC = 0.65
+    PUSH_MU_DYNAMIC = 0.55
+
+    POST_PLACE_DWELL_DEFAULT = 12
+    GRASP_SPAN_MAX = 0.100
+    PUSH_STEP_DEFAULT = 0.060
+
+    # Décor: plant is 2× the usual shelf plant (0.48 → 0.96); others scaled up with it.
+    PLANT_SCALE = 0.96
+    DECOR_CUP_SCALE = 0.88
+    ROLLING_CUP_SCALE = 0.82
+    KETTLE_SCALE = 1.05
+    TISSUE_SCALE = 1.20
+    ALARM_SCALE = 1.05
+    N_SHELF_CUPS = 4
+
+    # Every prop is a dynamic convex collider, so a knock moves it (no pass-through).
+    PROP_MASSES = {
+        "021_cup": 0.14,
+        "120_plant": 1.60,
+        "091_kettle": 0.60,
+        "023_tissue-box": 0.22,
+        "046_alarm-clock": 0.20,
+    }
+    PROP_LIN_DAMP = 0.6
+    PROP_ANG_DAMP = 1.2
+
+    CUP_UPRIGHT_Q = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float64)
+    PROP_UPRIGHT_Q = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float64)
+    # Cushion yawed 90°, so its wide face (0.18 m) takes the push and its short
+    # axis (0.14 m) runs along y — that leaves the gripper room behind it.
+    PILLOW_Q = np.asarray(
+        qmult(euler2quat(0.0, 0.0, np.pi / 2.0, axes="sxyz"), PROP_UPRIGHT_Q),
+        dtype=np.float64,
+    )
+
+    def setup_demo(self, **kwags):
+        self._cfg = kwags.get("task_args", {}).get("catch_fragile_object", {})
+        self._loaded = False
+        self.cup = None
+        self.pillow = None
+        self._cup_rigid = None
+        self._pillow_rigid = None
+        self._traj = []
+        self._traj_step = 0
+        # parked | rolling | caught | fallen
+        self._cup_state = "parked"
+        self._fell_on_table = False
+        self._caught_on_pillow = False
+        self._pillow_placed = False
+        self._pillow_dynamic = False
+        self._push_active = False
+        self._push_arm = None
+        self._push_dir = np.zeros(2)
+        self._push_start_xy = np.zeros(2)
+        self._land_idx = 0
+        self._drop_idx = 0
+        self._landing = np.zeros(3)
+        self._drop_pos = np.zeros(3)
+        self.arm_side = "right"
+        self.decor = []
+        self.shelf_cups = []
+        self._rolling_slot = None
+        self._occ_shelf = []
+        self._occ_table = []
+        super().setup_demo(**kwags)
+        self._configure_observer_camera()
+
+    # --------------------------------------------------------------- scene
+    def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):
+        """Office table + wall with a deeper full-width single shelf."""
+        self.arr_v = 1
+        self.table_xy_bias = list(table_xy_bias)
+        table_height = float(self.office_info["table_height"])
+        self.table_z_bias = 0.0
+
+        if self.random_background:
+            texture_type = "seen" if not self.eval_mode else "unseen"
+            directory = Path("assets/background_texture") / texture_type
+            count = len([p for p in directory.iterdir() if p.is_file()])
+            wall_id, table_id, floor_id = np.random.randint(0, count, size=3)
+            self.wall_texture = f"{texture_type}/{wall_id}"
+            self.table_texture = f"{texture_type}/{table_id}"
+            self.floor_texture = f"{texture_type}/{floor_id}"
+            if np.random.rand() <= self.clean_background_rate:
+                self.wall_texture = None
+            if np.random.rand() <= self.clean_background_rate:
+                self.table_texture = None
+            if np.random.rand() <= self.clean_background_rate:
+                self.floor_texture = None
+        else:
+            self.wall_texture = self.table_texture = self.floor_texture = None
+
+        self.floor_parts = []
+        for i, pos in enumerate(([1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0])):
+            floor = create_box(
+                self.scene,
+                sapien.Pose(p=pos),
+                half_size=[1, 1, 0.005],
+                color=(0.85, 0.85, 0.85),
+                name=f"floor_{i}",
+                texture_id=self.floor_texture,
+                is_static=True,
+            )
+            self.floor_parts.append(floor)
+
+        self.wall = create_box(
+            self.scene,
+            sapien.Pose(p=[0, 1, 1.5]),
+            half_size=[3, 0.6, 1.5],
+            color=(1, 0.9, 0.9),
+            name="wall",
+            texture_id=self.wall_texture,
+            is_static=True,
+        )
+        self.table = create_table(
+            self.scene,
+            sapien.Pose(p=[table_xy_bias[0], table_xy_bias[1], table_height]),
+            length=1.2,
+            width=0.7,
+            height=table_height,
+            thickness=0.05,
+            is_static=True,
+            texture_id=self.table_texture,
+        )
+
+        shelf_z = table_height + self.SHELF_Z_ABOVE_TABLE
+        shelf_y = self.SHELF_Y
+        half_x = 0.5 * self.SHELF_WIDTH
+        half_y = 0.5 * self.SHELF_DEPTH
+        half_z = 0.5 * self.SHELF_THICK
+        self.shelf = create_box(
+            self.scene,
+            sapien.Pose(p=[0.0, shelf_y, shelf_z]),
+            half_size=[half_x, half_y, half_z],
+            color=(0.55, 0.42, 0.30),
+            name="deep_wall_shelf",
+            is_static=True,
+        )
+        for bx in (-0.45, 0.0, 0.45):
+            create_box(
+                self.scene,
+                sapien.Pose(p=[bx, shelf_y + half_y - 0.01, shelf_z - 0.06]),
+                half_size=[0.012, 0.01, 0.06],
+                color=(0.35, 0.35, 0.35),
+                name="shelf_bracket",
+                is_static=True,
+            )
+
+        self.office_info["furn_x_v"]["shelf"] = [0.0, 0.0, 0.0]
+        self.office_info["shelf_area"] = [self.SHELF_WIDTH, self.SHELF_DEPTH]
+        self.office_info["shelf_heights"] = [shelf_z + half_z]
+        self.office_info["shelf_lims"] = [
+            -half_x, shelf_y - half_y, half_x, shelf_y + half_y,
+        ]
+        self.shelf_lims = list(self.office_info["shelf_lims"])
+        self.prohibited_area.append([
+            self.shelf_lims[0] - 0.02,
+            self.shelf_lims[1] - 0.02,
+            self.shelf_lims[2] + 0.02,
+            self.shelf_lims[3] + 0.02,
+        ])
+        self.cabinet = None
+        self.file_holder = None
+        self.wooden_box = None
+
+    def _configure_observer_camera(self):
+        cams = getattr(self, "cameras", None)
+        if cams is None or getattr(cams, "observer_camera", None) is None:
+            return
+        camera = cams.observer_camera
+        camera_pos = np.array([0.52, 0.58, 1.55], dtype=np.float64)
+        look_at = np.array([0.10, 0.05, 0.95], dtype=np.float64)
+        forward = look_at - camera_pos
+        forward /= np.linalg.norm(forward)
+        left = np.cross(np.array([0.0, 0.0, 1.0]), forward)
+        left /= np.linalg.norm(left)
+        up = np.cross(forward, left)
+        m = np.eye(4)
+        m[:3, :3] = np.stack([forward, left, up], axis=1)
+        m[:3, 3] = camera_pos
+        camera.entity.set_pose(sapien.Pose(m))
+
+    # ------------------------------------------------------------------ helpers
+    def _get_rigid(self, entity):
+        obj = entity.actor if hasattr(entity, "actor") else entity
+        for c in obj.get_components():
+            if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
+                return c
+        return None
+
+    def _make_kinematic(self, entity):
+        rigid = self._get_rigid(entity)
+        if rigid is None:
+            return None
+        try:
+            rigid.set_disable_gravity(True)
+            rigid.set_kinematic(True)
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+        except Exception:
+            pass
+        return rigid
+
+    def _slide_pillow_to(self, xy):
+        """Seat the pillow flat on the table at ``xy`` (setup / freeze only)."""
+        z = self.table_top + 0.5 * self.pillow_height
+        self._set_entity_pose(
+            self.pillow,
+            sapien.Pose(
+                [float(xy[0]), float(xy[1]), z],
+                self.PILLOW_Q.tolist(),
+            ),
+        )
+
+    def _tune_pillow_materials(self, rigid):
+        if rigid is None:
+            return
+        try:
+            for s in rigid.get_collision_shapes():
+                m = s.get_physical_material()
+                m.set_static_friction(float(self.PUSH_MU_STATIC))
+                m.set_dynamic_friction(float(self.PUSH_MU_DYNAMIC))
+                m.set_restitution(0.0)
+        except Exception:
+            pass
+
+    def _enable_pillow_physics(self):
+        """Ordinary dynamic cushion resting on the table.
+
+        Gravity holds it down, so the normal force (and therefore the Coulomb
+        friction it has to overcome) is real. Nothing drives it: it moves only
+        when the gripper's collision shapes push it. Tipping is locked out so a
+        low shove cannot flip a cushion end over end; yaw stays free.
+        """
+        rigid = self._get_rigid(self.pillow)
+        self._pillow_rigid = rigid
+        if rigid is None:
+            return
+        z = self.table_top + 0.5 * self.pillow_height
+        p = np.array(self.pillow.get_pose().p, dtype=np.float64)
+        p[2] = z
+        self._set_entity_pose(
+            self.pillow,
+            sapien.Pose(p.tolist(), self.PILLOW_Q.tolist()),
+        )
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_mass(float(self.pillow_mass))
+            rigid.set_disable_gravity(False)
+            # Translation free (it rests on the table); no roll/pitch, yaw free.
+            rigid.set_locked_motion_axes([False, False, False, True, True, False])
+            rigid.set_linear_damping(float(self.PUSH_LIN_DAMP))
+            rigid.set_angular_damping(2.0)
+            try:
+                rigid.set_max_linear_velocity(0.6)
+            except Exception:
+                pass
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+            for shape in rigid.get_collision_shapes():
+                shape.set_collision_groups([1, 1, 0, 0])
+            rigid.wake_up()
+        except Exception:
+            pass
+        self._tune_pillow_materials(rigid)
+        self._pillow_dynamic = True
+
+    def _freeze_pillow(self, pose=None):
+        """Park the pillow after the slide (kinematic, no drift)."""
+        if pose is None and self.pillow is not None:
+            p = np.array(self.pillow.get_pose().p, dtype=np.float64)
+            p[2] = self.table_top + 0.5 * self.pillow_height
+            pose = sapien.Pose(p.tolist(), self.PILLOW_Q.tolist())
+        if pose is not None:
+            self._set_entity_pose(self.pillow, pose)
+        rigid = self._get_rigid(self.pillow)
+        if rigid is not None:
+            try:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_kinematic(True)
+            except Exception:
+                pass
+        self._pillow_dynamic = False
+        self._push_active = False
+
+    def _set_entity_pose(self, entity, pose):
+        rigid = self._get_rigid(entity)
+        if rigid is not None:
+            try:
+                if rigid.kinematic:
+                    rigid.set_kinematic_target(pose)
+                    return
+            except Exception:
+                pass
+        obj = entity.actor if hasattr(entity, "actor") else entity
+        obj.set_pose(pose)
+
+    def _recolor(self, actor, rgb):
+        entity = actor.actor if hasattr(actor, "actor") else actor
+        rgba = [*list(rgb)[:3], 1.0]
+        for comp in entity.get_components():
+            if not isinstance(comp, sapien.render.RenderBodyComponent):
+                continue
+            for shape in comp.render_shapes:
+                try:
+                    mat = shape.material
+                except Exception:
+                    continue
+                try:
+                    mat.set_base_color_texture(None)
+                except Exception:
+                    pass
+                try:
+                    mat.set_base_color(rgba)
+                    mat.base_color = rgba
+                except Exception:
+                    try:
+                        mat.set_base_color(rgba)
+                    except Exception:
+                        pass
+                try:
+                    mat.set_metallic(0.0)
+                    mat.set_roughness(0.55)
+                except Exception:
+                    pass
+
+    def _cup_upright_quat(self):
+        return self.CUP_UPRIGHT_Q.copy()
+
+    def _cup_tip_quat(self, tip_frac, roll_angle=0.0):
+        tip_frac = float(np.clip(tip_frac, 0.0, 1.0))
+        q_tip = euler2quat(0.0, tip_frac * np.pi / 2.0, 0.0, axes="sxyz")
+        q_side = qmult(q_tip, self.CUP_UPRIGHT_Q)
+        if abs(roll_angle) < 1e-9:
+            return np.asarray(q_side, dtype=np.float64)
+        q_spin = euler2quat(float(roll_angle), 0.0, 0.0, axes="sxyz")
+        return np.asarray(qmult(q_spin, q_side), dtype=np.float64)
+
+    @staticmethod
+    def _cup_dims(model_id: int, scale_mult: float = 1.0):
+        path = Path(f"assets/objects/021_cup/model_data{int(model_id)}.json")
+        data = json.loads(path.read_text())
+        size = (
+            np.asarray(data["extents"], dtype=np.float64)
+            * np.asarray(data["scale"], dtype=np.float64)
+            * float(scale_mult)
+        )
+        # extents after upright quat: height ~ y, diameter ~ mean(x,z)
+        return float(size[1]), 0.5 * (float(size[0]) + float(size[2]))
+
+    def _footprint_ok(self, occ, cx, cy, hx, hy, pad=0.01):
+        box = (cx - hx - pad, cy - hy - pad, cx + hx + pad, cy + hy + pad)
+        for x0, y0, x1, y1 in occ:
+            if not (box[2] <= x0 or box[0] >= x1 or box[3] <= y0 or box[1] >= y1):
+                return False
+        return True
+
+    def _reserve(self, occ, cx, cy, hx, hy, pad=0.01):
+        occ.append((
+            cx - hx - pad, cy - hy - pad, cx + hx + pad, cy + hy + pad,
+        ))
+
+    @staticmethod
+    def _prop_height(modelname, model_id, scale_mult=1.0):
+        """World-frame height of a prop under ``PROP_UPRIGHT_Q`` (y extent → z)."""
+        try:
+            data = json.loads(
+                Path(f"assets/objects/{modelname}/model_data{int(model_id)}.json").read_text()
+            )
+            size = (
+                np.asarray(data["extents"], dtype=np.float64)
+                * np.asarray(data["scale"], dtype=np.float64)
+                * float(scale_mult)
+            )
+            return float(size[1])
+        except Exception:
+            return 0.10
+
+    def _seat_on_surface(self, entity, surface_z, clearance=0.0005):
+        """Drop ``entity`` so its collision AABB rests on ``surface_z``.
+
+        Asset origins are inconsistent (some bbox-centered, some bottom-anchored),
+        and a dynamic prop spawned even slightly inside the shelf explodes on the
+        first step. Measuring the real AABB avoids guessing.
+        """
+        rigid = self._get_rigid(entity)
+        if rigid is None:
+            return
+        try:
+            lo, _ = rigid.compute_global_aabb_tight()
+        except Exception:
+            return
+        pose = entity.get_pose() if hasattr(entity, "get_pose") else None
+        if pose is None:
+            return
+        dz = float(surface_z) + float(clearance) - float(lo[2])
+        if abs(dz) < 1e-6:
+            return
+        p = np.array(pose.p, dtype=np.float64)
+        p[2] += dz
+        seated = sapien.Pose(p.tolist(), list(pose.q))
+        # Direct set_pose: a kinematic target would not land until the next step,
+        # and callers read the corrected pose back immediately.
+        obj = entity.actor if hasattr(entity, "actor") else entity
+        obj.set_pose(seated)
+        try:
+            if rigid.kinematic:
+                rigid.set_kinematic_target(seated)
+        except Exception:
+            pass
+
+    def _spawn_prop(
+        self, modelname, model_id, xy, surface_z, hx, hy,
+        scale_mult=1.0, surface="table",
+    ):
+        """Dynamic convex-collider prop seated on ``surface_z``.
+
+        Décor is fully simulated: a knock from the rolling cup or the pillow
+        shoves it instead of passing through it.
+        """
+        cx, cy = float(xy[0]), float(xy[1])
+        occ = self._occ_shelf if surface == "shelf" else self._occ_table
+        if not self._footprint_ok(occ, cx, cy, hx, hy):
+            return None
+        h = self._prop_height(modelname, int(model_id), scale_mult)
+        pose = sapien.Pose(
+            [cx, cy, float(surface_z) + 0.5 * h + 0.001],
+            self.PROP_UPRIGHT_Q.tolist(),
+        )
+        try:
+            actor = create_actor(
+                self, pose=pose, modelname=modelname, model_id=int(model_id),
+                convex=True, is_static=False, scale_mult=float(scale_mult),
+            )
+        except Exception:
+            actor = None
+        if actor is None:
+            return None
+        rigid = self._get_rigid(actor)
+        if rigid is not None:
+            try:
+                rigid.set_mass(float(self.PROP_MASSES.get(modelname, 0.25)))
+                rigid.set_linear_damping(float(self.PROP_LIN_DAMP))
+                rigid.set_angular_damping(float(self.PROP_ANG_DAMP))
+                for shape in rigid.get_collision_shapes():
+                    shape.set_collision_groups([1, 1, 0, 0])
+            except Exception:
+                pass
+        self._seat_on_surface(actor, surface_z)
+        self._reserve(occ, cx, cy, hx, hy)
+        self.decor.append(actor)
+        return actor
+
+    def _measure_shelf_plate(self):
+        half_x = 0.5 * self.SHELF_WIDTH
+        half_y = 0.5 * self.SHELF_DEPTH
+        shelf_y = self.SHELF_Y
+        z_top = self.table_top + self.SHELF_Z_ABOVE_TABLE + 0.5 * self.SHELF_THICK
+        self.shelf_plate_z = float(z_top)
+        self.shelf_plate_xlim = (-half_x, half_x)
+        self.shelf_plate_ylim = (shelf_y - half_y, shelf_y + half_y)
+        self.shelf_lims = [
+            self.shelf_plate_xlim[0], self.shelf_plate_ylim[0],
+            self.shelf_plate_xlim[1], self.shelf_plate_ylim[1],
+        ]
+
+    # --------------------------------------------------------------- trajectory
+    def _build_trajectory(self):
+        """Tip → roll on deep shelf → free-fall to table/pillow landing."""
+        dt = float(self.scene.get_timestep())
+        g = self.GRAVITY
+        r = self.cup_radius
+        v = self.roll_speed
+        traj = []
+        traveled = 0.0
+
+        def append(x, y, z, tip_frac, roll_s=0.0):
+            # Cup travels toward the robot (−Y). No-slip about +X needs ωx = +v/r
+            # (sign was inverted before, so the texture spun the wrong way).
+            q = self._cup_tip_quat(tip_frac, +roll_s / max(r, 1e-4))
+            traj.append((
+                np.array([x, y, z], dtype=np.float64),
+                np.asarray(q, dtype=np.float64),
+            ))
+
+        x0 = float(self.cup_start[0])
+        y0 = float(self.cup_start[1])
+        z_upright = float(self.cup_start[2])
+        z_side_shelf = float(self.shelf_z_surf + r)
+        y_shelf_edge = float(self.shelf_front_y)
+        x_drop = float(self.drop_x)
+        z_table = self.table_top + r
+        z_pillow = self.table_top + self.pillow_height + r
+
+        # Tip while easing toward the front of the deeper shelf.
+        tip_t = max(0.25, float(self.tip_duration))
+        n_tip = max(1, int(round(tip_t / dt)))
+        y_after_tip = float(np.clip(
+            y0 - 0.35 * (y0 - y_shelf_edge),
+            y_shelf_edge + 0.02,
+            y0,
+        ))
+        for i in range(1, n_tip + 1):
+            frac = i / n_tip
+            s = frac * frac * (3.0 - 2.0 * frac)
+            x = x0 + s * (x_drop - x0) * 0.35
+            y = y0 + s * (y_after_tip - y0)
+            z = z_upright + s * (z_side_shelf - z_upright)
+            append(x, y, z, tip_frac=s, roll_s=0.0)
+
+        # Roll remaining distance to the front lip (random drop-off x).
+        x_roll0 = traj[-1][0][0] if traj else x0
+        y_roll0 = traj[-1][0][1] if traj else y_after_tip
+        dist_xy = float(np.hypot(x_drop - x_roll0, y_shelf_edge - y_roll0))
+        n_roll = max(1, int(round((dist_xy / max(v, 1e-4)) / dt)))
+        for i in range(1, n_roll + 1):
+            frac = i / n_roll
+            x = x_roll0 + frac * (x_drop - x_roll0)
+            y = y_roll0 + frac * (y_shelf_edge - y_roll0)
+            traveled += dist_xy / n_roll
+            append(x, y, z_side_shelf, tip_frac=1.0, roll_s=traveled)
+
+        self._drop_idx = len(traj) - 1
+        self._drop_pos = traj[-1][0].copy()
+
+        # Free-fall from the shelf lip. Catch height is the pillow top — place
+        # the pillow at the (x,y) the cup has when it reaches that height, kept
+        # clearly in front of the shelf so the arm can reach it. Landing y is
+        # sampled per episode (within a reachable band) so the drop place varies.
+        dz_pillow = max(1e-4, z_side_shelf - z_pillow)
+        t_pillow = float(np.sqrt(2.0 * dz_pillow / g))
+        y_lo = float(getattr(self, "land_y_min", -0.16))
+        y_hi = float(getattr(self, "land_y_max", -0.06))
+        if y_hi < y_lo:
+            y_lo, y_hi = y_hi, y_lo
+        y_catch = float(np.random.uniform(y_lo, y_hi))
+        y_catch = float(np.clip(y_catch, -0.22, y_shelf_edge - 0.12))
+        vy = (y_catch - y_shelf_edge) / max(t_pillow, 1e-4)
+        self.fall_speed_xy = float(abs(vy))
+
+        dz_table = max(1e-4, z_side_shelf - z_table)
+        t_fall = float(np.sqrt(2.0 * dz_table / g))
+        n_fall = max(1, int(round(t_fall / dt)))
+        y_table = y_shelf_edge + vy * t_fall
+
+        land_idx = None
+        for i in range(1, n_fall + 1):
+            t = (i / n_fall) * t_fall
+            y = y_shelf_edge + vy * t
+            z = z_side_shelf - 0.5 * g * t * t
+            traveled += abs(vy) * (t_fall / n_fall)
+            z_clamped = max(z, z_table)
+            append(x_drop, y, z_clamped, tip_frac=1.0, roll_s=traveled)
+            if land_idx is None and z <= z_pillow + 0.002:
+                land_idx = len(traj) - 1
+
+        if land_idx is None:
+            land_idx = len(traj) - 1
+        self._land_idx = int(land_idx)
+        self._landing = np.array(
+            [x_drop, y_catch, z_pillow], dtype=np.float64,
+        )
+        self._table_hit_z = z_table
+
+        # A few extra frames if the cup misses (settles on the table).
+        for i in range(1, int(round(0.20 / dt)) + 1):
+            append(x_drop, y_table, z_table, tip_frac=1.0, roll_s=traveled)
+
+        self._traj = traj
+        self._fall_table_idx = int(self._land_idx)
+
+    # ------------------------------------------------------------------ actors
+    def load_actors(self):
+        c = self._cfg
+        self.roll_speed = float(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
+        self.fall_speed_xy = float(c.get("fall_speed_xy", self.FALL_SPEED_XY_DEFAULT))
+        self.land_y_min = float(c.get("land_y_min", -0.16))
+        self.land_y_max = float(c.get("land_y_max", -0.06))
+        self.tip_duration = float(c.get("tip_duration", self.TIP_DURATION_DEFAULT))
+        self.upright_hold = float(c.get("upright_hold", self.UPRIGHT_HOLD_DEFAULT))
+        self.push_step = float(c.get("push_step", self.PUSH_STEP_DEFAULT))
+        self.pillow_catch_xy_tol = float(c.get(
+            "pillow_catch_xy_tol", self.PILLOW_CATCH_XY_TOL,
+        ))
+        self.post_place_dwell = int(c.get(
+            "post_place_dwell", self.POST_PLACE_DWELL_DEFAULT,
+        ))
+        self.pillow_height = float(c.get("pillow_height", self.PILLOW_HEIGHT_DEFAULT))
+        self.pillow_half_xy = list(c.get("pillow_half_xy", self.PILLOW_HALF_XY_DEFAULT))
+        self.plant_scale = float(c.get("plant_scale", self.PLANT_SCALE))
+        self.decor_cup_scale = float(c.get(
+            "decor_cup_scale", c.get("decor_mug_scale", self.DECOR_CUP_SCALE),
+        ))
+        self.rolling_cup_scale = float(c.get(
+            "rolling_cup_scale",
+            c.get("rolling_mug_scale", self.ROLLING_CUP_SCALE),
+        ))
+
+        cup_ids = c.get("cup_ids", c.get("mug_ids", self.CUP_IDS))
+        try:
+            cup_ids = [int(x) for x in cup_ids]
+        except Exception:
+            cup_ids = list(self.CUP_IDS)
+
+        self.table_top = 0.74 + float(self.table_z_bias)
+        self.table_near_y = -0.5 * self.TABLE_WIDTH + float(self.table_xy_bias[1])
+        self._measure_shelf_plate()
+        self.shelf_front_y = float(self.shelf_plate_ylim[0])
+        self.shelf_back_y = float(self.shelf_plate_ylim[1])
+        self.shelf_z_surf = float(self.shelf_plate_z)
+
+        self.arm_side = "right"
+        self.decor = []
+        self.shelf_cups = []
+        self._occ_shelf = []
+        self._occ_table = []
+        self._rolling_slot = None
+
+        # Plant (2×) + cup row; one right-side cup is randomly chosen to roll.
+        self._load_decorations(cup_ids)
+        assert self._rolling_slot is not None, "need a rolling cup slot"
+
+        slot_x, slot_y, self.cup_id = self._rolling_slot
+        axial, diameter = self._cup_dims(self.cup_id, self.rolling_cup_scale)
+        self.cup_scale_mult = float(c.get(
+            "cup_scale_mult",
+            c.get(
+                "mug_scale_mult",
+                min(self.rolling_cup_scale, self.GRASP_SPAN_MAX / max(axial, 1e-6)),
+            ),
+        ))
+        if "cup_id" in c or "mug_id" in c:
+            self.cup_id = int(c.get("cup_id", c.get("mug_id")))
+            axial, diameter = self._cup_dims(self.cup_id, self.cup_scale_mult)
+
+        self.cup_height = float(axial)
+        self.cup_radius = float(c.get("cup_radius", max(0.028, 0.5 * diameter)))
+
+        cup_x = float(slot_x)
+        cup_y = float(slot_y)
+        # Slight back-of-shelf offset so there is a real roll to the lip.
+        y0, y1 = self.shelf_plate_ylim
+        cup_y = float(np.clip(
+            cup_y + float(np.random.uniform(0.0, 0.04)),
+            y0 + 0.55 * self.SHELF_DEPTH,
+            y1 - 0.03,
+        ))
+        # Provisional; corrected to the measured AABB once the actor exists.
+        cup_z = self.shelf_z_surf + 0.5 * self.cup_height
+        self.cup_start = np.array([cup_x, cup_y, cup_z], dtype=np.float64)
+        self._reserve(self._occ_shelf, cup_x, cup_y, 0.055, 0.055, pad=0.02)
+
+        drop_jitter = float(c.get("drop_x_jitter", self.DROP_X_JITTER))
+        self.drop_x = float(np.clip(
+            cup_x + np.random.uniform(-drop_jitter, drop_jitter),
+            self.CUP_X_ABS_MIN - 0.02,
+            self.CUP_X_ABS_MAX + 0.02,
+        ))
+        # Block out the drop zone so the cushion cannot spawn already under it.
+        land_band_mid = 0.5 * (
+            float(getattr(self, "land_y_min", -0.07))
+            + float(getattr(self, "land_y_max", -0.01))
+        )
+        self._reserve(
+            self._occ_table, self.drop_x, land_band_mid, 0.12, 0.035, pad=0.01,
+        )
+
+        pillow_x = float(np.clip(
+            self.drop_x + float(np.random.uniform(-0.04, 0.04)),
+            0.14, 0.32,
+        ))
+        # The gripper has to fit behind the rear face while still standing over the
+        # tabletop — off the edge the fingertips drop below the surface and hook on
+        # it. That sets how far forward the cushion has to spawn.
+        y_lo = (
+            self.table_near_y
+            + self.PUSH_EDGE_MARGIN
+            + self.pillow_half_xy[1]
+            + self.PUSH_CONTACT_GAP
+            + self.PUSH_FINGER_HALF_W
+        )
+        pillow_y = float(np.clip(
+            float(c.get("pillow_start_y", self.PILLOW_START_Y_DEFAULT)),
+            y_lo, y_lo + 0.02,
+        ))
+        pillow_z = self.table_top + 0.5 * self.pillow_height
+        for _ in range(12):
+            if self._footprint_ok(
+                self._occ_table, pillow_x, pillow_y,
+                self.pillow_half_xy[0], self.pillow_half_xy[1],
+            ):
+                break
+            pillow_y = float(np.random.uniform(y_lo, y_lo + 0.02))
+            pillow_x = float(np.random.uniform(0.14, 0.32))
+        self.pillow_start = np.array([pillow_x, pillow_y, pillow_z], dtype=np.float64)
+        self._reserve(
+            self._occ_table, pillow_x, pillow_y,
+            self.pillow_half_xy[0], self.pillow_half_xy[1],
+        )
+
+        cup_pose = sapien.Pose(self.cup_start.tolist(), self._cup_upright_quat().tolist())
+        self.cup = create_actor(
+            self,
+            pose=cup_pose,
+            modelname=self.CUP_MODEL,
+            model_id=self.cup_id,
+            convex=True,
+            is_static=False,
+            scale_mult=self.cup_scale_mult,
+        )
+        self.cup.set_mass(0.10)
+        self._cup_rigid = self._make_kinematic(self.cup)
+        self._set_entity_pose(self.cup, cup_pose)
+        # 021_cup origins are bottom-anchored, so trust the AABB rather than the
+        # bbox center — otherwise the roller hovers above the shelf.
+        self._seat_on_surface(self.cup, self.shelf_z_surf)
+        self.cup_start = np.array(self.cup.get_pose().p, dtype=np.float64)
+        # Keep contacts live so the kinematic roller knocks neighbours aside
+        # instead of tunneling through them.
+        if self._cup_rigid is not None:
+            try:
+                for shape in self._cup_rigid.get_collision_shapes():
+                    shape.set_collision_groups([1, 1, 0, 0])
+            except Exception:
+                pass
+
+        pillow_pose = sapien.Pose(
+            self.pillow_start.tolist(), self.PILLOW_Q.tolist(),
+        )
+        self.pillow_mass = float(c.get("pillow_mass", self.PILLOW_MASS_DEFAULT))
+        self.pillow = create_actor(
+            self,
+            pose=pillow_pose,
+            modelname=self.PILLOW_MODEL,
+            model_id=0,
+            convex=True,
+            is_static=False,
+        )
+        self.pillow.set_mass(self.pillow_mass)
+        self._recolor(self.pillow, self.PILLOW_COLOR)
+        self._measure_pillow_extents()
+        self._seat_on_surface(self.pillow, self.table_top)
+        # Kinematic until the robot starts pushing, then a plain dynamic body.
+        self._pillow_rigid = self._make_kinematic(self.pillow)
+        self._tune_pillow_materials(self._pillow_rigid)
+        self._pillow_dynamic = False
+
+        self._build_trajectory()
+        self._traj_step = 0
+        self._cup_state = "parked"
+        self._fell_on_table = False
+        self._caught_on_pillow = False
+        self._pillow_placed = False
+        self._loaded = True
+
+    def _load_decorations(self, cup_ids):
+        """2× plant + cup row (one random right-side cup will roll) + table props."""
+        z_shelf = self.shelf_z_surf
+        y_shelf = float(0.5 * (self.shelf_plate_ylim[0] + self.shelf_plate_ylim[1]))
+        y0, y1 = self.shelf_plate_ylim
+
+        self._spawn_prop(
+            "120_plant", 0,
+            [-0.46, y_shelf + 0.02], z_shelf,
+            hx=0.12, hy=0.12, scale_mult=self.plant_scale, surface="shelf",
+        )
+
+        n_cups = int(getattr(self, "N_SHELF_CUPS", 4))
+        pool = [int(m) for m in (cup_ids or self.CUP_IDS)]
+        if len(pool) < n_cups:
+            pool = list(self.CUP_IDS)
+        # With a small id pool, allow replace so we always fill the row.
+        replace = len(pool) < n_cups
+        cup_ids_pick = list(np.random.choice(pool, size=n_cups, replace=replace))
+        # Left décor + two right-side roll candidates (arm reachability). Slots are
+        # spaced wider than a cup+handle (~0.10 m) so dynamic cups spawn touching
+        # nothing and the roller has a clear lane past its neighbours.
+        cup_xs = np.array([-0.20, -0.03, 0.15, 0.30], dtype=np.float64)[:n_cups]
+        if n_cups > 4:
+            cup_xs = np.linspace(-0.20, 0.30, n_cups)
+        cup_y = float(np.clip(y_shelf, y0 + 0.08, y1 - 0.04))
+        candidates = [
+            i for i, mx in enumerate(cup_xs) if float(mx) >= self.CUP_X_ABS_MIN - 0.02
+        ]
+        if not candidates:
+            candidates = [n_cups - 1]
+        roll_i = int(np.random.choice(candidates))
+        self._rolling_slot = (
+            float(cup_xs[roll_i]),
+            cup_y,
+            int(cup_ids_pick[roll_i]),
+        )
+
+        for i, (mid, mx) in enumerate(zip(cup_ids_pick, cup_xs)):
+            if i == roll_i:
+                continue  # rolling cup spawned as the dynamic actor in load_actors
+            actor = self._spawn_prop(
+                self.CUP_MODEL, int(mid),
+                [float(mx), cup_y], z_shelf,
+                hx=0.050, hy=0.050,
+                scale_mult=self.decor_cup_scale,
+                surface="shelf",
+            )
+            if actor is not None:
+                self.shelf_cups.append(actor)
+
+        self._spawn_prop(
+            "091_kettle", int(np.random.choice(self.KETTLE_IDS)),
+            [-0.42, 0.04], self.table_top,
+            hx=0.11, hy=0.11, scale_mult=self.KETTLE_SCALE, surface="table",
+        )
+        self._spawn_prop(
+            "023_tissue-box", int(np.random.choice(self.TISSUE_IDS)),
+            [-0.50, -0.18], self.table_top,
+            hx=0.07, hy=0.055, scale_mult=self.TISSUE_SCALE, surface="table",
+        )
+        self._spawn_prop(
+            "046_alarm-clock", int(np.random.choice(self.ALARM_IDS)),
+            [-0.28, -0.20], self.table_top,
+            hx=0.09, hy=0.07, scale_mult=self.ALARM_SCALE, surface="table",
+        )
+
+    # ----------------------------------------------------------- kinematics
+    def _release_cup(self):
+        if self._cup_state != "parked":
+            return
+        self._cup_state = "rolling"
+        self._traj_step = 0
+
+    def _pillow_under_landing(self):
+        """True when the pillow center is close enough that its footprint covers landing."""
+        if self.pillow is None:
+            return False
+        pp = np.array(self.pillow.get_pose().p, dtype=np.float64)
+        land = self._landing
+        # Require the pillow to have been pushed near the landing (not spawn pose).
+        return bool(
+            abs(pp[0] - land[0]) <= self.pillow_half_xy[0] * 0.75 + self.pillow_catch_xy_tol
+            and abs(pp[1] - land[1]) <= self.pillow_half_xy[1] * 0.75 + self.pillow_catch_xy_tol
+            and abs(pp[2] - (self.table_top + 0.5 * self.pillow_height)) < 0.06
+        )
+
+    def _cup_over_pillow(self):
+        """True when the cup's current XY sits over the pillow footprint."""
+        if self.pillow is None or self.cup is None:
+            return False
+        cp = np.array(self.cup.get_pose().p, dtype=np.float64)
+        pp = np.array(self.pillow.get_pose().p, dtype=np.float64)
+        return bool(
+            abs(cp[0] - pp[0]) <= self.pillow_half_xy[0] + self.pillow_catch_xy_tol
+            and abs(cp[1] - pp[1]) <= self.pillow_half_xy[1] + self.pillow_catch_xy_tol
+        )
+
+    def _seat_cup_on_pillow(self):
+        """Soft-catch on the pillow at the predicted landing XY."""
+        if self.pillow is None or self.cup is None:
+            return
+        z = self.table_top + self.pillow_height + self.cup_radius
+        q = self._cup_tip_quat(1.0, 0.0)
+        self._set_entity_pose(
+            self.cup,
+            sapien.Pose(
+                [float(self._landing[0]), float(self._landing[1]), z],
+                q.tolist(),
+            ),
+        )
+        self._cup_state = "caught"
+        self._caught_on_pillow = True
+
+    def _advance_cup(self):
+        if not self._loaded or self.cup is None:
+            return
+        if self._cup_state in ("parked", "caught", "fallen"):
+            return
+        if self._cup_state != "rolling":
+            return
+        if self._traj_step >= len(self._traj):
+            self._cup_state = "fallen"
+            self._fell_on_table = True
+            return
+
+        pos, quat = self._traj[self._traj_step]
+        self._set_entity_pose(self.cup, sapien.Pose(pos.tolist(), quat.tolist()))
+
+        # Catch only when the pillow was actually slid under the landing.
+        if self._traj_step >= self._land_idx and not self._caught_on_pillow:
+            moved = float(np.linalg.norm(
+                self._pillow_xy() - self.pillow_start[:2]
+            )) if self.pillow is not None else 0.0
+            if self._pillow_under_landing() and (
+                self._pillow_placed or moved >= 0.05
+            ):
+                self._seat_cup_on_pillow()
+                return
+            if pos[2] <= self._table_hit_z + 0.005:
+                self._fell_on_table = True
+                self._cup_state = "fallen"
+                return
+        self._traj_step += 1
+
+    def _update_kinematic_tasks(self):
+        super()._update_kinematic_tasks()
+        if not getattr(self, "_loaded", False):
+            return
+        self._advance_cup()
+
+    def check_stable(self):
+        if self.cup is not None and self._cup_state == "parked":
+            self._set_entity_pose(
+                self.cup,
+                sapien.Pose(self.cup_start.tolist(), self._cup_upright_quat().tolist()),
+            )
+        if (
+            self.pillow is not None
+            and not self._pillow_placed
+            and not self._push_active
+            and not self._pillow_dynamic
+            and self._cup_state == "parked"
+        ):
+            self._slide_pillow_to(self.pillow_start[:2])
+        return super().check_stable()
+
+    def _dwell(self, steps):
+        if not hasattr(self, "_pic_counter"):
+            self._pic_counter = 0
+        for _ in range(int(steps)):
+            self._update_kinematic_tasks()
+            self.scene.step()
+            self._pic_counter += 1
+            if self.save_freq and (self._pic_counter % self.save_freq == 0):
+                self._take_picture()
+
+    # ------------------------------------------------------------- policy
+    def _push_quat(self, arm_tag):
+        key = "down_left" if str(arm_tag) == "right" else "down_right"
+        return list(GRASP_DIRECTION_DIC[key])
+
+    def _tcp_pos(self, arm_tag):
+        pose = (
+            self.robot.get_left_tcp_pose() if str(arm_tag) == "left"
+            else self.robot.get_right_tcp_pose()
+        )
+        return np.array(pose[:3], dtype=np.float64)
+
+    def _pillow_xy(self):
+        return np.array(self.pillow.get_pose().p[:2], dtype=np.float64)
+
+    def _measure_pillow_extents(self):
+        """Take the cushion's footprint from its collision hull, not from config.
+
+        The hand aims at the rear face and the success test uses the footprint, so
+        a wrong half-extent (they were swapped) makes the gripper start inside the
+        cushion and stop short of the landing.
+        """
+        rigid = self._get_rigid(self.pillow)
+        if rigid is None:
+            return
+        try:
+            lo, hi = rigid.compute_global_aabb_tight()
+        except Exception:
+            return
+        lo = np.asarray(lo, dtype=np.float64)
+        hi = np.asarray(hi, dtype=np.float64)
+        half = 0.5 * (hi - lo)
+        self.pillow_half_xy = [float(half[0]), float(half[1])]
+        self.pillow_height = float(hi[2] - lo[2])
+
+    def _finger_drop(self, arm_tag):
+        """How far the closed fingertips reach below the TCP, in metres."""
+        art = (
+            self.robot.left_entity if str(arm_tag) == "left"
+            else self.robot.right_entity
+        )
+        lows = []
+        try:
+            for link in art.get_links():
+                name = link.get_name().lower()
+                if "finger" not in name and "gripper" not in name:
+                    continue
+                for c in link.get_components():
+                    if isinstance(c, sapien.physx.PhysxRigidBaseComponent):
+                        lows.append(float(c.compute_global_aabb_tight()[0][2]))
+                        break
+        except Exception:
+            pass
+        if not lows:
+            return self.PUSH_FINGER_DROP
+        drop = float(self._tcp_pos(arm_tag)[2]) - min(lows)
+        return float(np.clip(drop, 0.0, 0.12))
+
+    def _push_pillow_to_landing(self, arm_tag):
+        """Shove the pillow across the table with the closed gripper.
+
+        The pillow is a plain dynamic body resting on the table — no forces or
+        velocities are ever written to it. The hand is walked along the push axis
+        behind the rear face, and every centimetre the pillow travels comes out
+        of that contact.
+        """
+        land_xy = np.array(
+            [float(self._landing[0]), float(self._landing[1])], dtype=np.float64,
+        )
+        pp0 = self._pillow_xy()
+        delta = land_xy - pp0
+        dist = float(np.linalg.norm(delta))
+        if dist < 0.02:
+            self._pillow_placed = True
+            return True
+
+        direction = delta / max(dist, 1e-6)
+        half_along = float(
+            abs(direction[0]) * self.pillow_half_xy[0]
+            + abs(direction[1]) * self.pillow_half_xy[1]
+        )
+        quat = self._push_quat(arm_tag)
+        hover_z = self.table_top + 0.11
+
+        behind = pp0 - direction * (half_along + 0.09)
+        contact = pp0 - direction * (half_along + self.PUSH_CONTACT_GAP)
+        # Stay over the tabletop: past the near edge the fingertips hang below the
+        # surface and snag on it, and the arm stalls instead of pushing.
+        y_min = self.table_near_y + self.PUSH_EDGE_MARGIN
+        behind[1] = max(float(behind[1]), y_min)
+        contact[1] = max(float(contact[1]), y_min)
+
+        self.move(self.close_gripper(arm_tag=arm_tag))
+        # Hand over to PhysX before the hand comes anywhere near: while the cushion
+        # is kinematic it is an immovable wall, and a fingertip grazing its rear
+        # edge stalls the whole descent instead of nudging it.
+        self._push_arm = arm_tag
+        self._push_dir = direction.copy()
+        self._push_start_xy = pp0.copy()
+        self._enable_pillow_physics()
+        self.plan_success = True
+        self.move(self.move_to_pose(
+            arm_tag, [float(behind[0]), float(behind[1]), hover_z] + quat,
+        ))
+        if not self.plan_success:
+            self.plan_success = True
+            tcp = self._tcp_pos(arm_tag)
+            self.move(self.move_by_displacement(
+                arm_tag=arm_tag,
+                x=float(behind[0] - tcp[0]),
+                y=float(behind[1] - tcp[1]),
+                z=float(hover_z - tcp[2]),
+                quat=quat, move_axis="world",
+            ))
+        # The closed fingers hang well below the TCP. Aiming the TCP at the middle
+        # of a 5 cm cushion therefore drives the fingertips into the tabletop and
+        # the arm jams instead of pushing, so measure the overhang and clear it.
+        # The arm bottoms out a few mm above this, so leave slack: asking for the
+        # very lowest reachable height makes the descent fail outright and the hand
+        # then sails over the cushion at hover height.
+        push_z = self.table_top + self._finger_drop(arm_tag) + 0.022
+        hover_ok = bool(self.plan_success)
+        tcp_hover = self._tcp_pos(arm_tag).copy()
+        self.plan_success = True
+        tcp = self._tcp_pos(arm_tag)
+        self.move(self.move_by_displacement(
+            arm_tag=arm_tag,
+            x=float(contact[0] - tcp[0]),
+            y=float(contact[1] - tcp[1]),
+            z=float(push_z - tcp[2]),
+            quat=quat, move_axis="world",
+        ))
+        print(
+            f"[cfo-dbg] hover_ok={hover_ok} tcp_hover={np.round(tcp_hover, 3)} "
+            f"descend_ok={self.plan_success} push_z={push_z:.3f} "
+            f"contact={np.round(contact, 3)} tcp_contact={np.round(self._tcp_pos(arm_tag), 3)} "
+            f"drop={self._finger_drop(arm_tag):.3f} half={np.round(self.pillow_half_xy, 3)}"
+        )
+
+        self._push_active = True
+        self._dwell(2)
+
+        # Each planned move carries a fixed cost of tens of sim steps, so short
+        # strokes cannot outrun the falling cup — keep them long.
+        step = float(np.clip(
+            getattr(self, "push_step", self.PUSH_STEP_DEFAULT), 0.02, 0.10,
+        ))
+        # Sweep the hand along the push axis to where the rear face has to end up
+        # for the pillow center to sit on the landing. The hand leads, the pillow
+        # is displaced by contact.
+        ee_goal = land_xy - direction * (half_along + self.PUSH_CONTACT_GAP)
+        ee_start = self._tcp_pos(arm_tag)[:2].copy()
+        stop = "ran_out"
+        n_plan_fail = 0
+        # Walk the hand along the push axis in short strokes. Chunking (rather than
+        # one blind stroke to the goal) lets us stop the instant the cushion is on
+        # the landing, so a slippery skid cannot carry it past.
+        n_chunks = int(np.ceil(float(np.linalg.norm(ee_goal - ee_start)) / step)) + 12
+        for _ in range(max(1, n_chunks)):
+            if self._caught_on_pillow or self._fell_on_table:
+                stop = "cup_landed"
+                break
+            pp = self._pillow_xy()
+            along_remain = float(np.dot(land_xy - pp, direction))
+            if (
+                float(np.linalg.norm(pp - land_xy)) <= self.pillow_catch_xy_tol
+                or along_remain <= 0.0
+            ):
+                self._pillow_placed = True
+                stop = "on_landing"
+                break
+            # Track the cushion's actual rear face: it can lag or slip sideways.
+            rear_now = pp - direction * (half_along + self.PUSH_CONTACT_GAP)
+            aim = rear_now + direction * step
+            # Never give up ground already won along the axis.
+            if float(np.dot(aim - ee_goal, direction)) < 0.0:
+                aim = ee_goal
+            tcp = self._tcp_pos(arm_tag)
+            delta_ee = aim - tcp[:2]
+            d_ee = float(np.linalg.norm(delta_ee))
+            if d_ee < 1e-4:
+                break
+            if d_ee > step:
+                delta_ee = delta_ee * (step / d_ee)
+            self.plan_success = True
+            self.move(self.move_by_displacement(
+                arm_tag=arm_tag,
+                x=float(delta_ee[0]), y=float(delta_ee[1]), z=0.0,
+                quat=quat, move_axis="world",
+            ))
+            if not self.plan_success:
+                n_plan_fail += 1
+            self._dwell(2)
+            self.plan_success = True
+
+        ee_now = self._tcp_pos(arm_tag)[:2]
+        print(
+            f"[catch_fragile_object] push stop={stop} fails={n_plan_fail} "
+            f"tcp={np.round(self._tcp_pos(arm_tag), 3)} "
+            f"traj={self._traj_step}/{len(self._traj)} "
+            f"pillow {np.round(pp0, 3)}->{np.round(self._pillow_xy(), 3)} "
+            f"land={np.round(land_xy, 3)} "
+            f"ee_moved={np.linalg.norm(ee_now - ee_start):.3f}/"
+            f"{np.linalg.norm(ee_goal - ee_start):.3f}"
+        )
+
+        # Let friction bring it to rest, then park it at wherever it actually got.
+        self._push_active = False
+        self._dwell(18)
+        pp = self._pillow_xy()
+        z = self.table_top + 0.5 * self.pillow_height
+        self._freeze_pillow(
+            sapien.Pose(
+                [float(pp[0]), float(pp[1]), z],
+                self.PILLOW_Q.tolist(),
+            )
+        )
+        self._pillow_placed = bool(
+            float(np.linalg.norm(pp - land_xy))
+            <= max(self.pillow_half_xy) + self.pillow_catch_xy_tol
+        )
+
+        self.plan_success = True
+        self.move(self.move_by_displacement(
+            arm_tag=arm_tag, z=0.12, move_axis="world",
+        ))
+        if self._pillow_placed or self._pillow_under_landing() or self._cup_over_pillow():
+            self._pillow_placed = True
+            self.plan_success = True
+        self._push_arm = None
+        return self._pillow_placed
+
+    def play_once(self):
+        arm_tag = ArmTag(self.arm_side)
+        self._pic_counter = 0
+
+        old_save_freq = self.save_freq
+        if self.save_data and (self.save_freq is None or self.save_freq > 8):
+            self.save_freq = 5
+
+        # Reactive: random cup starts tipping; robot physically pushes the pillow.
+        self._release_cup()
+        self._push_pillow_to_landing(arm_tag)
+
+        max_wait = max(1, len(self._traj) - self._traj_step + 40)
+        waited = 0
+        while (
+            self._cup_state == "rolling"
+            and waited < max_wait
+            and not self._caught_on_pillow
+            and not self._fell_on_table
+        ):
+            self._dwell(1)
+            waited += 1
+
+        self._dwell(self.post_place_dwell)
+        if self._caught_on_pillow:
+            self.plan_success = True
+        self.save_freq = old_save_freq
+
+        self.info["info"] = {
+            "{A}": f"{self.CUP_MODEL}/base{self.cup_id}",
+            "{B}": "266_pillow/base0",
+            "{C}": "deep_wall_shelf",
+            "{a}": str(arm_tag),
+        }
+        return self.info
+
+    def check_success(self):
+        """Success only when the cup is sitting on the pillow (table touch = fail).
+
+        The whole cup footprint must lie inside the pillow; grazing a corner or
+        resting on the bare table is failure. Push / fall physics are unchanged.
+        """
+        if self._fell_on_table or self._cup_state == "fallen":
+            return False
+        if not self._caught_on_pillow or self.cup is None or self.pillow is None:
+            return False
+        cp = np.array(self.cup.get_pose().p, dtype=np.float64)
+        pp = np.array(self.pillow.get_pose().p, dtype=np.float64)
+        hx = float(self.pillow_half_xy[0])
+        hy = float(self.pillow_half_xy[1])
+        r = float(self.cup_radius)
+        # Inset by cup radius so the full body rests on the cushion, not an edge.
+        on_whole_pillow = (
+            abs(cp[0] - pp[0]) <= max(0.0, hx - r)
+            and abs(cp[1] - pp[1]) <= max(0.0, hy - r)
+        )
+        pillow_top = float(self.table_top + self.pillow_height)
+        cup_bottom = float(cp[2] - r)
+        sitting_on_pillow = cup_bottom >= pillow_top - 0.01
+        touches_table = cup_bottom <= float(self.table_top) + 0.01
+        return bool(on_whole_pillow and sitting_on_pillow and not touches_table)
+
+    def get_obs(self):
+        obs = super().get_obs()
+        obs["catch_fragile_object"] = {
+            "cup_state": str(self._cup_state),
+            "fell_on_table": bool(self._fell_on_table),
+            "caught_on_pillow": bool(self._caught_on_pillow),
+            "pillow_placed": bool(self._pillow_placed),
+            "traj_step": int(self._traj_step),
+            "drop_x": float(self.drop_x),
+            "landing": list(map(float, self._landing)),
+            "cup_id": int(getattr(self, "cup_id", -1)),
+            "n_shelf_cups": int(len(getattr(self, "shelf_cups", [])) + 1),
+            "plant_scale": float(getattr(self, "plant_scale", self.PLANT_SCALE)),
+            "pillow_xy": (
+                list(map(float, self.pillow.get_pose().p[:2]))
+                if self.pillow is not None else [0.0, 0.0]
+            ),
+        }
+        return obs
