@@ -53,7 +53,8 @@ class catch_fragile_object(Office_base_task):
     PILLOW_HEIGHT_DEFAULT = 0.05
     PILLOW_CATCH_XY_TOL = 0.03
     PILLOW_MASS_DEFAULT = 0.35
-    PILLOW_COLOR = [0.92, 0.78, 0.72]
+    # Matches Desktop/images/pillow.jpeg (sampled body blue).
+    PILLOW_COLOR = [5 / 255.0, 41 / 255.0, 105 / 255.0]
     # Gripper sits this far off the rear face before the push starts.
     PUSH_CONTACT_GAP = 0.025
     # Fallback fingertip-below-TCP overhang if the links cannot be measured.
@@ -809,7 +810,7 @@ class catch_fragile_object(Office_base_task):
             is_static=False,
         )
         self.pillow.set_mass(self.pillow_mass)
-        self._recolor(self.pillow, self.PILLOW_COLOR)
+        # Keep the CC0 fabric texture on 266_pillow (recolor would wash it out).
         self._measure_pillow_extents()
         self._seat_on_surface(self.pillow, self.table_top)
         # Kinematic until the robot starts pushing, then a plain dynamic body.
