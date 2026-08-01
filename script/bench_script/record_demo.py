@@ -259,6 +259,7 @@ def build_args(
         bool(targs.get("force_platform_miss", False))
         or bool(targs.get("allow_fail", False))
         or bool(targs.get("force_overflow", False))
+        or bool(targs.get("force_spill", False))
     ):
         args["save_failed_cases"] = True
         args["check_render_success"] = False

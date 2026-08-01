@@ -175,6 +175,8 @@ class make_soup(KitchenS_base_task):
         self.cube_half = float(cfg.get("cube_half", self.CUBE_HALF))
         self.tomato_radius = float(cfg.get("tomato_radius", self.TOMATO_RADIUS))
         self.grasp_tcp_tol = float(cfg.get("grasp_tcp_tol", self.GRASP_TCP_TOL))
+        # Expert demo failure: tip the board over the table so produce spills.
+        self.force_spill = bool(cfg.get("force_spill", False))
 
         self.stove_on = False
         self.turned_on_once = False
@@ -1277,6 +1279,71 @@ class make_soup(KitchenS_base_task):
             f"{np.round(np.asarray(self.board.get_pose().p), 3)} arm={arm}"
         )
 
+    def _spill_veggies_on_table(self) -> None:
+        """Failure demo: tip the board over the table so produce slides off."""
+        arm = self.arm
+        side_sign = 1.0 if str(arm) == "right" else -1.0
+        tip_max = float(np.deg2rad(55.0))
+
+        # Carry a short way, still clear of the pot — bad mid-carry tip.
+        spill_xy = np.array(
+            [float(self.board_xy[0]) - side_sign * 0.02, float(self.board_xy[1]) + 0.04],
+            dtype=float,
+        )
+        pot = np.asarray(self.pot_xy, dtype=float)
+        if float(np.linalg.norm(spill_xy - pot)) < 0.18:
+            spill_xy[1] = min(float(spill_xy[1]), -0.10)
+        hover_z = float(self.table_top) + 0.11
+        self._carry_board_level(spill_xy, hover_z)
+        self._sync_board_to_ee()
+        self._idle_steps(6)
+
+        pour_flat = self.board.get_pose()
+        ee_flat = self._ee_pose(arm)
+        pivot = np.asarray(pour_flat.p, dtype=float)
+        # Free produce while the board is still level, then tip away from the pot.
+        self._release_veggies_physics(settle_on_board=True)
+
+        tip_steps = 100
+        wrist_at = (tip_steps // 2, tip_steps)
+        hold_pose = pour_flat
+
+        def _roll(frac: float) -> tuple[sapien.Pose, list[float]]:
+            # Tip the opposite way from a careful pour so pieces dump onto the table.
+            theta = side_sign * tip_max * frac
+            board = self._rot_about_y(pour_flat, pivot, theta)
+            ee = self._rot_about_y(ee_flat, pivot, theta)
+            return board, [*[float(v) for v in ee.p], *[float(v) for v in ee.q]]
+
+        self._board_welded = False
+        if self._board_rigid is not None:
+            try:
+                self._board_rigid.set_kinematic(True)
+            except Exception:
+                pass
+
+        for i in range(1, tip_steps + 1):
+            hold_pose, ee_target = _roll(i / tip_steps)
+            self._set_entity_pose(self.board, hold_pose)
+            if i in wrist_at:
+                self.plan_success = True
+                self.move(self.move_to_pose(arm, ee_target))
+                self.plan_success = True
+                self._set_entity_pose(self.board, hold_pose)
+            self.scene.step()
+            self._check_veg_fallen()
+
+        # Hold tipped while pieces bounce onto the table.
+        for _ in range(160):
+            self._set_entity_pose(self.board, hold_pose)
+            self.scene.step()
+            self._check_veg_fallen()
+
+        print(
+            f"[make_soup] force_spill fallen={self._veg_fallen} "
+            f"in_pot={sum(self._veg_in_pot(v) for v in self.veggies)}/{len(self.veggies)}"
+        )
+
     def play_once(self) -> dict[str, Any]:
         arm = self.arm
         self.plan_success = True
@@ -1300,6 +1367,20 @@ class make_soup(KitchenS_base_task):
         if self._veg_released or self._veg_fallen:
             print("[make_soup] veggies fell during lift — fail")
             self.plan_success = False
+            return self.info
+
+        # Optional failure demo: tip carelessly over the table (produce spills).
+        if getattr(self, "force_spill", False):
+            self._spill_veggies_on_table()
+            self.plan_success = False
+            self.info["info"] = {
+                "{A}": "chopping_board",
+                "{B}": "soup_pot",
+                "{C}": "cooking_range",
+                "{D}": "stove_knob",
+                "{E}": "vegetables",
+                "{a}": str(arm),
+            }
             return self.info
 
         self._pour_into_pot()
