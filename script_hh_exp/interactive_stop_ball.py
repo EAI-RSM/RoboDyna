@@ -1,0 +1,14 @@
+#!/home/xuan/miniconda3/envs/robodyna/bin/python
+"""Interactive household task: stop_ball."""
+try:
+    from ._interactive_common import make_parser, run_task
+except ImportError:
+    from _interactive_common import make_parser, run_task
+
+KEYBOARD = """\n  F: release the rolling ball\n  1/2/3 and arrows/Q/E are available in robot mode\n  V: top-down/head camera | Escape: quit\n"""
+ROBOT = """\n  1/2/3: select arm(s) | arrows/Q/E: Cartesian arm teleoperation\n  F: release the rolling ball\n  V: top-down/head camera | Escape: quit\n"""
+
+if __name__ == "__main__":
+    a = make_parser("stop_ball", __doc__)
+    result = run_task("stop_ball", a.parse_args(), KEYBOARD, ROBOT)
+    raise SystemExit(10 if result is False else 0 if result is True else 2)

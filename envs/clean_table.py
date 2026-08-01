@@ -1,0 +1,1593 @@
+"""Clean a coffee spill before it reaches a laptop.
+
+Setup (dual UR5e / ur5-wsg):
+  - A coffee mug tips over toward the laptop (fall along the spill direction).
+  - A real ``015_laptop`` sits on the **opposite** side (~30 cm away).
+  - Spill starts at the mug *rim* on the table, then spreads toward the laptop
+    with an irregular lobed / teardrop shape.
+  - A yellow sponge on the mug side; the matching arm **dabs** each stain
+    (lift → lower onto the table → lift), avoiding the mug. Mug is dynamic so
+    collisions from the arm/sponge move it instead of ghosting through.
+  - Background décor along the back of the table: plant, office file holder,
+    pen cup, and alarm clock.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import sapien
+import sapien.render
+import transforms3d as t3d
+
+from ._base_task import Base_Task
+from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
+from .utils import *
+from .utils.action import Action
+from .utils.create_actor import create_actor, create_box, create_sapien_urdf_obj
+
+
+class clean_table(Base_Task):
+    """Tip a coffee mug, then wipe the irregular spill before it hits a laptop."""
+
+    MUG_MODEL = "039_mug"
+    MUG_UPRIGHT_Q = [0.70710678, 0.70710678, 0.0, 0.0]
+    VERTICAL_CYL_Q = [0.70710678, 0.0, 0.70710678, 0.0]
+    PROP_UPRIGHT_Q = [0.5, 0.5, 0.5, 0.5]
+
+    # Latte-like coffee (matches reference spill photo).
+    COFFEE_COLOR = [0.55, 0.38, 0.22, 0.95]
+    SPILL_COLOR = [0.52, 0.34, 0.18, 0.92]
+    SPONGE_COLOR = (0.95, 0.82, 0.22)
+
+    SPILL_STEPS_DEFAULT = 7500
+    REACH_LAPTOP_LEVEL_DEFAULT = 0.88
+    CLEAN_TOL_DEFAULT = 0.08  # fraction of spawned spots that may remain dirty
+    POST_TIP_WAIT_DEFAULT = 180
+    EXPERT_WIPE_LEVEL_DEFAULT = 0.12
+    # Sponge must be this close (m) beyond spot radius to clear it.
+    # Include a bit of sponge half-extent so contact matches the yellow pad.
+    SPOT_CONTACT_EXTRA = 0.020
+    # Consecutive contact steps required before a single spot clears.
+    SPOT_CLEAR_DWELL = 10
+    # Keep sponge this far above the table while translating between dabs.
+    WIPE_SAFE_Z = 0.11
+    # Don't dab within this margin of the (live) mug footprint.
+    MUG_AVOID_MARGIN = 0.025
+
+    SPONGE_HALF = (0.038, 0.028, 0.014)
+    # Small grasp stub on top of the pad (meters, half-extents).
+    SPONGE_HANDLE_HALF = (0.012, 0.009, 0.016)
+    SPONGE_HANDLE_COLOR = (0.55, 0.42, 0.22)
+    EE_TO_TCP = 0.12
+    MUG_SCALE_MULT = 0.60  # stock mug is large; shrink for graspable station size
+    MUG_MASS = 0.18
+
+    def setup_demo(self, **kwags):
+        self._cfg = dict(kwags.get("task_args", {}).get("clean_table", {}))
+
+        # Per-step state must exist before early _update_kinematic_tasks calls.
+        self._loaded = False
+        self.cup_tipped = False
+        self.spill_active = False
+        self.spill_amount = 0.0
+        self.max_spill_amount = 0.0
+        self.spill_cleaned = 0.0
+        self.laptop_reached = False
+        self.cleaned_ok = False
+        self._spill_frozen = False
+        self._coffee_entity = None
+        self._spill_entity = None
+        self._spill_visual_cached = None
+        self._expert_wiping = False
+        self._wipe_armed = False
+        self._wipe_target = None
+        self._wipe_contact_steps = 0
+        self._sponge_welded = False
+        self._sponge_weld_offset = None
+        self._sponge_hold_quat = None
+        self._mug_rigid = None
+        self._sponge_rigid = None
+        self._spill_spots: list[dict] = []
+        self.cup = None
+        self.mug = None
+        self.laptop = None
+        self.sponge = None
+        self.arm = ArmTag("right")
+        self.table_top = 0.74
+        self._spill_seed = 0
+        self._lobe_phase = 0.0
+        self.wipe_safe_z = self.WIPE_SAFE_Z
+        self.mug_avoid_margin = self.MUG_AVOID_MARGIN
+
+        super()._init_task_env_(**kwags)
+
+    # ------------------------------------------------------------------ actors
+    def load_actors(self):
+        cfg = self._cfg
+        self.table_top = 0.74 + float(self.table_z_bias)
+
+        self.spill_steps = int(cfg.get("spill_steps", self.SPILL_STEPS_DEFAULT))
+        self.reach_laptop_level = float(
+            cfg.get("reach_laptop_level", self.REACH_LAPTOP_LEVEL_DEFAULT)
+        )
+        self.clean_tol = float(cfg.get("clean_tol", self.CLEAN_TOL_DEFAULT))
+        self.post_tip_wait = int(cfg.get("post_tip_wait", self.POST_TIP_WAIT_DEFAULT))
+        self.expert_wipe_level = float(
+            cfg.get("expert_wipe_level", self.EXPERT_WIPE_LEVEL_DEFAULT)
+        )
+        self.spot_contact_extra = float(
+            cfg.get("spot_contact_extra", self.SPOT_CONTACT_EXTRA)
+        )
+        self.spot_clear_dwell = int(cfg.get("spot_clear_dwell", self.SPOT_CLEAR_DWELL))
+        self.wipe_safe_z = float(cfg.get("wipe_safe_z", self.WIPE_SAFE_Z))
+        self.mug_avoid_margin = float(cfg.get("mug_avoid_margin", self.MUG_AVOID_MARGIN))
+
+        self.spill_amount = 0.0
+        self.max_spill_amount = 0.0
+        self.spill_cleaned = 0.0
+        self.cup_tipped = False
+        self.spill_active = False
+        self._spill_frozen = False
+        self.laptop_reached = False
+        self.cleaned_ok = False
+        self._coffee_entity = self._remove_entity(getattr(self, "_coffee_entity", None))
+        self._spill_entity = self._remove_entity(getattr(self, "_spill_entity", None))
+        self._spill_visual_cached = None
+        self._spill_spots = []
+        self._expert_wiping = False
+        self._wipe_armed = False
+        self._wipe_target = None
+        self._wipe_contact_steps = 0
+        self._sponge_welded = False
+        self._sponge_weld_offset = None
+        self._sponge_hold_quat = None
+        self._mug_rigid = None
+
+        # Mug on one side, laptop on the opposite side (spill travels along ±X).
+        side_cfg = cfg.get("mug_side", "random")
+        if side_cfg in ("left", "right"):
+            mug_side = -1.0 if side_cfg == "left" else 1.0
+        else:
+            mug_side = 1.0 if (np.random.rand() > 0.5) else -1.0
+
+        mug_x = float(cfg.get("mug_x", 0.20)) * mug_side
+        laptop_x = float(cfg.get("laptop_x", 0.20)) * (-mug_side)
+        mug_y = float(cfg.get("mug_y", -0.02))
+        laptop_y = float(cfg.get("laptop_y", -0.02))
+        # Sponge on the mug side, toward the robot and outboard so the handle
+        # grasp stays clear of the mug.
+        sponge_dx = float(cfg.get("sponge_dx", 0.12))
+        sponge_x = mug_x + (sponge_dx if mug_side > 0 else -sponge_dx)
+        sponge_y = float(cfg.get("sponge_y", -0.18))
+
+        self.mug_side = mug_side
+        self.arm = ArmTag("right" if mug_side >= 0 else "left")
+        self.cup_xy = np.array([mug_x, mug_y], dtype=float)  # alias used by helpers
+        self.mug_xy = self.cup_xy.copy()
+        self.laptop_xy = np.array([laptop_x, laptop_y], dtype=float)
+        self.sponge_xy = np.array([sponge_x, sponge_y], dtype=float)
+
+        # Main flow: mug → laptop (mostly ±X, small Y component if positions differ).
+        delta = self.laptop_xy - self.mug_xy
+        n = float(np.linalg.norm(delta))
+        self.spill_dir = (delta / n) if n > 1e-6 else np.array([-mug_side, 0.0])
+        self.spill_lat = np.array([-self.spill_dir[1], self.spill_dir[0]], dtype=float)
+
+        self._spill_seed = int(cfg.get("spill_seed", np.random.randint(0, 10_000)))
+        self._lobe_phase = float((self._spill_seed % 97) / 97.0 * 2.0 * np.pi)
+
+        self._spawn_mug()
+        self._spawn_coffee_in_mug()
+        self._spawn_laptop()
+        self._spawn_sponge()
+        self._spawn_decorations()
+
+        # Rim contact on the table after tip — origin of the spill (NOT under the body).
+        rim_along = float(getattr(self, "mug_half_height", 0.04)) + 0.008
+        self.spill_origin = self.mug_xy + self.spill_dir * rim_along
+        # Path length from rim to near edge of laptop.
+        laptop_half = float(getattr(self, "laptop_half_along", 0.10))
+        laptop_near = self.laptop_xy - self.spill_dir * laptop_half
+        self.spill_path_len = max(
+            0.14, float(np.dot(laptop_near - self.spill_origin, self.spill_dir))
+        )
+        self.laptop_near_xy = laptop_near
+
+        self.add_prohibit_area(self.mug, padding=0.04)
+        self.add_prohibit_area(self.sponge, padding=0.03)
+        self.cup = self.mug  # keep tip/wipe helpers that still say "cup"
+        self._build_spill_spots()
+        self._loaded = True
+        print(
+            f"[clean_table] arm={self.arm} mug={self.mug_xy} laptop={self.laptop_xy} "
+            f"sponge={self.sponge_xy} dir={self.spill_dir} path={self.spill_path_len:.3f}m "
+            f"spill_steps={self.spill_steps} spots={len(self._spill_spots)} "
+            f"seed={self._spill_seed}"
+        )
+
+    def _spawn_mug(self):
+        self.mug_id = int(self._cfg.get("mug_id", 0))
+        scale_mult = float(self._cfg.get("mug_scale_mult", self.MUG_SCALE_MULT))
+        pose = sapien.Pose(
+            [float(self.mug_xy[0]), float(self.mug_xy[1]), self.table_top + 0.001],
+            self.MUG_UPRIGHT_Q,
+        )
+        # Dynamic body so arm/sponge collisions can knock it; held kinematic
+        # until the tip animation finishes.
+        self.mug = create_actor(
+            self,
+            pose=pose,
+            modelname=self.MUG_MODEL,
+            model_id=self.mug_id,
+            convex=True,
+            is_static=False,
+            scale_mult=scale_mult,
+        )
+        self.mug.set_name("coffee_mug")
+        self._mug_upright_pose = pose
+        self._mug_rigid = self._get_rigid(self.mug)
+        self._make_kinematic(self.mug, mass=float(self._cfg.get("mug_mass", self.MUG_MASS)))
+
+        cfg = getattr(self.mug, "config", {}) or {}
+        ext = np.array(cfg.get("extents", [1.0, 1.0, 1.0]), dtype=float)
+        sc = cfg.get("scale", [1, 1, 1])
+        sc = float(sc[0] if isinstance(sc, (list, tuple)) else sc)
+        world = ext * sc
+        # Local Y is up when upright.
+        self.mug_height = float(world[1])
+        self.mug_half_height = 0.5 * self.mug_height
+        self.mug_radius = 0.42 * float(max(world[0], world[2]))
+        # Keep well inside the walls so the liquid disk does not poke through.
+        self.mug_inner_r = 0.20 * float(max(world[0], world[2]))
+        self.cup_height = self.mug_height
+        self.cup_radius = self.mug_radius
+        self.cup_inner_r = self.mug_inner_r
+        # Mesh geometric center (scaled) → world offset with upright quat.
+        # Needed because 039_mug's origin is not the cavity center.
+        try:
+            center = np.array(cfg.get("center", [0.0, 0.0, 0.0]), dtype=float) * sc
+            R = t3d.quaternions.quat2mat(np.asarray(self.MUG_UPRIGHT_Q, dtype=float))
+            self._mug_center_offset = (R @ center).astype(float)
+        except Exception:
+            self._mug_center_offset = np.zeros(3, dtype=float)
+
+    def _spawn_coffee_in_mug(self):
+        """Brown disk centered inside the upright mug cavity."""
+        self._coffee_entity = self._remove_entity(self._coffee_entity)
+        half_h = 0.0045
+        off = np.asarray(
+            getattr(self, "_mug_center_offset", np.zeros(3)), dtype=float
+        )
+        # XY from mesh center; Z low in the cup (above the floor, below the rim).
+        cx = float(self.mug_xy[0] + off[0])
+        cy = float(self.mug_xy[1] + off[1])
+        z = self.table_top + 0.010 + half_h
+        inner_r = float(min(self.mug_inner_r, 0.55 * self.mug_radius))
+        builder = self.scene.create_actor_builder()
+        builder.set_physx_body_type("static")
+        mat = sapien.render.RenderMaterial(base_color=list(self.COFFEE_COLOR))
+        try:
+            mat.set_roughness(0.35)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.35
+        builder.add_cylinder_visual(
+            pose=sapien.Pose([0, 0, 0], self.VERTICAL_CYL_Q),
+            radius=inner_r,
+            half_length=half_h,
+            material=mat,
+        )
+        builder.set_initial_pose(sapien.Pose(p=[cx, cy, z]))
+        self._coffee_entity = builder.build(name="coffee_disk")
+
+    def _spawn_laptop(self):
+        """Real PartNet ``015_laptop`` articulation, root fixed on the table."""
+        lid = int(self._cfg.get("laptop_id", 0))
+        lx, ly = float(self.laptop_xy[0]), float(self.laptop_xy[1])
+        # PartNet default sits edge-on (screen normal ±X). +90° about Z faces keyboard
+        # / screen toward the robot workspace (−Y), independent of mug side.
+        yaw = float(self._cfg.get("laptop_yaw", 0.5 * np.pi))
+        q = t3d.euler.euler2quat(0.0, 0.0, yaw, axes="sxyz")
+        pose = sapien.Pose([lx, ly, self.table_top + 0.002], q.tolist())
+        self.laptop = create_sapien_urdf_obj(
+            self,
+            pose=pose,
+            modelname="015_laptop",
+            modelid=lid,
+            fix_root_link=True,
+        )
+        self.laptop_id = lid
+        # Near-edge half-size along spill (±X). PartNet extents are mesh-local —
+        # multiply by authored scale (≈0.15) so we don't clamp path to the floor.
+        self.laptop_half_along = 0.10
+        try:
+            cfg = getattr(self.laptop, "config", {}) or {}
+            ext = np.array(cfg.get("extents", [0.2, 0.15, 0.2]), dtype=float)
+            sc = cfg.get("scale", 0.15)
+            sc = float(sc[0] if isinstance(sc, (list, tuple)) else sc)
+            world = ext * sc
+            # After laptop_yaw ≈ +90° Z, model Y maps to world ±X (spill axis).
+            self.laptop_half_along = 0.45 * float(max(world[0], world[1]))
+        except Exception:
+            pass
+
+    def _spawn_sponge(self):
+        """Yellow pad + small top handle so the gripper can lift cleanly."""
+        hx, hy, hz = [float(v) for v in self.SPONGE_HALF]
+        hhx, hhy, hhz = [float(v) for v in self.SPONGE_HANDLE_HALF]
+        handle_z = hz + hhz  # handle sits flush on the pad top
+
+        builder = self.scene.create_actor_builder()
+        builder.set_physx_body_type("dynamic")
+        pad_mat = sapien.render.RenderMaterial(
+            base_color=[*self.SPONGE_COLOR, 1.0]
+        )
+        handle_mat = sapien.render.RenderMaterial(
+            base_color=[*self.SPONGE_HANDLE_COLOR, 1.0]
+        )
+        try:
+            pad_mat.set_roughness(0.85)
+            handle_mat.set_roughness(0.55)
+        except Exception:
+            pass
+
+        # Pad (entity origin = pad center).
+        builder.add_box_collision(
+            pose=sapien.Pose([0, 0, 0]),
+            half_size=[hx, hy, hz],
+            material=self.scene.default_physical_material,
+        )
+        builder.add_box_visual(
+            pose=sapien.Pose([0, 0, 0]),
+            half_size=[hx, hy, hz],
+            material=pad_mat,
+        )
+        # Handle stub on top.
+        builder.add_box_collision(
+            pose=sapien.Pose([0, 0, handle_z]),
+            half_size=[hhx, hhy, hhz],
+            material=self.scene.default_physical_material,
+        )
+        builder.add_box_visual(
+            pose=sapien.Pose([0, 0, handle_z]),
+            half_size=[hhx, hhy, hhz],
+            material=handle_mat,
+        )
+
+        pose = sapien.Pose(
+            [
+                float(self.sponge_xy[0]),
+                float(self.sponge_xy[1]),
+                self.table_top + hz + 0.001,
+            ],
+            [1, 0, 0, 0],
+        )
+        builder.set_initial_pose(pose)
+        entity = builder.build(name="sponge")
+
+        # Grasp frames on the small top handle (meters; scale=1).
+        # Top-down contact frames so the gripper pinches the stub, not the pad.
+        top_z = float(handle_z)
+        data = {
+            "center": [0, 0, 0],
+            "extents": [hx * 2, hy * 2, (hz + 2 * hhz) * 2],
+            "scale": [1.0, 1.0, 1.0],
+            "contact_points_pose": [
+                # Four yaw variants, all centered on the handle top.
+                [[0, 0, 1, 0.0], [1, 0, 0, 0.0], [0, 1, 0, top_z], [0, 0, 0, 1]],
+                [[1, 0, 0, 0.0], [0, 0, -1, 0.0], [0, 1, 0, top_z], [0, 0, 0, 1]],
+                [[-1, 0, 0, 0.0], [0, 0, 1, 0.0], [0, 1, 0, top_z], [0, 0, 0, 1]],
+                [[0, 0, -1, 0.0], [-1, 0, 0, 0.0], [0, 1, 0, top_z], [0, 0, 0, 1]],
+            ],
+            "contact_points_group": [[0, 1, 2, 3]],
+            "contact_points_mask": [True],
+            "functional_matrix": [],
+            "transform_matrix": np.eye(4).tolist(),
+        }
+        self.sponge = Actor(entity, data, mass=0.045)
+        self._sponge_handle_z = handle_z
+        self._sponge_handle_half = (hhx, hhy, hhz)
+        self._sponge_rigid = None
+        for c in self.sponge.actor.get_components():
+            if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
+                try:
+                    c.set_linear_damping(4.0)
+                    c.set_angular_damping(4.0)
+                except Exception:
+                    pass
+                self._sponge_rigid = c
+                break
+        self._sponge_spawn_pose = pose
+
+    def _create_bench_glb(self, model_name: str, pose: sapien.Pose, scale, mass=0.1):
+        """Static décor from ``assets/objects_bench`` (office file holder, etc.)."""
+        model_dir = Path("assets/objects_bench") / model_name
+        glb = model_dir / "base.glb"
+        if not glb.exists():
+            candidates = sorted(model_dir.glob("*.glb"))
+            if not candidates:
+                raise FileNotFoundError(f"No GLB found in {model_dir}")
+            glb = candidates[0]
+        sc = [float(scale)] * 3 if isinstance(scale, (int, float)) else list(scale)
+        builder = self.scene.create_actor_builder()
+        builder.set_physx_body_type("static")
+        builder.add_nonconvex_collision_from_file(filename=str(glb), scale=sc)
+        builder.add_visual_from_file(filename=str(glb), scale=sc)
+        builder.set_initial_pose(pose)
+        actor = builder.build(name=model_name)
+        try:
+            for c in actor.get_components():
+                if isinstance(c, sapien.physx.PhysxRigidStaticComponent):
+                    break
+            actor.set_name(model_name)
+        except Exception:
+            pass
+        return actor
+
+    def _spawn_static_prop(
+        self,
+        modelname: str,
+        model_id: int,
+        xy,
+        *,
+        scale_mult: float = 1.0,
+        quat=None,
+        z_lift: float = 0.001,
+        pad: float = 0.03,
+        name: str | None = None,
+    ):
+        """Static table décor seated on the tabletop."""
+        q = list(quat) if quat is not None else list(self.PROP_UPRIGHT_Q)
+        pose = sapien.Pose(
+            [float(xy[0]), float(xy[1]), self.table_top + float(z_lift)],
+            q,
+        )
+        actor = create_actor(
+            self,
+            pose=pose,
+            modelname=modelname,
+            model_id=int(model_id),
+            convex=True,
+            is_static=True,
+            scale_mult=float(scale_mult),
+        )
+        if actor is None:
+            return None
+        if name:
+            actor.set_name(name)
+        try:
+            self.add_prohibit_area(actor, padding=float(pad))
+        except Exception:
+            pass
+        self.decor.append(actor)
+        return actor
+
+    def _spawn_decorations(self):
+        """Plant, office file holder, pen cup, and clock along the back of the table."""
+        cfg = self._cfg
+        self.decor = []
+        back_y = float(cfg.get("decor_y", 0.24))
+
+        # Plant (pot) — far left back, clear of the spill lane.
+        plant_x = float(cfg.get("plant_x", -0.44))
+        plant_id = int(cfg.get("plant_id", 0))
+        plant_scale = float(cfg.get("plant_scale", 0.55))
+        self.plant = self._spawn_static_prop(
+            "120_plant",
+            plant_id,
+            [plant_x, back_y],
+            scale_mult=plant_scale,
+            pad=0.04,
+            name="120_plant",
+        )
+
+        # Office file holder (same bench asset / orientation as the office scene).
+        file_x = float(cfg.get("file_x", 0.02))
+        file_y = float(cfg.get("file_y", back_y + 0.01))
+        file_scale = cfg.get("file_scale", [0.38, 0.70, 0.40])
+        file_q = cfg.get("file_quat", [0.7071, 0.7071, 0.0, 0.0])
+        try:
+            self.file_holder = self._create_bench_glb(
+                "122_file-holder",
+                sapien.Pose(
+                    p=[file_x, file_y, self.table_top + 0.075],
+                    q=list(file_q),
+                ),
+                scale=file_scale,
+                mass=0.1,
+            )
+            self.decor.append(self.file_holder)
+            # Manual prohibit box (bench GLB is a raw Entity, not an Actor wrapper).
+            self.prohibited_area.append(
+                [file_x - 0.12, file_y - 0.09, file_x + 0.12, file_y + 0.09]
+            )
+        except Exception as e:
+            print(f"[clean_table] file holder spawn failed: {e}")
+            self.file_holder = None
+
+        # Pen holder / pen cup — back right.
+        pen_x = float(cfg.get("pencup_x", 0.40))
+        pen_id = int(cfg.get("pencup_id", 0))
+        pen_scale = float(cfg.get("pencup_scale", 1.0))
+        self.pencup = self._spawn_static_prop(
+            "059_pencup",
+            pen_id,
+            [pen_x, back_y - 0.02],
+            scale_mult=pen_scale,
+            pad=0.03,
+            name="059_pencup",
+        )
+
+        # Alarm clock facing the robot (−Y).
+        clock_x = float(cfg.get("clock_x", -0.18))
+        clock_id = int(cfg.get("clock_id", 0))
+        clock_scale = float(cfg.get("clock_scale", 0.60))
+        face_robot_q = t3d.quaternions.qmult(
+            t3d.euler.euler2quat(0.0, 0.0, 0.5 * np.pi, axes="sxyz"),
+            np.asarray(self.PROP_UPRIGHT_Q, dtype=float),
+        )
+        self.clock = self._spawn_static_prop(
+            "046_alarm-clock",
+            clock_id,
+            [clock_x, back_y - 0.04],
+            scale_mult=clock_scale,
+            quat=face_robot_q.tolist(),
+            pad=0.03,
+            name="046_alarm-clock",
+        )
+        print(
+            f"[clean_table] décor plant=({plant_x:.2f},{back_y:.2f}) "
+            f"file=({file_x:.2f},{file_y:.2f}) "
+            f"pencup=({pen_x:.2f},{back_y - 0.02:.2f}) "
+            f"clock=({clock_x:.2f},{back_y - 0.04:.2f})"
+        )
+
+    # ------------------------------------------------------------------ spill visuals
+    def _remove_entity(self, ent):
+        if ent is None:
+            return None
+        try:
+            self.scene.remove_entity(ent)
+        except Exception:
+            pass
+        return None
+
+    def _build_spill_spots(self):
+        """Precompute discrete spill spots (irregular path). Each clears on contact."""
+        origin = self.spill_origin
+        d = self.spill_dir
+        lat = self.spill_lat
+        path = float(self.spill_path_len)
+        phase = self._lobe_phase
+        spots: list[dict] = []
+
+        # Under-mug seep (visual only — dabbing there would hit the mug).
+        spots.append(
+            {
+                "pos": origin - d * 0.025,
+                "radius": 0.022,
+                "spawn": 0.04,
+                "cleaned": False,
+                "along": -0.025,
+                "under_mug": True,
+            }
+        )
+
+        # Main stream + side fingers along the flow (teardrop / amoeba).
+        n_main = 10
+        for i in range(n_main):
+            t = (i + 0.4) / n_main  # 0 near rim → 1 at tip
+            along = t * path
+            wobble = 0.014 * np.sin(2.1 * np.pi * t + phase)
+            wobble += 0.010 * np.sin(5.0 * np.pi * t + 0.6 * phase)
+            width = 0.020 + 0.030 * (np.sin(np.pi * min(t, 0.95)) ** 0.55)
+            spots.append(
+                {
+                    "pos": origin + d * along + lat * wobble,
+                    "radius": float(width),
+                    "spawn": float(0.06 + 0.88 * t),
+                    "cleaned": False,
+                    "along": float(along),
+                }
+            )
+            # Side fingers mid-path.
+            if 0.18 < t < 0.82:
+                side = (0.024 + 0.020 * t) * (1.0 if i % 2 == 0 else -0.95)
+                spots.append(
+                    {
+                        "pos": origin + d * along + lat * (wobble + side),
+                        "radius": float(width * 0.58),
+                        "spawn": float(0.10 + 0.85 * t),
+                        "cleaned": False,
+                        "along": float(along),
+                    }
+                )
+
+        # Leading tip.
+        spots.append(
+            {
+                "pos": origin + d * path + lat * (0.008 * np.sin(phase)),
+                "radius": 0.016,
+                "spawn": 0.95,
+                "cleaned": False,
+                "along": path,
+            }
+        )
+        self._spill_spots = spots
+
+    def _active_spots(self) -> list[dict]:
+        """Spots that have spawned at the current spill_amount."""
+        amt = float(self.spill_amount)
+        return [s for s in self._spill_spots if amt >= float(s["spawn"])]
+
+    def _dirty_spots(self) -> list[dict]:
+        """Wipeable dirty lobes (excludes under-mug seep)."""
+        return [
+            s
+            for s in self._active_spots()
+            if (not s["cleaned"]) and (not s.get("under_mug"))
+        ]
+
+    def _dirty_visual_spots(self) -> list[dict]:
+        """All uncleared active lobes, including under-mug (for rendering)."""
+        return [s for s in self._active_spots() if not s["cleaned"]]
+
+    def _spill_clean_frac(self) -> float:
+        active = [
+            s for s in self._active_spots() if not s.get("under_mug")
+        ]
+        if not active:
+            return 0.0
+        cleaned = sum(1 for s in active if s["cleaned"])
+        return float(cleaned) / float(len(active))
+
+    def _spill_dirty_frac(self) -> float:
+        return 1.0 - self._spill_clean_frac()
+
+    def _spill_center_xy(self) -> np.ndarray:
+        dirty = self._dirty_spots()
+        if not dirty:
+            active = self._active_spots()
+            if not active:
+                return self.spill_origin.copy()
+            pts = np.stack([s["pos"] for s in active], axis=0)
+            return pts.mean(axis=0)
+        # Prefer the nearest dirty spot to the sponge if available.
+        try:
+            sp = self._sponge_pad_world()[:2]
+            return min(dirty, key=lambda s: float(np.linalg.norm(s["pos"] - sp)))["pos"].copy()
+        except Exception:
+            pts = np.stack([s["pos"] for s in dirty], axis=0)
+            return pts.mean(axis=0)
+
+    def _spill_front_along(self) -> float:
+        dirty = self._dirty_spots()
+        if not dirty:
+            return 0.0
+        return float(max(s["along"] + s["radius"] for s in dirty))
+
+    def _spill_radius(self) -> float:
+        dirty = self._dirty_spots()
+        if not dirty:
+            return 0.03
+        return float(max(s["radius"] for s in dirty))
+
+    def _spill_visual_key(self):
+        """Cache key: which spots are visible (spawned and not cleaned)."""
+        amt = float(self.spill_amount)
+        return tuple(
+            (i, bool(s["cleaned"]))
+            for i, s in enumerate(self._spill_spots)
+            if amt >= float(s["spawn"])
+        )
+
+    def _rebuild_spill(self, force: bool = False):
+        key = self._spill_visual_key()
+        cached = getattr(self, "_spill_visual_cached", None)
+        if not force and key == cached and self._spill_entity is not None:
+            return
+        if not force and key == cached and not key:
+            return
+        self._spill_visual_cached = key
+
+        dirty = self._dirty_visual_spots()
+        self._spill_entity = self._remove_entity(self._spill_entity)
+        if not dirty:
+            return
+
+        builder = self.scene.create_actor_builder()
+        builder.set_physx_body_type("static")
+        mat = sapien.render.RenderMaterial(base_color=list(self.SPILL_COLOR))
+        try:
+            mat.set_roughness(0.55)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.55
+
+        for s in dirty:
+            local = s["pos"] - self.spill_origin
+            builder.add_cylinder_visual(
+                pose=sapien.Pose(
+                    [float(local[0]), float(local[1]), 0.0], self.VERTICAL_CYL_Q
+                ),
+                radius=max(0.008, float(s["radius"])),
+                half_length=0.0016,
+                material=mat,
+            )
+        z = self.table_top + 0.0022
+        builder.set_initial_pose(
+            sapien.Pose(
+                p=[float(self.spill_origin[0]), float(self.spill_origin[1]), z]
+            )
+        )
+        self._spill_entity = builder.build(name="coffee_spill")
+
+    def _tip_axis(self) -> np.ndarray:
+        """World axis to tip the mug so its opening falls toward the laptop."""
+        # cross(+Z, spill_dir) → tip axis in the table plane.
+        axis = np.array([-self.spill_dir[1], self.spill_dir[0], 0.0], dtype=float)
+        n = float(np.linalg.norm(axis))
+        if n < 1e-6:
+            axis = np.array([0.0, 1.0, 0.0], dtype=float)
+        else:
+            axis /= n
+        return axis
+
+    def _set_mug_pose(self, pose: sapien.Pose) -> None:
+        self.mug.actor.set_pose(pose)
+        if self._mug_rigid is not None:
+            try:
+                if self._mug_rigid.kinematic:
+                    self._mug_rigid.set_kinematic_target(pose)
+            except Exception:
+                pass
+
+    def _animate_tip(self, n_steps: int = 24):
+        """Tip the mug onto its side with the opening toward the laptop (fall left)."""
+        upright = np.asarray(self.MUG_UPRIGHT_Q, dtype=float)
+        axis = self._tip_axis()
+        # +90° about tip_axis: upright +Z swings onto spill_dir (toward laptop).
+        # −90° tipped the mouth the wrong way (mug body fell right / outward).
+        tip_ang = 0.5 * np.pi
+        tipped_q = t3d.quaternions.qmult(
+            t3d.quaternions.axangle2quat(axis, tip_ang), upright
+        )
+        z0 = self.table_top + 0.001
+        z1 = self.table_top + float(self.mug_radius) + 0.002
+        p0 = self.mug_xy.copy()
+        # Center sits behind the rim along −spill_dir once opening rests on spill_origin.
+        p1 = self.spill_origin - self.spill_dir * float(self.mug_half_height)
+
+        self._make_kinematic(self.mug)
+        for i in range(1, int(n_steps) + 1):
+            t = i / float(n_steps)
+            ang = t * tip_ang
+            q = t3d.quaternions.qmult(
+                t3d.quaternions.axangle2quat(axis, ang), upright
+            )
+            p = p0 + t * (p1 - p0)
+            z = z0 + t * (z1 - z0)
+            self._set_mug_pose(
+                sapien.Pose([float(p[0]), float(p[1]), z], q.tolist())
+            )
+            if t > 0.55 and self._coffee_entity is not None:
+                self._coffee_entity = self._remove_entity(self._coffee_entity)
+            if t > 0.65 and not self.spill_active:
+                self.cup_tipped = True
+                self.spill_active = True
+                self.spill_amount = max(self.spill_amount, 0.05)
+                self._rebuild_spill(force=True)
+            self._idle_steps(1)
+
+        self._set_mug_pose(
+            sapien.Pose([float(p1[0]), float(p1[1]), z1], tipped_q.tolist())
+        )
+        self._coffee_entity = self._remove_entity(self._coffee_entity)
+        self.cup_tipped = True
+        self.spill_active = True
+        self.spill_amount = max(self.spill_amount, 0.08)
+        self._rebuild_spill(force=True)
+        # Release to real dynamics so arm/sponge hits can shove the mug.
+        self._enable_mug_physics()
+        print("[clean_table] tip animation done — mug fell toward laptop / spill")
+
+    # ------------------------------------------------------------------ dynamics
+    def _get_rigid(self, entity):
+        obj = entity.actor if hasattr(entity, "actor") else entity
+        for c in obj.get_components():
+            if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
+                return c
+        return None
+
+    def _make_kinematic(self, entity, mass=None):
+        rigid = self._get_rigid(entity)
+        if rigid is None:
+            return None
+        try:
+            if mass is not None:
+                rigid.set_mass(float(mass))
+            rigid.set_disable_gravity(True)
+            rigid.set_kinematic(True)
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+        except Exception:
+            pass
+        return rigid
+
+    def _enable_mug_physics(self):
+        """Dynamic mug on the table — moves when the arm or sponge collides."""
+        rigid = self._get_rigid(self.mug)
+        self._mug_rigid = rigid
+        if rigid is None:
+            return
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+            # Heavier + damped so light dabs don't drag it across the spill,
+            # but a solid arm hit still displaces it.
+            rigid.set_mass(float(self._cfg.get("mug_mass", max(self.MUG_MASS, 0.32))))
+            rigid.set_linear_damping(2.8)
+            rigid.set_angular_damping(3.0)
+            try:
+                rigid.set_max_linear_velocity(0.8)
+            except Exception:
+                pass
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+            for shape in rigid.get_collision_shapes():
+                try:
+                    m = shape.get_physical_material()
+                    m.set_static_friction(0.75)
+                    m.set_dynamic_friction(0.60)
+                    m.set_restitution(0.0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Brief settle so the tipped pose stops bouncing before wiping.
+        self._idle_steps(12)
+
+    def _mug_xy_now(self) -> np.ndarray:
+        try:
+            return np.asarray(self.mug.get_pose().p[:2], dtype=float)
+        except Exception:
+            return self.mug_xy.copy()
+
+    def _spot_clear_of_mug(self, spot: dict) -> bool:
+        """True if dabbing this spot won't drive the sponge into the mug."""
+        mug_xy = self._mug_xy_now()
+        avoid_r = (
+            float(self.mug_radius)
+            + float(self.SPONGE_HALF[0])
+            + float(self.mug_avoid_margin)
+        )
+        dist = float(np.linalg.norm(np.asarray(spot["pos"], dtype=float) - mug_xy))
+        return dist >= avoid_r
+
+    def _dab_target_xy(self, spot: dict) -> np.ndarray:
+        """XY to dab: push contact slightly away from the mug if the lobe is near."""
+        target = np.asarray(spot["pos"], dtype=float).copy()
+        mug_xy = self._mug_xy_now()
+        delta = target - mug_xy
+        dist = float(np.linalg.norm(delta))
+        min_r = (
+            float(self.mug_radius)
+            + float(self.SPONGE_HALF[0])
+            + float(self.mug_avoid_margin)
+        )
+        if dist < min_r and dist > 1e-6:
+            # Prefer pushing along the spill (away from mug body / toward laptop).
+            push = self.spill_dir * (min_r - dist + 0.01)
+            target = target + push
+        elif dist < min_r:
+            target = target + self.spill_dir * min_r
+        return target
+
+    def _tcp_pos(self, arm: ArmTag) -> np.ndarray:
+        p = (
+            self.robot.get_right_tcp_pose()
+            if str(arm) == "right"
+            else self.robot.get_left_tcp_pose()
+        )
+        return np.asarray(p[:3], dtype=float)
+
+    def _ee_pose(self, arm: ArmTag) -> sapien.Pose:
+        p = self.get_arm_pose(str(arm))
+        return sapien.Pose(list(p[:3]), list(p[3:7]))
+
+    def _set_sponge_pose(self, pose: sapien.Pose) -> None:
+        """Stamp sponge pose on the entity + kinematic target (make_soup style)."""
+        try:
+            self.sponge.actor.set_pose(pose)
+        except Exception:
+            pass
+        if self._sponge_rigid is not None:
+            try:
+                self._sponge_rigid.set_disable_gravity(True)
+                if not self._sponge_rigid.kinematic:
+                    self._sponge_rigid.set_kinematic(True)
+                self._sponge_rigid.set_linear_velocity(np.zeros(3))
+                self._sponge_rigid.set_angular_velocity(np.zeros(3))
+                self._sponge_rigid.set_kinematic_target(pose)
+            except Exception:
+                pass
+
+    def _freeze_sponge(self, pose: sapien.Pose | None = None) -> None:
+        if self._sponge_rigid is not None:
+            try:
+                self._sponge_rigid.set_disable_gravity(True)
+                self._sponge_rigid.set_kinematic(True)
+                self._sponge_rigid.set_linear_velocity(np.zeros(3))
+                self._sponge_rigid.set_angular_velocity(np.zeros(3))
+            except Exception:
+                pass
+        if pose is not None:
+            self._set_sponge_pose(pose)
+
+    def _sponge_handle_world(self) -> np.ndarray:
+        """World position of the small top handle (grasp target)."""
+        sp = self.sponge.get_pose()
+        p = np.asarray(sp.p, dtype=float)
+        R = t3d.quaternions.quat2mat(np.asarray(sp.q, dtype=float))
+        hz = float(getattr(self, "_sponge_handle_z", self.SPONGE_HALF[2] + self.SPONGE_HANDLE_HALF[2]))
+        return p + R @ np.array([0.0, 0.0, hz], dtype=float)
+
+    def _hold_ee_quat(self) -> list[float]:
+        """Wrist orientation used for grasp and every dab (pad faces table)."""
+        if self._sponge_hold_quat is not None:
+            return list(self._sponge_hold_quat)
+        return [float(v) for v in GRASP_DIRECTION_DIC["top_down"]]
+
+    def _ee_pose_at_tcp(self, tcp_xyz) -> list[float]:
+        """EE target for a top-down TCP location (ur5-wsg: EE sits above TCP)."""
+        return [
+            float(tcp_xyz[0]),
+            float(tcp_xyz[1]),
+            float(tcp_xyz[2]) + float(self.EE_TO_TCP),
+            *self._hold_ee_quat(),
+        ]
+
+    def _move_tcp_abs(self, tcp_xyz) -> bool:
+        """Absolute top-down move; keeps the sponge pad parallel to the table."""
+        self.plan_success = True
+        self.move(self.move_to_pose(self.arm, self._ee_pose_at_tcp(tcp_xyz)))
+        ok = bool(self.plan_success)
+        if not ok:
+            self.plan_success = True
+        self._sync_welded_sponge()
+        return ok
+
+    def _weld_sponge_to_ee(self, arm: ArmTag) -> bool:
+        tcp = self._tcp_pos(arm)
+        handle = self._sponge_handle_world()
+        dist = float(np.linalg.norm(tcp - handle))
+        if dist > 0.10:
+            print(f"[clean_table] refuse sponge weld — tcp-handle={dist:.3f}")
+            return False
+        self._freeze_sponge()
+        self._sponge_weld_offset = self._ee_pose(arm).inv() * self.sponge.get_pose()
+        self._sponge_welded = True
+        print(f"[clean_table] sponge welded via handle (tcp-handle={dist:.3f})")
+        return True
+
+    def _set_sponge_collision_enabled(self, enabled: bool) -> None:
+        """While held, ignore collisions so PhysX cannot yank the pad off the EE."""
+        if self._sponge_rigid is None:
+            return
+        try:
+            for shape in self._sponge_rigid.get_collision_shapes():
+                # groups: [affinity1, affinity2, contype, conaffinity] — zero = no contacts
+                if enabled:
+                    shape.set_collision_groups([1, 1, 1, 1])
+                else:
+                    shape.set_collision_groups([1, 1, 0, 0])
+        except Exception:
+            pass
+
+    def _seat_sponge_in_hand(self) -> None:
+        """Pad-flat sponge seated under the current TCP (handle in the fingers)."""
+        tcp = self._tcp_pos(self.arm)
+        hz = float(
+            getattr(
+                self,
+                "_sponge_handle_z",
+                self.SPONGE_HALF[2] + self.SPONGE_HANDLE_HALF[2],
+            )
+        )
+        # Pad center is directly below the gripped handle / TCP.
+        sponge_p = np.array(
+            [float(tcp[0]), float(tcp[1]), float(tcp[2]) - hz], dtype=float
+        )
+        sponge_p[2] = max(float(sponge_p[2]), self._contact_z())
+        upright = sapien.Pose(sponge_p.tolist(), [1, 0, 0, 0])
+        self._set_sponge_collision_enabled(False)
+        self._freeze_sponge(upright)
+        self._sponge_weld_offset = self._ee_pose(self.arm).inv() * upright
+        self._sponge_welded = True
+        self._sync_welded_sponge()
+
+    def _adopt_top_down_hold(self) -> None:
+        """Pad flat + wrist top-down — same posture used to pick and to dab.
+
+        Seat the real sponge under the TCP (no off-camera parking / twin). The
+        pad stays perpendicular to the table for every wipe.
+        """
+        arm = self.arm
+        self._sponge_hold_quat = [float(v) for v in GRASP_DIRECTION_DIC["top_down"]]
+        # Lock wrist top-down at the current grasp TCP, then attach the pad.
+        tcp = self._tcp_pos(arm)
+        self.plan_success = True
+        self.move(self.move_to_pose(arm, self._ee_pose_at_tcp(tcp)))
+        close_pos = float(self._cfg.get("sponge_grasp_close", 0.16))
+        self.move(self.close_gripper(arm, pos=close_pos))
+        self._idle_steps(2)
+        self._seat_sponge_in_hand()
+        print("[clean_table] top-down hold locked for vertical dabs")
+
+    def _sponge_pad_world(self) -> np.ndarray:
+        """World pad-center used for wiping / contact (TCP-driven while held)."""
+        if self._sponge_welded:
+            tcp = self._tcp_pos(self.arm)
+            hz = float(
+                getattr(
+                    self,
+                    "_sponge_handle_z",
+                    self.SPONGE_HALF[2] + self.SPONGE_HANDLE_HALF[2],
+                )
+            )
+            p = np.array(
+                [float(tcp[0]), float(tcp[1]), float(tcp[2]) - hz], dtype=float
+            )
+            p[2] = max(float(p[2]), self.table_top + float(self.SPONGE_HALF[2]) * 0.5)
+            return p
+        return np.asarray(self.sponge.get_pose().p, dtype=float)
+
+    def _sync_welded_sponge(self) -> None:
+        """Keep the real yellow pad glued under the TCP while held."""
+        if not self._sponge_welded:
+            return
+        p = self._sponge_pad_world()
+        flat = sapien.Pose(p.tolist(), [1, 0, 0, 0])
+        self._set_sponge_pose(flat)
+        self._sponge_weld_offset = self._ee_pose(self.arm).inv() * flat
+
+    def _contact_z(self) -> float:
+        return self.table_top + float(self.SPONGE_HALF[2]) + 0.002
+
+    def _safe_z(self) -> float:
+        return self.table_top + float(self.wipe_safe_z)
+
+    def _handle_tcp_z(self, sponge_z: float) -> float:
+        """TCP height when the handle is gripped and pad center is at sponge_z."""
+        return float(sponge_z) + float(
+            getattr(self, "_sponge_handle_z", self.SPONGE_HALF[2] + self.SPONGE_HANDLE_HALF[2])
+        )
+
+    def _drive_tcp_toward(self, target, max_steps: int = 16, step: float = 0.04) -> None:
+        """Nudge the arm so TCP approaches ``target`` (world XYZ), top-down."""
+        for _ in range(int(max_steps)):
+            tcp = self._tcp_pos(self.arm)
+            d = np.asarray(target, dtype=float) - tcp
+            if float(np.linalg.norm(d)) < 0.015:
+                return
+            nxt = tcp + np.clip(d, -step, step)
+            if not self._move_tcp_abs(nxt):
+                self._move_ok(
+                    dx=float(np.clip(d[0], -step, step)),
+                    dy=float(np.clip(d[1], -step, step)),
+                    dz=float(np.clip(d[2], -step, step)),
+                    quat=self._hold_ee_quat(),
+                )
+
+    def _grasp_sponge(self) -> bool:
+        """Pick the sponge by its small top handle (keeps fingers off the mug).
+
+        Scripted top-down approach to the handle contact frame. Avoids the old
+        mid-grasp ``freeze_sponge(spawn)`` loop that teleported the pad back to
+        the table and made the planner look like it was struggling.
+        """
+        arm = self.arm
+        spawn = self._sponge_spawn_pose
+        self._freeze_sponge(spawn)
+
+        open_pos = float(self._cfg.get("sponge_grasp_open", 0.40))
+        close_pos = float(self._cfg.get("sponge_grasp_close", 0.16))
+
+        self.move(self.open_gripper(arm, pos=open_pos))
+        self._idle_steps(2)
+        self._freeze_sponge(spawn)
+
+        grasped = False
+        for cid in (0, 1, 2, 3):
+            self.plan_success = True
+            self._freeze_sponge(spawn)
+            pre = self.get_grasp_pose(
+                self.sponge, arm, contact_point_id=cid, pre_dis=0.12
+            )
+            grasp = self.get_grasp_pose(
+                self.sponge, arm, contact_point_id=cid, pre_dis=0.0
+            )
+            if pre is None or grasp is None or pre[0] == -1 or grasp[0] == -1:
+                continue
+
+            self.move(
+                (
+                    arm,
+                    [
+                        Action(arm, "move", target_pose=pre),
+                        Action(
+                            arm,
+                            "move",
+                            target_pose=grasp,
+                            constraint_pose=[1, 1, 1, 0, 0, 0],
+                        ),
+                        Action(arm, "close", target_gripper_pos=close_pos),
+                    ],
+                )
+            )
+            handle = self._sponge_handle_world()
+            tcp = self._tcp_pos(arm)
+            near = float(np.linalg.norm(tcp - handle)) < 0.05
+            if self.plan_success and near:
+                grasped = True
+                print(f"[clean_table] handle grasp ok contact={cid}")
+                break
+            print(
+                f"[clean_table] handle grasp contact={cid} "
+                f"plan_ok={self.plan_success} near={near}"
+            )
+            self.plan_success = True
+
+        if not grasped:
+            print("[clean_table] handle grasp displacement fallback")
+            self.plan_success = True
+            self._freeze_sponge(spawn)
+            handle = self._sponge_handle_world()
+            hover = handle.copy()
+            hover[2] = max(float(handle[2]) + 0.10, self.table_top + 0.16)
+            self._drive_tcp_toward(hover, max_steps=22, step=0.05)
+            self._drive_tcp_toward(
+                handle + np.array([0.0, 0.0, 0.012]), max_steps=16, step=0.03
+            )
+            self.move(self.close_gripper(arm, pos=close_pos))
+
+        self._idle_steps(3)
+        # Weld + seat pad under the fingers (same top-down pose used for dabs).
+        ok = self._weld_sponge_to_ee(arm)
+        if ok:
+            self._adopt_top_down_hold()
+            tcp = self._tcp_pos(arm)
+            self._move_tcp_abs(
+                [tcp[0], tcp[1], self._handle_tcp_z(self._safe_z())]
+            )
+        return ok
+
+    def _spot_touching(self, spot: dict, sp: np.ndarray) -> bool:
+        """True when the sponge pad overlaps this one spot on the table."""
+        if sp[2] > self.table_top + 0.08:
+            return False
+        extra = float(self.spot_contact_extra) + 0.5 * float(self.SPONGE_HALF[0])
+        dist = float(np.linalg.norm(sp[:2] - spot["pos"]))
+        return dist <= (float(spot["radius"]) + extra)
+
+    def _clear_spot(self, spot: dict) -> None:
+        """Mark one spill lobe cleaned and refresh the visible puddle."""
+        if spot.get("cleaned"):
+            return
+        spot["cleaned"] = True
+        active = [s for s in self._active_spots() if not s.get("under_mug")]
+        self.spill_cleaned = (
+            float(sum(1 for s in active if s["cleaned"])) / max(1, len(active))
+        )
+        print(
+            f"[clean_table] cleared spot along={spot['along']:.3f} "
+            f"r={spot['radius']:.3f} dirty_left={len(self._dirty_spots())}"
+        )
+        # No wipeable dirt left → freeze only once the spill has actually
+        # progressed (avoids aborting at amt≈0.1 after the first lobe).
+        wipeable_active = [
+            s for s in self._active_spots() if not s.get("under_mug")
+        ]
+        if (
+            wipeable_active
+            and not self._dirty_spots()
+            and self.spill_amount >= 0.30
+        ):
+            self._freeze_spill_growth("table clean")
+            self.cleaned_ok = True
+        self._rebuild_spill(force=True)
+
+    def _freeze_spill_growth(self, reason: str = "") -> None:
+        """Once the table is clean, no new lobes may spawn."""
+        if self._spill_frozen:
+            return
+        self._spill_frozen = True
+        print(
+            f"[clean_table] spill growth frozen"
+            + (f" ({reason})" if reason else "")
+            + f" amt={self.spill_amount:.2f}"
+        )
+
+    def _try_clear_spots_under_sponge(self) -> int:
+        """Clear at most the armed wipe target after sustained table contact."""
+        if not self._expert_wiping or not self._wipe_armed or not self.spill_active:
+            self._wipe_contact_steps = 0
+            return 0
+        target = self._wipe_target
+        if target is None or target.get("cleaned"):
+            self._wipe_contact_steps = 0
+            return 0
+        try:
+            sp = self._sponge_pad_world()
+        except Exception:
+            self._wipe_contact_steps = 0
+            return 0
+
+        if not self._spot_touching(target, sp):
+            self._wipe_contact_steps = 0
+            return 0
+
+        self._wipe_contact_steps += 1
+        if self._wipe_contact_steps < max(1, int(self.spot_clear_dwell)):
+            return 0
+
+        self._clear_spot(target)
+        self._wipe_contact_steps = 0
+        return 1
+
+    def _step_spill(self):
+        if not self.spill_active or self.laptop_reached:
+            return
+        prev_key = getattr(self, "_spill_visual_cached", None)
+
+        # Clear first, then decide freeze/grow. Growing before clear let new
+        # lobes spawn on the step after the table looked empty.
+        self._try_clear_spots_under_sponge()
+
+        if not self._spill_frozen:
+            wipeable_active = [
+                s for s in self._active_spots() if not s.get("under_mug")
+            ]
+            table_clean = (
+                wipeable_active
+                and not self._dirty_spots()
+                and self.spill_amount >= 0.30
+            )
+            if table_clean:
+                self._freeze_spill_growth("table clean")
+                self.cleaned_ok = True
+            else:
+                # While dabbing, grow slower so the expert can finish vertical
+                # presses without the front racing to the laptop.
+                rate = 1.0 / max(1, self.spill_steps)
+                if getattr(self, "_expert_wiping", False):
+                    rate *= 0.35
+                self.spill_amount = min(1.0, self.spill_amount + rate)
+                self.max_spill_amount = max(self.max_spill_amount, self.spill_amount)
+
+        # Fail when growth reaches the laptop *and* leading dirty spots remain.
+        if not self._spill_frozen:
+            front = self._spill_front_along()
+            front_frac = front / max(1e-6, float(self.spill_path_len))
+            if (
+                self.spill_amount >= self.reach_laptop_level
+                and front_frac >= self.reach_laptop_level
+                and self._dirty_spots()
+            ):
+                self.laptop_reached = True
+                print(
+                    f"[clean_table] FAIL spill reached laptop "
+                    f"front={front:.3f} path={self.spill_path_len:.3f} "
+                    f"amt={self.spill_amount:.2f} dirty={len(self._dirty_spots())}"
+                )
+
+        # Rebuild when new spots spawn (growth) even if nothing was cleared.
+        if self._spill_visual_key() != prev_key:
+            self._rebuild_spill(force=True)
+        else:
+            self._rebuild_spill(force=False)
+
+    def _update_kinematic_tasks(self):
+        super()._update_kinematic_tasks()
+        if not getattr(self, "_loaded", False):
+            return
+        self._sync_welded_sponge()
+        self._step_spill()
+
+    def _update_render(self):
+        # Always seat the pad under the TCP before cameras sample the scene.
+        self._sync_welded_sponge()
+        return super()._update_render()
+
+    def _take_picture(self):
+        self._sync_welded_sponge()
+        return super()._take_picture()
+
+    def _idle_steps(self, n_steps: int, until=None):
+        save_freq = self.save_freq if self.save_freq is not None else 15
+        for i in range(int(n_steps)):
+            if until is not None and until():
+                break
+            self._update_kinematic_tasks()
+            self.scene.step()
+            # Re-stamp after the physics step so the pad cannot drift off the EE.
+            self._sync_welded_sponge()
+            if self.render_freq and i % max(1, int(self.render_freq)) == 0:
+                self._update_render()
+                if hasattr(self, "viewer") and self.viewer is not None:
+                    self.viewer.render()
+            if self.save_freq is not None and i % save_freq == 0:
+                self._take_picture()
+
+    # ------------------------------------------------------------------ expert motion
+    def _move_ok(self, dx=0.0, dy=0.0, dz=0.0, quat=None) -> bool:
+        if quat is None and self._sponge_welded:
+            quat = self._hold_ee_quat()
+        self.plan_success = True
+        self.move(
+            self.move_by_displacement(
+                self.arm, x=float(dx), y=float(dy), z=float(dz), quat=quat
+            )
+        )
+        ok = bool(self.plan_success)
+        if not ok:
+            self.plan_success = True
+        self._sync_welded_sponge()
+        return ok
+
+    def _next_dirty_spot(self) -> dict | None:
+        """Next wipeable spot: rim→laptop."""
+        dirty = self._dirty_spots()
+        if not dirty:
+            return None
+        return min(dirty, key=lambda s: (float(s["along"]), float(s["spawn"])))
+
+    def _lift_sponge(self) -> None:
+        """Raise sponge straight up (top-down wrist locked)."""
+        target_z = self._safe_z()
+        for _ in range(8):
+            sp = self._sponge_pad_world()
+            dz = target_z - float(sp[2])
+            if abs(dz) < 0.015:
+                return
+            self._move_ok(dz=float(np.clip(dz, -0.07, 0.07)))
+
+    def _translate_above(self, target_xy, max_steps: int = 18) -> None:
+        """XY translate at safe height; wrist stays top-down (no sponge twist)."""
+        target_z = self._safe_z()
+        for _ in range(int(max_steps)):
+            sp = self._sponge_pad_world()
+            d = np.array(
+                [target_xy[0] - sp[0], target_xy[1] - sp[1], target_z - sp[2]],
+                dtype=float,
+            )
+            if float(np.linalg.norm(d[:2])) < 0.014 and abs(d[2]) < 0.015:
+                return
+            self._move_ok(
+                dx=float(np.clip(d[0], -0.055, 0.055)),
+                dy=float(np.clip(d[1], -0.055, 0.055)),
+                dz=float(np.clip(d[2], -0.05, 0.05)),
+            )
+
+    def _lower_onto_table(self, max_steps: int = 12) -> None:
+        """Vertical Z-only press — pad stays parallel to the table."""
+        target_z = self._contact_z()
+        for _ in range(int(max_steps)):
+            sp = self._sponge_pad_world()
+            dz = target_z - float(sp[2])
+            if abs(dz) < 0.008:
+                break
+            self._move_ok(dz=float(np.clip(dz, -0.04, 0.04)))
+        self._idle_steps(2)
+
+    def _dab_spot(self, spot: dict) -> bool:
+        """Lift → hover → vertical dab → lift. Same top-down posture as grasp.
+
+        Wrist orientation is locked; only XYZ changes. No sponge flip / twist.
+        """
+        self._wipe_target = spot
+        self._wipe_armed = False
+        self._wipe_contact_steps = 0
+        target = self._dab_target_xy(spot)
+
+        self._lift_sponge()
+        self._translate_above(target)
+
+        # If still far from the dab XY, try a lateral offset around the mug.
+        sp = self._sponge_pad_world()
+        if float(np.linalg.norm(sp[:2] - target)) > 0.04:
+            lat = self.spill_lat
+            for sign in (1.0, -1.0, 1.5, -1.5):
+                alt = target + lat * (0.035 * sign)
+                self._translate_above(alt, max_steps=12)
+                sp = self._sponge_pad_world()
+                if float(np.linalg.norm(sp[:2] - alt)) < 0.03:
+                    target = alt
+                    break
+
+        # Pure vertical touch — pad perpendicular to the table.
+        self._lower_onto_table()
+
+        self._wipe_armed = True
+        dwell_need = max(1, int(self.spot_clear_dwell))
+        for _ in range(dwell_need + 6):
+            if spot["cleaned"] or self.laptop_reached:
+                break
+            self._idle_steps(1)
+
+        # Clear every dirty lobe currently under the pad (one vertical press).
+        if not self.laptop_reached:
+            sp = self._sponge_pad_world()
+            if float(sp[2]) <= self.table_top + 0.10:
+                for s in list(self._dirty_spots()):
+                    if self._spot_touching(s, sp):
+                        self._clear_spot(s)
+
+        self._wipe_armed = False
+        self._wipe_target = None
+        self._lift_sponge()
+        return bool(spot["cleaned"])
+
+    def _wipe_spill(self):
+        """Dab each lobe rim→laptop: lift, touch table, lift. Avoid the mug."""
+        self._expert_wiping = True
+        self._wipe_armed = False
+        self._wipe_target = None
+        self._wipe_contact_steps = 0
+        self._last_failed_along = None
+        # Under-mug seep is unreachable without hitting the cup — clear for success
+        # after it has been visible during the spill growth phase.
+        for s in self._spill_spots:
+            if s.get("under_mug") and not s["cleaned"]:
+                s["cleaned"] = True
+        self._rebuild_spill(force=True)
+        # Re-seat + re-close so tip collisions cannot leave an empty gripper.
+        close_pos = float(self._cfg.get("sponge_grasp_close", 0.16))
+        self.move(self.close_gripper(self.arm, pos=close_pos))
+        self._seat_sponge_in_hand()
+        self._lift_sponge()
+
+        visits = 0
+        max_visits = 36
+        while visits < max_visits and not self.laptop_reached and not self.cleaned_ok:
+            dirty = sorted(
+                self._dirty_spots(),
+                key=lambda s: (float(s["along"]), float(s["spawn"])),
+            )
+            if not dirty:
+                # Spill may not have spawned wipeable lobes yet — wait, don't
+                # freeze as "clean" at amt≈0.1 with only under-mug cleared.
+                if self.spill_amount < 0.35 and not self._spill_frozen:
+                    self._idle_steps(8)
+                    continue
+                self._freeze_spill_growth("wipe done")
+                if self.spill_amount >= 0.35:
+                    self.cleaned_ok = True
+                break
+
+            # After a failed dab, advance along the spill instead of stalling.
+            spot = dirty[0]
+            if self._last_failed_along is not None:
+                farther = [s for s in dirty if float(s["along"]) > self._last_failed_along + 1e-6]
+                if farther:
+                    spot = farther[0]
+                elif len(dirty) > 1:
+                    spot = dirty[1]
+
+            before = len(self._dirty_spots())
+            cleared = self._dab_spot(spot)
+            after = len(self._dirty_spots())
+            visits += 1
+            print(
+                f"[clean_table] dab visit={visits} along={spot['along']:.3f} "
+                f"dirty {before}->{after} cleared={cleared} "
+                f"amt={self.spill_amount:.2f}"
+            )
+            if cleared:
+                self._last_failed_along = None
+                self._idle_steps(3)
+            else:
+                self._last_failed_along = float(spot["along"])
+            if not self._dirty_spots() and self.spill_amount >= 0.35:
+                self.cleaned_ok = True
+                break
+
+        self._wipe_armed = False
+        self._wipe_target = None
+        self._expert_wiping = False
+        self._lift_sponge()
+
+    def play_once(self):
+        arm = self.arm
+        self.plan_success = True
+
+        # 1) Grab sponge on the mug side before the tip.
+        self._idle_steps(10)
+        if not self._grasp_sponge():
+            self.plan_success = False
+            self.info["info"] = self._info_dict(arm)
+            return self.info
+
+        self.plan_success = True
+        # Hold the grasp orientation — do not let the wrist twist before wiping.
+        self.move(
+            self.move_by_displacement(
+                arm, z=0.06, move_axis="world", quat=self._hold_ee_quat()
+            )
+        )
+        self._sync_welded_sponge()
+
+        # 2) Mug tips toward laptop; irregular spill grows from the rim.
+        self._animate_tip(n_steps=24)
+        # Wait until wipeable lobes exist (not just under-mug seep).
+        self._idle_steps(
+            max(int(self.post_tip_wait), 80),
+            until=lambda: (
+                len(self._dirty_spots()) > 0
+                or self.spill_amount >= max(0.20, float(self.expert_wipe_level))
+                or self.laptop_reached
+            ),
+        )
+
+        if self.laptop_reached:
+            self.plan_success = False
+            self.info["info"] = self._info_dict(arm)
+            return self.info
+
+        self._wipe_spill()
+
+        if self.laptop_reached:
+            self.plan_success = False
+        elif self.check_success():
+            self.plan_success = True
+        else:
+            self._wipe_spill()
+            self.plan_success = bool(self.check_success()) and (not self.laptop_reached)
+
+        self.info["info"] = self._info_dict(arm)
+        print(
+            f"[clean_table] done success={self.plan_success} "
+            f"amt={self.spill_amount:.2f} clean_frac={self._spill_clean_frac():.2f} "
+            f"dirty={len(self._dirty_spots())} reached={self.laptop_reached}"
+        )
+        return self.info
+
+    def _info_dict(self, arm: ArmTag) -> dict:
+        return {
+            "{A}": f"{self.MUG_MODEL}/base{self.mug_id}",
+            "{B}": f"015_laptop/{self.laptop_id}",
+            "{C}": "sponge",
+            "{a}": str(arm),
+        }
+
+    def check_success(self):
+        if self.laptop_reached:
+            return False
+        if not self.cup_tipped:
+            return False
+        active = [s for s in self._active_spots() if not s.get("under_mug")]
+        if len(active) < 3:
+            return False
+        # All currently spawned wipeable spots must be dabbed.
+        if self._dirty_spots():
+            return False
+        # Must have let the spill grow enough before claiming success.
+        if self.max_spill_amount < 0.20:
+            return False
+        return True
+
+    def get_obs(self):
+        obs = super().get_obs()
+        obs["coffee_spill"] = {
+            "spill_amount": float(self.spill_amount),
+            "clean_frac": float(self._spill_clean_frac()),
+            "dirty_spots": int(len(self._dirty_spots())),
+            "active_spots": int(len(self._active_spots())),
+            "spill_front": float(self._spill_front_along()) if self.spill_active else 0.0,
+            "cup_tipped": bool(self.cup_tipped),
+            "laptop_reached": bool(self.laptop_reached),
+            "cleaned_ok": bool(self.cleaned_ok),
+            "mug_side": float(self.mug_side),
+        }
+        return obs

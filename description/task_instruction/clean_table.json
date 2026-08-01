@@ -1,0 +1,24 @@
+{
+  "full_description": "A coffee mug tips over on one side of the table and the spill spreads toward a laptop on the opposite side. Use the sponge to wipe up the spill before it reaches the laptop.",
+  "schema": "{A} notifies the coffee mug, {B} notifies the laptop, {C} notifies the sponge, {a} notifies the arm used to wipe",
+  "preference": "num of words should not exceed 25. Degree of detail avg is 6",
+  "seen": [
+    "Wipe the coffee spill with {C} before it reaches {B}",
+    "Use {a} to clean the spill from {A} so it does not touch {B}",
+    "Grab {C} and scrub the spreading coffee before it hits {B}",
+    "Clean the table spill with {C} before it reaches the laptop",
+    "Stop the coffee from {A} reaching {B} by wiping with {C}",
+    "With {a}, wipe up the spill using {C} before it reaches {B}",
+    "The mug tipped — clean the spill with {C} before it hits {B}",
+    "Prevent coffee from soaking {B}: wipe with {C}",
+    "Use {C} to mop the spill from tipped {A} before it reaches {B}",
+    "Clean the spreading coffee puddle with {C} in time"
+  ],
+  "unseen": [
+    "Wipe the spill before it reaches the laptop",
+    "Clean the coffee puddle with the sponge in time",
+    "Stop the spill from {A} before it touches {B}",
+    "Use the sponge to clean the table before the laptop gets wet",
+    "Do not let the coffee reach the laptop; wipe it up first"
+  ]
+}

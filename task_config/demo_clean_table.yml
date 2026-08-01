@@ -1,0 +1,74 @@
+# clean_table — dual UR5e + WSG (ur5-wsg).
+render_freq: 0
+episode_num: 1
+use_seed: false
+save_freq: 15
+embodiment: [ur5-wsg, ur5-wsg, 0.6]
+language_num: 100
+use_dynamic: false
+dynamic_level: 1
+dynamic_coefficient: 0.1
+domain_randomization:
+  random_background: false
+  cluttered_table: false
+  clean_background_rate: 1
+  random_head_camera_dis: 0
+  random_table_height: 0
+  random_light: false
+  crazy_random_light_rate: 0
+camera:
+  head_camera_type: D435
+  wrist_camera_type: D435
+  collect_head_camera: true
+  collect_wrist_camera: true
+data_type:
+  rgb: true
+  third_view: false
+  depth: false
+  pointcloud: false
+  observer: false
+  endpose: true
+  qpos: true
+  mesh_segmentation: false
+  actor_segmentation: false
+pcd_down_sample_num: 1024
+pcd_crop: true
+save_path: ./data
+clear_cache_freq: 1
+collect_data: true
+eval_video_log: true
+save_failed_cases: false
+check_render_success: true
+task_args:
+  clean_table:
+    # Mug on one side, 015_laptop on the opposite; irregular spill from rim → laptop.
+    mug_side: right          # left | right | random
+    mug_x: 0.20
+    laptop_x: 0.20
+    mug_y: -0.02
+    laptop_y: -0.02
+    sponge_y: -0.18
+    mug_id: 0
+    mug_scale_mult: 0.60
+    laptop_id: 0
+    laptop_yaw: 1.5707963267948966   # +90° Z — screen/keyboard toward robot (−Y)
+    sponge_dx: 0.12                  # outboard of mug so handle grasp clears the cup
+    sponge_grasp_open: 0.40
+    sponge_grasp_close: 0.16
+    spill_steps: 16000
+    reach_laptop_level: 0.92
+    clean_tol: 0.08
+    post_tip_wait: 120
+    expert_wipe_level: 0.10
+    spot_contact_extra: 0.020
+    spot_clear_dwell: 10
+    wipe_safe_z: 0.11
+    mug_avoid_margin: 0.025
+    # Back-of-table décor (away from spill lane at y≈-0.02).
+    decor_y: 0.24
+    plant_x: -0.44
+    plant_scale: 0.55
+    file_x: 0.02
+    pencup_x: 0.40
+    clock_x: -0.18
+    clock_scale: 0.60
