@@ -2,10 +2,10 @@
 
 Inherits ``KitchenS_base_task`` (microwave + dishrack + cooking range on a kitchen
 counter). The dispenser is a raised clear glass hopper packed with real bean
-meshes. Pressing its lid opens a nozzle above the jar and releases beans into a
-glass jar marked with red ring lines at 25% / 50% / 75% (rim = full).
+meshes. Pressing the red button on top opens a nozzle above the jar and releases
+beans into a glass jar marked with red ring lines at 25% / 50% / 75% (rim = full).
 
-Dispense amount is gated by **press force** on the lid (four thresholds), not
+Dispense amount is gated by **press force** on the button (four thresholds), not
 hold duration.
 """
 
@@ -27,7 +27,7 @@ from .utils.create_actor import create_actor, create_box
 
 
 class fill_coffee_jar(KitchenS_base_task):
-    """Press the dispenser lid to fill a marked glass jar to a target level.
+    """Press the dispenser button to fill a marked glass jar to a target level.
 
     Task options (``task_args.fill_coffee_jar``):
       - ``target_fill``: 0.25 | 0.50 | 0.75 | ``random``
@@ -38,7 +38,7 @@ class fill_coffee_jar(KitchenS_base_task):
       - ``beans_full``: bean count that packs to the rim / 100%
       - ``scene_id``: 0 | 1 | 2 (KitchenS fixture layout)
 
-    Peak lid press force maps to four dispense levels; fill rises with beans.
+    Peak button press force maps to four dispense levels; fill rises with beans.
     Success when fill ∈ [target_fill − fill_tol, target_fill + fill_tol].
     """
 
@@ -51,12 +51,12 @@ class fill_coffee_jar(KitchenS_base_task):
     # (beans_full=160 → 10/20/30/40 beans ≈ 6%/13%/19%/25% of the rim).
     FORCE_THRESHOLDS = (3.0, 6.0, 10.0, 14.0)
     BEANS_PER_FORCE_LEVEL = (10, 20, 30, 40)
-    # Spring proxy (N/m): F = k * tip engagement into the lid zone.
-    # Zone starts ~5 cm above the lid so force builds as the tip descends
-    # toward contact (the arm cannot penetrate the static lid collider).
+    # Spring proxy (N/m): F = k * tip engagement into the button zone.
+    # Zone starts ~5 cm above the button so force builds as the tip descends
+    # toward contact (the arm cannot penetrate the static button collider).
     FORCE_STIFFNESS = 300.0
     FORCE_ENGAGE_SLACK = 0.05
-    # Expert press depths from hover for force levels 1..4 (stay above lid).
+    # Expert press depths from hover for force levels 1..4 (stay above button).
     PRESS_DEPTHS = (0.020, 0.030, 0.044, 0.057)
     PRESS_SAMPLE_S = 0.40  # hold time to sample peak force
     FILL_LEVELS = (0.25, 0.50, 0.75)
@@ -74,6 +74,12 @@ class fill_coffee_jar(KitchenS_base_task):
     BOX_HALF = (0.035, 0.035, 0.090)       # tall slender glass box
     PEDESTAL_HALF = (0.052, 0.052, 0.050)  # raises the hopper above the jar
     PLATFORM_HALF = (0.058, 0.058, 0.008)  # platform between pedestal and hopper
+    # Red push button on top of the glass lid (press target).
+    BTN_BASE_HALF = (0.016, 0.016, 0.003)
+    BTN_HALF = (0.011, 0.011, 0.010)
+    BTN_BASE_COLOR = (0.12, 0.12, 0.14)
+    BTN_COLOR = (0.90, 0.12, 0.10)
+    BTN_TOUCH_XY_TOL = 0.028  # m; fingertip XY tolerance around button center
     BEAN_FILL_FRAC = 0.65                  # visual fill inside the glass box
     EE_TO_TCP = 0.12
     KEY_HOVER_DIS = 0.06
@@ -85,6 +91,8 @@ class fill_coffee_jar(KitchenS_base_task):
     JAR_BOTTOM_T = 0.005
 
     GLASS = [0.88, 0.95, 0.98, 0.14]
+    # Interactive viewer look (matches trap_bug plain trap): no transmission/IOR.
+    PLAIN_GLASS = [0.18, 0.32, 0.48, 0.55]
     BEAN_BROWN = [0.30, 0.14, 0.05]
     RING_RED = [0.95, 0.05, 0.05]
 
@@ -114,6 +122,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_peak_force = 0.0
         self._press_force_level = 0
         self.table_top = 0.74
+        self._plain_glass = bool(self._cfg.get("plain_glass", False))
 
         super().setup_demo(**kwags)
         self._configure_observer_camera()
@@ -136,8 +145,30 @@ class fill_coffee_jar(KitchenS_base_task):
         camera.entity.set_pose(sapien.Pose(m))
 
     # ------------------------------------------------------------------ helpers
+    def _plain_glass_material(self):
+        """Simple alpha-transparent plastic — no glass transmission/IOR (viewer-friendly)."""
+        mat = sapien.render.RenderMaterial(base_color=list(self.PLAIN_GLASS))
+        try:
+            mat.set_transmission(0.0)
+            mat.set_transmission_roughness(1.0)
+            mat.set_roughness(0.55)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.55
+            mat.metallic = 0.0
+        try:
+            mat.set_ior(1.0)
+        except Exception:
+            try:
+                mat.ior = 1.0
+            except Exception:
+                pass
+        return mat
+
     def _glass_material(self, rgba=None, transmission=0.90):
         """Nearly-clear glass matching trap_bug / reference acrylic look."""
+        if bool(getattr(self, "_plain_glass", False)):
+            return self._plain_glass_material()
         c = list(rgba if rgba is not None else self.GLASS)
         if len(c) == 3:
             c = c + [0.18]
@@ -399,7 +430,7 @@ class fill_coffee_jar(KitchenS_base_task):
         )
 
     def _build_dispenser(self):
-        """Raised glass bean hopper whose lid touch opens a nozzle over the jar."""
+        """Raised glass bean hopper; red top button opens a nozzle over the jar."""
         x, y = self.dispenser_xy
         z0 = self.table_top
         bx, by, bz = self.BOX_HALF
@@ -434,13 +465,34 @@ class fill_coffee_jar(KitchenS_base_task):
             open_top=True,
             collision=True,
         )
-        # The clear lid itself is the touch target; there is no separate button.
-        lid_z = box_z + bz + 0.003
-        self.dispenser_touch_surface = self._add_static_box(
-            pose=sapien.Pose([x, y, box_z + bz + 0.003]),
-            half_size=[bx * 1.01, by * 1.01, 0.003],
+        # Clear lid (visual/structural only) — press target is the button above.
+        lid_hz = 0.003
+        lid_z = box_z + bz + lid_hz
+        self._add_static_box(
+            pose=sapien.Pose([x, y, lid_z]),
+            half_size=[bx * 1.01, by * 1.01, lid_hz],
             material=self._glass_material([0.90, 0.96, 0.99, 0.22]),
-            name="dispenser_touch_lid",
+            name="dispenser_lid",
+            collision=True,
+        )
+        lid_top = lid_z + lid_hz
+        # Dark collar + red push button centered on the lid.
+        bbx, bby, bbz = self.BTN_BASE_HALF
+        bhx, bhy, bhz = self.BTN_HALF
+        base_z = lid_top + bbz
+        btn_z = lid_top + 2.0 * bbz + bhz
+        self._add_static_box(
+            pose=sapien.Pose([x, y, base_z]),
+            half_size=[bbx, bby, bbz],
+            color=[*self.BTN_BASE_COLOR, 1.0],
+            name="dispenser_button_base",
+            collision=True,
+        )
+        self.dispenser_touch_surface = self._add_static_box(
+            pose=sapien.Pose([x, y, btn_z]),
+            half_size=[bhx, bhy, bhz],
+            color=[*self.BTN_COLOR, 1.0],
+            name="dispenser_push_button",
             collision=True,
         )
 
@@ -489,7 +541,7 @@ class fill_coffee_jar(KitchenS_base_task):
         )
 
         self.touch_xy = np.array([x, y], dtype=float)
-        self.touch_top_z = lid_z + 0.003
+        self.touch_top_z = float(btn_z + bhz)
 
     def _build_jar(self):
         """Clear glass cylinder (original jar design) — no handle/spout.
@@ -517,15 +569,18 @@ class fill_coffee_jar(KitchenS_base_task):
         except Exception:
             pass
 
-        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
-        glass.set_transmission(1.0)
-        glass.set_transmission_roughness(0.0)
-        glass.set_roughness(0.04)
-        glass.set_metallic(0.0)
-        try:
-            glass.set_ior(1.0)
-        except Exception:
-            pass
+        if bool(getattr(self, "_plain_glass", False)):
+            glass = self._plain_glass_material()
+        else:
+            glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
+            glass.set_transmission(1.0)
+            glass.set_transmission_roughness(0.0)
+            glass.set_roughness(0.04)
+            glass.set_metallic(0.0)
+            try:
+                glass.set_ior(1.0)
+            except Exception:
+                pass
 
         wall_h = h - bottom_t
         wall_half = wall_h * 0.5
@@ -777,20 +832,20 @@ class fill_coffee_jar(KitchenS_base_task):
             return 1.0 / 250.0
 
     def _lid_contact_force(self) -> float:
-        """PhysX contact force (N) between gripper links and the dispenser lid."""
+        """PhysX contact force (N) between gripper links and the push button."""
         if not hasattr(self, "robot"):
             return 0.0
         dt = self._sim_dt()
-        lid = "dispenser_touch_lid"
+        btn = "dispenser_push_button"
         grip = set(getattr(self.robot, "gripper_name", []) or [])
         imp = 0.0
         try:
             for contact in self.scene.get_contacts():
                 n0 = contact.bodies[0].entity.name
                 n1 = contact.bodies[1].entity.name
-                if lid not in (n0, n1):
+                if btn not in (n0, n1):
                     continue
-                other = n1 if n0 == lid else n0
+                other = n1 if n0 == btn else n0
                 if grip and other not in grip:
                     # Still accept left-arm / finger-like links.
                     o = other.lower()
@@ -810,10 +865,10 @@ class fill_coffee_jar(KitchenS_base_task):
         return float(imp / max(dt, 1e-6))
 
     def _lid_spring_force(self) -> float:
-        """Spring proxy (N) from fingertip engagement into the lid zone.
+        """Spring proxy (N) from fingertip engagement into the button zone.
 
         Position-controlled presses often yield sparse contact impulses against a
-        static lid; the spring fills that gap so press depth ↔ force stays
+        static button; the spring fills that gap so press depth ↔ force stays
         correlated for both the expert and learned policies.
         """
         if not hasattr(self, "robot"):
@@ -828,9 +883,9 @@ class fill_coffee_jar(KitchenS_base_task):
         return float(self.force_stiffness * pen)
 
     def _lid_press_force(self) -> float:
-        """Effective lid press force (N) used for the 4 dispense thresholds.
+        """Effective button press force (N) used for the 4 dispense thresholds.
 
-        Position-controlled presses into a static lid produce huge, noisy PhysX
+        Position-controlled presses into a static button produce huge, noisy PhysX
         impulse spikes (often >100 N) that would collapse every press to the
         hardest level. The spring engagement force is a stable, depth-correlated
         signal that matches the expert press depths to the four thresholds.
@@ -883,7 +938,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_force_level = 0
 
     def _tick_press(self):
-        """While the lid is held, stream beans according to peak press force."""
+        """While the button is held, stream beans according to peak press force."""
         if not self._press_active:
             return
         if self.beans_in_jar + self._press_spawned >= self.beans_full:
@@ -916,6 +971,16 @@ class fill_coffee_jar(KitchenS_base_task):
         if force_n > self._press_peak_force:
             self._press_peak_force = force_n
         self._press_force_level = self._force_level(self._press_peak_force)
+        # Ignore ghost touches during approach (below first threshold → no beans).
+        if self._press_force_level <= 0 and int(self._press_spawned) <= 0:
+            self._press_active = False
+            self._dispensing = False
+            self._press_steps = 0
+            self._press_spawned = 0
+            self._press_hold_s = 0.0
+            self._press_peak_force = 0.0
+            self._press_force_level = 0
+            return
         want = self._beans_for_force(self._press_peak_force)
         want = min(want, self.beans_full - self.beans_in_jar)
         while self._press_spawned < want:
@@ -967,7 +1032,7 @@ class fill_coffee_jar(KitchenS_base_task):
         return [float(self.touch_xy[0]), float(self.touch_xy[1]), ee_z, *GRASP_DIRECTION_DIC["top_down"]]
 
     def _press_dispenser(self, arm_tag: ArmTag, force_level: int = 4):
-        """Press the lid to the requested force level (1–4) and dispense."""
+        """Press the top button to the requested force level (1–4) and dispense."""
         level = int(np.clip(force_level, 1, 4))
         depth = float(self.press_depths[level - 1])
         # Floor for this press: commanded level's threshold (expert intent).
@@ -1020,8 +1085,9 @@ class fill_coffee_jar(KitchenS_base_task):
             ee = np.asarray(self.robot.get_left_ee_pose()[:3], dtype=float)
         except Exception:
             return
-        xy_ok = float(np.linalg.norm(ee[:2] - self.touch_xy)) <= 0.05
-        # Engage when the fingertip enters the force-sensing zone above the lid.
+        xy_tol = float(getattr(self, "BTN_TOUCH_XY_TOL", 0.028))
+        xy_ok = float(np.linalg.norm(ee[:2] - self.touch_xy)) <= xy_tol
+        # Engage when the fingertip enters the force-sensing zone above the button.
         z_ok = ee[2] <= self.touch_top_z + self.EE_TO_TCP + self.force_engage_slack
         touching = bool(xy_ok and z_ok and self._lid_press_force() > 0.5)
         if touching and not self._touch_latched:
@@ -1118,7 +1184,7 @@ class fill_coffee_jar(KitchenS_base_task):
         level_pct = int(round(self.target_fill * 100))
         self.info["info"] = {
             "{A}": "coffee dispenser",
-            "{B}": f"glass coffee pot ({level_pct}% line)",
+            "{B}": f"glass jar ({level_pct}% line)",
             "{C}": "252_coffee_bean/base0",
             "{a}": str(arm),
             "{L}": f"{level_pct}%",

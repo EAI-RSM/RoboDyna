@@ -39,7 +39,7 @@ eval_video_log: true
 task_args:
   fill_coffee_jar:
     # Success = fill in [target_fill ± fill_tol]. target_fill: 0.25|0.5|0.75|random
-    # Peak lid press force → beans dispensed → fill level (beans/beans_full).
+    # Peak button press force → beans dispensed → fill level (beans/beans_full).
     target_fill: random
     scene_id: 0
     randomize_layout: true
@@ -47,7 +47,7 @@ task_args:
     force_thresholds: [3.0, 6.0, 10.0, 14.0]   # N  (light → hard)
     beans_per_force_level: [10, 20, 30, 40]     # → ~6%/13%/19%/25% fill
     force_stiffness: 300.0                       # N/m spring engagement proxy
-    force_engage_slack: 0.05                     # m above lid where force starts
+    force_engage_slack: 0.05                     # m above button where force starts
     press_depths: [0.020, 0.030, 0.044, 0.057]  # expert depths for levels 1–4
     press_sample_s: 0.40
     fill_tol: 0.05                               # ±5% success band

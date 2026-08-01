@@ -955,6 +955,23 @@ task_args:
     expert_wipe_level: 0.12
     spot_contact_extra: 0.020
     spot_clear_dwell: 8
+  fill_coffee_jar:
+    # KitchenS: press red button on coffee dispenser → beans into marked jar.
+    # Success = fill in [target_fill ± fill_tol]. Peak button press force → beans
+    # dispensed → fill level (beans/beans_full).
+    # Randomness: target_fill=random (0.25|0.50|0.75); randomize_layout=true
+    # samples non-overlapping dispenser/jar poses per seed.
+    target_fill: random         # 0.25 | 0.50 | 0.75 | random
+    scene_id: 0
+    randomize_layout: true
+    beans_full: 160             # rim = 100% fill
+    force_thresholds: [3.0, 6.0, 10.0, 14.0]   # N  (light → hard)
+    beans_per_force_level: [10, 20, 30, 40]     # → ~6%/13%/19%/25% fill
+    force_stiffness: 300.0      # N/m spring engagement proxy
+    force_engage_slack: 0.05    # m above button where force starts
+    press_depths: [0.020, 0.030, 0.044, 0.057]  # expert depths for levels 1–4
+    press_sample_s: 0.40
+    fill_tol: 0.05              # ±5% success band
   measure_ingredient:
     # KitchenS baking counter: pour oil, then place jar on electronic scale.
     # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
