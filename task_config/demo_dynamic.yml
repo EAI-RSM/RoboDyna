@@ -825,13 +825,15 @@ task_args:
     # the bookshelf and scurries left/right with its head facing travel.
     # Expert places a hollow clear glass trap over it without pausing the bug.
     # Success = trap footprint covers the bug on the table.
+    # After walk_time seconds the bug retreats under the shelf (episode fails).
     bug_types: [cockroach, spider, ant]
     bug_speed_min: 0.07         # m/s base scuttle speed (low)
     bug_speed_max: 0.14         # m/s base scuttle speed (high)
     emerge_steps: 40            # sim steps of emerge before L/R run
+    walk_time: 15.0             # seconds out before hiding (fail)
     trap_half: [0.045, 0.045, 0.028]  # m; outer half-extents of glass trap
     trap_wall: 0.004            # m; wall / lid thickness
-    trap_mass: 0.35             # kg while held; trap is kinematic-anchored once seated
+    trap_mass: 2.5              # kg; heavy vs ~0.5 g bug; still graspable
     release_clearance: 0.05     # m; drop height above the seated trap
   two_type_sorting_catch:
     num_objects: 4              # total objects emitted

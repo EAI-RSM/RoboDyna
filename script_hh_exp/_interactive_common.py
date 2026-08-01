@@ -235,14 +235,17 @@ class HouseholdController:
                     _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
                     print(f"[{self.task}] prop held; arrows/Q/E move it")
                 else:
-                    try:
-                        body.set_kinematic(False)
-                        body.set_disable_gravity(False)
-                    except Exception:
-                        pass
-                    print(f"[{self.task}] prop released")
                     if self.task == "trap_bug":
+                        # Trap stays kinematic; release arms evaluation + kinematic fall.
+                        self.env.release_trap()
                         self.trap_released = True
+                    else:
+                        try:
+                            body.set_kinematic(False)
+                            body.set_disable_gravity(False)
+                        except Exception:
+                            pass
+                    print(f"[{self.task}] prop released")
             return
         if self.actor is None:
             self._task_action()
@@ -257,6 +260,8 @@ class HouseholdController:
                 else:
                     self.env.move(self.env.grasp_actor(self.actor, arm_tag=arm, pre_grasp_dis=0.08))
                     self.holding = bool(getattr(self.env, "plan_success", True))
+                    if self.holding and self.task == "trap_bug":
+                        self.env.weld_trap_to_gripper(arm)
                 print(f"[{self.task}] grasp {'ok' if self.holding else 'failed'}")
             else:
                 self.env.move(self.env.open_gripper(arm))
@@ -265,9 +270,10 @@ class HouseholdController:
                 elif self.task == "clean_table":
                     self.env._sponge_welded = False
                     self.env._sponge_weld_offset = None
-                self.holding = False
-                if self.task == "trap_bug":
+                elif self.task == "trap_bug":
+                    self.env.release_trap()
                     self.trap_released = True
+                self.holding = False
                 print(f"[{self.task}] released")
         except Exception as exc:
             print(f"[{self.task}] grasp/release unavailable: {exc}")
@@ -301,22 +307,24 @@ class HouseholdController:
                         print("[make_soup] vegetables released from tilted board")
 
     def after_step(self):
-        """Freeze a released trap only after it physically reaches the table."""
+        """Ensure release is armed; landing freeze is handled in the env (pose as-is)."""
         if self.task != "trap_bug" or not self.trap_released:
             return
         env = self.env
-        if getattr(env, "_trap_anchored", False) or env.trap is None:
+        if env.trap is None:
             return
-        seated_z = float(env.table_top + env.trap_half[2])
-        trap_z = float(env.trap.get_pose().p[2])
-        if trap_z <= seated_z + 0.008:
-            env._anchor_trap()
-            print("[trap_bug] trap reached the table and is now static")
+        if not bool(getattr(env, "_trap_released", False)):
+            env.release_trap()
+        if bool(getattr(env, "_trap_anchored", False)) and not getattr(self, "_trap_land_logged", False):
+            self._trap_land_logged = True
+            print("[trap_bug] trap landed; pose frozen as-is")
 
 
 def _terminal_failure(env, task):
     """Return an irreversible task failure reason, or ``None`` while playable."""
     if task == "trap_bug":
+        if bool(getattr(env, "_bug_escaped", False)):
+            return "bug went back into hiding"
         if bool(getattr(env, "_trap_anchored", False)):
             return "trap missed the bug"
     elif task in ("boil_milk", "pour_beer", "measure_ingredient"):
