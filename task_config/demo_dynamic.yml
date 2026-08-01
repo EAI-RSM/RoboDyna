@@ -1010,11 +1010,11 @@ task_args:
     # KitchenS: pan with meatballs on lit burner (right-top); serve onto plate (left-center).
     scene_id: 0
     burner: left_front
-    range_xy: [0.34, 0.18]
-    plate_x: 0.00
-    plate_y: -0.06
+    range_xy: [0.36, 0.14]
+    plate_x: -0.08
+    plate_y: -0.08
     pan_scale: 1.0
-    range_scale_mult: 1.05
+    range_scale_mult: 1.0
     plate_scale: 1.05          # prior 1.5 × 0.7 (−30%)
     meatball_radius: 0.015
     tilt_hold_dot: 0.78
