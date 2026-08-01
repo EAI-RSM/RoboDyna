@@ -411,52 +411,92 @@ class trap_bug(Office_base_task):
         self._loaded = True
 
     # ---------------------------------------------------------- bug motion
-    def _trap_near_table(self) -> bool:
-        """True when seated/anchored (or rim nearly on the table)."""
+    def _trap_overlaps_bug_height(self) -> bool:
+        """True when the hollow trap walls can touch the bug on the tabletop."""
         if self.trap is None:
             return False
-        # Only block after the trap has been released and anchored — otherwise the
-        # descending box would shove the kinematic bug out before cover.
-        if self._trap_anchored:
-            return True
-        return False
+        trap_z = float(self.trap.get_pose().p[2])
+        hz = float(self.trap_half[2])
+        bug_z = float(self.table_top + self._bug_half_h)
+        # Wall bottoms are at ~trap_z - hz; collide once they reach the bug.
+        return (trap_z - hz) <= (bug_z + 0.012) and (trap_z + hz) >= (bug_z - 0.005)
 
     def _resolve_trap_collision(self, cur, new_p, vx, vy):
-        """Block the kinematic bug from tunneling through the hollow glass trap.
+        """Keep the kinematic bug from tunneling through the hollow trap walls.
 
-        Only active once the trap is anchored on the table. Capture is decided
-        at anchor time; free bugs cannot enter the trap footprint.
+        Both actors are kinematic, so PhysX will not separate them — we resolve
+        XY against the trap's wall boxes in the trap local frame whenever the
+        trap is low enough to overlap the bug. The open cavity stays free so a
+        drop-over capture still works; only the walls block.
         """
-        if self.trap is None or not self._trap_near_table() or self._bug_captured:
+        if self.trap is None or self._bug_captured or not self._trap_overlaps_bug_height():
             return new_p, vx, vy
 
-        tp = np.asarray(self.trap.get_pose().p, dtype=np.float64)
-        hx, hy = float(self.trap_half[0]), float(self.trap_half[1])
+        pose = self.trap.get_pose()
+        T = np.asarray(pose.to_transformation_matrix(), dtype=np.float64)
+        R = T[:3, :3]
+        origin = T[:3, 3]
 
-        cx, cy = float(cur[0] - tp[0]), float(cur[1] - tp[1])
-        nx, ny = float(new_p[0] - tp[0]), float(new_p[1] - tp[1])
+        def to_local(pw):
+            return R.T @ (np.asarray(pw, dtype=np.float64)[:3] - origin)
 
-        def outside(x, y):
-            return abs(x) >= hx or abs(y) >= hy
+        cur_l = to_local(cur)
+        new_l = to_local(new_p)
+        cx, cy = float(cur_l[0]), float(cur_l[1])
+        nx, ny = float(new_l[0]), float(new_l[1])
 
-        # Outside / approaching: reject any step into the footprint.
-        if not outside(nx, ny):
-            if abs(cx) >= hx and abs(nx) < hx:
-                vx = -vx
-                nx = float(np.sign(cx) * hx)
-                self.run_sign = int(np.sign(vx)) if abs(vx) > 1e-6 else self.run_sign
-            if abs(cy) >= hy and abs(ny) < hy:
-                vy = -vy
-                ny = float(np.sign(cy) * hy)
-            if abs(nx) < hx and abs(ny) < hy:
-                if abs(nx) / hx > abs(ny) / hy:
-                    nx = float(np.sign(nx if nx != 0 else cx if cx != 0 else 1.0) * hx)
-                    vx = -abs(vx) * np.sign(nx)
-                else:
-                    ny = float(np.sign(ny if ny != 0 else cy if cy != 0 else 1.0) * hy)
-                    vy = -abs(vy) * np.sign(ny)
-            new_p = np.array([tp[0] + nx, tp[1] + ny, new_p[2]], dtype=np.float64)
+        wall = float(self.trap_wall)
+        # Inflate walls slightly so the bug body cannot clip through thin glass.
+        r = 0.008
+        ox = float(self.trap_half[0])
+        oy = float(self.trap_half[1])
+        ix = max(ox - wall - r, 0.004)
+        iy = max(oy - wall - r, 0.004)
 
+        def in_cavity(x, y):
+            return abs(x) < ix and abs(y) < iy
+
+        def in_outer(x, y):
+            return abs(x) < ox and abs(y) < oy
+
+        def in_wall(x, y):
+            return in_outer(x, y) and not in_cavity(x, y)
+
+        if not in_wall(nx, ny):
+            return new_p, vx, vy
+
+        v_loc = R.T @ np.array([vx, vy, 0.0], dtype=np.float64)
+        lvx, lvy = float(v_loc[0]), float(v_loc[1])
+
+        if in_cavity(cx, cy):
+            # Hit an inner wall from inside — bounce back into the cavity.
+            if abs(nx) / max(ix, 1e-6) >= abs(ny) / max(iy, 1e-6):
+                side = float(np.sign(nx if nx != 0 else (cx if cx != 0 else 1.0)))
+                nx = side * (ix - 1e-4)
+                lvx = -abs(lvx) * side
+            else:
+                side = float(np.sign(ny if ny != 0 else (cy if cy != 0 else 1.0)))
+                ny = side * (iy - 1e-4)
+                lvy = -abs(lvy) * side
+        else:
+            # Hit an outer wall from outside — stay outside; bounce along outward normal.
+            if abs(nx) / max(ox, 1e-6) >= abs(ny) / max(oy, 1e-6):
+                side = float(np.sign(nx if nx != 0 else (cx if cx != 0 else 1.0)))
+                nx = side * ox
+                lvx = abs(lvx) * side
+            else:
+                side = float(np.sign(ny if ny != 0 else (cy if cy != 0 else 1.0)))
+                ny = side * oy
+                lvy = abs(lvy) * side
+
+        v_world = R @ np.array([lvx, lvy, 0.0], dtype=np.float64)
+        vx, vy = float(v_world[0]), float(v_world[1])
+        if abs(vx) > 1e-6:
+            self.run_sign = int(np.sign(vx))
+
+        world = R @ np.array([nx, ny, float(new_l[2])], dtype=np.float64) + origin
+        new_p = np.array([float(world[0]), float(world[1]), float(new_p[2])],
+                         dtype=np.float64)
         return new_p, vx, vy
 
     def _ee_pose(self, arm) -> sapien.Pose:
@@ -710,8 +750,9 @@ class trap_bug(Office_base_task):
                 vy = -abs(speed) * 0.3
 
         new_p = p + np.array([vx, vy, 0.0], dtype=np.float64) * dt
+        # Always collide with low trap walls (including while fleeing to hide).
+        new_p, vx, vy = self._resolve_trap_collision(p, new_p, vx, vy)
         if self._bug_mode != "hide":
-            new_p, vx, vy = self._resolve_trap_collision(p, new_p, vx, vy)
             new_p[0] = float(np.clip(new_p[0], xmin, xmax))
             new_p[1] = float(np.clip(new_p[1], ymin, ymax))
         else:
