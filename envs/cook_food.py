@@ -649,8 +649,8 @@ class cook_food(KitchenS_base_task):
         finally:
             self._cook_hold = False
         self._dbg(f"knob_grasp_near={self._tcp_near_knob()}")
-        # Commit fire from the physically reached angle (not a teleported target).
-        self._set_knob_angle(reached if abs(reached) > 0.05 else end)
+        # Fire from contact angle only — no snap to the commanded target.
+        self._set_knob_angle(reached)
 
     # ----------------------------------------------------------- place expert
     def _dbg(self, tag: str) -> None:

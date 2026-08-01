@@ -548,6 +548,9 @@ class KitchenS_base_task(Base_Task):
                 "scale": scale.tolist(),
             },
         )
+        # The CC0 cooktop GLB ships with always-orange burner cups. Dim those so
+        # "off" does not look lit — only our blue fire ring signals stove on.
+        self._dim_cooktop_burner_materials(range_entity)
 
         self.range_xy = (float(x), float(y))
         self.range_half_size = (0.5 * model_width, 0.5 * model_depth)
@@ -559,6 +562,30 @@ class KitchenS_base_task(Base_Task):
         }
         # Default active burner: left-rear (boil_milk); tasks may reassign.
         self.burner_xy = self.burner_positions["left_rear"]
+
+        # Cover the GLB's always-orange burner cups so "off" reads cold. The
+        # active burner disc is then recolored blue only when the knob is on.
+        cover_mat = sapien.render.RenderMaterial(
+            base_color=[0.14, 0.14, 0.15, 1.0]
+        )
+        cover_mat.metallic = 0.35
+        cover_mat.roughness = 0.55
+        cover_r = 0.055 * scale_mult
+        cyl_q = [0.70710678, 0.0, 0.70710678, 0.0]
+        self._burner_covers = []
+        for bname, (bx, by) in self.burner_positions.items():
+            cb = self.scene.create_actor_builder()
+            cb.set_physx_body_type("static")
+            cb.add_cylinder_visual(
+                pose=sapien.Pose([0, 0, 0], cyl_q),
+                radius=cover_r,
+                half_length=0.0016 * scale_mult,
+                material=cover_mat,
+            )
+            cb.set_initial_pose(
+                sapien.Pose(p=[bx, by, self.range_top_z + 0.0016])
+            )
+            self._burner_covers.append(cb.build(name=f"burner_cover_{bname}"))
 
         burner_mat = sapien.render.RenderMaterial(
             base_color=[0.20, 0.20, 0.22, 1.0]
@@ -805,6 +832,38 @@ class KitchenS_base_task(Base_Task):
             for c in comps:
                 if isinstance(c, sapien.render.RenderBodyComponent):
                     self._ring_shapes.extend(list(c.render_shapes))
+
+    @staticmethod
+    def _dim_cooktop_burner_materials(entity) -> None:
+        """Darken baked-in orange/red burner cups on the cooktop mesh."""
+        try:
+            comps = entity.get_components()
+        except Exception:
+            return
+        for c in comps:
+            if not isinstance(c, sapien.render.RenderBodyComponent):
+                continue
+            for s in list(getattr(c, "render_shapes", []) or []):
+                try:
+                    mat = s.material
+                    col = list(mat.base_color)
+                except Exception:
+                    continue
+                r, g, b = float(col[0]), float(col[1]), float(col[2])
+                # Warm burner glow: strong red/orange, little blue.
+                if r > 0.35 and r > g >= b and (r - b) > 0.15:
+                    cold = [0.12, 0.12, 0.13, float(col[3] if len(col) > 3 else 1.0)]
+                    try:
+                        mat.set_base_color(cold)
+                    except Exception:
+                        mat.base_color = cold
+                    try:
+                        if hasattr(mat, "set_emission"):
+                            mat.set_emission([0.0, 0.0, 0.0, 1.0])
+                        elif hasattr(mat, "emission"):
+                            mat.emission = [0.0, 0.0, 0.0, 1.0]
+                    except Exception:
+                        pass
 
     def _set_stove_fire(self, on: bool, intensity: float = 1.0) -> None:
         """Bright blue flame when on; fully hide disc + ring when off (no gray)."""
@@ -1076,12 +1135,21 @@ class KitchenS_base_task(Base_Task):
     def _update_stove_knob_control(self) -> None:
         """Interactive / policy knob: free joint on grasp, fire from physics.
 
-        Suppresses the old proximity-toggle. While the expert owns the motion
-        (``_ignore_knob``), this is a no-op — expert begin/end handles the joint.
+        Fire always follows the live joint angle — never a scripted toggle.
+        While the expert owns approach/retreat (``_ignore_knob``), policy grasp
+        logic is suppressed, but an active grasp still drives the burner from
+        the contact-rotated joint so the flame cannot light before the twist.
         """
-        if getattr(self, "_ignore_knob", False):
-            return
         if getattr(self, "stove_knob_articulation", None) is None:
+            return
+
+        # Expert mid-twist: keep burner tied to the physical knob angle.
+        if getattr(self, "_ignore_knob", False):
+            if getattr(self, "_knob_grasp_active", False):
+                angle = float(self._get_knob_joint_angle())
+                if hasattr(self, "knob_angle"):
+                    self.knob_angle = angle
+                self._commit_stove_from_knob_angle(angle)
             return
 
         grasped = self._knob_is_grasped()
@@ -1167,9 +1235,12 @@ class KitchenS_base_task(Base_Task):
         Closes the jaws on the free revolute knob, waits for contacts, twists the
         wrist so friction torques the cap, then parks at the reached angle.
 
-        Returns the joint angle after the turn. If ``commit_stove`` is set, calls
-        ``_set_stove`` with that boolean after the twist.
+        Returns the joint angle after the turn. Burner state always follows the
+        *physical* knob angle from contact — never a hard qpos snap and never a
+        scripted ``_set_stove`` that ignores the joint. If the jaws fail to
+        torque the knob, the stove stays off.
         """
+        _ = commit_stove  # kept for call-site compat; physics angle is authoritative
         arm = getattr(self, "arm", None)
         if arm is None:
             raise RuntimeError("stove knob turn requires self.arm")
@@ -1215,9 +1286,8 @@ class KitchenS_base_task(Base_Task):
         )
         self._end_knob_turn()
         reached = float(self._get_knob_joint_angle())
-
-        if commit_stove is not None and hasattr(self, "_set_stove"):
-            self._set_stove(bool(commit_stove))
+        # Fire / stove from contact angle only — no teleport, no forced commit.
+        self._commit_stove_from_knob_angle(reached)
         if after_idle:
             self._idle_steps(int(after_idle))
 

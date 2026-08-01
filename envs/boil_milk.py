@@ -650,13 +650,12 @@ class boil_milk(KitchenS_base_task):
         if not hasattr(self, "liquid_level"):
             return
 
-        # Knob grasp / fire: KitchenS_base_task._update_stove_knob_control
-        # (contact-driven joint; stove follows angle — no proximity toggle).
+        # Knob / fire: KitchenS_base_task._update_stove_knob_control — burner
+        # follows the physical knob angle (including during the expert twist).
 
         # Boiling continues for every sim step while the burner is on — including
-        # the entire shutoff reach. It must NOT pause for ``_ignore_knob`` or any
-        # other arm-motion flag; the only stop is ``_set_stove(False)`` after the
-        # off-twist (or an overflow committed once the hand leaves the knob).
+        # the shutoff reach. Rising stops only when the knob angle turns the
+        # stove off (or overflow commits once the hand leaves the knob).
         if self.overflowed:
             self.liquid_level = float(self.baseline_level)
         elif self.stove_on:
@@ -717,13 +716,12 @@ class boil_milk(KitchenS_base_task):
 
     # ---------------------------------------------------------------- expert motion
     def _turn_knob(self, want_on: bool):
-        """Contact-driven cooktop knob twist (shared KitchenS helper)."""
+        """Contact-driven cooktop knob twist; fire follows the knob angle only."""
         self._turn_stove_knob(
             self.KNOB_ON_ANGLE if bool(want_on) else self.KNOB_OFF_ANGLE,
             start_angle=(
                 self.KNOB_ON_ANGLE if self.stove_on else self.KNOB_OFF_ANGLE
             ),
-            commit_stove=bool(want_on),
         )
         # If the milk crested the rim during the reach and the stove is STILL on
         # (missed shutoff), commit the overflow now that the hand is clear.
