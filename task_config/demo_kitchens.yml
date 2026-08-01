@@ -157,13 +157,16 @@ task_args:
     grasp_tcp_dz: 0.02
     post_catch_lift: 0.08
   make_soup:
-    # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
-    # Lift board level, tip so pieces slide into pot (PhysX), then turn stove on.
+    # KitchenS: no microwave. Stove X / board / decor randomized (Y of stove fixed).
+    # Pot stays on the same burner relative to the stove. Success = all veggies in pot.
     scene_id: 0
     burner: left_front
-    range_xy: [0.18, 0.14]
+    range_xy: [0.18, 0.14]       # Y fixed; X sampled in range_x_range when randomize_layout
+    range_x_range: [-0.10, 0.30]
     range_scale_mult: 1.0
-    microwave_scale_mult: 1.3
+    randomize_layout: true
+    randomize_background: true
+    clean_background_rate: 0.0
     water_level: 0.45
     # Original two-handled pot, sized to the boil_milk saucepan.
     pot_radius: 0.058
@@ -171,7 +174,7 @@ task_args:
     pot_wall: 0.005
     board_half: [0.095, 0.065, 0.010]
     handle_half: [0.022, 0.024, 0.022]
-    board_x: 0.16                # clear of the range apron / knob panel
+    board_x: 0.16                # fallback / mean when randomize_layout=false
     board_y: -0.14
     cube_half: 0.012
     tomato_radius: 0.015
@@ -180,7 +183,7 @@ task_args:
     pour_tip_rad: 0.70           # wrist roll for the pour (~40°)
     knob_contact_radius: 0.06
     grasp_tcp_tol: 0.045
-    # Left-side decor
+    # Decor defaults (positions randomized opposite the stove when enabled)
     plate_x: -0.18
     plate_y: -0.08
     plate_scale: 0.55
@@ -196,8 +199,11 @@ task_args:
     scene_id: 0
     burner: left_front
     range_xy: [0.18, 0.14]
+    range_x_range: [-0.10, 0.30]
     range_scale_mult: 1.0
-    microwave_scale_mult: 1.3
+    randomize_layout: true
+    randomize_background: true
+    clean_background_rate: 0.0
     water_level: 0.45
     pot_radius: 0.058
     pot_height: 0.0735
