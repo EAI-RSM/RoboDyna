@@ -3,7 +3,8 @@
 Scene mirrors the basic office bench layout (`121_wall-shelf` at the back of
 the table, from robotwin_bench office). A cockroach, spider, or ant emerges
 from under the bookshelf and runs left or right. The robot must place a hollow
-~50%-transparent glass trap box over the still-moving bug (never paused).
+~50%-transparent glass trap box over the still-moving bug (never paused for the
+place). On success the bug stops under the trap; trap collision stays on.
 The bug's heading always matches its travel direction.
 Success: the trap footprint covers the bug while resting on the table.
 """
@@ -157,8 +158,24 @@ class trap_bug(Office_base_task):
             glass.ior = 1.45
         return glass
 
+    def _make_plain_trap_material(self):
+        """Simple alpha-transparent plastic — no glass transmission/IOR (viewer-friendly)."""
+        mat = sapien.render.RenderMaterial(base_color=[0.75, 0.88, 0.95, 0.35])
+        mat.set_transmission(0.0)
+        try:
+            mat.set_transmission_roughness(1.0)
+        except Exception:
+            pass
+        mat.set_roughness(0.45)
+        mat.set_metallic(0.0)
+        try:
+            mat.set_ior(1.0)
+        except Exception:
+            mat.ior = 1.0
+        return mat
+
     def _create_glass_trap(self, pose: sapien.Pose) -> Actor:
-        """Hollow open-bottom square box (reverse box) with glass visuals."""
+        """Hollow open-bottom square box (reverse box) with glass or plain visuals."""
         hx, hy, hz = [float(v) for v in self.trap_half]
         wt = float(self.trap_wall)
         scene = self.scene
@@ -189,10 +206,14 @@ class trap_bug(Office_base_task):
         builder.set_initial_pose(pose)
         entity = builder.build(name="glass_trap")
 
-        glass = self._make_glass_material()
+        # Interactive / viewer: plain alpha transparency. Expert demos: glass.
+        if bool(getattr(self, "_plain_trap", False)):
+            visual = self._make_plain_trap_material()
+        else:
+            visual = self._make_glass_material()
         render_body = sapien.render.RenderBodyComponent()
         for local_pose, half in parts:
-            shape = sapien.render.RenderShapeBox(half, glass)
+            shape = sapien.render.RenderShapeBox(half, visual)
             shape.set_local_pose(local_pose)
             render_body.attach(shape)
         entity.add_component(render_body)
@@ -264,6 +285,8 @@ class trap_bug(Office_base_task):
         c = self._cfg
         self.trap_half = list(c.get("trap_half", self.TRAP_HALF))
         self.trap_wall = float(c.get("trap_wall", self.TRAP_WALL))
+        # plain_trap: opaque-ish alpha box (no glass transmission) for interactive viewers.
+        self._plain_trap = bool(c.get("plain_trap", False))
         self.release_clearance = float(
             c.get("release_clearance", self.RELEASE_CLEARANCE))
         self.emerge_steps = int(c.get("emerge_steps", self.EMERGE_STEPS))
@@ -372,39 +395,20 @@ class trap_bug(Office_base_task):
     def _resolve_trap_collision(self, cur, new_p, vx, vy):
         """Block the kinematic bug from tunneling through the hollow glass trap.
 
-        Only active once the trap is anchored on the table. Whether the bug
-        was caught is decided at anchor time, so a bug standing in the wall
-        band is pushed back into the cavity rather than ejected:
-        - Caught: scuttles inside, bouncing off the inner walls.
-        - Free: cannot enter the trap footprint (walls are solid).
+        Only active once the trap is anchored on the table. Capture is decided
+        at anchor time; free bugs cannot enter the trap footprint.
         """
-        if self.trap is None or not self._trap_near_table():
+        if self.trap is None or not self._trap_near_table() or self._bug_captured:
             return new_p, vx, vy
 
         tp = np.asarray(self.trap.get_pose().p, dtype=np.float64)
         hx, hy = float(self.trap_half[0]), float(self.trap_half[1])
-        wt = float(self.trap_wall)
-        # Inner free space (slight shrink so we never sit in the wall volume).
-        ix = max(hx - wt - 0.002, 0.005)
-        iy = max(hy - wt - 0.002, 0.005)
 
         cx, cy = float(cur[0] - tp[0]), float(cur[1] - tp[1])
         nx, ny = float(new_p[0] - tp[0]), float(new_p[1] - tp[1])
 
         def outside(x, y):
             return abs(x) >= hx or abs(y) >= hy
-
-        if self._bug_captured:
-            # Covered: bounce off inner walls, stay inside.
-            if abs(nx) > ix:
-                vx = -vx
-                nx = float(np.sign(nx) * ix)
-                self.run_sign = int(np.sign(vx)) if abs(vx) > 1e-6 else self.run_sign
-            if abs(ny) > iy:
-                vy = -vy
-                ny = float(np.sign(ny) * iy)
-            new_p = np.array([tp[0] + nx, tp[1] + ny, new_p[2]], dtype=np.float64)
-            return new_p, vx, vy
 
         # Outside / approaching: reject any step into the footprint.
         if not outside(nx, ny):
@@ -426,89 +430,6 @@ class trap_bug(Office_base_task):
 
         return new_p, vx, vy
 
-    def _gripper_holding_trap(self) -> bool:
-        """True when a closed-ish gripper is still near the trap (carrying it)."""
-        if self.trap is None or getattr(self, "robot", None) is None:
-            return False
-        tp = np.asarray(self.trap.get_pose().p, dtype=np.float64)
-        for get_ee, get_g in (
-            (self.robot.get_left_ee_pose, self.robot.get_left_gripper_val),
-            (self.robot.get_right_ee_pose, self.robot.get_right_gripper_val),
-        ):
-            try:
-                ee = np.asarray(get_ee()[:3], dtype=np.float64)
-                g = float(get_g())
-            except Exception:
-                continue
-            if g < 0.55 and float(np.linalg.norm(ee - tp)) < 0.10:
-                return True
-        return False
-
-    def _ignore_bug_trap_collision(self) -> None:
-        """Bug motion is scripted; PhysX contact would let it shove a dynamic box."""
-        if self.bug is None or self.trap is None:
-            return
-        ignore_bit, ignore_id = 1 << 14, 0xB06
-        for ent in (self.bug, self.trap):
-            try:
-                obj = ent.actor if hasattr(ent, "actor") else ent
-                shapes = []
-                for c in obj.get_components():
-                    if isinstance(
-                        c,
-                        (
-                            sapien.physx.PhysxRigidDynamicComponent,
-                            sapien.physx.PhysxRigidStaticComponent,
-                        ),
-                    ):
-                        shapes.extend(c.get_collision_shapes())
-                for shape in shapes:
-                    g0, g1, g2, g3 = shape.get_collision_groups()
-                    shape.set_collision_groups(
-                        [
-                            int(g0),
-                            int(g1),
-                            int(g2) | ignore_bit,
-                            (int(g3) & 0xFFFF0000) | ignore_id,
-                        ]
-                    )
-            except Exception:
-                pass
-
-    def _pin_anchored_trap(self) -> None:
-        """Force the seated pose every step so nothing can nudge the box."""
-        if not self._trap_anchored or self._trap_anchor_pose is None or self.trap is None:
-            return
-        pose = self._trap_anchor_pose
-        rigid = self._trap_rigid or self._get_rigid(self.trap)
-        if rigid is not None:
-            try:
-                rigid.set_disable_gravity(True)
-                rigid.set_kinematic(True)
-                rigid.set_linear_velocity(np.zeros(3))
-                rigid.set_angular_velocity(np.zeros(3))
-                rigid.set_kinematic_target(pose)
-            except Exception:
-                pass
-            self._trap_rigid = rigid
-        obj = self.trap.actor if hasattr(self.trap, "actor") else self.trap
-        try:
-            obj.set_pose(pose)
-        except Exception:
-            pass
-
-    def _maybe_anchor_released_trap(self) -> None:
-        """Auto-freeze once the box sits on the table and is no longer held."""
-        if self.trap is None or self._trap_anchored:
-            return
-        tp = np.asarray(self.trap.get_pose().p, dtype=np.float64)
-        seated_z = self.table_top + float(self.trap_half[2])
-        if float(tp[2]) > seated_z + 0.02:
-            return
-        if self._gripper_holding_trap():
-            return
-        self._anchor_trap()
-
     def _anchor_trap(self):
         """Freeze the trap where it landed so the bug cannot shove it."""
         if self.trap is None or self._trap_anchored:
@@ -523,7 +444,6 @@ class trap_bug(Office_base_task):
         rigid = self._trap_rigid or self._get_rigid(self.trap)
         if rigid is not None:
             try:
-                rigid.set_disable_gravity(True)
                 rigid.set_linear_velocity(np.zeros(3))
                 rigid.set_angular_velocity(np.zeros(3))
                 rigid.set_kinematic(True)
@@ -534,11 +454,9 @@ class trap_bug(Office_base_task):
         self._trap_rigid = rigid
         self._trap_anchor_pose = seated
         self._trap_anchored = True
-        # Scripted bug containment already handles walls; kill PhysX contact so
-        # a kinematic scuttle cannot shove the box even if kinematic mode fails.
-        self._ignore_bug_trap_collision()
         # The landing box either swept the bug into the cavity or missed it;
-        # that verdict is fixed here and drives containment from now on.
+        # that verdict is fixed here. On success, freeze the bug so it cannot
+        # shove the (still-collidable) trap around.
         if self.bug is not None and self._bug_rigid is not None:
             rp = np.asarray(self.bug.get_pose().p, dtype=np.float64)
             if (abs(rp[0] - p[0]) < self.trap_half[0]
@@ -549,18 +467,47 @@ class trap_bug(Office_base_task):
                 rp[0] = float(np.clip(rp[0], p[0] - ix, p[0] + ix))
                 rp[1] = float(np.clip(rp[1], p[1] - iy, p[1] + iy))
                 rp[2] = float(self.table_top + self._bug_half_h)
-                q = self.bug.get_pose().q
+                q = list(self.bug.get_pose().q)
                 self._bug_rigid.set_kinematic_target(
-                    sapien.Pose(p=rp.tolist(), q=list(q)))
+                    sapien.Pose(p=rp.tolist(), q=q))
+                self._stop_bug()
+
+    def _stop_bug(self):
+        """Halt scuttle once trapped — keeps PhysX trap collision intact."""
+        self._bug_moving = False
+        self._bug_vel = np.zeros(3, dtype=np.float64)
+        if self.bug is None or self._bug_rigid is None:
+            return
+        pose = self.bug.get_pose()
+        p = np.asarray(pose.p, dtype=np.float64)
+        p[2] = float(self.table_top + self._bug_half_h)
+        try:
+            self._bug_rigid.set_kinematic_target(
+                sapien.Pose(p.tolist(), list(pose.q)))
+        except Exception:
+            pass
 
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
             return
         self._sim_steps += 1
-        # Interactive + expert: freeze as soon as the released box seats.
-        self._maybe_anchor_released_trap()
-        self._pin_anchored_trap()
+        # Keep an anchored trap pinned every step (collector two-pass safe).
+        if self._trap_anchored and self._trap_anchor_pose is not None:
+            if self._trap_rigid is not None:
+                try:
+                    self._trap_rigid.set_kinematic_target(self._trap_anchor_pose)
+                except Exception:
+                    pass
+        # Interactive / late cover: stop as soon as success holds.
+        if (
+            self._bug_moving
+            and self._trap_anchored
+            and not self._bug_captured
+            and self.check_success()
+        ):
+            self._bug_captured = True
+            self._stop_bug()
         if not self._bug_moving or self._bug_rigid is None:
             return
 
@@ -762,7 +709,7 @@ class trap_bug(Office_base_task):
         self._anchor_trap()
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.10, move_axis="world"))
 
-        # Bug keeps scurrying inside / bouncing off the glass walls.
+        # Hold on success (bug stopped under the trap) or a miss.
         self._dwell(60)
 
         self.info["info"] = {
@@ -777,13 +724,20 @@ class trap_bug(Office_base_task):
 
     # ------------------------------------------------------------- success
     def check_success(self):
+        """Success = trap dropped onto the table with the bug under its footprint.
+
+        Hovering the box over the bug (still held / in the air) must not count.
+        Anchoring only happens after a release that seats on the table.
+        """
         if self.trap is None or self.bug is None:
+            return False
+        if not bool(getattr(self, "_trap_anchored", False)):
             return False
         trap_p = np.array(self.trap.get_pose().p, dtype=np.float64)
         bug_p = np.array(self.bug.get_pose().p, dtype=np.float64)
-        trap_on_table = (
-            (self.table_top - 0.01) < trap_p[2] < (self.table_top + 2 * self.trap_half[2] + 0.05)
-        )
+        seated_z = float(self.table_top + self.trap_half[2])
+        # Tight band around the seated rim height (not release-clearance hover).
+        trap_on_table = abs(float(trap_p[2]) - seated_z) <= 0.012
         covered = (
             abs(bug_p[0] - trap_p[0]) < self.trap_half[0] * 0.95
             and abs(bug_p[1] - trap_p[1]) < self.trap_half[1] * 0.95
