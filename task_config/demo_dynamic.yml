@@ -194,7 +194,7 @@ task_args:
     pillow_catch_xy_tol: 0.04   # m; XY pad — pillow must cover the landing
     pillow_mass: 0.35           # kg; cushion the gripper shoves across the table
     post_place_dwell: 12        # sim steps after catch/miss before episode ends
-  prevent_breakage:
+  mouse_object_drop:
     # Deep wall shelf with random cup/wineglass/beer/wine bottles + plant/mug
     # décor. Robot pick-places a custom cushioned basket under the shelf lip
     # (no teleports — carried and released by the gripper). Then a kinematic
