@@ -175,7 +175,7 @@ task_args:
     settle_hold_steps: 12       # consecutive slow steps required to call it settled
     max_live_steps: 420         # sim-step budget for the contact + roll-out
     arm_side: random            # random | left | right
-  catch_fragile_object:
+  catch_cup:
     # Deep shelf: 2× plant + 021_cup row; one random right-side cup tips/rolls.
     # Closed gripper presses one face of 266_pillow; PhysX force + damping
     # slides it under the landing on the table (table hit = fail).

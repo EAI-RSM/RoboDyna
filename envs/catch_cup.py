@@ -10,7 +10,7 @@ from transforms3d.euler import euler2quat
 from transforms3d.quaternions import qmult
 
 
-class catch_fragile_object(Office_base_task):
+class catch_cup(Office_base_task):
     """Catch a tipping/rolling cup by pushing a pillow under its landing.
 
     Scene: deep wall shelf with a 2× plant and several 021_cup instances. One
@@ -106,7 +106,7 @@ class catch_fragile_object(Office_base_task):
     )
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("catch_fragile_object", {})
+        self._cfg = kwags.get("task_args", {}).get("catch_cup", {})
         self._loaded = False
         self.cup = None
         self.pillow = None
@@ -1200,7 +1200,7 @@ class catch_fragile_object(Office_base_task):
 
         ee_now = self._tcp_pos(arm_tag)[:2]
         print(
-            f"[catch_fragile_object] push stop={stop} fails={n_plan_fail} "
+            f"[catch_cup] push stop={stop} fails={n_plan_fail} "
             f"tcp={np.round(self._tcp_pos(arm_tag), 3)} "
             f"traj={self._traj_step}/{len(self._traj)} "
             f"pillow {np.round(pp0, 3)}->{np.round(self._pillow_xy(), 3)} "
@@ -1299,7 +1299,7 @@ class catch_fragile_object(Office_base_task):
 
     def get_obs(self):
         obs = super().get_obs()
-        obs["catch_fragile_object"] = {
+        obs["catch_cup"] = {
             "cup_state": str(self._cup_state),
             "fell_on_table": bool(self._fell_on_table),
             "caught_on_pillow": bool(self._caught_on_pillow),

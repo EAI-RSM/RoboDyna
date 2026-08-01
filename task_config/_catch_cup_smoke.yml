@@ -147,7 +147,7 @@ task_args:
     catch_shelf_clearance: 0.22 # m; min gap between catch hand and shelf front lip
     post_grasp_lift: 0.10       # m; lift after grasping the stopped cup
     upright_hold: 0.30          # s; cup stands on shelf before tipping
-  catch_fragile_object:
+  catch_cup:
     # Deep shelf: 2× plant + 021_cup row; one random right-side cup tips/rolls.
     # Closed gripper presses one face of 266_pillow; PhysX force + damping
     # slides it under the landing on the table (table hit = fail).

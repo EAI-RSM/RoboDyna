@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed sweep for catch_fragile_object.
+"""Seed sweep for catch_cup.
 
 Also reports how far every dynamic décor prop drifted from its spawn pose, which
 is how we tell real cup/prop contacts apart from spawn-overlap explosions.
@@ -18,7 +18,7 @@ sys.path.insert(0, "./script/bench_script")
 from script.bench_script.record_demo import build_args
 from script.collect_data import class_decorator
 
-TASK = "catch_fragile_object"
+TASK = "catch_cup"
 CONFIG = "demo_dynamic"
 
 

@@ -700,7 +700,7 @@ class mouse_object_drop(Office_base_task):
             )
             if plant is not None:
                 self._decor_obstacles.append((-0.34, y_back, 0.085, 0.085))
-        # Tissue on the table (left), like catch_fragile — avoids shelf crowding.
+        # Tissue on the table (left), like catch_cup — avoids shelf crowding.
         tissue_id = int(np.random.choice(self.TISSUE_IDS))
         tissue_pose = sapien.Pose(
             [-0.48, -0.18, self.table_top + 0.005],
