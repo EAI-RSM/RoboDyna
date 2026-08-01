@@ -358,7 +358,7 @@ def _terminal_failure(env, task):
     return None
 
 
-def run_task(task, args, keyboard_controls, robot_controls):
+def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     module_name, class_name, _, _ = PROFILES[task]
     module = importlib.import_module(module_name)
     task_cls = getattr(module, class_name)
@@ -380,6 +380,8 @@ def run_task(task, args, keyboard_controls, robot_controls):
         task_args[key.strip()] = value
     env = task_cls()
     env.setup_demo(**config)
+    if post_setup is not None:
+        post_setup(env)
     env._interactive_robot_mode = args.control == "robot"
     print_mode_controls(task, args.control, keyboard=keyboard_controls, robot=robot_controls)
     controller = HouseholdController(env, task, robot=args.control == "robot")

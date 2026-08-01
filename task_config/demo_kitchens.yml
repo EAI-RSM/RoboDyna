@@ -146,11 +146,11 @@ task_args:
     scene_id: 0
     bag_side: left
     bag_x_abs: 0.16
-    bag_y: -0.06
+    bag_y: -0.02
     bag_yaw_deg: 0.0
     bag_scale_mult: 1.0
     apple_color: random         # green | red | random
-    veg_scale_mult: 0.035
+    veg_scale_mult: 0.024
     table_edge_y: -0.30
     grasp_tol: 0.08
     grasp_hover_z: 0.14

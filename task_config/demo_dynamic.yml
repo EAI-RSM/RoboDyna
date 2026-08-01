@@ -135,19 +135,17 @@ task_args:
     pop_steps: 90               # sim steps rat stays raised per pop
     grasp_tol: 0.05             # m; catch offset scale (success uses ~2.5×)
   catch_rolling_cup:
-    # Full office scene (wall-shelf, drawer cabinet, file holder). Cup starts on its
-    # side on the shelf, rolls like a wheel onto the table toward the near edge;
-    # robot closes onto it mid-roll (never parks the cup before the catch).
+    # Full-width single shelf (+30cm), no drawer/file/plates. Cup tips→rolls;
+    # stop → exterior physical grasp (no weld) → upright on the table.
     cup_ids: [0, 1, 2, 5, 6, 3]  # 021_cup variants used by this task
     roll_speed: 0.14            # m/s; shelf + table roll speed (arm pre-positions first)
     fall_speed_xy: 0.07         # m/s; retained horizontal speed during shelf→table fall
+    tip_duration: 0.90          # s; upright→on-side lean on the shelf
     table_edge_y: -0.30         # m; near table edge (past this without catch = fail)
-    intercept_frac: 0.72        # farther from shelf along table-roll (room to manipulate)
-    catch_shelf_clearance: 0.28 # m; min gap between catch hand and shelf front lip
-    grasp_tol: 0.08             # m; TCP-to-cup tolerance to count a catch
-    grasp_z_above: 0.055        # m; TCP height above table at the catch
-    jaw_clearance: 0.002        # m; pads stop this far short of the cup surface
-    post_catch_lift: 0.12       # m; lift after welding the caught cup
+    intercept_frac: 0.65        # fraction along table-roll for the catch
+    catch_shelf_clearance: 0.22 # m; min gap between catch hand and shelf front lip
+    post_grasp_lift: 0.10       # m; lift after grasping the stopped cup
+    upright_hold: 0.30          # s; cup stands on shelf before tipping
   stop_ball:
     # Full-width shelf; 1.6× 027_table-tennis rolls off from episode start
     # (reactive) on a randomized heading — may exit front or a side edge.
@@ -222,7 +220,6 @@ task_args:
     grasp_hover_z: 0.14
     grasp_tcp_dz: 0.02
     post_catch_lift: 0.08
-
   catch_shelf_marble:
     # Options (independent toggles; Opt 1+2 can both be on):
     #   Default — marble pauses on the top shelf until a bowl key is pressed
@@ -878,39 +875,53 @@ task_args:
     board_color: [0.98, 0.82, 0.05]  # RGB board color (yellow)
   boil_milk:
     # KitchenS: no sink/tap; microwave left, cooking range right. Pot of milk on
-    # a burner; grasp and twist the front knob to toggle heat. Milk rises while
-    # on and settles back when off. Success = on then off before overflow.
+    # a burner; grasp and twist the cooktop knob to toggle heat. White milk rises
+    # while on. Success = milk reaches the red ring, then stove off before spill.
+    # Failure = spill, or shutoff before the milk hits the ring.
     scene_id: 0                 # MW left, range right (right-arm reach)
-    range_xy: [0.42, 0.13]      # stove pulled forward so the knob is in reach
+    range_xy: [0.28, 0.14]
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
     settle_steps: 1200          # steps for liquid to return toward baseline when off
     baseline_level: 0.35        # resting fill fraction
-    expert_shutoff_level: 0.55  # milk keeps rising during the reach; leave lead time
+    target_ring: 80             # 100 = rim, 0 = pot floor
+    shutoff_lead: 0.08          # start shutoff this far below the ring
     overflow_level: 0.98        # rim; spill + fail if reached while stove on
     # force_overflow: true      # demo failure: leave burner on until spill
     pot_id: 0                   # unused (procedural pot); kept for schema compat
     pot_radius: 0.054           # m; prior teapot then −30%
     pot_height: 0.0735          # m; prior teapot then −30%
     handle_length: 0.091        # m; saucepan dual-rod handle (−30%)
-    range_scale_mult: 1.05      # 1.5× stove then −30%
+    range_scale_mult: 1.0
     microwave_scale_mult: 1.3   # +30% microwave
     milk_box_id: -1             # -1 = random 038_milk-box variant
     milk_box_height: 0.20       # m; ~1 L carton
     mug_id: 0                   # 039_mug/base0 (classic ceramic)
-    mug_height: 0.105           # m; ~10.5 cm coffee mug
-    mug_gap: 0.16               # m; beside milk, clear of knob approach
+    mug_height: 0.0735          # m; prior 10.5 cm then −30%
+    mug_gap: 0.03               # m; air gap between milk/mug footprints (Y-stacked)
     knob_contact_radius: 0.06   # m; pinch-to-knob distance that counts as held
   cook_food:
-    # KitchenS: pan on stove with food already in it. Cook via stove knob (not a
-    # key), then pour onto plate. food_type: meat|chicken|sausage|random
+    # KitchenS: food starts on chopping board → pan → cook via knob → plate.
+    # food_type: meat|chicken|sausage|random
     scene_id: 0
     food_type: random
+    burner: left_front
+    range_xy: [0.10, 0.14]
+    board_y: -0.02
+    plate_y: -0.12
     cook_steps: 2000
     cook_speed_jitter: 0.0
-    shutoff_lead: 0.04
-    cook_intensity: 0.75
-    pan_scale: 0.70
-    plate_scale: 0.55
+    # Top-down knob shutoff is a longer reach than the old front knobs.
+    shutoff_lead: 0.22
+    cook_intensity: 0.70
+    range_scale_mult: 1.0
+    pan_scale: 1.0
+    skillet_id: 2
+    skillet_handle_yaw: 1.5708
+    # Left-arm board→pan undershoots −X; bias release toward bowl +X.
+    place_dx: 0.05
+    place_dy: 0.05
+    plate_scale: 0.715
+    board_scale_mult: 0.0975
     knob_contact_radius: 0.06
   pour_beer:
     # KitchenS: pour beer from bottle into glass; foam rises while pouring.
@@ -924,6 +935,24 @@ task_args:
     expert_foam_resume: 0.55
     target_liquid: 0.90
     full_liquid_tol: 0.05
+  clean_table:
+    # Mug on one side, 015_laptop opposite; irregular spill from rim toward laptop.
+    mug_side: right
+    mug_x: 0.20
+    laptop_x: 0.20
+    mug_y: -0.02
+    laptop_y: -0.02
+    sponge_y: -0.16
+    mug_id: 0
+    mug_scale_mult: 0.60
+    laptop_id: 0
+    spill_steps: 7500
+    reach_laptop_level: 0.88
+    clean_tol: 0.08
+    post_tip_wait: 180
+    expert_wipe_level: 0.12
+    spot_contact_extra: 0.020
+    spot_clear_dwell: 8
   measure_ingredient:
     # KitchenS baking counter: pour oil, then place jar on electronic scale.
     # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)

@@ -16,8 +16,9 @@ class stop_ball(Office_base_task):
     Scene: full-width wall shelf with plant + sparse décor (globe / trophy /
     rest / clock). A ``027_table-tennis`` ball starts moving immediately on an
     angled path that may exit the front or a side edge; the matching arm reacts.
-    The scripted roll is handed over to PhysX shortly before the hand, so the
-    block, the deflection and the roll-out are simulated rather than faked.
+    Table décor is kept off the predicted roll corridor so only the arm can stop
+    it. Success requires an arm hit that keeps the ball on the table — a touch
+    that then deflects off any edge fails.
     """
 
     BALL_IDS = [0, 1]
@@ -110,6 +111,7 @@ class stop_ball(Office_base_task):
         self._traj_dt = 0.004
         self._fell_off = False
         self._stopped = False
+        self._arm_contacted = False
         self._table_start_idx = 0
         self._roll_start_idx = 0
         self._intercept_idx = 0
@@ -658,6 +660,7 @@ class stop_ball(Office_base_task):
         self._ball_state = "parked"
         self._fell_off = False
         self._stopped = False
+        self._arm_contacted = False
         self._live_steps = 0
         self._settle_steps = 0
         self._armed = False
@@ -665,18 +668,29 @@ class stop_ball(Office_base_task):
         self._loaded = True
 
     def _reserve_roll_corridor(self):
-        """Keep décor off the angled table roll path (tight AABBs)."""
+        """Keep décor completely off the predicted table roll path.
+
+        Dense, wide AABBs so props cannot sit on the lane (visually or as a
+        physical blocker if collision is ever enabled).
+        """
         if not self._traj:
             return
         i0 = int(self._land_idx)
-        i1 = int(self._fall_off_idx)
-        idxs = np.linspace(i0, max(i0, i1), num=5, dtype=int)
-        for i in idxs:
+        i1 = max(int(self._fall_off_idx), i0 + 1)
+        n = max(i1 - i0, 1)
+        step = max(1, n // 28)
+        for i in range(i0, i1 + 1, step):
             p = self._traj[int(i)][0]
             self._reserve(
                 self._occ_table, float(p[0]), float(p[1]),
-                0.055, 0.055, pad=0.015,
+                0.11, 0.11, pad=0.045,
             )
+        # Extra clearance around the intended intercept (arm owns this space).
+        ip = self._intercept_pos
+        self._reserve(
+            self._occ_table, float(ip[0]), float(ip[1]),
+            0.16, 0.16, pad=0.05,
+        )
 
     def _try_place_candidates(self, candidates, surface, n_attempts=10):
         """Place décor from a shuffled candidate list; skip overlaps."""
@@ -756,65 +770,63 @@ class stop_ball(Office_base_task):
                     surface="shelf", quat=quat, pad=0.005, force=True,
                 )
 
-        # ---- table: small props first, then screen/speaker ----
-        tissue_x = float(np.clip(-sign * 0.46, -0.52, 0.52))
-        self._spawn_static(
-            "023_tissue-box", int(np.random.choice(self.TISSUE_IDS)),
-            [tissue_x, -0.25, self.table_top + 0.005],
-            hx=0.055, hy=0.045, scale_mult=0.80, surface="table", pad=0.02,
-            force=True,
-        )
-
-        opp = -float(sign)
-        anchors = [
-            ("099_fan", self.FAN_IDS, 0.06, 0.06, 0.85, 0.05,
-             [opp * 0.48, -0.05, self.table_top + 0.005], None, 0.02),
-            ("043_book", self.BOOK_IDS, 0.08, 0.06, 0.75, 0.05,
-             [opp * 0.28, -0.25, self.table_top + 0.005], None, 0.02),
-            ("100_seal", self.SEAL_IDS, 0.045, 0.045, 0.90, 0.05,
-             [sign * 0.46, -0.22, self.table_top + 0.005], None, 0.02),
-            ("101_milk-tea", self.MILKTEA_IDS, 0.05, 0.05, 0.70, 0.05,
-             [opp * 0.46, 0.05, self.table_top + 0.005], None, 0.02),
-        ]
-        for modelname, ids, hx, hy, sm, fb, p, quat, pad in anchors:
-            placed = False
-            for _ in range(12):
+        # ---- table décor: never force onto the reserved roll corridor ----
+        def place_table(modelname, ids, preferred, hx, hy, sm, fb=0.05,
+                        quat=None, pad=0.02, n_try=24, jitter=(0.10, 0.08)):
+            z = float(preferred[2])
+            for _ in range(int(n_try)):
                 pj = [
-                    float(np.clip(p[0] + np.random.uniform(-0.06, 0.06), -0.52, 0.52)),
-                    float(np.clip(p[1] + np.random.uniform(-0.05, 0.05), -0.28, 0.16)),
-                    float(p[2]),
+                    float(np.clip(
+                        preferred[0] + np.random.uniform(-jitter[0], jitter[0]),
+                        -0.52, 0.52,
+                    )),
+                    float(np.clip(
+                        preferred[1] + np.random.uniform(-jitter[1], jitter[1]),
+                        -0.28, 0.16,
+                    )),
+                    z,
                 ]
                 if self._spawn_static(
                     modelname, int(np.random.choice(list(ids))), pj,
                     hx=hx, hy=hy, scale_mult=sm, fallback=fb, surface="table",
                     quat=quat, pad=pad,
                 ) is not None:
-                    placed = True
-                    break
-            if not placed:
-                self._spawn_static(
-                    modelname, int(np.random.choice(list(ids))), p,
-                    hx=hx, hy=hy, scale_mult=sm, fallback=fb, surface="table",
-                    quat=quat, pad=0.005, force=True,
-                )
+                    return True
+            return False  # skip rather than block the ball lane
 
-        # Screen + speaker under shelf (faces robot), clear of the ball lane.
-        under_y = 0.14
-        screen_x = float(np.clip(-sign * 0.28, -0.42, 0.42))
-        if abs(screen_x - ball_x) < 0.20:
-            screen_x = float(np.clip(-sign * 0.40, -0.48, 0.48))
-        speaker_x = float(np.clip(screen_x - sign * 0.26, -0.50, 0.50))
-        self._spawn_static(
-            "097_screen", int(np.random.choice(self.SCREEN_IDS)),
-            [screen_x, under_y, self.table_top + 0.01],
-            hx=0.11, hy=0.05, scale_mult=self.screen_scale_mult, surface="table",
-            quat=face, pad=0.015, force=True,
+        opp = -float(sign)
+        place_table(
+            "023_tissue-box", self.TISSUE_IDS,
+            [opp * 0.46, -0.25, self.table_top + 0.005],
+            0.055, 0.045, 0.80, pad=0.02,
         )
-        self._spawn_static(
-            "098_speaker", int(np.random.choice(self.SPEAKER_IDS)),
-            [speaker_x, under_y, self.table_top + 0.01],
-            hx=0.055, hy=0.055, scale_mult=1.0, fallback=0.06, surface="table",
-            quat=face, pad=0.015, force=True,
+        for modelname, ids, hx, hy, sm, fb, p in [
+            ("099_fan", self.FAN_IDS, 0.06, 0.06, 0.85, 0.05,
+             [opp * 0.48, -0.05, self.table_top + 0.005]),
+            ("043_book", self.BOOK_IDS, 0.08, 0.06, 0.75, 0.05,
+             [opp * 0.28, -0.25, self.table_top + 0.005]),
+            ("100_seal", self.SEAL_IDS, 0.045, 0.045, 0.90, 0.05,
+             [sign * 0.46, -0.22, self.table_top + 0.005]),
+            ("101_milk-tea", self.MILKTEA_IDS, 0.05, 0.05, 0.70, 0.05,
+             [opp * 0.46, 0.05, self.table_top + 0.005]),
+        ]:
+            place_table(modelname, ids, p, hx, hy, sm, fb=fb, pad=0.02)
+
+        # Screen + speaker under shelf, pushed off the roll lane (no force).
+        under_y = 0.14
+        screen_x = float(np.clip(opp * 0.40, -0.48, 0.48))
+        place_table(
+            "097_screen", self.SCREEN_IDS,
+            [screen_x, under_y, self.table_top + 0.01],
+            0.11, 0.05, self.screen_scale_mult, quat=face, pad=0.02,
+            n_try=30, jitter=(0.18, 0.04),
+        )
+        place_table(
+            "098_speaker", self.SPEAKER_IDS,
+            [float(np.clip(screen_x - sign * 0.26, -0.50, 0.50)),
+             under_y, self.table_top + 0.01],
+            0.055, 0.055, 1.0, fb=0.06, quat=face, pad=0.02,
+            n_try=30, jitter=(0.18, 0.04),
         )
 
     def _decouple_ball_from_robot(self):
@@ -1030,12 +1042,44 @@ class stop_ball(Office_base_task):
         except Exception:
             return 0.0
 
+    def _poll_arm_contact(self):
+        """Record whether the ball has touched any robot link (PhysX contacts)."""
+        if self._arm_contacted or self.ball is None:
+            return
+        try:
+            ball_name = self.ball.get_name()
+            robot_links = set()
+            for articulation in (self.robot.left_entity, self.robot.right_entity):
+                if articulation is None:
+                    continue
+                for link in articulation.get_links():
+                    robot_links.add(link.get_name())
+            for contact in self.scene.get_contacts():
+                n0 = contact.bodies[0].entity.name
+                n1 = contact.bodies[1].entity.name
+                if (n0 == ball_name and n1 in robot_links) or (
+                    n1 == ball_name and n0 in robot_links
+                ):
+                    self._arm_contacted = True
+                    return
+        except Exception:
+            pass
+        # Fallback: closed gripper almost touching the ball centre counts as a hit.
+        # Used when contact reporting is sparse for the sphere collider.
+        try:
+            gap = float(np.linalg.norm(self._ball_to_tcp(self.arm_side)[:3]))
+            if gap <= (self.ball_radius + 0.028):
+                self._arm_contacted = True
+        except Exception:
+            pass
+
     def _advance_ball(self):
         if not self._loaded or self.ball is None:
             return
         if self._ball_state == "live":
-            # PhysX owns the ball now — only watch where it ends up.
+            # PhysX owns the ball now — watch contacts and whether it stays up.
             self._live_steps += 1
+            self._poll_arm_contact()
             p = self._ball_centre()
             if self._ball_off_table(p):
                 self._fell_off = True
@@ -1216,9 +1260,17 @@ class stop_ball(Office_base_task):
         return self.info
 
     def check_success(self):
+        """Success = arm stopped the ball and it stayed on the table.
+
+        Merely touching the arm is not enough: a deflection that then falls off
+        any edge fails. Settling without arm contact (e.g. against décor) also
+        fails — only the robot may be the stopper.
+        """
         if self._fell_off or self._ball_state == "fallen":
             return False
-        if not self._stopped or self.ball is None:
+        if not self._arm_contacted or self.ball is None:
+            return False
+        if not self._stopped:
             return False
         p = self._ball_centre()
         on_table = (
@@ -1229,8 +1281,9 @@ class stop_ball(Office_base_task):
             abs(p[0]) <= self.table_x_edge - 0.01
             and self.table_edge_y + 0.01 <= p[1] <= self.shelf_front_y - 0.02
         )
-        at_rest = self._ball_speed() <= max(self.settle_speed * 4.0, 0.08)
-        return bool(on_table and in_xy and at_rest)
+        # Settle-hold already happened (`_stopped`); residual crawl after an
+        # angled deflection is fine so long as the ball stays on the table.
+        return bool(on_table and in_xy)
 
     def get_obs(self):
         obs = super().get_obs()
@@ -1238,6 +1291,7 @@ class stop_ball(Office_base_task):
             "ball_state": str(self._ball_state),
             "fell_off": bool(self._fell_off),
             "stopped": bool(self._stopped),
+            "arm_contacted": bool(self._arm_contacted),
             "traj_step": int(self._traj_step),
             "intercept_idx": int(self._intercept_idx),
             "arm_side": str(self.arm_side),
