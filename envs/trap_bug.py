@@ -426,6 +426,89 @@ class trap_bug(Office_base_task):
 
         return new_p, vx, vy
 
+    def _gripper_holding_trap(self) -> bool:
+        """True when a closed-ish gripper is still near the trap (carrying it)."""
+        if self.trap is None or getattr(self, "robot", None) is None:
+            return False
+        tp = np.asarray(self.trap.get_pose().p, dtype=np.float64)
+        for get_ee, get_g in (
+            (self.robot.get_left_ee_pose, self.robot.get_left_gripper_val),
+            (self.robot.get_right_ee_pose, self.robot.get_right_gripper_val),
+        ):
+            try:
+                ee = np.asarray(get_ee()[:3], dtype=np.float64)
+                g = float(get_g())
+            except Exception:
+                continue
+            if g < 0.55 and float(np.linalg.norm(ee - tp)) < 0.10:
+                return True
+        return False
+
+    def _ignore_bug_trap_collision(self) -> None:
+        """Bug motion is scripted; PhysX contact would let it shove a dynamic box."""
+        if self.bug is None or self.trap is None:
+            return
+        ignore_bit, ignore_id = 1 << 14, 0xB06
+        for ent in (self.bug, self.trap):
+            try:
+                obj = ent.actor if hasattr(ent, "actor") else ent
+                shapes = []
+                for c in obj.get_components():
+                    if isinstance(
+                        c,
+                        (
+                            sapien.physx.PhysxRigidDynamicComponent,
+                            sapien.physx.PhysxRigidStaticComponent,
+                        ),
+                    ):
+                        shapes.extend(c.get_collision_shapes())
+                for shape in shapes:
+                    g0, g1, g2, g3 = shape.get_collision_groups()
+                    shape.set_collision_groups(
+                        [
+                            int(g0),
+                            int(g1),
+                            int(g2) | ignore_bit,
+                            (int(g3) & 0xFFFF0000) | ignore_id,
+                        ]
+                    )
+            except Exception:
+                pass
+
+    def _pin_anchored_trap(self) -> None:
+        """Force the seated pose every step so nothing can nudge the box."""
+        if not self._trap_anchored or self._trap_anchor_pose is None or self.trap is None:
+            return
+        pose = self._trap_anchor_pose
+        rigid = self._trap_rigid or self._get_rigid(self.trap)
+        if rigid is not None:
+            try:
+                rigid.set_disable_gravity(True)
+                rigid.set_kinematic(True)
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_kinematic_target(pose)
+            except Exception:
+                pass
+            self._trap_rigid = rigid
+        obj = self.trap.actor if hasattr(self.trap, "actor") else self.trap
+        try:
+            obj.set_pose(pose)
+        except Exception:
+            pass
+
+    def _maybe_anchor_released_trap(self) -> None:
+        """Auto-freeze once the box sits on the table and is no longer held."""
+        if self.trap is None or self._trap_anchored:
+            return
+        tp = np.asarray(self.trap.get_pose().p, dtype=np.float64)
+        seated_z = self.table_top + float(self.trap_half[2])
+        if float(tp[2]) > seated_z + 0.02:
+            return
+        if self._gripper_holding_trap():
+            return
+        self._anchor_trap()
+
     def _anchor_trap(self):
         """Freeze the trap where it landed so the bug cannot shove it."""
         if self.trap is None or self._trap_anchored:
@@ -440,6 +523,7 @@ class trap_bug(Office_base_task):
         rigid = self._trap_rigid or self._get_rigid(self.trap)
         if rigid is not None:
             try:
+                rigid.set_disable_gravity(True)
                 rigid.set_linear_velocity(np.zeros(3))
                 rigid.set_angular_velocity(np.zeros(3))
                 rigid.set_kinematic(True)
@@ -450,6 +534,9 @@ class trap_bug(Office_base_task):
         self._trap_rigid = rigid
         self._trap_anchor_pose = seated
         self._trap_anchored = True
+        # Scripted bug containment already handles walls; kill PhysX contact so
+        # a kinematic scuttle cannot shove the box even if kinematic mode fails.
+        self._ignore_bug_trap_collision()
         # The landing box either swept the bug into the cavity or missed it;
         # that verdict is fixed here and drives containment from now on.
         if self.bug is not None and self._bug_rigid is not None:
@@ -471,13 +558,9 @@ class trap_bug(Office_base_task):
         if not getattr(self, "_loaded", False):
             return
         self._sim_steps += 1
-        # Keep an anchored trap pinned every step (collector two-pass safe).
-        if self._trap_anchored and self._trap_anchor_pose is not None:
-            if self._trap_rigid is not None:
-                try:
-                    self._trap_rigid.set_kinematic_target(self._trap_anchor_pose)
-                except Exception:
-                    pass
+        # Interactive + expert: freeze as soon as the released box seats.
+        self._maybe_anchor_released_trap()
+        self._pin_anchored_trap()
         if not self._bug_moving or self._bug_rigid is None:
             return
 
