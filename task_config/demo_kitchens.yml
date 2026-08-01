@@ -111,6 +111,8 @@ task_args:
     target_fill: 0.25
     fill_levels: [0.25, 0.50, 0.75, 1.0]
     pour_rate: 0.00022
+    # Sample fill speed ∼ Uniform(1±pour_rate_jitter) * pour_rate (0 = fixed).
+    pour_rate_jitter: 0.15
     fill_tol: 0.05
     # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
     oil_style: solid
@@ -119,7 +121,8 @@ task_args:
     # randomize_layout=true samples microwave X, station, scale, decor.
     randomize_layout: false
     microwave_y: 0.18
-    microwave_x_range: [-0.42, 0.18]
+    # Far-left only so the pour station never sits inside the MW footprint.
+    microwave_x_range: [-0.42, -0.22]
     station_x: -0.08
     station_x_range: [-0.20, -0.02]
     disp_y: 0.08

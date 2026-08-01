@@ -28,7 +28,9 @@ class measure_ingredient(KitchenS_base_task):
     EGG_ORANGE = [0.95, 0.48, 0.10, 1.0]
     YUP_Q = [0.5, 0.5, 0.5, 0.5]
     BOARD_QPOS = [0.707, 0.707, 0.0, 0.0]
-    BOARD_SCALE_DEFAULT = 0.07
+    # +30% vs the original 0.07 baking-board scale.
+    BOARD_SCALE_DEFAULT = 0.091
+    MICROWAVE_SCALE_DEFAULT = 1.3
 
     JAR_MODEL = "253_glass_jar"
 
@@ -55,12 +57,40 @@ class measure_ingredient(KitchenS_base_task):
     SWITCH_HOVER_Z = 0.07
     SWITCH_PRESS_Z = 0.008     # EE above button top when pressing
 
-    FILL_LEVELS = (0.25,)
-    FILL_TOL = 0.02
+    # Ring marks at 25/50/75%; 100% = jar rim (no ring).
+    FILL_LEVELS = (0.25, 0.50, 0.75, 1.0)
+    FILL_TOL = 0.05             # ±5% absolute fill tolerance
     # Slow enough that opening the switch does not already overshoot the mark;
     # oil still rises continuously while the switch stays on.
     POUR_RATE = 0.00022         # fill fraction per physics step while switch on
-    OVERFLOW_LEVEL = 1.02
+    # Relative half-width for sampling pour speed: rate ∼ Uniform(1±jitter)*pour_rate.
+    POUR_RATE_JITTER = 0.15
+    # Jar is full at 1.0; further pour (switch still ON) spills onto the table.
+    OVERFLOW_LEVEL = 1.0
+    # Layout randomization defaults (see task_args.measure_ingredient).
+    MICROWAVE_Y_DEFAULT = 0.18  # stay at the back; only X diversifies
+    # Keep MW out of the left-arm pour lane (see _sample_microwave_override).
+    MICROWAVE_X_RANGE = (-0.42, -0.22)
+    STATION_X_RANGE = (-0.20, -0.02)   # left-arm pour station
+    SCALE_NEAR_DX_RANGE = (-0.28, -0.16)  # scale toward −x of jar (same arm)
+    SCALE_NEAR_DY_RANGE = (-0.12, -0.02)  # slightly toward robot
+    DECOR_ON_MICROWAVE_PROB = 0.35
+    # Axis-aligned footprint half-sizes (m) + gap used for non-overlap layout.
+    LAYOUT_MARGIN = 0.035
+    DISP_HALF_XY = (0.058, 0.058)       # oil-can pedestal / body
+    JAR_HALF_XY = (0.042, 0.042)
+    SCALE_HALF_XY = (0.095, 0.075)
+    DECOR_HALF_XY = {
+        "bread": (0.12, 0.085),          # cutting board + bread
+        "flour": (0.075, 0.075),
+        "chips": (0.075, 0.055),
+        "bowl": (0.085, 0.085),
+    }
+    # Spill puddle grows while switch stays on after the jar is full.
+    SPILL_RATE = 0.00045        # spill_amount per physics step while overflowing
+    SPILL_RADIUS_MIN = 0.035    # m; first visible puddle under the jar
+    SPILL_RADIUS_MAX = 0.095    # m; fully spilled puddle
+    SPILL_HALF_H = 0.0018       # m; flat disk thickness on the table
 
     # Oil look (``oil_style`` task_arg):
     #   solid       — opaque sunflower-yellow oil (default)
@@ -72,6 +102,9 @@ class measure_ingredient(KitchenS_base_task):
     # Opaque sunflower-oil yellow.
     OIL_COLOR_SOLID = [0.96, 0.78, 0.12, 0.95]
     OIL_STREAM_SOLID = [0.94, 0.74, 0.08, 0.92]
+    # Same yellow family for the table spill (slightly more opaque).
+    OIL_SPILL_SOLID = [0.96, 0.78, 0.12, 0.98]
+    OIL_SPILL_TRANSPARENT = [0.90, 0.92, 0.62, 0.55]
     UPRIGHT_CYL_Q = [0.70710678, 0.0, -0.70710678, 0.0]
     SILVER = [0.78, 0.80, 0.84, 1.0]
     SILVER_DARK = [0.55, 0.57, 0.60, 1.0]
@@ -86,19 +119,30 @@ class measure_ingredient(KitchenS_base_task):
         # Bare baking counter: remove sink, faucet tap, and stove.
         self.clear_sink_and_range = True
         self.replace_sink_with_range = False
+        self.microwave_scale_mult = float(
+            self._cfg.get("microwave_scale_mult", self.MICROWAVE_SCALE_DEFAULT)
+        )
+        # Microwave pose must be chosen before super() builds the kitchen.
+        self._layout_seed = int(kwags.get("seed", 0) or 0)
+        self._sample_microwave_override(self._cfg, self._layout_seed)
 
         # Per-step state before early _update_kinematic_tasks (camera init).
         self._loaded = False
         self.tab_open = False
         self.liquid_level = 0.0
         self.overflowed = False
+        self.spill_amount = 0.0
         self.opened_once = False
         self.closed_after_pour = False
         self.jar_on_scale = False
         self.target_fill = 0.25
+        self._decor_layout = {}
         self._apply_oil_style(self._parse_oil_style(self._cfg))
         self._liquid_entity = None
         self._stream_entity = None
+        self._spill_entity = None
+        self._spill_radius_cached = -1.0
+        self._spill_xy = None
         self._liquid_half_h_cached = -1.0
         self._switch_parts = []
         self._switch_btn = None
@@ -116,6 +160,454 @@ class measure_ingredient(KitchenS_base_task):
 
         super().setup_demo(**kwags)
         self._configure_observer_camera()
+
+    def _layout_rng(self, salt: int = 0) -> np.random.RandomState:
+        return np.random.RandomState(int(getattr(self, "_layout_seed", 0)) + int(salt))
+
+    def _parse_range(self, cfg, key, default):
+        raw = cfg.get(key, default)
+        if raw is None:
+            raw = default
+        return (float(raw[0]), float(raw[1]))
+
+    def _estimate_microwave_half_xy(self, scale_mult=None):
+        """World-XY half extents of the yawed microwave collision box."""
+        if scale_mult is None:
+            scale_mult = float(
+                getattr(self, "microwave_scale_mult", self.MICROWAVE_SCALE_DEFAULT)
+            )
+        scale = 0.15 * float(scale_mult)
+        # Mesh bounds before yaw; after +90° Z, (x,y) → (−y, x).
+        bounds_min = np.array([-0.761475, -0.495360, -0.567261], dtype=float)
+        bounds_max = np.array([0.795292, 0.435315, 0.630773], dtype=float)
+        half_x = 0.5 * (bounds_max[1] - bounds_min[1]) * scale
+        half_y = 0.5 * (bounds_max[0] - bounds_min[0]) * scale
+        return np.array([float(half_x), float(half_y)], dtype=float)
+
+    @staticmethod
+    def _aabb_overlap(c1, h1, c2, h2, margin=0.0):
+        """True if two axis-aligned footprints overlap (with optional gap)."""
+        c1 = np.asarray(c1, dtype=float)
+        c2 = np.asarray(c2, dtype=float)
+        h1 = np.asarray(h1, dtype=float)
+        h2 = np.asarray(h2, dtype=float)
+        m = float(margin)
+        return bool(
+            abs(c1[0] - c2[0]) < (h1[0] + h2[0] + m)
+            and abs(c1[1] - c2[1]) < (h1[1] + h2[1] + m)
+        )
+
+    def _footprint_clear(self, center, half, blockers, margin=None):
+        """Return True if ``center/half`` does not overlap any blocker AABB."""
+        if margin is None:
+            margin = self.LAYOUT_MARGIN
+        for b_c, b_h in blockers:
+            if self._aabb_overlap(center, half, b_c, b_h, margin=margin):
+                return False
+        return True
+
+    def _microwave_pose_for_layout(self, cfg):
+        """Return (mw_xy, mw_half) used for collision-aware placement."""
+        mw_xy = getattr(self, "microwave_xy", None)
+        if mw_xy is None:
+            mw_xy = getattr(self, "microwave_xy_override", None)
+        if mw_xy is None:
+            mw_xy = [-0.32, float(cfg.get("microwave_y", self.MICROWAVE_Y_DEFAULT))]
+        mw_xy = np.asarray(mw_xy, dtype=float)
+        mw_half = getattr(self, "microwave_half_xy", None)
+        if mw_half is None:
+            mw_half = self._estimate_microwave_half_xy()
+        mw_half = np.asarray(mw_half, dtype=float)
+        return mw_xy, mw_half
+
+    def _station_clears_microwave(self, side_x, disp_y, jar_y, mw_xy, mw_half, margin=None):
+        if margin is None:
+            margin = self.LAYOUT_MARGIN
+        disp = np.array([side_x, disp_y], dtype=float)
+        jar = np.array([side_x, jar_y], dtype=float)
+        if self._aabb_overlap(disp, self.DISP_HALF_XY, mw_xy, mw_half, margin):
+            return False
+        if self._aabb_overlap(jar, self.JAR_HALF_XY, mw_xy, mw_half, margin):
+            return False
+        return True
+
+    def _nudge_x_clear_of_microwave(self, side_x, disp_y, jar_y, mw_xy, mw_half, x_lo, x_hi):
+        """Push station X away from the microwave until footprints clear."""
+        need = (
+            float(mw_half[0])
+            + max(float(self.DISP_HALF_XY[0]), float(self.JAR_HALF_XY[0]))
+            + float(self.LAYOUT_MARGIN)
+            + 1e-3
+        )
+        # Prefer the side that still lies inside [x_lo, x_hi].
+        left_x = float(mw_xy[0]) - need
+        right_x = float(mw_xy[0]) + need
+        candidates = []
+        if x_lo <= left_x <= x_hi:
+            candidates.append(left_x)
+        if x_lo <= right_x <= x_hi:
+            candidates.append(right_x)
+        # Also try clamping the preferred direction from the current sample.
+        if side_x <= mw_xy[0]:
+            candidates.append(float(np.clip(left_x, x_lo, x_hi)))
+        else:
+            candidates.append(float(np.clip(right_x, x_lo, x_hi)))
+        for x in candidates:
+            if self._station_clears_microwave(x, disp_y, jar_y, mw_xy, mw_half):
+                return float(x)
+        # Last resort: pick the in-range X maximizing |x - mw_x|.
+        grid = np.linspace(x_lo, x_hi, 25)
+        best = float(side_x)
+        best_d = -1.0
+        for x in grid:
+            if not self._station_clears_microwave(x, disp_y, jar_y, mw_xy, mw_half):
+                continue
+            d = abs(float(x) - float(mw_xy[0]))
+            if d > best_d:
+                best, best_d = float(x), d
+        return best
+
+    def _sample_microwave_override(self, cfg, seed: int):
+        """Microwave stays at the back (fixed Y); only X may diversify.
+
+        Reject X samples that leave no collision-free pour-station placement.
+        """
+        mw_y = float(cfg.get("microwave_y", self.MICROWAVE_Y_DEFAULT))
+        randomize = bool(cfg.get("randomize_layout", False))
+        if "microwave_x" in cfg and cfg.get("microwave_x") is not None:
+            self.microwave_xy_override = [float(cfg["microwave_x"]), mw_y]
+            return
+        if not randomize:
+            self.microwave_xy_override = None
+            return
+
+        lo, hi = self._parse_range(cfg, "microwave_x_range", self.MICROWAVE_X_RANGE)
+        sx_lo, sx_hi = self._parse_range(cfg, "station_x_range", self.STATION_X_RANGE)
+        disp_y = float(cfg.get("disp_y", 0.08))
+        jar_y = float(cfg.get("jar_y", -0.06))
+        mw_half = self._estimate_microwave_half_xy(
+            cfg.get("microwave_scale_mult", self.MICROWAVE_SCALE_DEFAULT)
+        )
+        rng = np.random.RandomState(int(seed) + 17)
+        mw_x = None
+        for _ in range(80):
+            cand = float(rng.uniform(lo, hi))
+            mw_xy = np.array([cand, mw_y], dtype=float)
+            # Must leave at least one valid station X in range.
+            ok = False
+            for x in np.linspace(sx_lo, sx_hi, 21):
+                if self._station_clears_microwave(
+                    float(x), disp_y, jar_y, mw_xy, mw_half
+                ):
+                    ok = True
+                    break
+            if ok:
+                mw_x = cand
+                break
+        if mw_x is None:
+            # Park MW on the far-left so the left-arm station stays clear.
+            need = (
+                float(mw_half[0])
+                + max(float(self.DISP_HALF_XY[0]), float(self.JAR_HALF_XY[0]))
+                + float(self.LAYOUT_MARGIN)
+            )
+            mw_x = float(np.clip(sx_lo - need - 0.02, lo, hi))
+        self.microwave_xy_override = [mw_x, mw_y]
+
+    def _resolve_target_fill(self, cfg, rng: np.random.RandomState) -> float:
+        """Parse target_fill: 0.25/0.5/0.75/1.0 or ``random``."""
+        tf = cfg.get("target_fill", 0.25)
+        if isinstance(tf, str) and tf.strip().lower() == "random":
+            levels = cfg.get("fill_levels", self.FILL_LEVELS)
+            choices = [float(x) for x in levels]
+            for c in choices:
+                if c not in self.FILL_LEVELS:
+                    raise ValueError(
+                        f"fill_levels entry {c} not in {self.FILL_LEVELS}"
+                    )
+            return float(rng.choice(choices))
+        level = 0.25 if tf is None else float(tf)
+        if level not in self.FILL_LEVELS:
+            raise ValueError(f"target_fill must be one of {self.FILL_LEVELS} or 'random'")
+        return level
+
+    def _sample_free_xy_aabb(
+        self, rng, half, blockers, x_range, y_range, tries=60, margin=None
+    ):
+        """Sample a table XY whose footprint clears all blocker AABBs."""
+        if margin is None:
+            margin = self.LAYOUT_MARGIN
+        x_lo, x_hi = float(x_range[0]), float(x_range[1])
+        y_lo, y_hi = float(y_range[0]), float(y_range[1])
+        half = np.asarray(half, dtype=float)
+        for _ in range(int(tries)):
+            p = np.array(
+                [rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi)], dtype=float
+            )
+            if self._footprint_clear(p, half, blockers, margin=margin):
+                return p
+        # Prefer the open right / front counter if the full box is crowded.
+        safe_boxes = [
+            (max(x_lo, 0.12), x_hi, y_lo, min(y_hi, 0.06)),
+            (x_lo, x_hi, y_lo, y_hi),
+        ]
+        best, best_score = None, -1e9
+        for bx0, bx1, by0, by1 in safe_boxes:
+            if bx1 <= bx0 or by1 <= by0:
+                continue
+            for _ in range(80):
+                p = np.array(
+                    [rng.uniform(bx0, bx1), rng.uniform(by0, by1)], dtype=float
+                )
+                if self._footprint_clear(p, half, blockers, margin=margin):
+                    return p
+                score = min(
+                    min(
+                        abs(p[0] - b_c[0]) - (half[0] + b_h[0] + margin),
+                        abs(p[1] - b_c[1]) - (half[1] + b_h[1] + margin),
+                    )
+                    for b_c, b_h in blockers
+                ) if blockers else 1.0
+                if score > best_score:
+                    best, best_score = p, score
+        if best is not None and best_score >= 0.0:
+            return best
+        # Last resort: park on the far-right front corner.
+        return np.array([min(x_hi, 0.42), max(y_lo, -0.22)], dtype=float)
+
+    def _resolve_layout(self, cfg):
+        """Station (jar under dispenser), nearby scale, sparse/on-microwave decor.
+
+        With ``randomize_layout: true``, fixed ``*_xy`` / ``station_x`` / ``scale_*``
+        in yaml are ignored in favor of the ``*_range`` parameters (unless a pin
+        key is set, e.g. ``pin_station_x``). All table props use AABB clearance
+        so the dispenser / jar / scale never sit inside the microwave.
+        """
+        rng = self._layout_rng(101)
+        randomize = bool(cfg.get("randomize_layout", False))
+        mw_xy, mw_half = self._microwave_pose_for_layout(cfg)
+        mw_top = getattr(self, "microwave_top_z", None)
+        if mw_top is None:
+            mw_top = self.table_top + 0.22
+        mw_top = float(mw_top)
+        table_z = float(self.table_top + 0.001)
+
+        disp_y = float(cfg.get("disp_y", 0.08))
+        jar_y = float(cfg.get("jar_y", -0.06))
+        if randomize and bool(cfg.get("randomize_station_y", False)):
+            dlo, dhi = self._parse_range(cfg, "disp_y_range", (0.04, 0.12))
+            jlo, jhi = self._parse_range(cfg, "jar_y_range", (-0.10, -0.02))
+            gap = disp_y - jar_y
+            disp_y = float(rng.uniform(dlo, dhi))
+            jar_y = float(np.clip(disp_y - gap, jlo, jhi))
+
+        sx_lo, sx_hi = self._parse_range(cfg, "station_x_range", self.STATION_X_RANGE)
+        if randomize:
+            if cfg.get("pin_station_x") is not None:
+                side_x = float(cfg["pin_station_x"])
+            else:
+                side_x = float(rng.uniform(sx_lo, sx_hi))
+                if not self._station_clears_microwave(
+                    side_x, disp_y, jar_y, mw_xy, mw_half
+                ):
+                    # Resample, then nudge if still blocked.
+                    found = None
+                    for _ in range(40):
+                        cand = float(rng.uniform(sx_lo, sx_hi))
+                        if self._station_clears_microwave(
+                            cand, disp_y, jar_y, mw_xy, mw_half
+                        ):
+                            found = cand
+                            break
+                    side_x = (
+                        found
+                        if found is not None
+                        else self._nudge_x_clear_of_microwave(
+                            side_x, disp_y, jar_y, mw_xy, mw_half, sx_lo, sx_hi
+                        )
+                    )
+            if not self._station_clears_microwave(
+                side_x, disp_y, jar_y, mw_xy, mw_half
+            ):
+                side_x = self._nudge_x_clear_of_microwave(
+                    side_x, disp_y, jar_y, mw_xy, mw_half, sx_lo, sx_hi
+                )
+        else:
+            side_x = float(cfg.get("station_x", -0.08))
+            if not self._station_clears_microwave(
+                side_x, disp_y, jar_y, mw_xy, mw_half
+            ):
+                # Fixed configs that still collide (e.g. large MW) get nudged.
+                side_x = self._nudge_x_clear_of_microwave(
+                    side_x, disp_y, jar_y, mw_xy, mw_half, -0.45, 0.20
+                )
+
+        self.dispenser_xy = np.array([side_x, disp_y], dtype=float)
+        self.jar_xy = np.array([side_x, jar_y], dtype=float)
+        self.arm = ArmTag("left" if side_x <= 0 else "right")
+
+        blockers = [
+            (mw_xy.copy(), mw_half.copy()),
+            (self.dispenser_xy.copy(), np.asarray(self.DISP_HALF_XY, dtype=float)),
+            (self.jar_xy.copy(), np.asarray(self.JAR_HALF_XY, dtype=float)),
+        ]
+
+        # Scale stays near the jar so the pour arm can place it — never in MW.
+        if randomize:
+            if cfg.get("pin_scale_x") is not None and cfg.get("pin_scale_y") is not None:
+                scale_xy = np.array(
+                    [float(cfg["pin_scale_x"]), float(cfg["pin_scale_y"])],
+                    dtype=float,
+                )
+            else:
+                dx_lo, dx_hi = self._parse_range(
+                    cfg, "scale_near_dx_range", self.SCALE_NEAR_DX_RANGE
+                )
+                dy_lo, dy_hi = self._parse_range(
+                    cfg, "scale_near_dy_range", self.SCALE_NEAR_DY_RANGE
+                )
+                scale_xy = None
+                for _ in range(50):
+                    dx = float(rng.uniform(dx_lo, dx_hi))
+                    dy = float(rng.uniform(dy_lo, dy_hi))
+                    if side_x <= 0:
+                        cand = np.array([side_x + dx, jar_y + dy], dtype=float)
+                    else:
+                        cand = np.array([side_x - dx, jar_y + dy], dtype=float)
+                    if self._footprint_clear(cand, self.SCALE_HALF_XY, blockers):
+                        scale_xy = cand
+                        break
+                if scale_xy is None:
+                    # Fallback: beside the jar, away from the microwave in X.
+                    away = -1.0 if side_x <= float(mw_xy[0]) else 1.0
+                    scale_xy = np.array(
+                        [side_x + away * 0.22, jar_y - 0.06], dtype=float
+                    )
+                    if not self._footprint_clear(scale_xy, self.SCALE_HALF_XY, blockers):
+                        scale_xy = np.array(
+                            [side_x + away * 0.28, jar_y - 0.08], dtype=float
+                        )
+        else:
+            scale_xy = np.array(
+                [
+                    float(
+                        cfg.get(
+                            "scale_x",
+                            side_x - 0.26 if side_x <= 0 else side_x + 0.26,
+                        )
+                    ),
+                    float(cfg.get("scale_y", -0.14)),
+                ],
+                dtype=float,
+            )
+            if not self._footprint_clear(scale_xy, self.SCALE_HALF_XY, blockers):
+                away = -1.0 if side_x <= float(mw_xy[0]) else 1.0
+                scale_xy = np.array([side_x + away * 0.24, jar_y - 0.06], dtype=float)
+        self.scale_xy = scale_xy
+        blockers.append(
+            (self.scale_xy.copy(), np.asarray(self.SCALE_HALF_XY, dtype=float))
+        )
+
+        # Baking decor: free counter (AABB-clear), or on top of the microwave.
+        defaults = {
+            "bread": cfg.get("bread_xy", [0.28, -0.20]),
+            "flour": cfg.get("flour_xy", [0.38, 0.14]),
+            "chips": cfg.get("chips_xy", [0.12, -0.22]),
+            "bowl": cfg.get("bowl_xy", [0.40, -0.02]),
+        }
+        on_mw_prob = float(
+            cfg.get("decor_on_microwave_prob", self.DECOR_ON_MICROWAVE_PROB)
+        )
+        decor_x_range = self._parse_range(cfg, "decor_x_range", (-0.45, 0.48))
+        decor_y_range = self._parse_range(cfg, "decor_y_range", (-0.26, 0.20))
+        # Keep table decor off the microwave footprint and out of the pour lane.
+        mw_blockers = list(blockers)
+        on_mw_blockers = []  # footprints already placed on the microwave top
+
+        self._decor_layout = {}
+        for name, default_xy in defaults.items():
+            half = self.DECOR_HALF_XY.get(name, (0.08, 0.08))
+            on_mw = False
+            if randomize:
+                want_mw = bool(rng.rand() < on_mw_prob)
+                # Skip MW top if the prop footprint cannot fit with margin.
+                if want_mw and (
+                    float(half[0]) > 0.70 * float(mw_half[0])
+                    or float(half[1]) > 0.70 * float(mw_half[1])
+                ):
+                    want_mw = False
+                xy = None
+                if want_mw:
+                    # Place on MW top with mutual clearance between decor items.
+                    inset = 0.40
+                    for _ in range(50):
+                        cand = np.array(
+                            [
+                                mw_xy[0]
+                                + rng.uniform(-inset * mw_half[0], inset * mw_half[0]),
+                                mw_xy[1]
+                                + rng.uniform(-inset * mw_half[1], inset * mw_half[1]),
+                            ],
+                            dtype=float,
+                        )
+                        if self._footprint_clear(
+                            cand, half, on_mw_blockers, margin=0.02
+                        ):
+                            xy = cand
+                            on_mw = True
+                            break
+                if xy is None:
+                    on_mw = False
+                    xy = self._sample_free_xy_aabb(
+                        rng, half, mw_blockers, decor_x_range, decor_y_range
+                    )
+                z = (mw_top + 0.002) if on_mw else table_z
+            else:
+                xy = np.array([float(default_xy[0]), float(default_xy[1])], dtype=float)
+                z = table_z
+                # Fixed decor that would land in the MW / station gets nudged away.
+                if not self._footprint_clear(xy, half, mw_blockers):
+                    xy = self._sample_free_xy_aabb(
+                        rng, half, mw_blockers, decor_x_range, decor_y_range
+                    )
+            self._decor_layout[name] = {
+                "xy": xy,
+                "z": float(z),
+                "on_microwave": bool(on_mw),
+            }
+            if on_mw:
+                on_mw_blockers.append((xy.copy(), np.asarray(half, dtype=float)))
+            else:
+                mw_blockers.append((xy.copy(), np.asarray(half, dtype=float)))
+
+        # Hard assert for the critical failure mode reported by the user.
+        if not self._station_clears_microwave(
+            float(self.dispenser_xy[0]),
+            float(self.dispenser_xy[1]),
+            float(self.jar_xy[1]),
+            mw_xy,
+            mw_half,
+            margin=0.0,
+        ):
+            print(
+                f"[measure_ingredient] WARNING: station still overlaps microwave "
+                f"disp={self.dispenser_xy.tolist()} mw={mw_xy.tolist()} "
+                f"mw_half={mw_half.tolist()} — forcing X nudge"
+            )
+            side_x = self._nudge_x_clear_of_microwave(
+                float(self.dispenser_xy[0]),
+                float(self.dispenser_xy[1]),
+                float(self.jar_xy[1]),
+                mw_xy,
+                mw_half,
+                -0.45,
+                0.25,
+            )
+            self.dispenser_xy[0] = side_x
+            self.jar_xy[0] = side_x
+            self.arm = ArmTag("left" if side_x <= 0 else "right")
+
+        self.target_fill = self._resolve_target_fill(cfg, rng)
 
     def _configure_observer_camera(self):
         cams = getattr(self, "cameras", None)
@@ -209,10 +701,12 @@ class measure_ingredient(KitchenS_base_task):
             self.oil_color = list(self.OIL_COLOR_TRANSPARENT)
             self.oil_stream_color = list(self.OIL_STREAM_TRANSPARENT)
             self.oil_meniscus = list(self.OIL_MENISCUS_TRANSPARENT)
+            self.oil_spill_color = list(self.OIL_SPILL_TRANSPARENT)
         else:
             self.oil_color = list(self.OIL_COLOR_SOLID)
             self.oil_stream_color = list(self.OIL_STREAM_SOLID)
             self.oil_meniscus = None
+            self.oil_spill_color = list(self.OIL_SPILL_SOLID)
 
     def _fluid_material(self, rgba, transmission=None):
         """Oil material: glass-clear when transparent, beer-style when solid."""
@@ -303,24 +797,38 @@ class measure_ingredient(KitchenS_base_task):
         cfg = self._cfg
         self.table_top = float(self.kitchens_info["table_height"]) + float(self.table_z_bias)
 
-        tf = cfg.get("target_fill", 0.25)
-        self.target_fill = 0.25 if tf is None else float(tf)
-        if self.target_fill not in self.FILL_LEVELS:
-            raise ValueError(f"target_fill must be one of {self.FILL_LEVELS}")
-
-        self.pour_rate = float(cfg.get("pour_rate", self.POUR_RATE))
+        base_pour = float(cfg.get("pour_rate", self.POUR_RATE))
+        self.pour_rate_base = base_pour
+        # pour_rate_jitter: 0 → fixed; 0.15 → sample Uniform([0.85, 1.15]) * pour_rate.
+        jitter = float(cfg.get("pour_rate_jitter", self.POUR_RATE_JITTER))
+        self.pour_rate_jitter = max(0.0, jitter)
+        if self.pour_rate_jitter > 0.0:
+            scale = float(
+                self._layout_rng(211).uniform(
+                    1.0 - self.pour_rate_jitter, 1.0 + self.pour_rate_jitter
+                )
+            )
+            self.pour_rate = max(1e-8, base_pour * scale)
+        else:
+            self.pour_rate = base_pour
         self.fill_tol = float(cfg.get("fill_tol", self.FILL_TOL))
         self.overflow_level = float(cfg.get("overflow_level", self.OVERFLOW_LEVEL))
+        self.spill_rate = float(cfg.get("spill_rate", self.SPILL_RATE))
+        self.force_overflow = bool(cfg.get("force_overflow", False))
         self._apply_oil_style(self._parse_oil_style(cfg))
 
         self.tab_open = False
         self.liquid_level = 0.0
         self.overflowed = False
+        self.spill_amount = 0.0
         self.opened_once = False
         self.closed_after_pour = False
         self.jar_on_scale = False
         self._liquid_entity = None
         self._stream_entity = None
+        self._spill_entity = self._remove_entity(getattr(self, "_spill_entity", None))
+        self._spill_radius_cached = -1.0
+        self._spill_xy = None
         self._liquid_half_h_cached = -1.0
         self._switch_parts = []
         self._switch_btn = None
@@ -332,14 +840,8 @@ class measure_ingredient(KitchenS_base_task):
         self._jar_carry_offset = None
         self._jar_seated_pose = None
 
-        # Front workspace toward robot (−y), mid-left (clear of MW).
-        # Dispenser + jar sit farther back (+y) so the left arm can reach cleanly.
-        side_x = float(cfg.get("station_x", -0.08))
-        disp_y = float(cfg.get("disp_y", 0.08))
-        jar_y = float(cfg.get("jar_y", -0.06))
-        self.dispenser_xy = np.array([side_x, disp_y], dtype=float)
-        self.jar_xy = np.array([side_x, jar_y], dtype=float)
-        self.arm = ArmTag("left" if side_x <= 0 else "right")
+        # Jar always under dispenser; scale nearby; decor free / on microwave.
+        self._resolve_layout(cfg)
 
         self._build_dispenser()
         self._build_jar()
@@ -360,10 +862,20 @@ class measure_ingredient(KitchenS_base_task):
             self.add_prohibit_area(self.scale, padding=0.04)
 
         self._loaded = True
+        mw = getattr(self, "microwave_xy_override", None) or getattr(
+            self, "microwave_xy", None
+        )
+        decor_on_mw = [
+            n for n, d in (self._decor_layout or {}).items() if d.get("on_microwave")
+        ]
         print(
             f"[measure_ingredient] KitchenS scene={self.scene_id} "
-            f"target≥{self.target_fill:.0%} arm={self.arm} "
-            f"oil_style={self.oil_style} (baking counter, no sink/stove)"
+            f"target={self.target_fill:.0%}±{self.fill_tol:.0%} arm={self.arm} "
+            f"pour_rate={self.pour_rate:.6g} "
+            f"(base={self.pour_rate_base:.6g}±{self.pour_rate_jitter:.0%}) "
+            f"station={self.jar_xy.tolist()} scale={self.scale_xy.tolist()} "
+            f"mw={None if mw is None else [float(mw[0]), float(mw[1])]} "
+            f"decor_on_mw={decor_on_mw} oil_style={self.oil_style}"
         )
 
     def _build_dispenser(self):
@@ -671,14 +1183,22 @@ class measure_ingredient(KitchenS_base_task):
     def _build_scale(self):
         """Electronic kitchen scale on the same arm side as the jar."""
         cfg = self._cfg
-        side = float(self.jar_xy[0])
-        scale_x = float(cfg.get("scale_x", side - 0.26 if side <= 0 else side + 0.26))
-        scale_y = float(cfg.get("scale_y", -0.14))
+        scale_xy = getattr(self, "scale_xy", None)
+        if scale_xy is None:
+            side = float(self.jar_xy[0])
+            scale_xy = np.array(
+                [
+                    float(cfg.get("scale_x", side - 0.26 if side <= 0 else side + 0.26)),
+                    float(cfg.get("scale_y", -0.14)),
+                ],
+                dtype=float,
+            )
+            self.scale_xy = scale_xy
         scale_id = int(cfg.get("scale_id", 0))
         self.scale = create_actor(
             scene=self,
             pose=sapien.Pose(
-                [scale_x, scale_y, self.table_top + 0.001],
+                [float(scale_xy[0]), float(scale_xy[1]), self.table_top + 0.001],
                 self.YUP_Q,
             ),
             modelname="072_electronicscale",
@@ -700,20 +1220,75 @@ class measure_ingredient(KitchenS_base_task):
                     except Exception:
                         pass
 
+    def _get_rigid(self, entity):
+        obj = entity.actor if hasattr(entity, "actor") else entity
+        for c in obj.get_components():
+            if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
+                return c
+        return None
+
+    def _make_dynamic(self, entity, mass=None, lin_damp=0.8, ang_damp=1.2):
+        rigid = self._get_rigid(entity)
+        if rigid is None:
+            return None
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+            rigid.set_linear_damping(float(lin_damp))
+            rigid.set_angular_damping(float(ang_damp))
+            if mass is not None:
+                try:
+                    entity.set_mass(float(mass))
+                except Exception:
+                    rigid.mass = float(mass)
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+        except Exception:
+            pass
+        return rigid
+
+    def _tune_actor_friction(self, entity, static_f=2.4, dynamic_f=2.0, restitution=0.0):
+        rigid = self._get_rigid(entity)
+        if rigid is None:
+            return
+        try:
+            for s in rigid.get_collision_shapes():
+                m = s.get_physical_material()
+                m.set_static_friction(float(static_f))
+                m.set_dynamic_friction(float(dynamic_f))
+                m.set_restitution(float(restitution))
+        except Exception:
+            pass
+
+    def _settle_physics(self, steps=60):
+        """Advance PhysX without recording (egg settle into the bowl)."""
+        for _ in range(int(steps)):
+            self._update_kinematic_tasks()
+            self.scene.step()
+
+    def _decor_pose(self, name, default_xy, default_z=None):
+        layout = (getattr(self, "_decor_layout", None) or {}).get(name)
+        if layout is None:
+            z = self.table_top + 0.001 if default_z is None else float(default_z)
+            return (
+                np.array([float(default_xy[0]), float(default_xy[1])], dtype=float),
+                z,
+            )
+        return np.asarray(layout["xy"], dtype=float), float(layout["z"])
+
     def _build_baking_props(self):
         """Static baking clutter: board+bread, flour, chocolate chips, bowl+eggs."""
         cfg = self._cfg
-        z0 = self.table_top + 0.001
         q = self.YUP_Q
 
-        # Cutting board with bread on top.
-        bread_xy = cfg.get("bread_xy", [0.22, -0.10])
+        # Cutting board with bread on top (table or microwave top).
+        bread_xy, bread_z = self._decor_pose("bread", cfg.get("bread_xy", [0.28, -0.20]))
         board_scale = float(cfg.get("board_scale_mult", self.BOARD_SCALE_DEFAULT))
         with open("assets/objects/104_board/model_data0.json", encoding="utf-8") as f:
             board_data = json.load(f)
         board_th = float(board_data["extents"][1]) * board_scale
         board_pose = sapien.Pose(
-            [float(bread_xy[0]), float(bread_xy[1]), z0 + 0.5 * board_th],
+            [float(bread_xy[0]), float(bread_xy[1]), bread_z + 0.5 * board_th],
             list(self.BOARD_QPOS),
         )
         self.board = create_actor(
@@ -731,7 +1306,7 @@ class measure_ingredient(KitchenS_base_task):
             "extents": board_data["extents"],
             "center": board_data["center"],
         }
-        board_top_z = z0 + board_th
+        board_top_z = bread_z + board_th
 
         self.bread = create_actor(
             scene=self,
@@ -745,54 +1320,130 @@ class measure_ingredient(KitchenS_base_task):
             is_static=True,
         )
 
-        flour_xy = cfg.get("flour_xy", [0.08, 0.06])
+        flour_xy, flour_z = self._decor_pose("flour", cfg.get("flour_xy", [0.38, 0.14]))
         self.flour = create_actor(
             scene=self,
-            pose=sapien.Pose([float(flour_xy[0]), float(flour_xy[1]), z0], q),
+            pose=sapien.Pose([float(flour_xy[0]), float(flour_xy[1]), flour_z], q),
             modelname="261_flour_sack",
             model_id=0,
             convex=True,
             is_static=True,
         )
 
-        chips_xy = cfg.get("chips_xy", [0.18, 0.08])
+        chips_xy, chips_z = self._decor_pose("chips", cfg.get("chips_xy", [0.12, -0.22]))
         self.chocolate_chips = create_actor(
             scene=self,
-            pose=sapien.Pose([float(chips_xy[0]), float(chips_xy[1]), z0], q),
+            pose=sapien.Pose([float(chips_xy[0]), float(chips_xy[1]), chips_z], q),
             modelname="263_chocolate_chips_bag",
             model_id=0,
             convex=True,
             is_static=True,
         )
 
-        bowl_xy = cfg.get("bowl_xy", [0.30, 0.05])
+        bowl_xy, bowl_z = self._decor_pose("bowl", cfg.get("bowl_xy", [0.40, -0.02]))
+        bowl_id = int(cfg.get("bowl_id", 1))
+        bowl_scale_mult = float(cfg.get("bowl_scale_mult", 1.0))
+        # Static + nonconvex keeps a hollow interior so eggs can fall inside.
         self.bowl = create_actor(
             scene=self,
-            pose=sapien.Pose([float(bowl_xy[0]), float(bowl_xy[1]), z0], q),
+            pose=sapien.Pose([float(bowl_xy[0]), float(bowl_xy[1]), bowl_z], q),
             modelname="002_bowl",
-            model_id=int(cfg.get("bowl_id", 1)),
-            convex=True,
+            model_id=bowl_id,
+            convex=False,
             is_static=True,
+            scale_mult=bowl_scale_mult,
         )
+        with open(
+            f"assets/objects/002_bowl/model_data{bowl_id}.json", encoding="utf-8"
+        ) as f:
+            bowl_data = json.load(f)
+        bowl_scale = float(bowl_data["scale"][1]) * bowl_scale_mult
+        bowl_h = float(bowl_data["extents"][1]) * bowl_scale
+        bowl_r = 0.5 * min(
+            float(bowl_data["extents"][0]), float(bowl_data["extents"][2])
+        ) * bowl_scale
 
-        # Three orange eggs resting in the bowl.
-        egg_z = z0 + 0.028
-        egg_offsets = [(-0.018, 0.0), (0.018, 0.0), (0.0, 0.016)]
+        # Drop full-size eggs from just above the rim; gravity seats them inside.
+        # 262_egg pose origin = mesh bottom (local Y≈0).
+        drop_offsets = [
+            (-0.010, 0.0),
+            (0.010, 0.0),
+            (0.0, 0.008),
+        ]
         self.eggs = []
-        for i, (dx, dy) in enumerate(egg_offsets):
+        for i, (dx, dy) in enumerate(drop_offsets):
+            drop_z = bowl_z + bowl_h + 0.012 + 0.010 * i
             egg = create_actor(
                 scene=self,
                 pose=sapien.Pose(
-                    [float(bowl_xy[0]) + dx, float(bowl_xy[1]) + dy, egg_z],
+                    [
+                        float(bowl_xy[0]) + dx,
+                        float(bowl_xy[1]) + dy,
+                        float(drop_z),
+                    ],
                     q,
                 ),
                 modelname="262_egg",
                 model_id=0,
                 convex=True,
-                is_static=True,
+                is_static=False,
             )
             self._recolor_actor(egg, self.EGG_ORANGE)
+            self._make_dynamic(egg, mass=0.05, lin_damp=1.2, ang_damp=1.8)
+            self._tune_actor_friction(egg, static_f=3.0, dynamic_f=2.6, restitution=0.0)
             self.eggs.append(egg)
+            self._settle_physics(60)
+        self._settle_physics(100)
+
+        # Re-drop any escapee from a short height (still PhysX, no pose snap).
+        bowl_center = np.asarray([float(bowl_xy[0]), float(bowl_xy[1])], dtype=float)
+        for _ in range(2):
+            any_bad = False
+            for egg, (dx, dy) in zip(self.eggs, drop_offsets):
+                ep = np.asarray(egg.get_pose().p, dtype=float)
+                xy = float(np.linalg.norm(ep[:2] - bowl_center))
+                inside = (
+                    xy < 0.80 * bowl_r
+                    and ep[2] > bowl_z - 0.005
+                    and ep[2] < bowl_z + bowl_h + 0.07
+                )
+                if inside:
+                    continue
+                any_bad = True
+                retry = sapien.Pose(
+                    [
+                        float(bowl_xy[0]) + 0.5 * dx,
+                        float(bowl_xy[1]) + 0.5 * dy,
+                        float(bowl_z + bowl_h + 0.018),
+                    ],
+                    q,
+                )
+                try:
+                    egg.actor.set_pose(retry)
+                except Exception:
+                    egg.set_pose(retry)
+                rigid = self._get_rigid(egg)
+                if rigid is not None:
+                    try:
+                        rigid.set_linear_velocity(np.zeros(3))
+                        rigid.set_angular_velocity(np.zeros(3))
+                    except Exception:
+                        pass
+            if not any_bad:
+                break
+            self._settle_physics(80)
+
+        for egg in self.eggs:
+            rigid = self._get_rigid(egg)
+            if rigid is None:
+                continue
+            try:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_linear_damping(2.5)
+                rigid.set_angular_damping(3.5)
+            except Exception:
+                pass
 
     def _sync_jar_followers(self):
         """Keep glass visual, fill rings, and oil column attached to the jar."""
@@ -906,18 +1557,67 @@ class measure_ingredient(KitchenS_base_task):
         self.scene.add_entity(ent)
         self._liquid_entity = ent
 
+    def _spill_radius(self):
+        """Table puddle radius from spill_amount in [0, 1]."""
+        a = float(np.clip(self.spill_amount, 0.0, 1.0))
+        if a <= 1e-4:
+            return 0.0
+        # Ease-out growth so the puddle appears quickly, then spreads.
+        t = float(np.sqrt(a))
+        return float(self.SPILL_RADIUS_MIN + t * (self.SPILL_RADIUS_MAX - self.SPILL_RADIUS_MIN))
+
+    def _rebuild_spill(self, force: bool = False):
+        """Yellow oil circle on the table under the jar (overflow puddle)."""
+        radius = self._spill_radius()
+        if not force and abs(radius - self._spill_radius_cached) < 0.0015:
+            return
+        self._spill_radius_cached = radius
+        self._spill_entity = self._remove_entity(self._spill_entity)
+        if radius <= 1e-4:
+            return
+
+        if self._spill_xy is None:
+            if self.jar is not None:
+                jp = np.asarray(self.jar.get_pose().p, dtype=float)
+                self._spill_xy = np.array([jp[0], jp[1]], dtype=float)
+            else:
+                self._spill_xy = np.asarray(self.jar_xy, dtype=float).copy()
+
+        sx, sy = float(self._spill_xy[0]), float(self._spill_xy[1])
+        z = float(self.table_top) + 0.0022
+        rgba = list(getattr(self, "oil_spill_color", self.OIL_SPILL_SOLID))
+        # Flat cylinder lying on the table (same upright quat as oil columns).
+        self._spill_entity = self._make_oil_column(
+            radius=radius,
+            half_h=self.SPILL_HALF_H,
+            world_xyz=[sx, sy, z + self.SPILL_HALF_H],
+            rgba=rgba,
+            name="oil_spill",
+            local_z=0.0,
+        )
+
     def _step_oil(self):
         # Natural pour: oil rises whenever the switch is on — including the
         # whole approach to the off-click. Never halt on fill target alone.
+        # Once the jar is full, further pour spills onto the table as a yellow disk.
         if self.tab_open:
-            self.liquid_level = min(1.0, self.liquid_level + self.pour_rate)
-            if self.liquid_level >= self.overflow_level - 1e-4:
-                self.overflowed = True
+            next_lvl = float(self.liquid_level) + float(self.pour_rate)
+            if next_lvl <= float(self.overflow_level):
+                self.liquid_level = next_lvl
+            else:
+                self.liquid_level = float(self.overflow_level)
+                # Excess oil puddles under the jar.
+                self.spill_amount = min(
+                    1.0, float(self.spill_amount) + float(self.spill_rate)
+                )
+                if self.spill_amount > 1e-4:
+                    self.overflowed = True
             # Keep the stream alive every step while ON (only the off-click
             # flips tab_open and removes it via _set_tab_open).
             if getattr(self, "_stream_entity", None) is None:
                 self._sync_stream()
         self._rebuild_liquid(force=False)
+        self._rebuild_spill(force=False)
 
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
@@ -1224,8 +1924,58 @@ class measure_ingredient(KitchenS_base_task):
         # 2) Wait near the target ring. Oil (and the stream) keep going for the
         # whole off-click approach; only the button press stops the pour.
         # Start the approach a little early so fill lands near the mark.
-        close_start = max(0.05, float(self.target_fill) - 0.06)
-        max_wait = int(close_start / max(1e-6, self.pour_rate)) + 120
+        # force_overflow: deliberately leave the switch ON past full so a yellow
+        # spill disk grows under the jar (failure demo).
+        if getattr(self, "force_overflow", False):
+            # Faster pour/spill for a short showcase (visuals unchanged).
+            self.pour_rate = max(float(self.pour_rate), 0.0015)
+            self.spill_rate = max(float(self.spill_rate), 0.0025)
+            spill_target = float(self._cfg.get("spill_demo_amount", 0.55))
+            max_wait = int(1.05 / max(1e-6, self.pour_rate)) + int(
+                spill_target / max(1e-6, self.spill_rate)
+            ) + 200
+            self._idle_steps(
+                max_wait,
+                until=lambda: self.spill_amount >= spill_target,
+            )
+            print(
+                f"[measure_ingredient] force_overflow liq={self.liquid_level:.2f} "
+                f"spill={self.spill_amount:.2f} r={self._spill_radius():.3f}m "
+                f"tab_open={self.tab_open}"
+            )
+            # Click OFF, then hold so the puddle is clearly visible on camera.
+            self._ignore_tab = True
+            if self.plan_success and self.tab_open:
+                self._press_switch(arm, want_open=False)
+            self._ignore_tab = True
+            if self.plan_success:
+                self.move(self.move_by_displacement(arm, z=0.08))
+            self._idle_steps(90)
+            self.plan_success = False  # overflowed episode is a failure
+            level_pct = int(round(self.target_fill * 100))
+            self.info["info"] = {
+                "{A}": "olive oil dispenser",
+                "{B}": f"glass jar ({level_pct}% line)",
+                "{C}": "red nozzle switch",
+                "{D}": f"072_electronicscale/base{getattr(self, 'scale_id', 0)}",
+                "{a}": str(arm),
+                "{L}": f"{level_pct}%",
+            }
+            return self.info
+
+        # Start the off-click early so fill lands inside ±fill_tol after approach.
+        # Approach still pours; lead ≈ expected overshoot (+ small margin).
+        lead = float(
+            self._cfg.get(
+                "pour_close_lead",
+                max(0.05, min(0.14, 220.0 * float(self.pour_rate) + 0.03)),
+            )
+        )
+        # For 100% (rim), stop earlier so we do not spill over the edge.
+        if float(self.target_fill) >= 0.999:
+            lead = max(lead, 0.12)
+        close_start = max(0.05, float(self.target_fill) - lead)
+        max_wait = int(close_start / max(1e-6, self.pour_rate)) + 160
         self._idle_steps(
             max_wait,
             until=lambda: (
@@ -1235,7 +1985,7 @@ class measure_ingredient(KitchenS_base_task):
         print(
             f"[measure_ingredient] after pour liq={self.liquid_level:.2f} "
             f"target={self.target_fill:.2f} overflow={self.overflowed} "
-            f"tab_open={self.tab_open}"
+            f"spill={self.spill_amount:.2f} tab_open={self.tab_open}"
         )
 
         # 3) Click the switch OFF → stream stops only when the button clicks.
@@ -1365,8 +2115,8 @@ class measure_ingredient(KitchenS_base_task):
             self._idle_steps(6)
 
     def check_success(self):
-        """Filled to the target ring, tab closed, and jar resting on the scale."""
-        if self.overflowed:
+        """Oil in [target±tol], no spill/overflow, switch off, jar on scale."""
+        if self.overflowed or float(getattr(self, "spill_amount", 0.0)) > 1e-4:
             return False
         if not self.opened_once:
             return False
@@ -1374,7 +2124,15 @@ class measure_ingredient(KitchenS_base_task):
             return False
         if not self.closed_after_pour:
             return False
-        if self.liquid_level + 1e-3 < self.target_fill - self.fill_tol:
+        lo = float(self.target_fill) - float(self.fill_tol)
+        hi = float(self.target_fill) + float(self.fill_tol)
+        # 100% rim: cannot exceed 1.0 without overflowing; allow up to overflow_level.
+        if float(self.target_fill) >= 0.999:
+            hi = min(hi, float(self.overflow_level) + 1e-6)
+        lvl = float(self.liquid_level)
+        if lvl + 1e-3 < lo:
+            return False
+        if lvl - 1e-3 > hi:
             return False
         if self.jar is None or self.scale is None:
             return False
@@ -1392,15 +2150,40 @@ class measure_ingredient(KitchenS_base_task):
 
     def get_obs(self):
         obs = super().get_obs()
+        mw = getattr(self, "microwave_xy_override", None) or getattr(
+            self, "microwave_xy", None
+        )
         obs["measure_ingredient"] = {
             "target_fill": float(self.target_fill),
+            "fill_tol": float(getattr(self, "fill_tol", self.FILL_TOL)),
+            "pour_rate": float(getattr(self, "pour_rate", self.POUR_RATE)),
+            "pour_rate_base": float(
+                getattr(self, "pour_rate_base", getattr(self, "pour_rate", self.POUR_RATE))
+            ),
+            "pour_rate_jitter": float(
+                getattr(self, "pour_rate_jitter", self.POUR_RATE_JITTER)
+            ),
             "liquid_level": float(self.liquid_level),
             "tab_open": bool(self.tab_open),
             "overflowed": bool(self.overflowed),
+            "spill_amount": float(getattr(self, "spill_amount", 0.0)),
             "opened_once": bool(self.opened_once),
             "closed_after_pour": bool(self.closed_after_pour),
             "jar_on_scale": bool(getattr(self, "jar_on_scale", False)),
             "oil_style": str(getattr(self, "oil_style", self.OIL_STYLE_DEFAULT)),
             "scene_id": int(getattr(self, "scene_id", 0)),
+            "station_xy": (
+                None
+                if getattr(self, "jar_xy", None) is None
+                else [float(self.jar_xy[0]), float(self.jar_xy[1])]
+            ),
+            "scale_xy": (
+                None
+                if getattr(self, "scale_xy", None) is None
+                else [float(self.scale_xy[0]), float(self.scale_xy[1])]
+            ),
+            "microwave_xy": (
+                None if mw is None else [float(mw[0]), float(mw[1])]
+            ),
         }
         return obs
