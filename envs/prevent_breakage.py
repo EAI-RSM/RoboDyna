@@ -10,7 +10,9 @@ goes over the front edge.
 
 Everything after the basket is placed is simulated, not animated: the target is
 a dynamic body, the fall and the landing come out of the solver, and success is
-read off the resting pose. Nothing is teleported into place.
+read off the resting pose. Nothing is teleported into place. The mouse starts
+scurrying at episode start while the arm places the basket; the final shove
+waits until the catcher is down.
 """
 
 from ._office_base_task import Office_base_task
@@ -122,9 +124,11 @@ class prevent_breakage(Office_base_task):
         self._mouse_path = []
         self._mouse_cum = [0.0]
         self._mouse_path_len = 0.0
+        self._mouse_shove_s = 0.0
         self._mouse_s = 0.0
         self._mouse_z = 0.0
         self._mouse_heading = 0.0
+        self._allow_shove = False
         self._mouse_obstacles = []
         self._decor_obstacles = []
         self._landing = np.zeros(3)
@@ -627,6 +631,8 @@ class prevent_breakage(Office_base_task):
             seg.append(seg[-1] + float(np.linalg.norm(b - a)))
         self._mouse_cum = seg
         self._mouse_path_len = float(seg[-1])
+        # Hold just before the final shove so the basket can finish placing.
+        self._mouse_shove_s = float(seg[-2]) if len(seg) >= 2 else 0.0
         self._mouse_s = 0.0
         self._mouse_z = float(z)
 
@@ -844,19 +850,17 @@ class prevent_breakage(Office_base_task):
                 "radius": radius, "hx": hx, "hy": hy,
             }]
 
-        # Choose the knock target. It must have room behind it for the mouse to
-        # line up the shove, otherwise the mouse would have to start inside it.
+        # Choose the knock target uniformly among objects the mouse can line up
+        # behind (either half of the shelf). Preferring the right side made
+        # left-side falls almost never appear.
         reachable = [
             i for i, e in enumerate(self.shelf_objects)
             if self._mouse_standoff(float(e["start"][1]), float(e["hy"]))
             >= float(e["start"][1]) + float(e["hy"]) + self.MOUSE_HALF_XY
         ]
         if not reachable:
-            reachable = [int(np.argmin([e["start"][1] for e in self.shelf_objects]))]
-        pool = [i for i in reachable if self.shelf_objects[i]["start"][0] > 0.05]
-        if not pool:
-            pool = reachable
-        self.target_idx = int(pool[int(np.random.randint(0, len(pool)))])
+            reachable = list(range(len(self.shelf_objects)))
+        self.target_idx = int(reachable[int(np.random.randint(0, len(reachable)))])
         self.target_info = self.shelf_objects[self.target_idx]
         self.target = self.target_info["actor"]
         self.target_start = self.target_info["start"].copy()
@@ -899,24 +903,35 @@ class prevent_breakage(Office_base_task):
                  float(e["hx"]), float(e["hy"]))
             )
 
-        # Mouse: start at a far shelf end, route around décor, shove the target.
-        # A crowded shelf can be impassable from one end, so try both and keep
-        # the end that yields a verified obstacle-free route.
+        # Mouse start side is randomized; both ends are tried if the preferred
+        # side has no clear route around décor.
         z_mouse = self.shelf_z_surf + 0.016
         ends = [("left", float(x0 + 0.06)), ("right", float(x1 - 0.06))]
         if float(np.random.rand()) < 0.5:
             ends.reverse()
+        # Prefer a start that is not already on top of the target.
         ends.sort(key=lambda e: abs(tx - e[1]) < self.mouse_start_gap_min)
 
         route = push_y1 = None
+        viable = []
         for end_name, mx in ends:
-            route, push_y1, found = self._plan_mouse_route(
+            r, py, found = self._plan_mouse_route(
+                mx, tx, ty,
+                float(self.target_info["hx"]), float(self.target_info["hy"]),
+            )
+            if found:
+                viable.append((end_name, r, py))
+        if viable:
+            end_name, route, push_y1 = viable[int(np.random.randint(0, len(viable)))]
+            self.mouse_end = end_name
+        else:
+            # No verified clear route — fall back to the preferred end anyway.
+            end_name, mx = ends[0]
+            route, push_y1, _ = self._plan_mouse_route(
                 mx, tx, ty,
                 float(self.target_info["hx"]), float(self.target_info["hy"]),
             )
             self.mouse_end = end_name
-            if found:
-                break
         self._set_mouse_path(route, push_y1, z_mouse)
         p0, h0 = self._mouse_point_at(0.0)
         self._spawn_mouse(float(p0[0]), float(p0[1]), z_mouse, h0)
@@ -958,6 +973,7 @@ class prevent_breakage(Office_base_task):
         self._basket_placed = False
         self._holding_basket = False
         self._target_live = False
+        self._allow_shove = False
         self._loaded = True
 
     def _create_cushion_basket(self, pose: sapien.Pose) -> Actor:
@@ -1138,8 +1154,16 @@ class prevent_breakage(Office_base_task):
         if self._mouse_state != "running":
             return
         dt = float(self.scene.get_timestep())
-        self._mouse_s += float(self.mouse_speed) * dt
-        if self._mouse_s >= self._mouse_path_len:
+        nxt = self._mouse_s + float(self.mouse_speed) * dt
+        # Wait at the stand-off until the basket is allowed to receive the shove
+        # (robot is still placing, or placement just finished).
+        shove_s = float(getattr(self, "_mouse_shove_s", self._mouse_path_len))
+        if not getattr(self, "_allow_shove", True) and nxt >= shove_s:
+            nxt = shove_s
+        self._mouse_s = nxt
+        if self._mouse_s >= self._mouse_path_len and getattr(
+            self, "_allow_shove", True
+        ):
             self._mouse_s = self._mouse_path_len
             self._mouse_state = "done"
         p, heading = self._mouse_point_at(self._mouse_s)
@@ -1177,6 +1201,20 @@ class prevent_breakage(Office_base_task):
             return 0.0
         return float(np.linalg.norm(v) + 0.05 * np.linalg.norm(w))
 
+    def _object_touches_table(self):
+        """True once any part of the target is on/through the table top.
+
+        Basket-cushion contact is not a table hit — only pose outside the
+        basket counts. Used as a hard failure: once set, success is impossible.
+        """
+        if self.target is None:
+            return False
+        if self._target_in_basket():
+            return False
+        p = np.array(self.target.get_pose().p, dtype=np.float64)
+        # Approximate contact: center within ~radius of the table plane.
+        return bool(p[2] <= self.table_top + self.target_radius + 0.015)
+
     def _update_catch_state(self):
         """Read the outcome off the simulation — nothing is teleported."""
         if not self._target_live or self.target is None or self._fell_on_table:
@@ -1185,22 +1223,16 @@ class prevent_breakage(Office_base_task):
         if p[2] < self.shelf_z_surf - 0.03 and self._obj_state == "parked":
             self._obj_state = "falling"
 
-        if self._target_in_basket():
-            self._low_steps = 0
-            if self._target_speed() < 0.03:
-                self._caught = True
-                self._obj_state = "caught"
+        # Table contact outside the basket is an immediate permanent fail.
+        if self._object_touches_table():
+            self._fell_on_table = True
+            self._caught = False
+            self._obj_state = "fallen"
             return
 
-        # Not in the basket: a sustained stay near table height means it missed.
-        self._caught = False
-        if p[2] <= self.table_top + self.target_radius + 0.04:
-            self._low_steps = int(getattr(self, "_low_steps", 0)) + 1
-            if self._low_steps > 12:
-                self._fell_on_table = True
-                self._obj_state = "fallen"
-        else:
-            self._low_steps = 0
+        if self._target_in_basket():
+            self._caught = True
+            self._obj_state = "caught"
 
     def _basket_under_landing(self):
         if self.basket is None:
@@ -1334,7 +1366,7 @@ class prevent_breakage(Office_base_task):
 
         self._basket_placed = bool(self._basket_under_landing())
 
-        # Retreat so the arm is clear before the mouse sets the object falling.
+        # Retreat so the arm is clear of the catch zone.
         self.plan_success = True
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.14, move_axis="world"))
         self.plan_success = True
@@ -1351,15 +1383,18 @@ class prevent_breakage(Office_base_task):
         if self.save_data and (self.save_freq is None or self.save_freq > 8):
             self.save_freq = 5
 
-        # Place the cushioned basket under the landing first, then hand the
-        # target to physics and send the mouse.
-        self._pick_place_basket_to_landing(arm_tag)
+        # Mouse scurries from the first frame while the arm places the basket.
+        # The final shove is gated on _allow_shove so the object is not knocked
+        # off before the catcher is down.
+        self._allow_shove = False
         self._activate_target()
-        self._dwell(8)
         self._release_mouse()
+        self._pick_place_basket_to_landing(arm_tag)
+        self._allow_shove = True
 
         dt = max(float(self.scene.get_timestep()), 1e-4)
-        run_steps = int(self._mouse_path_len / max(self.mouse_speed, 1e-4) / dt) + 60
+        remain = max(0.0, self._mouse_path_len - float(self._mouse_s))
+        run_steps = int(remain / max(self.mouse_speed, 1e-4) / dt) + 80
         waited = 0
         while self._mouse_state == "running" and waited < run_steps:
             self._dwell(1)
@@ -1392,11 +1427,13 @@ class prevent_breakage(Office_base_task):
         return self.info
 
     def check_success(self):
+        # Pass only if the object rests in the basket and never touched the table.
         if self._fell_on_table or self._obj_state == "fallen":
             return False
         if self.target is None or self.basket is None:
             return False
-        # Read the resting pose straight out of the sim.
+        if self._object_touches_table():
+            return False
         return bool(self._target_in_basket())
 
     def get_obs(self):
