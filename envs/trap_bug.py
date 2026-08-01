@@ -160,13 +160,14 @@ class trap_bug(Office_base_task):
 
     def _make_plain_trap_material(self):
         """Simple alpha-transparent plastic — no glass transmission/IOR (viewer-friendly)."""
-        mat = sapien.render.RenderMaterial(base_color=[0.75, 0.88, 0.95, 0.35])
+        # Darker blue-gray + higher alpha so the box reads clearly on the white table.
+        mat = sapien.render.RenderMaterial(base_color=[0.18, 0.32, 0.48, 0.55])
         mat.set_transmission(0.0)
         try:
             mat.set_transmission_roughness(1.0)
         except Exception:
             pass
-        mat.set_roughness(0.45)
+        mat.set_roughness(0.55)
         mat.set_metallic(0.0)
         try:
             mat.set_ior(1.0)
