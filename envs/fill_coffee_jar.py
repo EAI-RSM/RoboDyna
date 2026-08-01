@@ -1,9 +1,12 @@
-"""Fill a marked glass jar with coffee beans from a glass-box dispenser (KitchenS).
+"""Fill a marked glass jar with beans from a glass-box dispenser (KitchenS).
 
 Inherits ``KitchenS_base_task`` (microwave + dishrack + cooking range on a kitchen
 counter). The dispenser is a raised clear glass hopper packed with real bean
-meshes. Touching its lid opens a nozzle above the jar and releases beans into a
+meshes. Pressing its lid opens a nozzle above the jar and releases beans into a
 glass jar marked with red ring lines at 25% / 50% / 75% (rim = full).
+
+Dispense amount is gated by **press force** on the lid (four thresholds), not
+hold duration.
 """
 
 from __future__ import annotations
@@ -24,30 +27,44 @@ from .utils.create_actor import create_actor, create_box
 
 
 class fill_coffee_jar(KitchenS_base_task):
-    """Touch the dispenser lid to fill a marked glass jar to a target level.
+    """Press the dispenser lid to fill a marked glass jar to a target level.
 
     Task options (``task_args.fill_coffee_jar``):
-      - ``target_fill``: minimum *visual* fill vs red rings (default 0.25)
-      - ``press_duration_min`` / ``press_duration_max``: hold time range (sec)
-      - ``beans_per_press_min`` / ``beans_per_press``: beans at min / max hold
+      - ``target_fill``: 0.25 | 0.50 | 0.75 | ``random``
+      - ``fill_tol``: success band half-width (default 0.05 = ±5%)
+      - ``randomize_layout``: seed-randomized non-overlapping station pose
+      - ``force_thresholds``: 4 increasing force cutoffs (N)
+      - ``beans_per_force_level``: beans dispensed at each force level
       - ``beans_full``: bean count that packs to the rim / 100%
       - ``scene_id``: 0 | 1 | 2 (KitchenS fixture layout)
 
-    Hold duration maps linearly to dispense amount between the min/max
-    endpoints (clamped). Success is pile height vs the red-ring scale.
+    Peak lid press force maps to four dispense levels; fill rises with beans.
+    Success when fill ∈ [target_fill − fill_tol, target_fill + fill_tol].
     """
 
     BEAN_MODEL = "252_coffee_bean"
     JAR_MODEL = "253_glass_jar"
     # Max beans that may be dispensed (enough to pass the 25% ring densely).
     BEANS_FULL = 160
-    # Hold-time → amount mapping (overridable via task_args).
-    PRESS_DURATION_MIN = 0.35
-    PRESS_DURATION_MAX = 1.40
-    BEANS_PER_PRESS_MIN = 2
-    BEANS_PER_PRESS = 12  # beans at press_duration_max
-    FILL_LEVELS = (0.25,)
-    FILL_TOL = 0.02
+    # Four force thresholds (N) → beans per press level (light → hard).
+    # Bean counts are spaced so each level raises fill by ~6.25% of the jar
+    # (beans_full=160 → 10/20/30/40 beans ≈ 6%/13%/19%/25% of the rim).
+    FORCE_THRESHOLDS = (3.0, 6.0, 10.0, 14.0)
+    BEANS_PER_FORCE_LEVEL = (10, 20, 30, 40)
+    # Spring proxy (N/m): F = k * tip engagement into the lid zone.
+    # Zone starts ~5 cm above the lid so force builds as the tip descends
+    # toward contact (the arm cannot penetrate the static lid collider).
+    FORCE_STIFFNESS = 300.0
+    FORCE_ENGAGE_SLACK = 0.05
+    # Expert press depths from hover for force levels 1..4 (stay above lid).
+    PRESS_DEPTHS = (0.020, 0.030, 0.044, 0.057)
+    PRESS_SAMPLE_S = 0.40  # hold time to sample peak force
+    FILL_LEVELS = (0.25, 0.50, 0.75)
+    FILL_TOL = 0.05  # success band: target_fill ± fill_tol
+    # Station footprints for non-overlap layout (half-extents, meters).
+    DISP_HALF_XY = (0.065, 0.065)
+    JAR_HALF_XY = (0.045, 0.045)
+    LAYOUT_MARGIN = 0.025
     # Dense mound packing (used for freeze + bean-need estimates).
     _BEAN_R = 0.0055
     _BEAN_H = 0.0065
@@ -60,7 +77,7 @@ class fill_coffee_jar(KitchenS_base_task):
     BEAN_FILL_FRAC = 0.65                  # visual fill inside the glass box
     EE_TO_TCP = 0.12
     KEY_HOVER_DIS = 0.06
-    KEY_PRESS_DEPTH = 0.055
+    KEY_PRESS_DEPTH = 0.057  # default = hardest force level
     SETTLE_STEPS = 80
 
     JAR_INNER_R = 0.035
@@ -75,7 +92,9 @@ class fill_coffee_jar(KitchenS_base_task):
         self._cfg = dict(kwags.get("task_args", {}).get("fill_coffee_jar", {}))
         if kwags.get("scene_id") is None:
             kwags["scene_id"] = int(self._cfg.get("scene_id", 0))
+        self._layout_seed = int(kwags.get("seed", 0) or 0)
         self.replace_sink_with_range = True
+        self.omit_sink = True  # solid counter; no sink basin or faucet tap
 
         self._loaded = False
         self.beans = []
@@ -92,6 +111,8 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
+        self._press_peak_force = 0.0
+        self._press_force_level = 0
         self.table_top = 0.74
 
         super().setup_demo(**kwags)
@@ -213,38 +234,131 @@ class fill_coffee_jar(KitchenS_base_task):
         builder.set_initial_pose(pose)
         return builder.build(name=name)
 
+    # ------------------------------------------------------------------ layout
+    @staticmethod
+    def _aabb_overlap(c1, h1, c2, h2, margin=0.0):
+        c1 = np.asarray(c1, dtype=float)
+        c2 = np.asarray(c2, dtype=float)
+        h1 = np.asarray(h1, dtype=float)
+        h2 = np.asarray(h2, dtype=float)
+        m = float(margin)
+        return bool(
+            abs(c1[0] - c2[0]) < (h1[0] + h2[0] + m)
+            and abs(c1[1] - c2[1]) < (h1[1] + h2[1] + m)
+        )
+
+    def _layout_blockers(self):
+        """Kitchen fixture footprints the station must not overlap."""
+        blockers = []
+        mw_xy = getattr(self, "microwave_xy", None)
+        mw_half = getattr(self, "microwave_half_xy", None)
+        if mw_xy is not None and mw_half is not None:
+            blockers.append((np.asarray(mw_xy, dtype=float), np.asarray(mw_half, dtype=float)))
+        range_xy = getattr(self, "range_xy", None)
+        range_half = getattr(self, "range_half_size", None)
+        if range_xy is not None and range_half is not None:
+            blockers.append(
+                (np.asarray(range_xy, dtype=float), np.asarray(range_half, dtype=float))
+            )
+        return blockers
+
+    def _station_clear(self, side_x, disp_y, jar_y, blockers, margin=None):
+        if margin is None:
+            margin = self.LAYOUT_MARGIN
+        disp = np.array([side_x, disp_y], dtype=float)
+        jar = np.array([side_x, jar_y], dtype=float)
+        # Dispenser ↔ jar must not overlap each other.
+        if self._aabb_overlap(disp, self.DISP_HALF_XY, jar, self.JAR_HALF_XY, margin):
+            return False
+        for b_c, b_h in blockers:
+            if self._aabb_overlap(disp, self.DISP_HALF_XY, b_c, b_h, margin):
+                return False
+            if self._aabb_overlap(jar, self.JAR_HALF_XY, b_c, b_h, margin):
+                return False
+        return True
+
+    def _resolve_target_fill(self, cfg, rng: np.random.RandomState) -> float:
+        tf = cfg.get("target_fill", 0.25)
+        if tf is None:
+            return 0.25
+        if isinstance(tf, str) and tf.lower() == "random":
+            return float(rng.choice(self.FILL_LEVELS))
+        val = float(tf)
+        if val not in self.FILL_LEVELS:
+            raise ValueError(f"target_fill must be one of {self.FILL_LEVELS} or 'random'")
+        return val
+
+    def _sample_station_layout(self, cfg, rng: np.random.RandomState):
+        """Place dispenser+jar on the left arm side without fixture overlap.
+
+        Keeps a shared X (nozzle alignment) with the jar in front (−y) of the
+        dispenser. When ``randomize_layout`` is false, uses fixed config defaults.
+        """
+        randomize = bool(cfg.get("randomize_layout", False))
+        blockers = self._layout_blockers()
+        # Jitter around the proven left-arm station (reachability is tight).
+        base_x = float(cfg.get("station_x", -0.08))
+        base_disp_y = float(cfg.get("disp_y", -0.02))
+        base_jar_y = float(cfg.get("jar_y", -0.16))
+
+        if not randomize:
+            side_x, disp_y, jar_y = base_x, base_disp_y, base_jar_y
+            if not self._station_clear(side_x, disp_y, jar_y, blockers):
+                for x in np.linspace(side_x, -0.05, 20):
+                    if self._station_clear(float(x), disp_y, jar_y, blockers):
+                        side_x = float(x)
+                        break
+            return side_x, disp_y, jar_y
+
+        for _ in range(80):
+            # Small jitter only — larger offsets make the tall lid approach unplannable.
+            side_x = float(np.clip(base_x + rng.uniform(-0.015, 0.015), -0.11, -0.05))
+            disp_y = float(np.clip(base_disp_y + rng.uniform(-0.015, 0.015), -0.04, 0.01))
+            gap = float((base_disp_y - base_jar_y) + rng.uniform(-0.015, 0.015))
+            gap = float(np.clip(gap, 0.125, 0.155))
+            jar_y = disp_y - gap
+            if jar_y < -0.20:
+                continue
+            if self._station_clear(side_x, disp_y, jar_y, blockers):
+                return side_x, disp_y, jar_y
+
+        # Deterministic fallback that clears scene_0 fixtures.
+        return base_x, base_disp_y, base_jar_y
+
     # ------------------------------------------------------------------ actors
     def load_actors(self):
         cfg = self._cfg
         self.table_top = float(self.kitchens_info["table_height"]) + float(self.table_z_bias)
-        tf = cfg.get("target_fill", 0.25)
-        if tf is None:
-            # Task objective: fill to the first (25%) red ring.
-            self.target_fill = 0.25
-        else:
-            self.target_fill = float(tf)
-            if self.target_fill not in self.FILL_LEVELS:
-                raise ValueError(f"target_fill must be one of {self.FILL_LEVELS}")
+        seed = int(getattr(self, "_layout_seed", 0) or 0)
+        # Separate streams so target choice doesn't collide with layout jitter.
+        rng_target = np.random.RandomState(seed + 202)
+        rng_layout = np.random.RandomState(seed + 101)
 
+        self.target_fill = self._resolve_target_fill(cfg, rng_target)
         self.beans_full = int(cfg.get("beans_full", self.BEANS_FULL))
-        self.beans_per_press_min = int(
-            cfg.get("beans_per_press_min", self.BEANS_PER_PRESS_MIN)
+        thr = cfg.get("force_thresholds", self.FORCE_THRESHOLDS)
+        beans_lv = cfg.get("beans_per_force_level", self.BEANS_PER_FORCE_LEVEL)
+        self.force_thresholds = tuple(float(x) for x in thr)
+        self.beans_per_force_level = tuple(int(x) for x in beans_lv)
+        if len(self.force_thresholds) != 4 or len(self.beans_per_force_level) != 4:
+            raise ValueError("force_thresholds and beans_per_force_level need length 4")
+        if any(
+            self.force_thresholds[i] >= self.force_thresholds[i + 1]
+            for i in range(3)
+        ):
+            raise ValueError("force_thresholds must be strictly increasing")
+        self.force_stiffness = float(cfg.get("force_stiffness", self.FORCE_STIFFNESS))
+        self.force_engage_slack = float(
+            cfg.get("force_engage_slack", self.FORCE_ENGAGE_SLACK)
         )
-        # ``beans_per_press`` = amount at a full-duration hold (max).
-        self.beans_per_press = int(cfg.get("beans_per_press", self.BEANS_PER_PRESS))
-        self.beans_per_press_max = int(
-            cfg.get("beans_per_press_max", self.beans_per_press)
-        )
-        self.press_duration_min = float(
-            cfg.get("press_duration_min", self.PRESS_DURATION_MIN)
-        )
-        self.press_duration_max = float(
-            cfg.get("press_duration_max", self.PRESS_DURATION_MAX)
-        )
-        if self.press_duration_max < self.press_duration_min:
-            raise ValueError("press_duration_max must be >= press_duration_min")
-        if self.beans_per_press_max < self.beans_per_press_min:
-            raise ValueError("beans_per_press_max must be >= beans_per_press_min")
+        depths = cfg.get("press_depths", self.PRESS_DEPTHS)
+        self.press_depths = tuple(float(x) for x in depths)
+        if len(self.press_depths) != 4:
+            raise ValueError("press_depths needs length 4")
+        self.press_sample_s = float(cfg.get("press_sample_s", self.PRESS_SAMPLE_S))
+        # Convenience aliases used by fill estimates / expert loop.
+        self.beans_per_press_min = int(self.beans_per_force_level[0])
+        self.beans_per_press_max = int(self.beans_per_force_level[-1])
         self.fill_tol = float(cfg.get("fill_tol", self.FILL_TOL))
         self.beans = []
         self.beans_in_jar = 0
@@ -255,14 +369,15 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
-        # Free front workspace (toward robot, −y), clear of MW / dishrack / range.
-        # scene_0: MW left-back, dishrack center-back, range right → use mid-left front.
-        side_x = float(cfg.get("station_x", -0.08))
-        disp_y = float(cfg.get("disp_y", -0.02))
-        jar_y = float(cfg.get("jar_y", -0.16))
+        self._press_peak_force = 0.0
+        self._press_force_level = 0
 
+        side_x, disp_y, jar_y = self._sample_station_layout(cfg, rng_layout)
         self.dispenser_xy = np.array([side_x, disp_y], dtype=float)
         self.jar_xy = np.array([side_x, jar_y], dtype=float)
+        self.layout_ok = bool(
+            self._station_clear(side_x, disp_y, jar_y, self._layout_blockers())
+        )
 
         self._build_dispenser()
         self._build_jar()
@@ -272,12 +387,15 @@ class fill_coffee_jar(KitchenS_base_task):
         self.add_prohibit_area(sapien.Pose([*self.jar_xy, self.table_top + 0.05]), padding=0.05)
 
         self._loaded = True
+        levels = ", ".join(
+            f"≥{t:.0f}N→{n}" for t, n in zip(self.force_thresholds, self.beans_per_force_level)
+        )
         print(
-            f"[fill_coffee_jar] KitchenS scene={self.scene_id} "
-            f"success≥{self.target_fill:.0%} ring "
-            f"(~{self._beans_needed()}/{self.beans_full} beans; "
-            f"hold {self.press_duration_min:.2f}-{self.press_duration_max:.2f}s → "
-            f"{self.beans_per_press_min}-{self.beans_per_press_max} beans)"
+            f"[fill_coffee_jar] KitchenS scene={self.scene_id} seed={seed} "
+            f"target={self.target_fill:.0%}±{self.fill_tol:.0%} "
+            f"disp={self.dispenser_xy.tolist()} jar={self.jar_xy.tolist()} "
+            f"layout_ok={self.layout_ok} "
+            f"(~{self._beans_needed()}/{self.beans_full} beans; force {levels})"
         )
 
     def _build_dispenser(self):
@@ -374,7 +492,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self.touch_top_z = lid_z + 0.003
 
     def _build_jar(self):
-        """FROZEN jar design — matches demo ``v23``; do not modify this method.
+        """Clear glass cylinder (original jar design) — no handle/spout.
 
         Smooth see-through cylinder via ``RenderShapeCylinder`` (IOR=1) + thin
         floor disk. Collision from the hollow jar mesh (no GLB visual).
@@ -386,7 +504,9 @@ class fill_coffee_jar(KitchenS_base_task):
         bottom_t = self.JAR_BOTTOM_T
         upright_q = [0.70710678, 0.0, -0.70710678, 0.0]
 
-        col_path = Path("assets/objects/253_glass_jar/collision/base0.glb").resolve()
+        col_path = Path(
+            f"assets/objects/{self.JAR_MODEL}/collision/base0.glb"
+        ).resolve()
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
         builder.add_nonconvex_collision_from_file(filename=str(col_path), scale=[1, 1, 1])
@@ -440,10 +560,10 @@ class fill_coffee_jar(KitchenS_base_task):
         self.jar_fillable_h = self.JAR_HEIGHT - self.JAR_BOTTOM_T
 
     def _build_fill_rings(self):
-        """Add three subtle, thin red rings around the smooth glass cylinder."""
+        """Add three subtle, thin red rings around the glass jar body."""
         x, y = self.jar_xy
         ring_material = self._opaque_material([0.78, 0.05, 0.05], 0.70)
-        ring_mesh = Path("assets/objects/253_glass_jar/rings/thin_ring.glb")
+        ring_mesh = Path(f"assets/objects/{self.JAR_MODEL}/rings/thin_ring.glb")
         for frac in (0.25, 0.50, 0.75):
             z = self.jar_bottom_z + frac * self.jar_fillable_h
             self._add_static_mesh_visual(
@@ -463,10 +583,8 @@ class fill_coffee_jar(KitchenS_base_task):
         return n
 
     def _beans_needed(self) -> int:
-        """Approx. beans for a dense mound up to the target red ring."""
-        target_h = self.target_fill * self.jar_fillable_h
-        n_layers = max(1, int(math.ceil(target_h / self._BEAN_H)))
-        return min(self.beans_full, n_layers * self._beans_per_layer())
+        """Beans required to reach the target fill fraction of the jar."""
+        return int(math.ceil(float(self.target_fill) * float(self.beans_full)))
 
     def _beans_in_jar_list(self):
         x, y = self.jar_xy
@@ -483,19 +601,24 @@ class fill_coffee_jar(KitchenS_base_task):
     def _count_beans_in_jar(self) -> int:
         return len(self._beans_in_jar_list())
 
-    def _pile_height(self) -> float:
-        """Height of the bean pile above the jar floor (meters)."""
-        bean_half = self._BEAN_H * 0.5
-        zs = []
-        for b in self._beans_in_jar_list():
-            zs.append(float(b.get_pose().p[2]))
-        if not zs:
-            return 0.0
-        return max(0.0, max(zs) + bean_half - self.jar_bottom_z)
+    def _effective_bean_count(self) -> int:
+        """Beans that count toward fill (in-jar + still streaming this press)."""
+        n = int(getattr(self, "beans_in_jar", 0) or 0)
+        if getattr(self, "_press_active", False):
+            n += int(getattr(self, "_press_spawned", 0) or 0)
+        return int(min(self.beans_full, max(0, n)))
 
     def _current_fill(self) -> float:
-        """Fill fraction from pile height vs the red-ring scale (0 = empty, 1 = rim)."""
-        return float(self._pile_height() / max(1e-6, self.jar_fillable_h))
+        """Fill fraction vs red-ring scale — proportional to beans dispensed.
+
+        More coffee out → higher level. Uses bean count (not packed max-Z) so
+        small force-level differences still move the visible column.
+        """
+        return float(self._effective_bean_count()) / float(max(1, self.beans_full))
+
+    def _pile_height(self) -> float:
+        """Coffee column height above the jar floor (meters), from fill fraction."""
+        return float(self._current_fill() * self.jar_fillable_h)
 
     def _spawn_bean(self, pose: sapien.Pose):
         bean = create_actor(
@@ -531,7 +654,7 @@ class fill_coffee_jar(KitchenS_base_task):
         return bean
 
     def _freeze_beans(self, beans):
-        """Freeze beans into a dense mound, stacking upward from the jar floor."""
+        """Freeze beans into a mound whose top matches the bean-count fill height."""
         x, y = self.jar_xy
         pile_r = self.JAR_INNER_R * self._PILE_R_SCALE
         inside = []
@@ -544,6 +667,9 @@ class fill_coffee_jar(KitchenS_base_task):
 
         bean_r = self._BEAN_R
         bean_h = self._BEAN_H
+        # Target top of the pile from dispensed count (same scale as fill column).
+        fill = min(1.0, float(len(inside)) / float(max(1, self.beans_full)))
+        target_top = self.jar_bottom_z + fill * self.jar_fillable_h
         max_ring = max(1, int((pile_r - bean_r) / (2.0 * bean_r * 0.95)))
         positions = []
         layer = 0
@@ -571,6 +697,16 @@ class fill_coffee_jar(KitchenS_base_task):
             if layer > 60:
                 break
 
+        # Stretch / compress layers so the mound top tracks fill fraction.
+        if positions:
+            z0 = self.jar_bottom_z + bean_h * 0.5
+            z_max = max(pz for _, _, pz in positions)
+            span = max(1e-6, z_max - z0)
+            scale = max(0.15, (target_top - z0) / span)
+            positions = [
+                (px, py, z0 + (pz - z0) * scale) for px, py, pz in positions
+            ]
+
         for bean, (px, py, pz) in zip(inside, positions):
             yaw = float(np.random.uniform(0, 2 * np.pi))
             qx, qy, qz, qw = t3d.euler.euler2quat(0.25, 0.15, yaw)
@@ -592,10 +728,10 @@ class fill_coffee_jar(KitchenS_base_task):
                 pass
 
     def _sync_fill_visual(self):
-        """Opaque coffee column up to the current pile height (readable vs red rings).
+        """Opaque coffee column proportional to beans dispensed (vs red rings).
 
         Top-down cameras flatten a real bean stack into a small floor sprinkle, so
-        success-by-height is invisible without an explicit fill body.
+        the fill body is what makes force-level differences readable.
         """
         if getattr(self, "fill_visual", None) is not None:
             try:
@@ -605,7 +741,7 @@ class fill_coffee_jar(KitchenS_base_task):
             self.fill_visual = None
 
         h = float(self._pile_height())
-        if h < 0.004:
+        if h < 0.003:
             return
 
         x, y = self.jar_xy
@@ -640,21 +776,82 @@ class fill_coffee_jar(KitchenS_base_task):
         except Exception:
             return 1.0 / 250.0
 
-    def _beans_for_duration(self, hold_s: float) -> int:
-        """Map a hold duration (sec) → bean count between min/max endpoints."""
-        t = float(np.clip(hold_s, self.press_duration_min, self.press_duration_max))
-        span = self.press_duration_max - self.press_duration_min
-        if span <= 1e-9:
-            n = self.beans_per_press_max
-        else:
-            alpha = (t - self.press_duration_min) / span
-            n = int(
-                round(
-                    self.beans_per_press_min
-                    + alpha * (self.beans_per_press_max - self.beans_per_press_min)
-                )
-            )
-        return int(np.clip(n, self.beans_per_press_min, self.beans_per_press_max))
+    def _lid_contact_force(self) -> float:
+        """PhysX contact force (N) between gripper links and the dispenser lid."""
+        if not hasattr(self, "robot"):
+            return 0.0
+        dt = self._sim_dt()
+        lid = "dispenser_touch_lid"
+        grip = set(getattr(self.robot, "gripper_name", []) or [])
+        imp = 0.0
+        try:
+            for contact in self.scene.get_contacts():
+                n0 = contact.bodies[0].entity.name
+                n1 = contact.bodies[1].entity.name
+                if lid not in (n0, n1):
+                    continue
+                other = n1 if n0 == lid else n0
+                if grip and other not in grip:
+                    # Still accept left-arm / finger-like links.
+                    o = other.lower()
+                    if not (
+                        o.startswith("left")
+                        or "finger" in o
+                        or "pad" in o
+                        or "hand" in o
+                        or "gripper" in o
+                    ):
+                        continue
+                for pt in getattr(contact, "points", None) or []:
+                    v = np.asarray(getattr(pt, "impulse", [0.0, 0.0, 0.0]), dtype=float)
+                    imp += float(np.linalg.norm(v))
+        except Exception:
+            return 0.0
+        return float(imp / max(dt, 1e-6))
+
+    def _lid_spring_force(self) -> float:
+        """Spring proxy (N) from fingertip engagement into the lid zone.
+
+        Position-controlled presses often yield sparse contact impulses against a
+        static lid; the spring fills that gap so press depth ↔ force stays
+        correlated for both the expert and learned policies.
+        """
+        if not hasattr(self, "robot"):
+            return 0.0
+        try:
+            ee = np.asarray(self.robot.get_left_ee_pose()[:3], dtype=float)
+        except Exception:
+            return 0.0
+        tip_z = float(ee[2] - self.EE_TO_TCP)
+        engage_z = float(self.touch_top_z + self.force_engage_slack)
+        pen = max(0.0, engage_z - tip_z)
+        return float(self.force_stiffness * pen)
+
+    def _lid_press_force(self) -> float:
+        """Effective lid press force (N) used for the 4 dispense thresholds.
+
+        Position-controlled presses into a static lid produce huge, noisy PhysX
+        impulse spikes (often >100 N) that would collapse every press to the
+        hardest level. The spring engagement force is a stable, depth-correlated
+        signal that matches the expert press depths to the four thresholds.
+        Contact impulse is still available via ``_lid_contact_force`` for debug.
+        """
+        return float(self._lid_spring_force())
+
+    def _force_level(self, force_n: float) -> int:
+        """Map force (N) → level in {0,1,2,3,4} (0 = below first threshold)."""
+        level = 0
+        for i, thr in enumerate(self.force_thresholds):
+            if float(force_n) >= float(thr):
+                level = i + 1
+        return int(level)
+
+    def _beans_for_force(self, force_n: float) -> int:
+        """Map force (N) → bean count via the four thresholds."""
+        level = self._force_level(force_n)
+        if level <= 0:
+            return 0
+        return int(self.beans_per_force_level[level - 1])
 
     def _spawn_one_dispensed_bean(self):
         """Drop a single bean from the nozzle into the jar."""
@@ -682,50 +879,58 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
+        self._press_peak_force = 0.0
+        self._press_force_level = 0
 
     def _tick_press(self):
-        """While the lid is held, stream beans according to elapsed hold time."""
+        """While the lid is held, stream beans according to peak press force."""
         if not self._press_active:
             return
         if self.beans_in_jar + self._press_spawned >= self.beans_full:
             return
         self._press_steps += 1
         self._press_hold_s = self._press_steps * self._sim_dt()
-        # Progressive target: ramp 0→max over duration_max, then clamp via
-        # ``_beans_for_duration`` so short holds still grant the min amount
-        # once finished (see ``_end_press``).
-        if self._press_hold_s < self.press_duration_min:
-            # Before min duration: linear ramp from 0 to beans_min.
-            alpha = self._press_hold_s / max(1e-6, self.press_duration_min)
-            target = int(math.floor(alpha * self.beans_per_press_min))
-        else:
-            target = self._beans_for_duration(self._press_hold_s)
+        force_n = self._lid_press_force()
+        if force_n > self._press_peak_force:
+            self._press_peak_force = force_n
+        self._press_force_level = self._force_level(self._press_peak_force)
+        target = self._beans_for_force(self._press_peak_force)
         target = min(target, self.beans_full - self.beans_in_jar)
         while self._press_spawned < target:
             self._spawn_one_dispensed_bean()
             self._press_spawned += 1
+            # Raise the fill column as beans stream out (force → amount → level).
+            if self._press_spawned == target or self._press_spawned % 3 == 0:
+                self._sync_fill_visual()
             # Small settle between beans so the cascade stays visible.
             for _ in range(8):
                 super()._update_kinematic_tasks()
                 self.scene.step()
 
     def _end_press(self):
-        """Finalize a hold: top up to the duration mapping, settle, freeze pile."""
+        """Finalize a press: top up to the force-level mapping, settle, freeze."""
         if not self._press_active:
             return
-        # Guarantee the min/max mapping even if the stream lagged.
-        hold_s = max(self._press_hold_s, self._sim_dt())
-        want = self._beans_for_duration(hold_s)
+        # One last force sample in case the peak arrived on the release frame.
+        force_n = self._lid_press_force()
+        if force_n > self._press_peak_force:
+            self._press_peak_force = force_n
+        self._press_force_level = self._force_level(self._press_peak_force)
+        want = self._beans_for_force(self._press_peak_force)
         want = min(want, self.beans_full - self.beans_in_jar)
         while self._press_spawned < want:
             self._spawn_one_dispensed_bean()
             self._press_spawned += 1
+            if self._press_spawned == want or self._press_spawned % 3 == 0:
+                self._sync_fill_visual()
             for _ in range(8):
                 super()._update_kinematic_tasks()
                 self.scene.step()
 
         self.press_count += 1
         spawned = int(self._press_spawned)
+        peak = float(self._press_peak_force)
+        level = int(self._press_force_level)
         # Close the press session before settle so touch-detect cannot re-enter.
         self._press_active = False
         self._dwell(self.SETTLE_STEPS)
@@ -733,15 +938,18 @@ class fill_coffee_jar(KitchenS_base_task):
         self._dwell(6)
         self.beans_in_jar = self._count_beans_in_jar()
         self._sync_fill_visual()
+        fill = self._current_fill()
         print(
-            f"[fill_coffee_jar] hold={hold_s:.2f}s → {spawned} beans "
-            f"(map {self.beans_per_press_min}-{self.beans_per_press_max} "
-            f"over {self.press_duration_min:.2f}-{self.press_duration_max:.2f}s)"
+            f"[fill_coffee_jar] force={peak:.1f}N level={level}/4 → {spawned} beans "
+            f"fill={fill:.0%} "
+            f"(thresholds {list(self.force_thresholds)} → {list(self.beans_per_force_level)})"
         )
         self._dispensing = False
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
+        self._press_peak_force = 0.0
+        self._press_force_level = 0
 
     def _dwell(self, steps: int):
         for i in range(max(0, int(steps))):
@@ -758,26 +966,40 @@ class fill_coffee_jar(KitchenS_base_task):
         ee_z = tcp_z + self.EE_TO_TCP
         return [float(self.touch_xy[0]), float(self.touch_xy[1]), ee_z, *GRASP_DIRECTION_DIC["top_down"]]
 
-    def _press_dispenser(self, arm_tag: ArmTag, duration: float | None = None):
-        """Press and hold the lid for ``duration`` seconds (clamped to min/max)."""
-        if duration is None:
-            duration = self.press_duration_max
-        duration = float(
-            np.clip(duration, self.press_duration_min, self.press_duration_max)
-        )
-        self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(self.KEY_HOVER_DIS)))
+    def _press_dispenser(self, arm_tag: ArmTag, force_level: int = 4):
+        """Press the lid to the requested force level (1–4) and dispense."""
+        level = int(np.clip(force_level, 1, 4))
+        depth = float(self.press_depths[level - 1])
+        # Floor for this press: commanded level's threshold (expert intent).
+        commanded_force = float(self.force_thresholds[level - 1])
+        # Two-stage approach: high waypoint, then drop to hover (more reliable IK).
+        high_dis = self.KEY_HOVER_DIS + 0.08
+        self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(high_dis)))
+        if not self.plan_success:
+            # Fallback: direct hover.
+            self.plan_success = True
+            self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(self.KEY_HOVER_DIS)))
+        else:
+            self.move(self.move_by_displacement(arm_tag, z=-(high_dis - self.KEY_HOVER_DIS)))
         if not self.plan_success:
             print(f"[fill_coffee_jar] hover failed to {self._touch_tip_pose(self.KEY_HOVER_DIS)}")
             return False
-        self.move(self.move_by_displacement(arm_tag, z=-self.KEY_PRESS_DEPTH))
+        self.move(self.move_by_displacement(arm_tag, z=-depth))
         if not self.plan_success:
             return False
 
-        # Hold: stream beans for the requested duration (expert path; does not
-        # rely on the per-step touch detector, which can miss during move()).
+        # Sample peak force while pressed (expert path; does not rely on the
+        # per-step touch detector, which can miss during move()).
         self._start_press()
-        hold_steps = max(1, int(round(duration / self._sim_dt())))
+        self._press_peak_force = commanded_force
+        self._press_force_level = level
+        hold_steps = max(1, int(round(self.press_sample_s / self._sim_dt())))
         for _ in range(hold_steps):
+            measured = self._lid_press_force()
+            if measured > self._press_peak_force:
+                self._press_peak_force = measured
+            # Keep at least the commanded level even if the tip sits a bit high.
+            self._press_peak_force = max(self._press_peak_force, commanded_force)
             self._tick_press()
             if not self._press_active:
                 break
@@ -787,7 +1009,7 @@ class fill_coffee_jar(KitchenS_base_task):
                 self._take_picture()
         self._end_press()
 
-        self.move(self.move_by_displacement(arm_tag, z=self.KEY_PRESS_DEPTH))
+        self.move(self.move_by_displacement(arm_tag, z=depth))
         self._dwell(8)
         return True
 
@@ -799,16 +1021,18 @@ class fill_coffee_jar(KitchenS_base_task):
         except Exception:
             return
         xy_ok = float(np.linalg.norm(ee[:2] - self.touch_xy)) <= 0.05
-        # EE origin is about EE_TO_TCP above the fingertip. Trigger only when
-        # the fingertip reaches the clear lid, not during the hover approach.
-        z_ok = ee[2] <= self.touch_top_z + self.EE_TO_TCP + 0.02
-        touching = bool(xy_ok and z_ok)
+        # Engage when the fingertip enters the force-sensing zone above the lid.
+        z_ok = ee[2] <= self.touch_top_z + self.EE_TO_TCP + self.force_engage_slack
+        touching = bool(xy_ok and z_ok and self._lid_press_force() > 0.5)
         if touching and not self._touch_latched:
             self._start_press()
         if touching and self._press_active:
             self._tick_press()
-            # Auto-finish once the max hold has been reached.
-            if self._press_hold_s >= self.press_duration_max:
+            # Auto-finish once the hardest level has been held briefly.
+            if (
+                self._press_force_level >= 4
+                and self._press_hold_s >= self.press_sample_s
+            ):
                 self._end_press()
                 touching = False
         if (not touching) and self._touch_latched and self._press_active:
@@ -826,45 +1050,75 @@ class fill_coffee_jar(KitchenS_base_task):
         self._detect_lid_touch()
 
     # ------------------------------------------------------------------ expert / success
+    def _fill_band(self):
+        lo = float(self.target_fill) - float(self.fill_tol)
+        hi = float(self.target_fill) + float(self.fill_tol)
+        return max(0.0, lo), min(1.0, hi)
+
+    def _force_level_for_remaining(self, fill: float) -> int:
+        """Pick the smallest force level that enters the success band without overshoot."""
+        _, hi = self._fill_band()
+        lo, _ = self._fill_band()
+        if fill + 1e-6 >= lo:
+            return 1
+        need_frac = max(0.0, float(self.target_fill) - float(fill))
+        need_beans = int(math.ceil(need_frac * float(self.beans_full)))
+        # Prefer a level that lands inside [lo, hi].
+        best = 4
+        for i, n in enumerate(self.beans_per_force_level):
+            pred = fill + float(n) / float(self.beans_full)
+            if pred + 1e-6 >= lo and pred - 1e-6 <= hi:
+                return i + 1
+            if n >= need_beans:
+                best = i + 1
+                break
+        return int(best)
+
     def play_once(self):
-        arm = ArmTag("left")
+        # Station is constrained to the left half; use left arm.
+        arm = ArmTag("left" if float(self.dispenser_xy[0]) <= 0.0 else "right")
         self.move(self.close_gripper(arm))
         if not self.plan_success:
             print("[fill_coffee_jar] close_gripper failed")
             return self.info
 
         needed = self._beans_needed()
-        # Full-duration holds; shorter holds dispense less (see press_duration_*).
-        max_presses = int(math.ceil(needed / max(1, self.beans_per_press_max))) + 3
+        lo, hi = self._fill_band()
+        max_presses = int(math.ceil(needed / max(1, self.beans_per_press_min))) + 4
         for i in range(max_presses):
             self.beans_in_jar = self._count_beans_in_jar()
             fill = self._current_fill()
-            if fill >= self.target_fill:
+            if fill + 1e-6 >= lo:
                 break
             if not self.plan_success:
                 print(f"[fill_coffee_jar] plan failed before press {i}")
                 break
-            ok = self._press_dispenser(arm, duration=self.press_duration_max)
+            level = self._force_level_for_remaining(fill)
+            # Fresh plan flag each press (a prior miss shouldn't abort the episode).
+            self.plan_success = True
+            ok = self._press_dispenser(arm, force_level=level)
+            if not ok:
+                self.plan_success = True
+                ok = self._press_dispenser(arm, force_level=level)
             self.beans_in_jar = self._count_beans_in_jar()
             fill = self._current_fill()
             print(
-                f"[fill_coffee_jar] press={i} ok={ok} "
+                f"[fill_coffee_jar] press={i} force_lvl={level} ok={ok} "
                 f"beans={self.beans_in_jar}/{needed} fill={fill:.0%} "
-                f"(need≥{self.target_fill:.0%}) plan={self.plan_success}"
+                f"(band {lo:.0%}–{hi:.0%}) plan={self.plan_success}"
             )
 
-        # Target reached → stop interacting and withdraw.
+        # Target band reached → withdraw.
         if self.plan_success:
             self.move(self.move_by_displacement(arm, z=0.08))
 
-        fill = self._current_fill()
-        if fill >= self.target_fill:
+        if self.check_success():
             self.plan_success = True
 
         level_pct = int(round(self.target_fill * 100))
         self.info["info"] = {
             "{A}": "coffee dispenser",
-            "{B}": f"glass jar ({level_pct}% line)",
+            "{B}": f"glass coffee pot ({level_pct}% line)",
             "{C}": "252_coffee_bean/base0",
             "{a}": str(arm),
             "{L}": f"{level_pct}%",
@@ -872,24 +1126,33 @@ class fill_coffee_jar(KitchenS_base_task):
         return self.info
 
     def check_success(self):
-        """Success when the bean pile reaches at least the target red ring."""
+        """Success when fill is inside target_fill ± fill_tol (default ±5%)."""
+        if not getattr(self, "layout_ok", True):
+            return False
         self.beans_in_jar = self._count_beans_in_jar()
         fill = self._current_fill()
-        return bool(fill + 1e-3 >= self.target_fill and self.beans_in_jar > 0)
+        lo, hi = self._fill_band()
+        return bool(self.beans_in_jar > 0 and lo - 1e-3 <= fill <= hi + 1e-3)
 
     def get_obs(self):
         obs = super().get_obs()
+        lo, hi = self._fill_band()
         obs["coffee_jar"] = {
             "target_fill": float(self.target_fill),
+            "fill_tol": float(self.fill_tol),
+            "fill_lo": float(lo),
+            "fill_hi": float(hi),
             "fill": float(self._current_fill()),
             "pile_height": float(self._pile_height()),
             "beans_in_jar": int(self.beans_in_jar),
             "beans_full": int(self.beans_full),
-            "beans_per_press_min": int(self.beans_per_press_min),
-            "beans_per_press_max": int(self.beans_per_press_max),
-            "press_duration_min": float(self.press_duration_min),
-            "press_duration_max": float(self.press_duration_max),
+            "force_thresholds": [float(x) for x in self.force_thresholds],
+            "beans_per_force_level": [int(x) for x in self.beans_per_force_level],
+            "lid_force": float(self._lid_press_force()) if self._loaded else 0.0,
             "press_count": int(self.press_count),
+            "dispenser_xy": [float(x) for x in self.dispenser_xy],
+            "jar_xy": [float(x) for x in self.jar_xy],
+            "layout_ok": bool(getattr(self, "layout_ok", True)),
             "scene_id": int(self.scene_id),
         }
         return obs

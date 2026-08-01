@@ -38,16 +38,19 @@ eval_video_log: true
 # Task-scoped knobs (read by envs that look under task_args.<task_name>).
 task_args:
   fill_coffee_jar:
-    # Success = dense pile height ≥ target_fill (red-ring scale).
-    # Hold duration (sec) maps linearly to beans_per_press_min..beans_per_press.
-    target_fill: 0.25
+    # Success = fill in [target_fill ± fill_tol]. target_fill: 0.25|0.5|0.75|random
+    # Peak lid press force → beans dispensed → fill level (beans/beans_full).
+    target_fill: random
     scene_id: 0
-    beans_full: 160
-    press_duration_min: 0.35
-    press_duration_max: 1.40
-    beans_per_press_min: 2
-    beans_per_press: 12
-    fill_tol: 0.02
+    randomize_layout: true
+    beans_full: 160                              # rim = 100% fill
+    force_thresholds: [3.0, 6.0, 10.0, 14.0]   # N  (light → hard)
+    beans_per_force_level: [10, 20, 30, 40]     # → ~6%/13%/19%/25% fill
+    force_stiffness: 300.0                       # N/m spring engagement proxy
+    force_engage_slack: 0.05                     # m above lid where force starts
+    press_depths: [0.020, 0.030, 0.044, 0.057]  # expert depths for levels 1–4
+    press_sample_s: 0.40
+    fill_tol: 0.05                               # ±5% success band
   measure_ingredient:
     # Pour oil to target ring, then place jar on electronic scale.
     target_fill: 0.25
