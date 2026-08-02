@@ -5,8 +5,8 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  F: toggle oil key (ON stays down / OFF returns up)\n  Space: hold/release jar | arrows/Q/E: move it\n  V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  Select an arm, move above the red key, lower with Q to press (latches ON/OFF like fill_coffee)\n  Key stays down while oil flows; press again to turn off and raise the key\n  Space: grasp/release jar for the scale step | F: scripted key press assist\n  V: top-down/head camera | Escape: quit\n"""
+KEYBOARD = """\n  Lower gripper onto the red key to latch oil ON/OFF\n  Space: hold/release jar | arrows/Q/E: move it\n  V: top-down/head camera | Escape: quit\n"""
+ROBOT = """\n  Select an arm, move above the red key, lower with Q to press (latches ON/OFF)\n  Key stays down while oil flows; press again to turn off and raise the key\n  Space: side-grasp / release jar (release ends the episode; success = fill + on scale)\n  V: top-down/head camera | Escape: quit\n"""
 
 
 def _post_setup(env):
@@ -21,7 +21,7 @@ def _post_setup(env):
     env.pour_rate = max(float(getattr(env, "pour_rate", 0.0)), 0.00085)
     print(
         f"[measure_ingredient] interactive pour_rate={env.pour_rate:.6g} "
-        f"(hollow glass jar in viewer; press red key to latch oil ON)"
+        f"(Z-press red key; Space grasps jar)"
     )
 
 

@@ -143,6 +143,7 @@ class measure_ingredient(KitchenS_base_task):
         self.opened_once = False
         self.closed_after_pour = False
         self.jar_on_scale = False
+        self._episode_jar_released = False
         self.target_fill = 0.25
         self._decor_layout = {}
         self._apply_oil_style(self._parse_oil_style(self._cfg))
@@ -163,9 +164,13 @@ class measure_ingredient(KitchenS_base_task):
         self._ring_entities = []
         self._touch_latched = False
         self._ignore_tab = False
+        # OFF is applied on release so oil keeps flowing until the key is up.
+        self._pending_tab_off = False
         self._jar_locked = True
         self._jar_carry = False
-        self._jar_carry_offset = None
+        self._jar_carry_local = None  # TCP→jar world offset (upright hold)
+        self._jar_carry_arm = None
+        self._jar_carry_quat = None
         self._jar_seated_pose = None
         self.jar = None
         self.jar_visual = None
@@ -536,6 +541,10 @@ class measure_ingredient(KitchenS_base_task):
         decor_y_range = self._parse_range(cfg, "decor_y_range", (-0.26, 0.20))
         # Keep table decor off the microwave footprint and out of the pour lane.
         mw_blockers = list(blockers)
+        # Grasp corridor: between jar and robot (−Y). No decor in this lane.
+        grasp_corridor_c = np.array([side_x, jar_y - 0.16], dtype=float)
+        grasp_corridor_h = np.array([0.12, 0.15], dtype=float)
+        mw_blockers.append((grasp_corridor_c, grasp_corridor_h))
         on_mw_blockers = []  # footprints already placed on the microwave top
 
         self._decor_layout = {}
@@ -857,6 +866,7 @@ class measure_ingredient(KitchenS_base_task):
         self.opened_once = False
         self.closed_after_pour = False
         self.jar_on_scale = False
+        self._episode_jar_released = False
         self._liquid_entity = None
         self._stream_entity = None
         self._spill_entity = self._remove_entity(getattr(self, "_spill_entity", None))
@@ -873,9 +883,12 @@ class measure_ingredient(KitchenS_base_task):
         self._ring_entities = []
         self._touch_latched = False
         self._ignore_tab = False
+        self._pending_tab_off = False
         self._jar_locked = True
         self._jar_carry = False
-        self._jar_carry_offset = None
+        self._jar_carry_local = None
+        self._jar_carry_arm = None
+        self._jar_carry_quat = None
         self._jar_seated_pose = None
 
         # Jar always under dispenser; scale nearby; decor free / on microwave.
@@ -1951,15 +1964,250 @@ class measure_ingredient(KitchenS_base_task):
         self._button_target_depth = depth
         self._sync_switch_touch_points()
 
-    def _start_jar_carry(self, arm_tag: ArmTag):
-        """Kinematically attach the jar under the EE (physics grasp is flaky here)."""
+    def _jar_grasp_quat(self):
+        """Top-down pinch (fingers around the upper jar body)."""
+        return list(GRASP_DIRECTION_DIC["top_down"])
+
+    def _jar_side_grasp_quat(self):
+        """Compatibility alias — carry / place use the top-down pinch quat."""
+        return self._jar_grasp_quat()
+
+    def _tcp_pose7(self, arm_tag: ArmTag):
         if str(arm_tag) == "left":
-            ee = np.asarray(self.robot.get_left_ee_pose(), dtype=float)
-        else:
-            ee = np.asarray(self.robot.get_right_ee_pose(), dtype=float)
+            return np.asarray(self.robot.get_left_tcp_pose(), dtype=float)
+        return np.asarray(self.robot.get_right_tcp_pose(), dtype=float)
+
+    def _ee_pose_from_tcp(self, tcp_xyz, quat) -> list:
+        """Convert a TCP target to the EE pose ``move_to_pose`` expects.
+
+        Robot EE poses sit ``EE_TO_TCP`` behind the TCP along local +X
+        (``robot._trans_endpose``).
+        """
+        R = np.asarray(
+            sapien.Pose([0.0, 0.0, 0.0], list(quat)).to_transformation_matrix()[
+                :3, :3
+            ],
+            dtype=float,
+        )
+        ee = np.asarray(tcp_xyz, dtype=float) - R @ np.array(
+            [float(self.EE_TO_TCP), 0.0, 0.0], dtype=float
+        )
+        return [float(ee[0]), float(ee[1]), float(ee[2]), *list(quat)]
+
+    def _seat_jar_in_gripper(self, arm_tag: ArmTag, lift: float = 0.0):
+        """Snap jar axis into the TCP so the fingers visually enclose it.
+
+        ``lift`` raises the jar into the finger pads (cm-scale) so it is not
+        hanging under the palm with an air gap.
+        """
+        if self.jar is None:
+            return
+        tcp = self._tcp_pose7(arm_tag)[:3]
+        jar_z = float(np.asarray(self.jar.get_pose().p, dtype=float)[2])
+        jar_z = max(jar_z, float(self.table_top) + 0.001) + float(lift)
+        pose = sapien.Pose([float(tcp[0]), float(tcp[1]), jar_z])
+        self.jar.actor.set_pose(pose)
+        for component in self.jar.actor.get_components():
+            if isinstance(component, sapien.physx.PhysxRigidDynamicComponent):
+                try:
+                    component.set_linear_velocity(np.zeros(3))
+                    component.set_angular_velocity(np.zeros(3))
+                except Exception:
+                    pass
+        self._sync_jar_followers()
+
+    def _tcp_in_jar_grasp(self, arm_tag: ArmTag, jar_p) -> bool:
+        """True if TCP is on the jar axis and mid-body (fingers can enclose it)."""
+        tcp = self._tcp_pose7(arm_tag)[:3]
+        dist_xy = float(np.linalg.norm(tcp[:2] - jar_p[:2]))
+        z_lo = float(jar_p[2] + 0.028)
+        z_hi = float(jar_p[2] + 0.90 * float(self.JAR_HEIGHT))
+        ok = dist_xy <= 0.038 and z_lo <= float(tcp[2]) <= z_hi
+        if not ok:
+            print(
+                f"[measure_ingredient] TCP not in grasp volume: "
+                f"xy={dist_xy:.3f}m z={float(tcp[2]):.3f} "
+                f"(need [{z_lo:.3f},{z_hi:.3f}])"
+            )
+        return ok
+
+    def _grasp_jar_from_side(self, arm_tag: ArmTag) -> bool:
+        """Top-down pinch via the −Y corridor, then slide clear of the spout.
+
+        One continuous top-down wrist from approach → close → retract → place.
+        Do **not** try a side ``grasp_actor`` first — a missed side attempt
+        followed by a top-down insert looks like “side stick then re-grasp from
+        above”. Weld only when TCP is mid-body.
+        """
+        if self.jar is None:
+            return False
+        self._ignore_tab = True
+        self._touch_latched = False
+        self.plan_success = True
+        self._clear_tab_collision()
+        self._jar_locked = False
+        self._jar_seated_pose = None
+        self._set_jar_damping(3.0)
+
         jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
-        # Keep jar upright under the EE; offset is EE→jar in world frame.
-        self._jar_carry_offset = jar_p - ee[:3]
+        if not self._grasp_jar_corridor_insert(arm_tag, jar_p):
+            print("[measure_ingredient] jar corridor grasp failed")
+            self.plan_success = False
+            return False
+
+        jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
+        if not self._tcp_in_jar_grasp(arm_tag, jar_p):
+            self.plan_success = False
+            return False
+
+        # Commanded top-down for the whole carry (stable place IK).
+        grasp_quat = self._jar_grasp_quat()
+        # Lift a little into the pads so the glass is enclosed, not hanging.
+        self._seat_jar_in_gripper(arm_tag, lift=0.018)
+        self._start_jar_carry(arm_tag, grasp_quat=grasp_quat)
+
+        # Slide out from under the spout first, then lift — never through it.
+        self.move(
+            self.move_by_displacement(
+                arm_tag, y=-0.16, quat=grasp_quat, move_axis="world"
+            )
+        )
+        if not self.plan_success:
+            self.plan_success = True
+        self.move(
+            self.move_by_displacement(
+                arm_tag, z=0.12, quat=grasp_quat, move_axis="world"
+            )
+        )
+        if not self.plan_success:
+            self.plan_success = True
+        self.plan_success = True
+        return True
+
+    def _grasp_jar_corridor_insert(self, arm_tag: ArmTag, jar_p) -> bool:
+        """Fallback: −Y corridor → above jar → deepen TCP into the body → close."""
+        # Upper body / near-rim pinch ("from the side on the top").
+        grasp_z = float(jar_p[2] + 0.092)
+        hover_z = float(jar_p[2] + float(self.JAR_HEIGHT) + 0.08)
+        quat = self._jar_grasp_quat()
+        tcp_side = [float(jar_p[0]), float(jar_p[1] - 0.18), hover_z]
+        tcp_above = [float(jar_p[0]), float(jar_p[1]), hover_z]
+
+        self.move(self.open_gripper(arm_tag))
+        if not self.plan_success:
+            self.plan_success = True
+        self.move(
+            self.move_to_pose(arm_tag, self._ee_pose_from_tcp(tcp_side, quat))
+        )
+        if not self.plan_success:
+            return False
+        self.move(
+            self.move_to_pose(arm_tag, self._ee_pose_from_tcp(tcp_above, quat))
+        )
+        if not self.plan_success:
+            return False
+
+        # Keep stepping down until TCP is mid-body — do not weld from hover.
+        for _ in range(8):
+            tcp = self._tcp_pose7(arm_tag)[:3]
+            dz = float(grasp_z - tcp[2])
+            if abs(dz) < 0.006:
+                break
+            self.plan_success = True
+            self.move(
+                self.move_by_displacement(
+                    arm_tag,
+                    z=float(np.clip(dz, -0.04, 0.04)),
+                    quat=quat,
+                    move_axis="world",
+                )
+            )
+            if not self.plan_success:
+                print("[measure_ingredient] corridor descend step failed")
+                return False
+
+        if not self._tcp_in_jar_grasp(arm_tag, jar_p):
+            # Last try: absolute EE for the grasp TCP.
+            self.plan_success = True
+            self.move(
+                self.move_to_pose(
+                    arm_tag,
+                    self._ee_pose_from_tcp(
+                        [float(jar_p[0]), float(jar_p[1]), grasp_z], quat
+                    ),
+                )
+            )
+            if not self.plan_success or not self._tcp_in_jar_grasp(arm_tag, jar_p):
+                return False
+
+        self.move(self.close_gripper(arm_tag))
+        return bool(self.plan_success)
+
+    def interactive_grasp_jar(self, arm_tag: ArmTag) -> bool:
+        """Interactive Space: grasp the jar (never toggles the oil key)."""
+        ok = bool(self._grasp_jar_from_side(arm_tag))
+        if ok:
+            print(
+                "[measure_ingredient] jar grasped in fingers — "
+                "move to the scale, then Space to release (ends episode)"
+            )
+        return ok
+
+    def interactive_release_jar(self, arm_tag: ArmTag) -> bool:
+        """Interactive Space: release the jar; episode ends after this."""
+        if self.jar is None:
+            return False
+        self._ignore_tab = True
+        self.plan_success = True
+        place = None
+        try:
+            jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
+            scale_xy = np.asarray(getattr(self, "scale_xy", jar_p[:2]), dtype=float)
+            if float(np.linalg.norm(jar_p[:2] - scale_xy)) < 0.12:
+                place = self._scale_place_xyz()
+        except Exception:
+            place = None
+        if place is not None:
+            self._seat_jar_on_scale(place)
+            self.jar_on_scale = True
+        else:
+            self._stop_jar_carry()
+            self.jar_on_scale = False
+        self.move(self.open_gripper(arm_tag))
+        if not self.plan_success:
+            self.plan_success = True
+        # Terminal signal for interactive: any post-grasp release ends the episode.
+        self._episode_jar_released = True
+        print(
+            f"[measure_ingredient] jar released"
+            f"{' on scale' if self.jar_on_scale else ' (not on scale)'} — episode ending"
+        )
+        return True
+
+    def _ee_pose7(self, arm_tag: ArmTag):
+        if str(arm_tag) == "left":
+            return np.asarray(self.robot.get_left_ee_pose(), dtype=float)
+        return np.asarray(self.robot.get_right_ee_pose(), dtype=float)
+
+    def _start_jar_carry(self, arm_tag: ArmTag, grasp_quat=None):
+        """Weld upright jar to the TCP (finger center), not the EE/palm frame.
+
+        Mixing EE position with a commanded wrist quat produced a floating gap
+        under the gripper. TCP-relative hold keeps the jar between the fingers.
+        """
+        tcp = self._tcp_pose7(arm_tag)[:3]
+        jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
+        quat = (
+            np.asarray(grasp_quat, dtype=float)
+            if grasp_quat is not None
+            else np.asarray(self._ee_pose7(arm_tag)[3:7], dtype=float)
+        )
+        # Force axis under TCP; keep only the vertical finger→bottom offset.
+        self._jar_carry_local = np.array(
+            [0.0, 0.0, float(jar_p[2] - tcp[2])], dtype=float
+        )
+        self._jar_carry_quat = quat.copy()
+        self._jar_carry_arm = ArmTag(str(arm_tag))
         self._jar_carry = True
         self._jar_locked = False
         self._apply_jar_carry()
@@ -1967,7 +2215,9 @@ class measure_ingredient(KitchenS_base_task):
     def _stop_jar_carry(self, place_xyz=None):
         """Release the kinematic attach. Optionally settle at ``place_xyz``."""
         self._jar_carry = False
-        self._jar_carry_offset = None
+        self._jar_carry_local = None
+        self._jar_carry_quat = None
+        self._jar_carry_arm = None
         if place_xyz is not None and self.jar is not None:
             self.jar.actor.set_pose(
                 sapien.Pose(
@@ -1984,16 +2234,19 @@ class measure_ingredient(KitchenS_base_task):
         self._sync_jar_followers()
 
     def _apply_jar_carry(self):
-        if self.jar is None or self._jar_carry_offset is None:
+        if self.jar is None or self._jar_carry_local is None:
             return
-        arm = self.arm
-        if str(arm) == "left":
-            ee = np.asarray(self.robot.get_left_ee_pose(), dtype=float)
-        else:
-            ee = np.asarray(self.robot.get_right_ee_pose(), dtype=float)
-        p = ee[:3] + self._jar_carry_offset
+        arm = getattr(self, "_jar_carry_arm", None) or self.arm
+        tcp = self._tcp_pose7(arm)[:3]
+        off = np.asarray(self._jar_carry_local, dtype=float)
+        # Always centered under the finger TCP; upright jar.
+        p = np.array(
+            [float(tcp[0]), float(tcp[1]), float(tcp[2] + off[2])], dtype=float
+        )
         try:
-            self.jar.actor.set_pose(sapien.Pose([float(p[0]), float(p[1]), float(p[2])]))
+            self.jar.actor.set_pose(
+                sapien.Pose([float(p[0]), float(p[1]), float(p[2])])
+            )
             for component in self.jar.actor.get_components():
                 if isinstance(component, sapien.physx.PhysxRigidDynamicComponent):
                     component.set_linear_velocity(np.zeros(3))
@@ -2002,20 +2255,20 @@ class measure_ingredient(KitchenS_base_task):
             pass
 
     def _ee_pose_for_carried_jar(self, jar_xyz):
-        """Top-down EE pose that puts the carried jar at ``jar_xyz``."""
-        offset = np.asarray(self._jar_carry_offset, dtype=float)
-        ee = np.asarray(jar_xyz, dtype=float) - offset
-        return [
-            float(ee[0]),
-            float(ee[1]),
-            float(ee[2]),
-            *GRASP_DIRECTION_DIC["top_down"],
-        ]
+        """EE pose (grasp quat) that puts the carried jar at ``jar_xyz``."""
+        off = np.asarray(self._jar_carry_local, dtype=float)
+        stored = getattr(self, "_jar_carry_quat", None)
+        quat = list(stored) if stored is not None else self._jar_grasp_quat()
+        dest = np.asarray(jar_xyz, dtype=float)
+        tcp = np.array(
+            [float(dest[0]), float(dest[1]), float(dest[2] - off[2])], dtype=float
+        )
+        return self._ee_pose_from_tcp(tcp, quat)
 
     def _carry_jar_to(self, arm_tag: ArmTag, dest_xyz, tol: float = 0.018):
         """Drive the arm (absolute pose, then axis tweaks) until jar is at dest."""
         dest = np.asarray(dest_xyz, dtype=float)
-        if self.jar is None or self._jar_carry_offset is None:
+        if self.jar is None or self._jar_carry_local is None:
             return False
 
         self.move(self.move_to_pose(arm_tag, self._ee_pose_for_carried_jar(dest)))
@@ -2047,7 +2300,9 @@ class measure_ingredient(KitchenS_base_task):
     def _seat_jar_on_scale(self, place_xyz):
         """Release carry and lock the jar where it already is (plate height)."""
         self._jar_carry = False
-        self._jar_carry_offset = None
+        self._jar_carry_local = None
+        self._jar_carry_quat = None
+        self._jar_carry_arm = None
         self._jar_locked = False
         # Use current XY (arm already delivered it); only set Z to the plate.
         if self.jar is not None:
@@ -2084,7 +2339,7 @@ class measure_ingredient(KitchenS_base_task):
         self._sync_jar_followers()
 
     def _detect_tab_touch(self):
-        """Edge-trigger on spring engage: press latches ON/OFF like a key."""
+        """Physical key: ON on press; OFF (and stream stop) on release back up."""
         if getattr(self, "_ignore_tab", False):
             self._touch_latched = False
             return
@@ -2096,10 +2351,29 @@ class measure_ingredient(KitchenS_base_task):
             and float(signal["force"]) > float(self.SWITCH_ENGAGE_FORCE)
         )
         if touching and not self._touch_latched:
-            self._set_tab_open(not self.tab_open)
+            if not self.tab_open:
+                self._set_tab_open(True)
+                self._pending_tab_off = False
+                print(
+                    f"[measure_ingredient] key pressed → ON (held down) "
+                    f"liq={self.liquid_level:.2f}"
+                )
+            else:
+                # Second press arms OFF; oil keeps flowing until release.
+                self._pending_tab_off = True
+                print(
+                    f"[measure_ingredient] key pressed → OFF pending "
+                    f"(flow until key returns up) liq={self.liquid_level:.2f}"
+                )
+        if (
+            getattr(self, "_pending_tab_off", False)
+            and not touching
+            and self._touch_latched
+        ):
+            self._pending_tab_off = False
+            self._set_tab_open(False)
             print(
-                f"[measure_ingredient] key pressed → "
-                f"{'ON (held down)' if self.tab_open else 'OFF (up)'} "
+                f"[measure_ingredient] key released → OFF (up) "
                 f"liq={self.liquid_level:.2f}"
             )
         self._touch_latched = touching
@@ -2137,13 +2411,14 @@ class measure_ingredient(KitchenS_base_task):
     def _press_switch(self, arm_tag: ArmTag, want_open: bool):
         """Press the red key (hover → depress → release) to the desired latch.
 
-        Oil keeps flowing for the entire approach when turning OFF; ``tab_open``
-        flips at the depress instant. After release the key stays down (ON) or
-        returns up (OFF).
+        ON: oil starts at depress; key stays down after release.
+        OFF: oil keeps flowing through the whole press; stream stops only after
+        release when the key returns to its up position.
         """
         was = self.tab_open
-        # Ignore ambient touch; expert sets the state only at the depress.
+        # Ignore ambient touch; expert sets the state explicitly below.
         self._ignore_tab = True
+        self._pending_tab_off = False
         self._pressing_arm_side = str(arm_tag)
 
         self.move(self.close_gripper(arm_tag))
@@ -2167,16 +2442,34 @@ class measure_ingredient(KitchenS_base_task):
             print(f"[measure_ingredient] key hover failed want_open={want_open}")
             return False
 
-        # Depress — this is the latch click.
+        # Depress.
         self.move(self.move_by_displacement(arm_tag, z=-float(self.KEY_PRESS_DEPTH)))
         if not self.plan_success:
             self.plan_success = True
         self._idle_steps(3)
-        self._set_tab_open(want_open)
-        # Hold briefly so the stay-down / stay-up pose is visible.
-        self._idle_steps(4)
-        self.move(self.move_by_displacement(arm_tag, z=float(self.KEY_PRESS_DEPTH) + 0.04))
+        if want_open:
+            # Latch ON immediately so oil flows while the key is held down.
+            self._set_tab_open(True)
+            self._idle_steps(4)
+            self.move(
+                self.move_by_displacement(
+                    arm_tag, z=float(self.KEY_PRESS_DEPTH) + 0.04
+                )
+            )
+        else:
+            # Keep pouring while depressed; stop only once the key is back up.
+            self._idle_steps(4)
+            self.move(
+                self.move_by_displacement(
+                    arm_tag, z=float(self.KEY_PRESS_DEPTH) + 0.04
+                )
+            )
+            if not self.plan_success:
+                self.plan_success = True
+            self._idle_steps(3)
+            self._set_tab_open(False)
         self._touch_latched = False
+        self._pending_tab_off = False
         # Keep ignore during scripted expert; interactive clears via load / F end.
         interactive = bool(getattr(self, "_interactive_robot_mode", False)) or bool(
             getattr(self, "_interactive_universal_controls", False)
@@ -2249,16 +2542,17 @@ class measure_ingredient(KitchenS_base_task):
             return self.info
 
         # Start the off-press early so fill lands inside ±fill_tol after approach.
-        # Approach still pours; lead ≈ expected overshoot (+ small margin).
+        # Oil pours for the whole approach *and* until the key returns up on OFF
+        # (not at depress), so lead must cover that extra release window.
         lead = float(
             self._cfg.get(
                 "pour_close_lead",
-                max(0.05, min(0.14, 220.0 * float(self.pour_rate) + 0.03)),
+                max(0.07, min(0.18, 280.0 * float(self.pour_rate) + 0.05)),
             )
         )
         # For 100% (rim), stop earlier so we do not spill over the edge.
         if float(self.target_fill) >= 0.999:
-            lead = max(lead, 0.12)
+            lead = max(lead, 0.14)
         close_start = max(0.05, float(self.target_fill) - lead)
         max_wait = int(close_start / max(1e-6, self.pour_rate)) + 160
         self._idle_steps(
@@ -2284,43 +2578,11 @@ class measure_ingredient(KitchenS_base_task):
         if self.plan_success:
             self.move(self.move_by_displacement(arm, z=0.08))
 
-        # 4) Grasp the filled jar and place it on the electronic scale.
+        # 4) Side-pinch the filled jar (TCP into axis, clear of spout) → scale.
         if self.plan_success and self.scale is not None:
-            self._clear_tab_collision()
-            self._jar_locked = False
-            self._set_jar_damping(3.0)
-            self.move(self.open_gripper(arm))
-            if self.plan_success:
-                jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
-                # Approach from the robot side, then descend onto the jar.
-                hover = [
-                    float(jar_p[0]),
-                    float(jar_p[1] - 0.10),
-                    float(jar_p[2] + 0.22),
-                    *GRASP_DIRECTION_DIC["top_down"],
-                ]
-                self.move(self.move_to_pose(arm, hover))
-            if self.plan_success:
-                jar_p = np.asarray(self.jar.get_pose().p, dtype=float)
-                above = [
-                    float(jar_p[0]),
-                    float(jar_p[1]),
-                    float(jar_p[2] + 0.22),
-                    *GRASP_DIRECTION_DIC["top_down"],
-                ]
-                self.move(self.move_to_pose(arm, above))
-            if self.plan_success:
-                # Descend in small steps — full IK to grasp depth is unreliable here.
-                for _ in range(4):
-                    self.move(self.move_by_displacement(arm, z=-0.04))
-                    if not self.plan_success:
-                        self.plan_success = True
-                        break
-                self.move(self.close_gripper(arm))
-                self._start_jar_carry(arm)
-                self.move(self.move_by_displacement(arm, z=0.12))
-            if not self.plan_success:
+            if not self._grasp_jar_from_side(arm):
                 print("[measure_ingredient] jar grasp failed")
+                self.plan_success = False
             if self.plan_success:
                 self._place_jar_on_scale(arm)
             if not self.plan_success:
@@ -2400,7 +2662,11 @@ class measure_ingredient(KitchenS_base_task):
             self._idle_steps(6)
 
     def check_success(self):
-        """Oil in [target±tol], no spill/overflow, switch off, jar on scale."""
+        """Success: fill in [target±tol], no spill/overflow, jar placed on scale.
+
+        Switch must be off after a pour. Interactive episodes also end on any
+        post-grasp jar release (success only if this check passes).
+        """
         if self.overflowed or float(getattr(self, "spill_amount", 0.0)) > 1e-4:
             return False
         if not self.opened_once:
