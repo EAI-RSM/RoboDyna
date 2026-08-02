@@ -40,6 +40,7 @@ task_args:
   fill_coffee_jar:
     # Success = fill in [target_fill ± fill_tol]. target_fill: 0.25|0.5|0.75|random
     # Peak button press force → beans dispensed → fill level (beans/beans_full).
+    # No microwave. Decor: random coffee-box + milk + mug; kettle on a random burner.
     target_fill: random
     scene_id: 0
     randomize_layout: true
@@ -51,6 +52,11 @@ task_args:
     press_depths: [0.020, 0.030, 0.044, 0.057]  # expert depths for levels 1–4
     press_sample_s: 0.40
     fill_tol: 0.05                               # ±5% success band
+    coffee_box_id: -1                            # -1 = random 113_coffee-box
+    milk_box_id: -1                              # -1 = random 038_milk-box
+    mug_id: -1                                   # -1 = random 039_mug
+    kettle_id: -1                                # -1 = random 009_kettle
+    kettle_burner: random                        # random | left_front | right_front | ...
   measure_ingredient:
     # Pour oil to target ring, then place jar on electronic scale.
     target_fill: 0.25

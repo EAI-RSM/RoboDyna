@@ -1,9 +1,13 @@
 """Fill a marked glass jar with beans from a glass-box dispenser (KitchenS).
 
-Inherits ``KitchenS_base_task`` (microwave + dishrack + cooking range on a kitchen
-counter). The dispenser is a raised clear glass hopper packed with real bean
-meshes. Pressing the blue button on top opens a nozzle above the jar and releases
-beans into a glass jar marked with red ring lines at 25% / 50% / 75% (rim = full).
+Inherits ``KitchenS_base_task`` (cooking range on a solid kitchen counter; no
+microwave / sink / tap). The dispenser is a raised clear glass hopper packed
+with real bean meshes. Pressing the button on top opens a nozzle above the jar
+and releases beans into a glass jar marked with red ring lines at 25% / 50% /
+75% (rim = full).
+
+Counter decor: random ``113_coffee-box``, ``038_milk-box``, and ``039_mug``.
+A random ``009_kettle`` sits on one of the stove burners.
 
 Dispense amount is gated by **press force** on the button (four thresholds), not
 hold duration.
@@ -11,6 +15,7 @@ hold duration.
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -19,6 +24,8 @@ import sapien
 import sapien.physx
 import sapien.render
 import transforms3d as t3d
+from transforms3d.euler import euler2quat
+from transforms3d.quaternions import qmult
 
 from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
@@ -97,6 +104,35 @@ class fill_coffee_jar(KitchenS_base_task):
     BEAN_BROWN = [0.30, 0.14, 0.05]
     RING_RED = [0.95, 0.05, 0.05]
 
+    # Counter / stove decor (static props; not task goals).
+    COFFEE_BOX_MODEL = "113_coffee-box"
+    MILK_BOX_MODEL = "038_milk-box"
+    MUG_MODEL = "039_mug"
+    KETTLE_MODEL = "009_kettle"
+    UPRIGHT_Q = np.array([0.70710678, 0.70710678, 0.0, 0.0], dtype=np.float64)
+    MILK_TARGET_HEIGHT = 0.18
+    MUG_TARGET_HEIGHT = 0.075
+    COFFEE_BOX_SCALE = 1.15
+    KETTLE_SCALE = 1.0
+    # Authored mesh meta for 009_kettle (visual GLBs exist; model_data may be absent).
+    KETTLE_MODEL_DATA = {
+        0: {
+            "center": [0.033335, 0.3552585, 0.0680835],
+            "extents": [1.378758, 1.356831, 1.535575],
+            "scale": [0.1, 0.1, 0.1],
+        },
+        1: {
+            "center": [0.0000505, 0.2696635, 0.1514755],
+            "extents": [0.932073, 1.451321, 1.315845],
+            "scale": [0.1, 0.1, 0.1],
+        },
+        2: {
+            "center": [0.004627, 0.2282145, 0.152863],
+            "extents": [1.186794, 1.415909, 1.565162],
+            "scale": [0.1, 0.1, 0.1],
+        },
+    }
+
     def setup_demo(self, **kwags):
         self._cfg = dict(kwags.get("task_args", {}).get("fill_coffee_jar", {}))
         if kwags.get("scene_id") is None:
@@ -104,6 +140,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self._layout_seed = int(kwags.get("seed", 0) or 0)
         self.replace_sink_with_range = True
         self.omit_sink = True  # solid counter; no sink basin or faucet tap
+        self._ensure_kettle_assets()
 
         self._loaded = False
         self.beans = []
@@ -114,6 +151,11 @@ class fill_coffee_jar(KitchenS_base_task):
         self.jar = None
         self.jar_visual = None
         self.fill_visual = None
+        self.decor_coffee_box = None
+        self.decor_milk_box = None
+        self.decor_mug = None
+        self.decor_kettle = None
+        self.kettle_burner = None
         self._touch_latched = False
         self._dispensing = False
         self._press_active = False
@@ -129,6 +171,47 @@ class fill_coffee_jar(KitchenS_base_task):
 
         super().setup_demo(**kwags)
         self._configure_observer_camera()
+
+    def _load_microwave(self, table_height, table_xy_bias):
+        """Leave the left/back counter open — no microwave in this task."""
+        self.microwave = None
+        self.microwave_xy = None
+        self.microwave_half_xy = None
+        self.microwave_top_z = None
+        return
+
+    @classmethod
+    def _ensure_kettle_assets(cls):
+        """Ensure ``009_kettle`` has create_actor-compatible model_data + collision."""
+        root = Path("assets/objects") / cls.KETTLE_MODEL
+        visual = root / "visual"
+        if not visual.exists():
+            return
+        collision = root / "collision"
+        collision.mkdir(exist_ok=True)
+        for mid, meta in cls.KETTLE_MODEL_DATA.items():
+            vfile = visual / f"base{mid}.glb"
+            cfile = collision / f"base{mid}.glb"
+            if vfile.exists() and not cfile.exists():
+                try:
+                    cfile.symlink_to(vfile.resolve())
+                except OSError:
+                    # Fall back to using the visual path name if symlink fails.
+                    pass
+            mpath = root / f"model_data{mid}.json"
+            if not mpath.exists():
+                data = {
+                    "center": list(meta["center"]),
+                    "extents": list(meta["extents"]),
+                    "scale": list(meta["scale"]),
+                    "transform_matrix": [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                }
+                mpath.write_text(json.dumps(data, indent=4) + "\n")
 
     def _configure_observer_camera(self):
         cams = getattr(self, "cameras", None)
@@ -284,10 +367,7 @@ class fill_coffee_jar(KitchenS_base_task):
     def _layout_blockers(self):
         """Kitchen fixture footprints the station must not overlap."""
         blockers = []
-        mw_xy = getattr(self, "microwave_xy", None)
-        mw_half = getattr(self, "microwave_half_xy", None)
-        if mw_xy is not None and mw_half is not None:
-            blockers.append((np.asarray(mw_xy, dtype=float), np.asarray(mw_half, dtype=float)))
+        # Microwave is omitted for this task; only the cooktop blocks the station.
         range_xy = getattr(self, "range_xy", None)
         range_half = getattr(self, "range_half_size", None)
         if range_xy is not None and range_half is not None:
@@ -295,6 +375,224 @@ class fill_coffee_jar(KitchenS_base_task):
                 (np.asarray(range_xy, dtype=float), np.asarray(range_half, dtype=float))
             )
         return blockers
+
+    @staticmethod
+    def _model_data(modelname: str, model_id: int) -> dict:
+        path = Path("assets/objects") / modelname / f"model_data{model_id}.json"
+        with open(path) as f:
+            return json.load(f)
+
+    @classmethod
+    def _available_model_ids(cls, modelname: str) -> list[int]:
+        root = Path("assets/objects") / modelname
+        ids = []
+        for p in root.glob("model_data*.json"):
+            try:
+                mid = int(p.stem.replace("model_data", ""))
+            except ValueError:
+                continue
+            vis = root / "visual" / f"base{mid}.glb"
+            col = root / "collision" / f"base{mid}.glb"
+            if vis.exists() or col.exists():
+                ids.append(mid)
+        return sorted(ids)
+
+    @classmethod
+    def _yup_authored_height(cls, modelname: str, model_id: int) -> float:
+        data = cls._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        if isinstance(sc, (int, float)):
+            sc = [float(sc)] * 3
+        return float(sc[1]) * float(data["extents"][1])
+
+    @classmethod
+    def _yup_authored_half_xy(cls, modelname: str, model_id: int) -> tuple[float, float]:
+        data = cls._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        if isinstance(sc, (int, float)):
+            sc = [float(sc)] * 3
+        ext = data["extents"]
+        return 0.5 * float(sc[0]) * float(ext[0]), 0.5 * float(sc[2]) * float(ext[2])
+
+    def _scale_for_target_height(self, modelname: str, model_id: int, target_h: float) -> float:
+        authored = self._yup_authored_height(modelname, model_id)
+        if authored <= 1e-6:
+            return 1.0
+        return float(target_h) / authored
+
+    def _yup_pose_z(self, modelname: str, model_id: int, scale_mult: float, surface_z: float) -> float:
+        """Pose Z so an upright Y-up mesh rests on ``surface_z``."""
+        data = self._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        if isinstance(sc, (int, float)):
+            sc = [float(sc)] * 3
+        final_sy = float(sc[1]) * float(scale_mult)
+        cy = float(data.get("center", [0.0, 0.0, 0.0])[1])
+        ey = float(data["extents"][1])
+        bottom_local_y = cy - 0.5 * ey
+        return float(surface_z - bottom_local_y * final_sy)
+
+    def _place_upright_prop(
+        self,
+        modelname: str,
+        model_id: int,
+        xy: tuple[float, float],
+        scale_mult: float,
+        yaw: float,
+        name: str,
+        surface_z: float | None = None,
+    ):
+        z_surf = float(self.table_top if surface_z is None else surface_z)
+        z = self._yup_pose_z(modelname, model_id, scale_mult, z_surf)
+        q = qmult(euler2quat(0.0, 0.0, float(yaw), axes="sxyz"), self.UPRIGHT_Q)
+        pose = sapien.Pose([float(xy[0]), float(xy[1]), float(z)], q.tolist())
+        actor = create_actor(
+            self,
+            pose=pose,
+            modelname=modelname,
+            model_id=int(model_id),
+            convex=True,
+            is_static=True,
+            scale_mult=float(scale_mult),
+        )
+        if actor is None:
+            print(f"[fill_coffee_jar] failed to spawn {name} ({modelname}/base{model_id})")
+            return None
+        try:
+            actor.set_name(name)
+        except Exception:
+            pass
+        try:
+            self.add_prohibit_area(actor, padding=0.02)
+        except Exception:
+            pad = 0.05
+            self.prohibited_area.append(
+                [xy[0] - pad, xy[1] - pad, xy[0] + pad, xy[1] + pad]
+            )
+        return actor
+
+    def _decor_clear(
+        self,
+        xy: np.ndarray,
+        half_xy: tuple[float, float],
+        blockers: list,
+        margin: float = 0.02,
+    ) -> bool:
+        for b_c, b_h in blockers:
+            if self._aabb_overlap(xy, half_xy, b_c, b_h, margin):
+                return False
+        return True
+
+    def _spawn_counter_decor(self, cfg, rng: np.random.RandomState):
+        """Coffee box + milk carton + mug on the open counter (no microwave)."""
+        coffee_ids = self._available_model_ids(self.COFFEE_BOX_MODEL) or [0]
+        milk_ids = self._available_model_ids(self.MILK_BOX_MODEL) or [0]
+        mug_ids = [i for i in self._available_model_ids(self.MUG_MODEL) if i <= 8] or [0]
+
+        coffee_id = int(cfg.get("coffee_box_id", -1))
+        if coffee_id < 0 or coffee_id not in coffee_ids:
+            coffee_id = int(rng.choice(coffee_ids))
+        milk_id = int(cfg.get("milk_box_id", -1))
+        if milk_id < 0 or milk_id not in milk_ids:
+            milk_id = int(rng.choice(milk_ids))
+        mug_id = int(cfg.get("mug_id", -1))
+        if mug_id < 0 or mug_id not in mug_ids:
+            mug_id = int(rng.choice(mug_ids))
+
+        coffee_scale = float(cfg.get("coffee_box_scale", self.COFFEE_BOX_SCALE))
+        milk_h = float(cfg.get("milk_box_height", self.MILK_TARGET_HEIGHT))
+        mug_h = float(cfg.get("mug_height", self.MUG_TARGET_HEIGHT))
+        milk_scale = self._scale_for_target_height(self.MILK_BOX_MODEL, milk_id, milk_h)
+        mug_scale = self._scale_for_target_height(self.MUG_MODEL, mug_id, mug_h)
+
+        chx, chz = self._yup_authored_half_xy(self.COFFEE_BOX_MODEL, coffee_id)
+        mhx, mhz = self._yup_authored_half_xy(self.MILK_BOX_MODEL, milk_id)
+        uhx, uhz = self._yup_authored_half_xy(self.MUG_MODEL, mug_id)
+        coffee_half = (chx * coffee_scale, chz * coffee_scale)
+        milk_half = (mhx * milk_scale, mhz * milk_scale)
+        # Mug extents include the handle; body footprint is smaller.
+        mug_half = (0.42 * uhx * mug_scale, 0.42 * uhz * mug_scale)
+
+        blockers = list(self._layout_blockers())
+        blockers.append((self.dispenser_xy, self.DISP_HALF_XY))
+        blockers.append((self.jar_xy, self.JAR_HALF_XY))
+
+        # Open counter where the microwave used to be (back / mid-left) plus apron.
+        x_lo, x_hi = -0.38, 0.12
+        y_lo, y_hi = -0.08, 0.20
+        specs = [
+            ("coffee", coffee_half, coffee_scale, self.COFFEE_BOX_MODEL, coffee_id, "decor_coffee_box"),
+            ("milk", milk_half, milk_scale, self.MILK_BOX_MODEL, milk_id, "decor_milk_box"),
+            ("mug", mug_half, mug_scale, self.MUG_MODEL, mug_id, "decor_mug"),
+        ]
+        placed = {}
+        for key, half, scale, model, mid, name in specs:
+            pose_xy = None
+            for _ in range(60):
+                xy = np.array(
+                    [rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi)], dtype=float
+                )
+                if self._decor_clear(xy, half, blockers, margin=0.025):
+                    pose_xy = xy
+                    break
+            if pose_xy is None:
+                # Deterministic fallback cluster behind the station.
+                fallback = {
+                    "coffee": np.array([-0.30, 0.14]),
+                    "milk": np.array([-0.22, 0.14]),
+                    "mug": np.array([-0.26, 0.04]),
+                }
+                pose_xy = fallback[key]
+            yaw = float(rng.uniform(-0.6, 0.6))
+            actor = self._place_upright_prop(
+                model, mid, (float(pose_xy[0]), float(pose_xy[1])), scale, yaw, name
+            )
+            setattr(self, name, actor)
+            placed[key] = {
+                "id": int(mid),
+                "xy": [float(pose_xy[0]), float(pose_xy[1])],
+                "scale": float(scale),
+            }
+            blockers.append((pose_xy, half))
+        self._decor_layout = placed
+        self.coffee_box_id = coffee_id
+        self.milk_box_id = milk_id
+        self.mug_id = mug_id
+
+    def _spawn_kettle_on_burner(self, cfg, rng: np.random.RandomState):
+        """Place a random ``009_kettle`` on a random cooktop burner."""
+        burners = getattr(self, "burner_positions", None) or {}
+        if not burners:
+            print("[fill_coffee_jar] no burners — skipping kettle decor")
+            return
+        kettle_ids = self._available_model_ids(self.KETTLE_MODEL) or list(
+            self.KETTLE_MODEL_DATA.keys()
+        )
+        kettle_id = int(cfg.get("kettle_id", -1))
+        if kettle_id < 0 or kettle_id not in kettle_ids:
+            kettle_id = int(rng.choice(list(kettle_ids)))
+        burner_name = cfg.get("kettle_burner", "random")
+        names = list(burners.keys())
+        if not isinstance(burner_name, str) or burner_name.lower() == "random":
+            burner_name = str(rng.choice(names))
+        elif burner_name not in burners:
+            burner_name = str(rng.choice(names))
+        bx, by = burners[burner_name]
+        scale = float(cfg.get("kettle_scale", self.KETTLE_SCALE))
+        yaw = float(rng.uniform(-np.pi, np.pi))
+        surface_z = float(getattr(self, "range_top_z", self.table_top) + 0.002)
+        self.decor_kettle = self._place_upright_prop(
+            self.KETTLE_MODEL,
+            kettle_id,
+            (float(bx), float(by)),
+            scale,
+            yaw,
+            "decor_kettle",
+            surface_z=surface_z,
+        )
+        self.kettle_id = int(kettle_id)
+        self.kettle_burner = str(burner_name)
+        self.kettle_xy = (float(bx), float(by))
 
     def _station_clear(self, side_x, disp_y, jar_y, blockers, margin=None):
         if margin is None:
@@ -420,6 +718,10 @@ class fill_coffee_jar(KitchenS_base_task):
         self.add_prohibit_area(sapien.Pose([*self.dispenser_xy, self.table_top + 0.1]), padding=0.08)
         self.add_prohibit_area(sapien.Pose([*self.jar_xy, self.table_top + 0.05]), padding=0.05)
 
+        rng_decor = np.random.RandomState(seed + 303)
+        self._spawn_counter_decor(cfg, rng_decor)
+        self._spawn_kettle_on_burner(cfg, rng_decor)
+
         self._loaded = True
         levels = ", ".join(
             f"≥{t:.0f}N→{n}" for t, n in zip(self.force_thresholds, self.beans_per_force_level)
@@ -429,6 +731,10 @@ class fill_coffee_jar(KitchenS_base_task):
             f"target={self.target_fill:.0%}±{self.fill_tol:.0%} "
             f"disp={self.dispenser_xy.tolist()} jar={self.jar_xy.tolist()} "
             f"layout_ok={self.layout_ok} "
+            f"coffee={getattr(self, 'coffee_box_id', '?')} "
+            f"milk={getattr(self, 'milk_box_id', '?')} "
+            f"mug={getattr(self, 'mug_id', '?')} "
+            f"kettle={getattr(self, 'kettle_id', '?')}@{getattr(self, 'kettle_burner', '?')} "
             f"(~{self._beans_needed()}/{self.beans_full} beans; force {levels})"
         )
 
@@ -1321,5 +1627,10 @@ class fill_coffee_jar(KitchenS_base_task):
             "jar_xy": [float(x) for x in self.jar_xy],
             "layout_ok": bool(getattr(self, "layout_ok", True)),
             "scene_id": int(self.scene_id),
+            "coffee_box_id": int(getattr(self, "coffee_box_id", -1)),
+            "milk_box_id": int(getattr(self, "milk_box_id", -1)),
+            "mug_id": int(getattr(self, "mug_id", -1)),
+            "kettle_id": int(getattr(self, "kettle_id", -1)),
+            "kettle_burner": str(getattr(self, "kettle_burner", "")),
         }
         return obs

@@ -955,7 +955,8 @@ task_args:
     spot_contact_extra: 0.020
     spot_clear_dwell: 8
   fill_coffee_jar:
-    # KitchenS: press red button on coffee dispenser → beans into marked jar.
+    # KitchenS: press button on coffee dispenser → beans into marked jar.
+    # No microwave. Decor: random coffee-box + milk + mug; kettle on a random burner.
     # Success = fill in [target_fill ± fill_tol]. Peak button press force → beans
     # dispensed → fill level (beans/beans_full).
     # Randomness: target_fill=random (0.25|0.50|0.75); randomize_layout=true
@@ -971,6 +972,11 @@ task_args:
     press_depths: [0.020, 0.030, 0.044, 0.057]  # expert depths for levels 1–4
     press_sample_s: 0.40
     fill_tol: 0.05              # ±5% success band
+    coffee_box_id: -1           # -1 = random 113_coffee-box
+    milk_box_id: -1             # -1 = random 038_milk-box
+    mug_id: -1                  # -1 = random 039_mug
+    kettle_id: -1               # -1 = random 009_kettle
+    kettle_burner: random       # random | left_front | right_front | left_rear | right_rear
   measure_ingredient:
     # KitchenS baking counter: pour oil, then place jar on electronic scale.
     # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
