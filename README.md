@@ -67,16 +67,16 @@ to GIFs for in-page playback; the condition shown below each GIF describes that 
 
 ## Household Tasks
 
-Household scenes built on the robotwin_bench office / KitchenS environments. Each row shows the latest side-by-side expert demo.
+Household scenes built on the robotwin_bench office / KitchenS environments. Each row shows the latest side-by-side expert demo (head camera + top-down). Re-record with `python script/bench_script/publish_household_demos.py`.
 
 | Task | Demo |
 |---|---|
 | **`trap_bug`**<br><sub>Trap a scurrying cockroach, spider, or ant under the office bookshelf by placing a transparent glass box over it while it is still moving.</sub> | <div align="center"><img src="final_task_demos/trap_bug/default_sidebyside.gif" width="320" height="120"/><br><sub>Office wall-shelf; live bug run (roach/spider/ant).</sub></div> |
-| **`catch_rolling_cup`**<br><sub>Stop a cup that tips off a shelf and rolls across the desk, upright it in hand, and set it on the table.</sub> | <div align="center"><img src="final_task_demos/catch_rolling_cup/default_sidebyside.gif" width="320" height="120"/><br><sub>Office desk; tip → roll → catch → upright.</sub></div> |
 | **`catch_cup`**<br><sub>Push a pillow under a tipping mug so it lands softly instead of hitting the table.</sub> | <div align="center"><img src="final_task_demos/catch_cup/default_sidebyside.gif" width="320" height="120"/><br><sub>Office wall-shelf; pillow catch under falling mug.</sub></div> |
 | **`mouse_object_drop`**<br><sub>Place a pillow-lined basket under a shelf object knocked by a scurrying mouse so it does not hit the table.</sub> | <div align="center"><img src="final_task_demos/mouse_object_drop/default_sidebyside.gif" width="320" height="120"/><br><sub>Office wall-shelf; mouse knock → basket catch.</sub></div> |
 | **`stop_ball`**<br><sub>Block a table-tennis ball that falls from the shelf and rolls toward the near table edge.</sub> | <div align="center"><img src="final_task_demos/stop_ball/default_sidebyside.gif" width="320" height="120"/><br><sub>Office wall-shelf; intercept before the edge.</sub></div> |
 | **`clean_table`**<br><sub>Wipe a spreading coffee spill with a sponge before it reaches a laptop on the opposite side.</sub> | <div align="center"><img src="final_task_demos/clean_table/default_sidebyside.gif" width="320" height="120"/><br><sub>Office desk; spill race vs. sponge wipe.</sub></div> |
+| **`catch_rolling_cup`**<br><sub>Stop a cup that tips off a shelf and rolls across the desk, upright it in hand, and set it on the table.</sub> | <div align="center"><img src="final_task_demos/catch_rolling_cup/default_sidebyside.gif" width="320" height="120"/><br><sub>Office desk; tip → roll → catch → upright.</sub></div> |
 | **`empty_bag`**<br><sub>Tip a paper grocery bag so the apple rolls out, then catch the apple before it falls off the table.</sub> | <div align="center"><img src="final_task_demos/empty_bag/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenL counter; tip bag, catch apple.</sub></div> |
 | **`fill_coffee_jar`**<br><sub>Press the coffee dispenser's lid to fill a marked glass jar to the target fill line.</sub> | <div align="center"><img src="final_task_demos/fill_coffee_jar/default_sidebyside.gif" width="320" height="120"/><br><sub>KitchenS counter; marked fill target.</sub></div> |
 | **`pour_beer`**<br><sub>Open a draft tap to pour beer into a glass, pausing so foam can settle; overflow fails.</sub> | <div align="center"><img src="final_task_demos/pour_beer/default_sidebyside.gif" width="320" height="120"/><br><sub>Bar counter; lever pour with foam control.</sub></div> |

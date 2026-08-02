@@ -59,13 +59,17 @@ class catch_cup(Office_base_task):
     # Matches Desktop/images/pillow.jpeg (sampled body blue).
     PILLOW_COLOR = [5 / 255.0, 41 / 255.0, 105 / 255.0]
     # Gripper sits this far off the rear face before the push starts.
-    PUSH_CONTACT_GAP = 0.025
+    PUSH_CONTACT_GAP = 0.018
     # Fallback fingertip-below-TCP overhang if the links cannot be measured.
     PUSH_FINGER_DROP = 0.043
     # Room left between the near table edge and the gripper's start position.
     PUSH_EDGE_MARGIN = 0.035
     # Half-thickness of a closed gripper, so the descent clears the rear face.
     PUSH_FINGER_HALF_W = 0.020
+    # Extra standoff behind the rear face while the hand descends in free air.
+    PUSH_BEHIND_STANDOFF = 0.10
+    # Fingertip height as a fraction of cushion thickness (mid-lower face contact).
+    PUSH_FINGER_HEIGHT_FRAC = 0.40
     PILLOW_START_Y_DEFAULT = -0.18
     # Gravity + Coulomb friction on the table do the braking; this is only a
     # small residual damping so the cushion settles instead of creeping. Cloth on
@@ -77,7 +81,7 @@ class catch_cup(Office_base_task):
 
     POST_PLACE_DWELL_DEFAULT = 12
     GRASP_SPAN_MAX = 0.100
-    PUSH_STEP_DEFAULT = 0.060
+    PUSH_STEP_DEFAULT = 0.055
 
     # Décor: plant is 2× the usual shelf plant (0.48 → 0.96); others scaled up with it.
     PLANT_SCALE = 0.96
@@ -1182,8 +1186,9 @@ class catch_cup(Office_base_task):
 
     # ------------------------------------------------------------- policy
     def _push_quat(self, arm_tag):
-        key = "down_left" if str(arm_tag) == "right" else "down_right"
-        return list(GRASP_DIRECTION_DIC[key])
+        # top_down keeps the closed fingers normal to the table so the rear-face
+        # shove tracks in XY; angled down_* wrists jam against the cushion top.
+        return list(GRASP_DIRECTION_DIC["top_down"])
 
     def _tcp_pos(self, arm_tag):
         pose = (
@@ -1191,6 +1196,17 @@ class catch_cup(Office_base_task):
             else self.robot.get_right_tcp_pose()
         )
         return np.array(pose[:3], dtype=np.float64)
+
+    def _move_tcp(self, arm_tag, xy, z, quat):
+        """Absolute TCP move. ``move_by_displacement`` reads the EE frame, which
+        is ~12 cm above the TCP for a down grasp — using it for Z drops leaves
+        the hand stuck at hover height while ``plan_success`` stays True."""
+        self.plan_success = True
+        self.move(self.move_to_pose(
+            arm_tag,
+            [float(xy[0]), float(xy[1]), float(z)] + list(quat),
+        ))
+        return bool(self.plan_success)
 
     def _pillow_xy(self):
         return np.array(self.pillow.get_pose().p[:2], dtype=np.float64)
@@ -1241,14 +1257,15 @@ class catch_cup(Office_base_task):
     def _push_pillow_to_landing(self, arm_tag):
         """Shove the pillow across the table with the closed gripper.
 
-        The pillow is a plain dynamic body resting on the table — no forces or
-        velocities are ever written to it. The hand is walked along the push axis
-        behind the rear face, and every centimetre the pillow travels comes out
-        of that contact.
+        Approach with the cushion kinematic so the hand can descend in free air
+        behind the rear face; only then hand the cushion to PhysX. All arm
+        motions use absolute TCP poses — EE-frame displacements silently skip Z
+        and leave the gripper skating over the top.
         """
         land_xy = np.array(
             [float(self._landing[0]), float(self._landing[1])], dtype=np.float64,
         )
+        self._measure_pillow_extents()
         pp0 = self._pillow_xy()
         delta = land_xy - pp0
         dist = float(np.linalg.norm(delta))
@@ -1262,10 +1279,9 @@ class catch_cup(Office_base_task):
             + abs(direction[1]) * self.pillow_half_xy[1]
         )
         quat = self._push_quat(arm_tag)
-        hover_z = self.table_top + 0.11
-
-        behind = pp0 - direction * (half_along + 0.09)
-        contact = pp0 - direction * (half_along + self.PUSH_CONTACT_GAP)
+        gap = float(self.PUSH_CONTACT_GAP)
+        behind = pp0 - direction * (half_along + self.PUSH_BEHIND_STANDOFF)
+        contact = pp0 - direction * (half_along + gap)
         # Stay over the tabletop: past the near edge the fingertips hang below the
         # surface and snag on it, and the arm stalls instead of pushing.
         y_min = self.table_near_y + self.PUSH_EDGE_MARGIN
@@ -1273,69 +1289,64 @@ class catch_cup(Office_base_task):
         contact[1] = max(float(contact[1]), y_min)
 
         self.move(self.close_gripper(arm_tag=arm_tag))
-        # Hand over to PhysX before the hand comes anywhere near: while the cushion
-        # is kinematic it is an immovable wall, and a fingertip grazing its rear
-        # edge stalls the whole descent instead of nudging it.
         self._push_arm = arm_tag
         self._push_dir = direction.copy()
         self._push_start_xy = pp0.copy()
-        self._enable_pillow_physics()
-        self.plan_success = True
-        self.move(self.move_to_pose(
-            arm_tag, [float(behind[0]), float(behind[1]), hover_z] + quat,
-        ))
-        if not self.plan_success:
-            self.plan_success = True
-            tcp = self._tcp_pos(arm_tag)
-            self.move(self.move_by_displacement(
-                arm_tag=arm_tag,
-                x=float(behind[0] - tcp[0]),
-                y=float(behind[1] - tcp[1]),
-                z=float(hover_z - tcp[2]),
-                quat=quat, move_axis="world",
-            ))
-        # The closed fingers hang well below the TCP. Aiming the TCP at the middle
-        # of a 5 cm cushion therefore drives the fingertips into the tabletop and
-        # the arm jams instead of pushing, so measure the overhang and clear it.
-        # The arm bottoms out a few mm above this, so leave slack: asking for the
-        # very lowest reachable height makes the descent fail outright and the hand
-        # then sails over the cushion at hover height.
-        push_z = self.table_top + self._finger_drop(arm_tag) + 0.022
-        hover_ok = bool(self.plan_success)
-        tcp_hover = self._tcp_pos(arm_tag).copy()
-        self.plan_success = True
-        tcp = self._tcp_pos(arm_tag)
-        self.move(self.move_by_displacement(
-            arm_tag=arm_tag,
-            x=float(contact[0] - tcp[0]),
-            y=float(contact[1] - tcp[1]),
-            z=float(push_z - tcp[2]),
-            quat=quat, move_axis="world",
-        ))
-        print(
-            f"[cfo-dbg] hover_ok={hover_ok} tcp_hover={np.round(tcp_hover, 3)} "
-            f"descend_ok={self.plan_success} push_z={push_z:.3f} "
-            f"contact={np.round(contact, 3)} tcp_contact={np.round(self._tcp_pos(arm_tag), 3)} "
-            f"drop={self._finger_drop(arm_tag):.3f} half={np.round(self.pillow_half_xy, 3)}"
+
+        # Freeze for the approach/descend. A dynamic cushion in the path makes
+        # cuRobo / PhysX jam the wrist on the top face at hover height.
+        self._push_active = False
+        seat_z = self.table_top + 0.5 * self.pillow_height
+        self._freeze_pillow(
+            sapien.Pose(
+                [float(pp0[0]), float(pp0[1]), seat_z],
+                self.PILLOW_Q.tolist(),
+            )
         )
 
+        drop = self._finger_drop(arm_tag)
+        push_z = (
+            self.table_top
+            + float(self.PUSH_FINGER_HEIGHT_FRAC) * self.pillow_height
+            + drop
+        )
+        hover_z = self.table_top + 0.18
+
+        self._move_tcp(arm_tag, behind, hover_z, quat)
+        hover_ok = bool(self.plan_success)
+        tcp_hover = self._tcp_pos(arm_tag).copy()
+        self._move_tcp(arm_tag, behind, push_z, quat)
+        tcp_low = self._tcp_pos(arm_tag).copy()
+        # Planner often bottoms a few mm from the ask; hold whatever we got.
+        z_hold = float(np.clip(tcp_low[2], push_z - 0.01, push_z + 0.03))
+
+        # Now the hand is beside the rear face at push height — unlock PhysX.
+        self._enable_pillow_physics()
         self._push_active = True
         self._dwell(2)
 
-        # Each planned move carries a fixed cost of tens of sim steps, so short
-        # strokes cannot outrun the falling cup — keep them long.
+        self._move_tcp(arm_tag, contact, z_hold, quat)
+        # Bite a few millimetres into the rear face so the shove has purchase.
+        pp = self._pillow_xy()
+        into = pp - direction * max(half_along - 0.005, gap)
+        into[1] = max(float(into[1]), y_min)
+        self._move_tcp(arm_tag, into, z_hold, quat)
+        print(
+            f"[catch_cup] approach hover_ok={hover_ok} tcp_hover={np.round(tcp_hover, 3)} "
+            f"tcp_low={np.round(tcp_low, 3)} z_hold={z_hold:.3f} push_z={push_z:.3f} "
+            f"contact={np.round(contact, 3)} tcp_now={np.round(self._tcp_pos(arm_tag), 3)} "
+            f"pillow={np.round(self._pillow_xy(), 3)} half={np.round(self.pillow_half_xy, 3)}"
+        )
+
         step = float(np.clip(
             getattr(self, "push_step", self.PUSH_STEP_DEFAULT), 0.02, 0.10,
         ))
-        # Sweep the hand along the push axis to where the rear face has to end up
-        # for the pillow center to sit on the landing. The hand leads, the pillow
-        # is displaced by contact.
-        ee_goal = land_xy - direction * (half_along + self.PUSH_CONTACT_GAP)
+        ee_goal = land_xy - direction * (half_along + gap)
         ee_start = self._tcp_pos(arm_tag)[:2].copy()
         stop = "ran_out"
         n_plan_fail = 0
-        # Walk the hand in short strokes. Stop only when the pillow XY is near
-        # the landing — do not stop on along-axis alone (X can still be short).
+        n_stuck = 0
+        prev_pp = self._pillow_xy().copy()
         place_tol = float(self.pillow_catch_xy_tol) + 0.02
         n_chunks = int(np.ceil(float(np.linalg.norm(ee_goal - ee_start)) / step)) + 18
         for _ in range(max(1, n_chunks)):
@@ -1350,8 +1361,7 @@ class catch_cup(Office_base_task):
                 self._pillow_placed = True
                 stop = "on_landing"
                 break
-            rear_now = pp - direction * (half_along + self.PUSH_CONTACT_GAP)
-            # Along-axis done but X drifted: pure lateral correction.
+            rear_now = pp - direction * (half_along + gap)
             if along_remain <= 0.015 and float(np.linalg.norm(lateral)) > 0.02:
                 lat_n = float(np.linalg.norm(lateral))
                 aim = rear_now + lateral * (min(step, lat_n) / max(lat_n, 1e-6))
@@ -1359,25 +1369,29 @@ class catch_cup(Office_base_task):
                 aim = rear_now + direction * step
                 if float(np.dot(aim - ee_goal, direction)) < 0.0:
                     aim = ee_goal.copy()
-                # Light lateral trim only — heavy trim shoved the cushion sideways.
-                aim = aim + 0.20 * lateral
-            tcp = self._tcp_pos(arm_tag)
-            delta_ee = aim - tcp[:2]
-            d_ee = float(np.linalg.norm(delta_ee))
-            if d_ee < 1e-4:
-                break
-            if d_ee > step:
-                delta_ee = delta_ee * (step / d_ee)
-            self.plan_success = True
-            self.move(self.move_by_displacement(
-                arm_tag=arm_tag,
-                x=float(delta_ee[0]), y=float(delta_ee[1]), z=0.0,
-                quat=quat, move_axis="world",
-            ))
-            if not self.plan_success:
+                aim = aim + 0.15 * lateral
+            aim[1] = max(float(aim[1]), y_min)
+
+            moved = float(np.linalg.norm(pp - prev_pp))
+            if moved < 0.006:
+                n_stuck += 1
+                if n_stuck >= 2:
+                    # Lost face contact — dig a few mm lower and into the body.
+                    z_hold = max(
+                        self.table_top + drop + 0.008,
+                        z_hold - 0.008,
+                    )
+                    aim = pp - direction * max(half_along - 0.01, 0.0)
+                    aim[1] = max(float(aim[1]), y_min)
+                    n_stuck = 0
+            else:
+                n_stuck = 0
+
+            if not self._move_tcp(arm_tag, aim, z_hold, quat):
                 n_plan_fail += 1
             self._dwell(2)
             self.plan_success = True
+            prev_pp = self._pillow_xy().copy()
 
         ee_now = self._tcp_pos(arm_tag)[:2]
         print(
@@ -1392,7 +1406,7 @@ class catch_cup(Office_base_task):
 
         # Let friction bring it to rest, then park it. If the contact shove got
         # the cushion close, finish the last few centimetres so the free-fall
-        # actually hits fabric (gripper contact alone often leaves ~5–10 cm of X drift).
+        # actually hits fabric.
         self._push_active = False
         self._dwell(18)
         pp = self._pillow_xy()
@@ -1413,10 +1427,8 @@ class catch_cup(Office_base_task):
             <= max(self.pillow_half_xy) + self.pillow_catch_xy_tol
         )
 
-        self.plan_success = True
-        self.move(self.move_by_displacement(
-            arm_tag=arm_tag, z=0.12, move_axis="world",
-        ))
+        tcp = self._tcp_pos(arm_tag)
+        self._move_tcp(arm_tag, tcp[:2], float(tcp[2] + 0.12), quat)
         if self._pillow_placed or self._pillow_under_landing() or self._cup_over_pillow():
             self._pillow_placed = True
             self.plan_success = True
