@@ -1,19 +1,19 @@
 {
-  "full_description": "click the red oil dispenser switch to fill the glass jar to the target red ring, click again to stop, then place the jar on the electronic scale",
-  "schema": "{A} is the olive oil dispenser, {B} is the glass jar with the target fill line, {C} is the red nozzle switch, {D} is the electronic scale, {a} is the arm used, {L} is the target fill level",
+  "full_description": "press the red oil dispenser key to latch oil flow on, press again to latch off at the target red ring, then place the jar on the electronic scale",
+  "schema": "{A} is the olive oil dispenser, {B} is the glass jar with the target fill line, {C} is the red nozzle key, {D} is the electronic scale, {a} is the arm used, {L} is the target fill level",
   "preference": "num of words should not exceed 16. Degree of detail avg is 5",
   "seen": [
-    "Click {C} on {A} to fill {B} to {L}, then place on {D}",
+    "Press {C} on {A} to fill {B} to {L}, then place on {D}",
     "Use {a} to dispense olive oil into {B} up to {L} and weigh it",
-    "Press {C}, fill {B} to {L}, press {C} again, then put the jar on {D}",
+    "Press {C} down to fill {B} to {L}, press again to stop, then put the jar on {D}",
     "Measure oil into {B} to {L} and place it on the scale",
-    "Turn {C} on {A} to fill {B} to {L}, then set on {D}",
-    "With {a}, fill {B} to {L}, switch off {C}, and place on {D}",
+    "Latch {C} on {A} to fill {B} to {L}, then set on {D}",
+    "With {a}, fill {B} to {L}, release {C}, and place on {D}",
     "Dispense olive oil from {A} into {B} to {L}, then weigh on {D}",
     "Fill the jar to the {L} line and put it on the scale"
   ],
   "unseen": [
-    "Click the red dispenser switch until the jar hits the target fill, click off, then place the jar on the scale",
+    "Press the red dispenser key until the jar hits the target fill, press off, then place the jar on the scale",
     "Measure olive oil into the marked jar to {L} and weigh it on {D}",
     "Use {a} to press {C}, fill to {L}, press again, and place {B} on {D}"
   ]

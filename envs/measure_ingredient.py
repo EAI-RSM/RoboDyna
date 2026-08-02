@@ -2,9 +2,10 @@
 
 KitchenS prep-counter scene (no sink / tap / stove): silver oil dispenser, marked
 glass jar, electronic scale, and baking props (bread on a cutting board, flour
-sack, chocolate chips, bowl of eggs). Click the red nozzle switch to start the
-pour; oil flows while the switch stays on. Click again to stop at the target
-ring, then place the jar on ``072_electronicscale``.
+sack, chocolate chips, bowl of eggs). Press the red nozzle key to latch ON (key
+stays down, oil flows); press again to latch OFF (key returns up). Interactive
+play matches ``fill_coffee_jar``: lower a closed gripper onto the key. Then place
+the jar on ``072_electronicscale``.
 """
 
 from __future__ import annotations
@@ -46,16 +47,20 @@ class measure_ingredient(KitchenS_base_task):
     PLATFORM_HALF = (0.055, 0.055, 0.007)
 
     NOZZLE_R = 0.006
-    # Tiny red push-switch on the nozzle arm (click = toggle on/off).
-    SWITCH_BASE_HALF = (0.007, 0.007, 0.0035)   # dark housing
-    SWITCH_BTN_HALF = (0.0045, 0.0045, 0.0025)  # red button cap
-    SWITCH_BTN_UP = 0.0045     # button stick-out when OFF
-    SWITCH_BTN_DOWN = 0.0010   # depressed when ON
+    # Red push-key on the nozzle arm (fill_coffee-style press; latches on/off).
+    # Key stays depressed while ON and springs back up when toggled OFF.
+    SWITCH_BASE_HALF = (0.014, 0.014, 0.004)    # dark housing
+    SWITCH_BTN_HALF = (0.010, 0.010, 0.012)     # red key cap (travel ≈ half-z)
     SWITCH_RED = [0.90, 0.08, 0.08]
+    SWITCH_TOUCH_XY_TOL = 0.045
+    SWITCH_FORCE_STIFFNESS = 800.0              # N/m spring proxy (fill_coffee)
+    SWITCH_FORCE_ENGAGE_SLACK = 0.045           # m above key top where force starts
+    SWITCH_ENGAGE_FORCE = 0.5                   # N; edge-trigger threshold
+    SWITCH_BUTTON_VISUAL_STEP = 0.0007
 
     EE_TO_TCP = 0.12
-    SWITCH_HOVER_Z = 0.07
-    SWITCH_PRESS_Z = 0.008     # EE above button top when pressing
+    KEY_HOVER_DIS = 0.06
+    KEY_PRESS_DEPTH = 0.024                     # expert depress from hover
 
     # Ring marks at 25/50/75%; 100% = jar rim (no ring).
     FILL_LEVELS = (0.25, 0.50, 0.75, 1.0)
@@ -111,6 +116,7 @@ class measure_ingredient(KitchenS_base_task):
     RING_RED = [0.78, 0.05, 0.05]
     GLASS = [0.88, 0.95, 0.98, 0.14]
     # Interactive viewer look (matches trap_bug plain trap): no transmission/IOR.
+    # Note: the jar itself always uses transmission glass (see ``_jar_glass_material``).
     PLAIN_GLASS = [0.18, 0.32, 0.48, 0.55]
     VERTICAL_CYL_Q = [0.70710678, 0.0, 0.70710678, 0.0]
 
@@ -149,6 +155,11 @@ class measure_ingredient(KitchenS_base_task):
         self._liquid_half_h_cached = -1.0
         self._switch_parts = []
         self._switch_btn = None
+        self._button_home_pose = None
+        self._button_visual_depth = 0.0
+        self._button_target_depth = 0.0
+        self._button_pressed_visual = False
+        self._pressing_arm_side = ""
         self._ring_entities = []
         self._touch_latched = False
         self._ignore_tab = False
@@ -854,6 +865,11 @@ class measure_ingredient(KitchenS_base_task):
         self._liquid_half_h_cached = -1.0
         self._switch_parts = []
         self._switch_btn = None
+        self._button_home_pose = None
+        self._button_visual_depth = 0.0
+        self._button_target_depth = 0.0
+        self._button_pressed_visual = False
+        self._pressing_arm_side = ""
         self._ring_entities = []
         self._touch_latched = False
         self._ignore_tab = False
@@ -1017,41 +1033,65 @@ class measure_ingredient(KitchenS_base_task):
         )
 
         self.nozzle_outlet_xyz = np.array([jar_x, tip_y, nozzle_outlet_z], dtype=float)
-        # Tiny red switch on TOP of the nozzle arm near the tip.
+        # Red push-key on TOP of the nozzle arm near the tip.
         self.switch_base_xyz = np.array(
             [jar_x, tip_y + 0.012, nozzle_joint_z + 0.006], dtype=float
         )
         self._build_switch()
 
+    def _switch_travel(self) -> float:
+        """Max key travel (m); latched ON parks here."""
+        return float(self.SWITCH_BTN_HALF[2]) * 0.90
+
     def _switch_button_center(self, open_: bool | None = None):
-        """World XYZ of the red button center (depressed when ON)."""
+        """World XYZ of the red key center (visual pose; home = UP)."""
+        home = getattr(self, "_button_home_pose", None)
+        if home is None:
+            bx, by, bz = self.switch_base_xyz
+            base_top = bz + float(self.SWITCH_BASE_HALF[2])
+            half_t = float(self.SWITCH_BTN_HALF[2])
+            return np.array([bx, by, base_top + half_t], dtype=float)
         if open_ is None:
-            open_ = bool(getattr(self, "tab_open", False))
-        bx, by, bz = self.switch_base_xyz
-        base_top = bz + float(self.SWITCH_BASE_HALF[2])
-        stick = self.SWITCH_BTN_DOWN if open_ else self.SWITCH_BTN_UP
-        half_t = float(self.SWITCH_BTN_HALF[2])
-        return np.array([bx, by, base_top + stick + half_t], dtype=float)
+            depth = float(getattr(self, "_button_visual_depth", 0.0))
+        else:
+            depth = self._switch_travel() if bool(open_) else 0.0
+        return np.array(
+            [float(home.p[0]), float(home.p[1]), float(home.p[2]) - float(depth)],
+            dtype=float,
+        )
 
     def _switch_top_z(self, open_: bool | None = None):
-        c = self._switch_button_center(open_)
+        """Top of the key at home (UP). Spring sensing uses the home top."""
+        home = getattr(self, "_button_home_pose", None)
+        if home is not None:
+            return float(home.p[2]) + float(self.SWITCH_BTN_HALF[2])
+        c = self._switch_button_center(False)
         return float(c[2] + float(self.SWITCH_BTN_HALF[2]))
 
     def _sync_switch_touch_points(self):
-        top = self._switch_button_center()
-        top[2] = self._switch_top_z()
-        self.tab_touch_xyz = top.copy()
-        self.touch_xy = top[:2].copy()
-        self.touch_top_z = float(top[2])
+        home = getattr(self, "_button_home_pose", None)
+        if home is not None:
+            self.touch_xy = np.array([float(home.p[0]), float(home.p[1])], dtype=float)
+            self.touch_top_z = float(home.p[2]) + float(self.SWITCH_BTN_HALF[2])
+        else:
+            c = self._switch_button_center(False)
+            self.touch_xy = c[:2].copy()
+            self.touch_top_z = float(c[2] + float(self.SWITCH_BTN_HALF[2]))
+        self.tab_touch_xyz = np.array(
+            [self.touch_xy[0], self.touch_xy[1], self.touch_top_z], dtype=float
+        )
 
     def _clear_switch_parts(self):
         for part in list(getattr(self, "_switch_parts", []) or []):
             self._remove_entity(part)
         self._switch_parts = []
         self._switch_btn = None
+        self._button_home_pose = None
+        self._button_visual_depth = 0.0
+        self._button_target_depth = 0.0
 
     def _build_switch(self):
-        """Dark housing + red push button; click toggles pour on/off."""
+        """Dark housing + red push key (static collision at home; visual travels)."""
         self._clear_switch_parts()
         bx, by, bz = self.switch_base_xyz
         housing = self._metallic_material([0.18, 0.18, 0.20], roughness=0.45, metallic=0.55)
@@ -1063,21 +1103,13 @@ class measure_ingredient(KitchenS_base_task):
             collision=True,
         )
         self._switch_parts.append(base)
-        self._rebuild_switch_button()
-        self._sync_switch_touch_points()
 
-    def _rebuild_switch_button(self):
-        """Recreate the red button at the raised (OFF) or depressed (ON) height."""
-        if getattr(self, "_switch_btn", None) is not None:
-            self._remove_entity(self._switch_btn)
-            if self._switch_btn in (self._switch_parts or []):
-                self._switch_parts.remove(self._switch_btn)
-            self._switch_btn = None
-
-        center = self._switch_button_center()
+        base_top = bz + float(self.SWITCH_BASE_HALF[2])
+        btn_z = base_top + float(self.SWITCH_BTN_HALF[2])
+        home = sapien.Pose([bx, by, btn_z])
         red = self._opaque_material(self.SWITCH_RED)
         btn = self._add_static_box(
-            pose=sapien.Pose(center.tolist()),
+            pose=home,
             half_size=list(self.SWITCH_BTN_HALF),
             material=red,
             name="oil_switch_button",
@@ -1085,19 +1117,250 @@ class measure_ingredient(KitchenS_base_task):
         )
         self._switch_btn = btn
         self._switch_parts.append(btn)
+        self._button_home_pose = home
+        self._button_visual_depth = 0.0
+        self._button_target_depth = 0.0
         self._sync_switch_touch_points()
 
+    def _set_button_press_depth(self, depth: float) -> None:
+        max_depth = self._switch_travel()
+        self._button_target_depth = float(np.clip(depth, 0.0, max_depth))
+
+    def _advance_button_press_visual(self) -> None:
+        button = getattr(self, "_switch_btn", None)
+        home = getattr(self, "_button_home_pose", None)
+        if button is None or home is None:
+            return
+        max_depth = self._switch_travel()
+        target = float(np.clip(getattr(self, "_button_target_depth", 0.0), 0.0, max_depth))
+        current = float(np.clip(getattr(self, "_button_visual_depth", 0.0), 0.0, max_depth))
+        step = float(self.SWITCH_BUTTON_VISUAL_STEP)
+        if target > current:
+            current = min(target, current + step)
+        elif target < current:
+            current = max(target, current - step)
+        self._button_visual_depth = current
+        self._button_pressed_visual = bool(current > 1e-6)
+        try:
+            button.set_pose(
+                sapien.Pose(
+                    [float(home.p[0]), float(home.p[1]), float(home.p[2] - current)],
+                    list(home.q),
+                )
+            )
+        except Exception:
+            pass
+
+    def _switch_press_signal(self):
+        """Best arm TCP press candidate over the red key (fill_coffee-style)."""
+        if not hasattr(self, "robot"):
+            return None
+        touch_xy = np.asarray(getattr(self, "touch_xy", None), dtype=float)
+        if touch_xy.size != 2:
+            return None
+        preferred = str(getattr(self, "_pressing_arm_side", ""))
+        sides = [preferred] if preferred in ("left", "right") else []
+        sides += [side for side in ("left", "right") if side not in sides]
+        best = None
+        top_z = float(getattr(self, "touch_top_z", self._switch_top_z()))
+        k = float(self.SWITCH_FORCE_STIFFNESS)
+        slack = float(self.SWITCH_FORCE_ENGAGE_SLACK)
+        for side in sides:
+            try:
+                getter = (
+                    self.robot.get_left_ee_pose
+                    if side == "left"
+                    else self.robot.get_right_ee_pose
+                )
+                ee = np.asarray(getter(), dtype=float)
+                tcp = np.asarray(ee, dtype=float)
+                tcp[2] -= float(self.EE_TO_TCP)
+            except Exception:
+                try:
+                    getter = (
+                        self.robot.get_left_tcp_pose
+                        if side == "left"
+                        else self.robot.get_right_tcp_pose
+                    )
+                    tcp = np.asarray(getter(), dtype=float)
+                except Exception:
+                    continue
+            xy_dist = float(np.linalg.norm(tcp[:2] - touch_xy))
+            if xy_dist > float(self.SWITCH_TOUCH_XY_TOL):
+                continue
+            force = float(k * max(0.0, top_z + slack - float(tcp[2])))
+            signal = {"side": side, "tcp": tcp, "force": force}
+            if best is None or signal["force"] > best["force"]:
+                best = signal
+        if best is not None:
+            self._pressing_arm_side = best["side"]
+        return best
+
+    def _update_switch_visual_from_robot(self) -> None:
+        """Press depth from gripper force; settle to latched DOWN (ON) or UP (OFF)."""
+        max_depth = self._switch_travel()
+        latched = max_depth if bool(getattr(self, "tab_open", False)) else 0.0
+        signal = self._switch_press_signal()
+        if signal is not None and float(signal["force"]) > 0.0:
+            # Soft map: ~14 N ≈ full travel (same scale family as fill_coffee).
+            press_depth = float(
+                np.clip(float(signal["force"]) / 14.0 * max_depth, 0.0, max_depth)
+            )
+            self._set_button_press_depth(max(latched, press_depth))
+        else:
+            self._set_button_press_depth(latched)
+        self._advance_button_press_visual()
+
+    def _jar_glass_material(self, viewer_shell: bool = False):
+        """Glass for the jar.
+
+        Demo cameras use transmission glass. The interactive SAPIEN viewer does
+        not composite opaque oil behind transmission materials (you see the
+        table through the wall but not the liquid), so the viewer shell uses
+        plain alpha glass — same trick as ``trap_bug`` plain trap.
+        """
+        if viewer_shell:
+            glass = sapien.render.RenderMaterial(
+                base_color=[0.88, 0.94, 0.98, 0.20]
+            )
+            try:
+                glass.set_transmission(0.0)
+                glass.set_transmission_roughness(1.0)
+                glass.set_roughness(0.10)
+                glass.set_metallic(0.0)
+            except Exception:
+                glass.roughness = 0.10
+                glass.metallic = 0.0
+            try:
+                glass.set_ior(1.0)
+            except Exception:
+                pass
+            return glass
+
+        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
+        try:
+            glass.set_transmission(1.0)
+            glass.set_transmission_roughness(0.0)
+            glass.set_roughness(0.04)
+            glass.set_metallic(0.0)
+        except Exception:
+            pass
+        try:
+            glass.set_ior(1.0)
+        except Exception:
+            pass
+        return glass
+
+    def _viewer_oil_material(self):
+        """Fully opaque oil for viewer compositing through alpha glass walls."""
+        rgba = list(self.OIL_COLOR_SOLID)
+        rgba[3] = 1.0
+        mat = sapien.render.RenderMaterial(base_color=rgba)
+        try:
+            mat.set_transmission(0.0)
+            mat.set_transmission_roughness(1.0)
+            mat.set_roughness(0.22)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.22
+            mat.metallic = 0.0
+        try:
+            mat.set_ior(1.0)
+        except Exception:
+            pass
+        return mat
+
+    def _build_jar_visual(self, hollow: bool = False):
+        """Glass jar visual. ``hollow=True`` for SAPIEN viewer (open interior).
+
+        Camera / expert demos keep the smooth solid transmission cylinder (looks
+        correct in offline render). The interactive viewer treats that cylinder
+        as an opaque volume, so viewer mode uses a thin alpha-glass shell instead.
+        """
+        self.jar_visual = self._remove_entity(getattr(self, "jar_visual", None))
+        if self.jar is None:
+            return
+
+        outer_r = self.JAR_INNER_R + 0.0035
+        h = self.JAR_HEIGHT
+        bottom_t = self.JAR_BOTTOM_T
+        upright_q = [0.70710678, 0.0, -0.70710678, 0.0]
+        wall_h = h - bottom_t
+        wall_half = wall_h * 0.5
+        wall_z = bottom_t + wall_half
+        glass = self._jar_glass_material(viewer_shell=bool(hollow))
+
+        pose = self.jar.get_pose()
+        vis = sapien.Entity()
+        vis.set_name("glass_jar_visual")
+        vis.set_pose(pose)
+        render_body = sapien.render.RenderBodyComponent()
+
+        floor = sapien.render.RenderShapeCylinder(
+            radius=outer_r * 0.98,
+            half_length=max(0.0015, bottom_t * 0.5),
+            material=glass,
+        )
+        floor.set_local_pose(sapien.Pose([0.0, 0.0, bottom_t * 0.5], upright_q))
+        render_body.attach(floor)
+
+        if hollow:
+            # Thin faceted glass shell — empty inside so oil level is visible.
+            wall_t = 0.0024
+            n_seg = 36
+            wall_radius = outer_r - 0.5 * wall_t
+            tangent_half = wall_radius * np.tan(np.pi / n_seg) * 1.03
+            for ang in np.linspace(0.0, 2.0 * np.pi, n_seg, endpoint=False):
+                px = float(wall_radius * np.cos(ang))
+                py = float(wall_radius * np.sin(ang))
+                yaw = float(ang + 0.5 * np.pi)
+                q = [
+                    float(np.cos(0.5 * yaw)),
+                    0.0,
+                    0.0,
+                    float(np.sin(0.5 * yaw)),
+                ]
+                panel = sapien.render.RenderShapeBox(
+                    [float(tangent_half), float(0.5 * wall_t), float(wall_half)],
+                    glass,
+                )
+                panel.set_local_pose(sapien.Pose([px, py, wall_z], q))
+                render_body.attach(panel)
+        else:
+            wall = sapien.render.RenderShapeCylinder(
+                radius=outer_r,
+                half_length=wall_half,
+                material=glass,
+            )
+            wall.set_local_pose(sapien.Pose([0.0, 0.0, wall_z], upright_q))
+            render_body.attach(wall)
+
+        vis.add_component(render_body)
+        self.scene.add_entity(vis)
+        self.jar_visual = vis
+        self._jar_visual_hollow = bool(hollow)
+
+    def use_viewer_hollow_jar(self):
+        """Swap to hollow alpha-glass shell for interactive SAPIEN viewer only."""
+        self._build_jar_visual(hollow=True)
+        # Rebuild oil after the shell so it composites through the alpha walls.
+        self._rebuild_liquid(force=True)
+        print(
+            "[measure_ingredient] viewer jar: hollow alpha-glass shell "
+            "(oil visible from the side)"
+        )
+
     def _build_jar(self):
-        """See-through coffee-task jar: dynamic convex collision + cylinder visual.
+        """See-through glass jar (fill_coffee look): grasp collision + glass visual.
 
         Kept locked under the nozzle while pouring; unlocked for the final grasp.
+        Default visual is the smooth transmission cylinder (demo cameras).
+        Interactive viewer calls ``use_viewer_hollow_jar()`` after setup.
         """
         x, y = self.jar_xy
         z0 = self.table_top + 0.001
         outer_r = self.JAR_INNER_R + 0.0035
         h = self.JAR_HEIGHT
-        bottom_t = self.JAR_BOTTOM_T
-        upright_q = [0.70710678, 0.0, -0.70710678, 0.0]
 
         md_path = Path("assets/objects/253_glass_jar/model_data0.json")
         with open(md_path, "r") as f:
@@ -1134,47 +1397,7 @@ class measure_ingredient(KitchenS_base_task):
                 except Exception:
                     pass
 
-        if bool(getattr(self, "_plain_glass", False)):
-            glass = self._plain_glass_material()
-        else:
-            glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
-            glass.set_transmission(1.0)
-            glass.set_transmission_roughness(0.0)
-            glass.set_roughness(0.04)
-            glass.set_metallic(0.0)
-            try:
-                glass.set_ior(1.0)
-            except Exception:
-                pass
-
-        wall_h = h - bottom_t
-        wall_half = wall_h * 0.5
-        wall_z = bottom_t + wall_half
-
-        vis = sapien.Entity()
-        vis.set_name("glass_jar_visual")
-        vis.set_pose(sapien.Pose([x, y, z0]))
-        render_body = sapien.render.RenderBodyComponent()
-
-        wall = sapien.render.RenderShapeCylinder(
-            radius=outer_r,
-            half_length=wall_half,
-            material=glass,
-        )
-        wall.set_local_pose(sapien.Pose([0.0, 0.0, wall_z], upright_q))
-        render_body.attach(wall)
-
-        floor = sapien.render.RenderShapeCylinder(
-            radius=outer_r * 0.98,
-            half_length=max(0.0015, bottom_t * 0.5),
-            material=glass,
-        )
-        floor.set_local_pose(sapien.Pose([0.0, 0.0, bottom_t * 0.5], upright_q))
-        render_body.attach(floor)
-
-        vis.add_component(render_body)
-        self.scene.add_entity(vis)
-        self.jar_visual = vis
+        self._build_jar_visual(hollow=False)
 
         self.jar_bottom_z = self.table_top + self.JAR_BOTTOM_T
         self.jar_fillable_h = self.JAR_HEIGHT - self.JAR_BOTTOM_T
@@ -1488,20 +1711,22 @@ class measure_ingredient(KitchenS_base_task):
 
     # ------------------------------------------------------------------ oil visuals / dynamics
     def _set_tab_open(self, open_: bool):
-        """Toggle pour state; red button depresses when ON."""
+        """Latch pour state; red key stays down when ON, up when OFF."""
         open_ = bool(open_)
-        if open_ == bool(self.tab_open):
-            self._rebuild_switch_button()
+        was_open = bool(self.tab_open)
+        if open_ == was_open:
+            self._set_button_press_depth(self._switch_travel() if open_ else 0.0)
             self._sync_stream()
             return
-        was_open = bool(self.tab_open)
         self.tab_open = open_
         if self.tab_open and not was_open:
             self.opened_once = True
         if was_open and not self.tab_open and self.liquid_level > 0.05:
             self.closed_after_pour = True
-        self._rebuild_switch_button()
+        self._set_button_press_depth(self._switch_travel() if open_ else 0.0)
         self._sync_stream()
+        # Force a liquid refresh so ON/OFF is immediately visible in interactive.
+        self._rebuild_liquid(force=True)
 
     def _sync_stream(self):
         """Narrow oil cylinder from nozzle outlet down to the table (tab-gated)."""
@@ -1527,9 +1752,15 @@ class measure_ingredient(KitchenS_base_task):
             return
         liq_h = max(0.0, float(self.liquid_level)) * self.jar_fillable_h
         liq_half = max(0.002, 0.5 * liq_h) if self.liquid_level > 1e-4 else 0.0
-        # While pouring, refresh a bit more often so the level keeps visibly
-        # rising through the off-click approach (not an early halt).
-        min_dh = 0.0008 if bool(getattr(self, "tab_open", False)) else 0.002
+        # While pouring, refresh often so the level keeps visibly rising
+        # (interactive real-time steps are much slower than expert idle loops).
+        interactive = bool(getattr(self, "_interactive_robot_mode", False)) or bool(
+            getattr(self, "_interactive_universal_controls", False)
+        )
+        if bool(getattr(self, "tab_open", False)):
+            min_dh = 0.00025 if interactive else 0.0008
+        else:
+            min_dh = 0.002
         if (
             not force
             and abs(liq_half - self._liquid_half_h_cached) < min_dh
@@ -1552,9 +1783,17 @@ class measure_ingredient(KitchenS_base_task):
         ent.set_pose(liquid_pose)
         body = sapien.render.RenderBodyComponent()
 
-        bulk_mat = self._fluid_material(self.oil_color)
+        # Viewer hollow shell: opaque oil + slightly fuller radius so the level
+        # reads clearly through the alpha glass from the side.
+        viewer_shell = bool(getattr(self, "_jar_visual_hollow", False))
+        if viewer_shell:
+            bulk_mat = self._viewer_oil_material()
+            liq_r = self.JAR_INNER_R * 0.97
+        else:
+            bulk_mat = self._fluid_material(self.oil_color)
+            liq_r = self.JAR_INNER_R * 0.90
         bulk = sapien.render.RenderShapeCylinder(
-            radius=self.JAR_INNER_R * 0.90,
+            radius=liq_r,
             half_length=liq_half,
             material=bulk_mat,
         )
@@ -1562,7 +1801,11 @@ class measure_ingredient(KitchenS_base_task):
         body.attach(bulk)
 
         # Meniscus only for the see-through style (marks fill without murk).
-        if self.oil_transparent and self.oil_meniscus is not None:
+        if (
+            not viewer_shell
+            and self.oil_transparent
+            and self.oil_meniscus is not None
+        ):
             men_half = 0.0012
             men_mat = self._fluid_material(self.oil_meniscus)
             men = sapien.render.RenderShapeCylinder(
@@ -1669,6 +1912,7 @@ class measure_ingredient(KitchenS_base_task):
                         component.set_angular_velocity(np.zeros(3))
             except Exception:
                 pass
+        self._update_switch_visual_from_robot()
         self._detect_tab_touch()
         self._step_oil()
         self._sync_jar_followers()
@@ -1677,8 +1921,9 @@ class measure_ingredient(KitchenS_base_task):
         """Drop switch collision after the pour so the jar is reachable."""
         self._ignore_tab = True
         open_ = bool(self.tab_open)
+        depth = self._switch_travel() if open_ else 0.0
         self._clear_switch_parts()
-        # Keep a visual-only housing + button (no collision).
+        # Keep a visual-only housing + key parked at the latched pose.
         bx, by, bz = self.switch_base_xyz
         housing = self._metallic_material([0.18, 0.18, 0.20], roughness=0.45, metallic=0.55)
         self._switch_parts.append(
@@ -1690,15 +1935,20 @@ class measure_ingredient(KitchenS_base_task):
                 collision=False,
             )
         )
-        center = self._switch_button_center(open_)
+        base_top = bz + float(self.SWITCH_BASE_HALF[2])
+        btn_z = base_top + float(self.SWITCH_BTN_HALF[2])
+        home = sapien.Pose([bx, by, btn_z])
+        self._button_home_pose = home
         self._switch_btn = self._add_static_box(
-            pose=sapien.Pose(center.tolist()),
+            pose=sapien.Pose([bx, by, btn_z - depth]),
             half_size=list(self.SWITCH_BTN_HALF),
             material=self._opaque_material(self.SWITCH_RED),
             name="oil_switch_button_visual",
             collision=False,
         )
         self._switch_parts.append(self._switch_btn)
+        self._button_visual_depth = depth
+        self._button_target_depth = depth
         self._sync_switch_touch_points()
 
     def _start_jar_carry(self, arm_tag: ArmTag):
@@ -1834,32 +2084,24 @@ class measure_ingredient(KitchenS_base_task):
         self._sync_jar_followers()
 
     def _detect_tab_touch(self):
-        """Edge-trigger: fingertip on the red switch toggles on/off."""
+        """Edge-trigger on spring engage: press latches ON/OFF like a key."""
         if getattr(self, "_ignore_tab", False):
             self._touch_latched = False
             return
-        if not hasattr(self, "robot"):
+        if getattr(self, "_switch_btn", None) is None or not hasattr(self, "robot"):
             return
-        arm = getattr(self, "arm", None)
-        if arm is None:
-            return
-        try:
-            if str(arm) == "left":
-                ee = np.asarray(self.robot.get_left_ee_pose()[:3], dtype=float)
-            else:
-                ee = np.asarray(self.robot.get_right_ee_pose()[:3], dtype=float)
-        except Exception:
-            return
-        # Fixed switch XY so rebuilding the button mid-press cannot re-trigger.
-        base = getattr(self, "switch_base_xyz", None)
-        if base is None:
-            return
-        top_z = self._switch_top_z()
-        xy_ok = float(np.linalg.norm(ee[:2] - base[:2])) <= 0.035
-        z_ok = ee[2] <= float(top_z) + self.EE_TO_TCP + 0.015
-        touching = bool(xy_ok and z_ok)
+        signal = self._switch_press_signal()
+        touching = bool(
+            signal is not None
+            and float(signal["force"]) > float(self.SWITCH_ENGAGE_FORCE)
+        )
         if touching and not self._touch_latched:
             self._set_tab_open(not self.tab_open)
+            print(
+                f"[measure_ingredient] key pressed → "
+                f"{'ON (held down)' if self.tab_open else 'OFF (up)'} "
+                f"liq={self.liquid_level:.2f}"
+            )
         self._touch_latched = touching
 
     def _idle_steps(self, n_steps: int, until=None):
@@ -1877,55 +2119,73 @@ class measure_ingredient(KitchenS_base_task):
                 self._take_picture()
 
     # ------------------------------------------------------------------ expert
-    def _switch_ee_pose(self, tip_z_above: float):
-        """Top-down EE pose above the red switch button."""
-        c = self._switch_button_center()
-        top_z = self._switch_top_z()
+    def _touch_tip_pose(self, tip_z_above_top: float):
+        """Top-down EE pose with TCP ``tip_z_above_top`` above the key top."""
+        tcp_z = float(self.touch_top_z) + float(tip_z_above_top)
+        ee_z = tcp_z + self.EE_TO_TCP
         return [
-            float(c[0]),
-            float(c[1]),
-            float(top_z + tip_z_above + self.EE_TO_TCP),
+            float(self.touch_xy[0]),
+            float(self.touch_xy[1]),
+            float(ee_z),
             *GRASP_DIRECTION_DIC["top_down"],
         ]
 
+    def _switch_ee_pose(self, tip_z_above: float):
+        """Compatibility alias for ``_touch_tip_pose``."""
+        return self._touch_tip_pose(tip_z_above)
+
     def _press_switch(self, arm_tag: ArmTag, want_open: bool):
-        """Click the red switch (hover → press → release) to the desired state.
+        """Press the red key (hover → depress → release) to the desired latch.
 
         Oil keeps flowing for the entire approach when turning OFF; ``tab_open``
-        flips only at the depress/click instant below.
+        flips at the depress instant. After release the key stays down (ON) or
+        returns up (OFF).
         """
         was = self.tab_open
-        # Ignore ambient touch; expert sets the state only at the click.
+        # Ignore ambient touch; expert sets the state only at the depress.
         self._ignore_tab = True
+        self._pressing_arm_side = str(arm_tag)
 
         self.move(self.close_gripper(arm_tag))
         if not self.plan_success:
             return False
 
-        self.move(
-            self.move_to_pose(arm_tag, self._switch_ee_pose(self.SWITCH_HOVER_Z))
-        )
-        if not self.plan_success:
-            print(f"[measure_ingredient] switch hover failed want_open={want_open}")
-            return False
-
-        self.move(
-            self.move_to_pose(arm_tag, self._switch_ee_pose(self.SWITCH_PRESS_Z))
-        )
-        self._idle_steps(2)
-        # Depress to "click" — this is the moment the switch state changes.
-        self.move(self.move_by_displacement(arm_tag, z=-0.012))
+        high_dis = float(self.KEY_HOVER_DIS) + 0.08
+        self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(high_dis)))
         if not self.plan_success:
             self.plan_success = True
-        self._idle_steps(2)
+            self.move(
+                self.move_to_pose(arm_tag, self._touch_tip_pose(self.KEY_HOVER_DIS))
+            )
+        else:
+            self.move(
+                self.move_by_displacement(
+                    arm_tag, z=-(high_dis - float(self.KEY_HOVER_DIS))
+                )
+            )
+        if not self.plan_success:
+            print(f"[measure_ingredient] key hover failed want_open={want_open}")
+            return False
+
+        # Depress — this is the latch click.
+        self.move(self.move_by_displacement(arm_tag, z=-float(self.KEY_PRESS_DEPTH)))
+        if not self.plan_success:
+            self.plan_success = True
+        self._idle_steps(3)
         self._set_tab_open(want_open)
-        self._idle_steps(2)
-        self.move(self.move_by_displacement(arm_tag, z=0.06))
+        # Hold briefly so the stay-down / stay-up pose is visible.
+        self._idle_steps(4)
+        self.move(self.move_by_displacement(arm_tag, z=float(self.KEY_PRESS_DEPTH) + 0.04))
         self._touch_latched = False
-        self._ignore_tab = True
+        # Keep ignore during scripted expert; interactive clears via load / F end.
+        interactive = bool(getattr(self, "_interactive_robot_mode", False)) or bool(
+            getattr(self, "_interactive_universal_controls", False)
+        )
+        self._ignore_tab = not interactive
         print(
-            f"[measure_ingredient] click switch {was}→{self.tab_open} "
-            f"(want={want_open}) liq={self.liquid_level:.2f}"
+            f"[measure_ingredient] press key {was}→{self.tab_open} "
+            f"(want={want_open}, latched={'DOWN' if self.tab_open else 'UP'}) "
+            f"liq={self.liquid_level:.2f}"
         )
         return bool(self.plan_success)
 
@@ -1936,7 +2196,7 @@ class measure_ingredient(KitchenS_base_task):
             print("[measure_ingredient] close_gripper failed")
             return self.info
 
-        # 1) Click the red switch ON → stream appears, oil starts filling.
+        # 1) Press the red key ON (stays down) → stream appears, oil fills.
         if not self._press_switch(arm, want_open=True):
             return self.info
         if not self.tab_open:
@@ -1981,14 +2241,14 @@ class measure_ingredient(KitchenS_base_task):
             self.info["info"] = {
                 "{A}": "olive oil dispenser",
                 "{B}": f"glass jar ({level_pct}% line)",
-                "{C}": "red nozzle switch",
+                "{C}": "red nozzle key",
                 "{D}": f"072_electronicscale/base{getattr(self, 'scale_id', 0)}",
                 "{a}": str(arm),
                 "{L}": f"{level_pct}%",
             }
             return self.info
 
-        # Start the off-click early so fill lands inside ±fill_tol after approach.
+        # Start the off-press early so fill lands inside ±fill_tol after approach.
         # Approach still pours; lead ≈ expected overshoot (+ small margin).
         lead = float(
             self._cfg.get(
@@ -2013,7 +2273,7 @@ class measure_ingredient(KitchenS_base_task):
             f"spill={self.spill_amount:.2f} tab_open={self.tab_open}"
         )
 
-        # 3) Click the switch OFF → stream stops only when the button clicks.
+        # 3) Press the key OFF → stream stops; key returns up.
         self._ignore_tab = True
         if self.plan_success:
             if not self.tab_open:
@@ -2078,7 +2338,7 @@ class measure_ingredient(KitchenS_base_task):
         self.info["info"] = {
             "{A}": "olive oil dispenser",
             "{B}": f"glass jar ({level_pct}% line)",
-            "{C}": "red nozzle switch",
+            "{C}": "red nozzle key",
             "{D}": f"072_electronicscale/base{getattr(self, 'scale_id', 0)}",
             "{a}": str(arm),
             "{L}": f"{level_pct}%",

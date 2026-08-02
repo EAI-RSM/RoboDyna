@@ -127,13 +127,13 @@ class HouseholdController:
         self.scenario_started = False
         self._failure_visual_until = 0.0
         self._failure_visual_original = {}
-        if task == "fill_coffee_jar" and robot:
-            self._close_fill_coffee_grippers_at_start()
+        if task in ("fill_coffee_jar", "measure_ingredient") and robot:
+            self._close_grippers_at_start()
         if not robot and self.actor is not None:
             _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
 
-    def _close_fill_coffee_grippers_at_start(self):
-        """Start fill_coffee_jar robot mode with both grippers closed."""
+    def _close_grippers_at_start(self):
+        """Start robot mode with both grippers closed."""
         from envs.utils.action import ArmTag
 
         for side in ("left", "right"):
@@ -142,9 +142,9 @@ class HouseholdController:
                 self.env.plan_success = True
                 moved = self.env.move(self.env.close_gripper(arm))
                 if moved is False or not bool(getattr(self.env, "plan_success", True)):
-                    print(f"[fill_coffee_jar] could not pre-close {side} gripper")
+                    print(f"[{self.task}] could not pre-close {side} gripper")
             except Exception as exc:
-                print(f"[fill_coffee_jar] could not pre-close {side} gripper: {exc}")
+                print(f"[{self.task}] could not pre-close {side} gripper: {exc}")
         self.env.plan_success = True
 
     def _keyboard_action(self):
@@ -166,7 +166,13 @@ class HouseholdController:
                 )
                 e._set_knob_angle(0.0 if bool(e.stove_on) else angle)
             elif t == "measure_ingredient":
+                # Keyboard proxy for the latched oil key (same edge as a press).
+                e._ignore_tab = False
                 e._set_tab_open(not bool(e.tab_open))
+                print(
+                    f"[measure_ingredient] key → "
+                    f"{'ON (held down)' if e.tab_open else 'OFF (up)'}"
+                )
             elif t == "make_soup":
                 if not bool(e.stove_on):
                     e._set_stove(True)
@@ -374,7 +380,10 @@ class HouseholdController:
             elif t == "cook_food":
                 self._turn_cook_food_knob()
             elif t == "measure_ingredient":
+                # Scripted assist press; primary UX is lowering the gripper onto the key.
+                e._ignore_tab = False
                 e._press_switch(arm, not bool(e.tab_open))
+                e._ignore_tab = False
             elif t == "make_soup":
                 if not bool(e.stove_on):
                     e._turn_knob_on()
@@ -622,6 +631,9 @@ class HouseholdController:
             self._grasp_or_release()
         if self.f.poll(window.key_down("f")) and self.task not in ("boil_milk", "fill_coffee_jar"):
             self._task_action()
+        # measure_ingredient: oil key is pressed like fill_coffee — lower the
+        # closed gripper in Z onto the red key; env spring latch toggles ON/OFF.
+        # Space remains jar grasp/release for the weigh step.
         if not self.robot and self.holding and self.actor is not None:
             p = np.asarray(self.actor.get_pose().p, dtype=float)
             step = 0.012
