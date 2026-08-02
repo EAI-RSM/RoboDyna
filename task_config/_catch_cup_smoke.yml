@@ -868,7 +868,7 @@ task_args:
     # Pause so foam settles; foam over the rim = fail. Fill glass (~90% beer) to succeed.
     scene_id: 0
     pour_rate: 0.00055
-    foam_gain: 0.80
+    foam_gain: 0.60
     foam_decay: 0.0045
     expert_foam_pause: 0.16
     expert_foam_resume: 0.09

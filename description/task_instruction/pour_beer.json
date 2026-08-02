@@ -1,6 +1,6 @@
 {
-  "full_description": "In the KitchenS bar scene, pull the beer tap lever by hand to pour into the glass under the spout. Flow and foam rise with how far the lever is open. Partially close to settle foam, then finish and close fully. Overflow fails.",
-  "schema": "{A} is the beer tap, {B} is the beer glass, {C} is the tap lever, {a} is the arm used",
+  "full_description": "In the KitchenS bar scene, pull the beer tap lever by hand to pour into the beer mug under the spout. Flow and foam rise with how far the lever is open. Partially close to settle foam, then finish, close fully, and wait for the tap to stop before done. Overflow fails.",
+  "schema": "{A} is the beer tap, {B} is the beer mug, {C} is the tap lever, {a} is the arm used",
   "preference": "num of words should not exceed 20. Degree of detail avg is 6",
   "seen": [
     "Pull {C} open by hand to pour beer from {A} into {B}",
@@ -13,10 +13,10 @@
     "Pour beer into {B} from {A} and shut the lever in time"
   ],
   "unseen": [
-    "Operate the beer tap lever gradually to fill the glass without spilling",
+    "Operate the beer tap lever gradually to fill the mug without spilling",
     "Pull and release the lever so foam does not crest the rim",
-    "Use {a} to control the lever angle until the glass is full",
+    "Use {a} to control the lever angle until the mug is full",
     "Do not let foam or beer overflow while pouring from the tap",
-    "Fill the glass from the draft tap with careful lever control"
+    "Fill the mug from the draft tap with careful lever control"
   ]
 }

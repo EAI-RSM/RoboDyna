@@ -509,10 +509,14 @@ class UniversalRobotControls:
     IK (SAPIEN's pinocchio CLIK, ~0.05 ms per solve). Seeding on the previous
     solution keeps the arm in one kinematic branch; Curobo's ``solve_ik`` is
     unseeded and returns elbow/wrist flips that are unusable for teleop.
+
+    Z / X tip the gripper about world +Y (left / right) for pour-style motions.
     """
 
     XY_SPEED = 0.20
     Z_SPEED = 0.16
+    # World-Y tip rate for Z/X (rad/s) — enough to dump a board without feeling twitchy.
+    ROLL_SPEED = 1.35
     MAX_DT = 0.05
     # How far the commanded pose may run ahead of the achieved pose, so a
     # blocked or joint-limited arm cannot accumulate an unrecoverable lead.
@@ -603,8 +607,10 @@ class UniversalRobotControls:
                   else self.env.robot.get_right_ee_pose)
         return np.asarray(getter(), dtype=np.float64)
 
-    def _drive(self, side, step, dt):
+    def _drive(self, side, step, dt, roll: float = 0.0):
         """Advance this arm's commanded pose and track it with seeded IK."""
+        from transforms3d.quaternions import axangle2quat, qmult
+
         solver = arm_ik(self.env, side)
         if solver is None:
             return
@@ -630,6 +636,10 @@ class UniversalRobotControls:
         distance = float(np.linalg.norm(lead))
         if distance > self.MAX_LEAD:
             pose[:3] = achieved[:3] + lead * (self.MAX_LEAD / distance)
+        # World-Y tip (Z/X): rotate the commanded gripper orientation in place.
+        if abs(float(roll)) > 1e-9:
+            dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
+            pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
 
         solution = solver.solve(pose, seed=state["seed"])
         if solution is None:
@@ -647,6 +657,13 @@ class UniversalRobotControls:
         state["pose"] = pose
         state["seed"] = full
         state["joints"] = target
+        # Expose the commanded EE pose so spring/contact tasks can track the
+        # teleop target even when the measured link lags the drive a bit.
+        cmd = getattr(self.env, "_interactive_cmd_pose", None)
+        if not isinstance(cmd, dict):
+            cmd = {}
+            self.env._interactive_cmd_pose = cmd
+        cmd[side] = pose.copy()
 
     def _stop(self):
         """Zero the drive velocity targets, else the arms coast after release."""
@@ -654,6 +671,8 @@ class UniversalRobotControls:
             joints = state["joints"]
             self.env.robot.set_arm_joints(joints, np.zeros_like(joints), side)
         self._command.clear()
+        if isinstance(getattr(self.env, "_interactive_cmd_pose", None), dict):
+            self.env._interactive_cmd_pose.clear()
 
     def update(self, window):
         self._select(window)
@@ -666,7 +685,9 @@ class UniversalRobotControls:
         x_dir = float(window.key_down("right")) - float(window.key_down("left"))
         y_dir = float(window.key_down("up")) - float(window.key_down("down"))
         z_dir = float(window.key_down("e")) - float(window.key_down("q"))
-        if not (x_dir or y_dir or z_dir):
+        # Z tip left / X tip right about world +Y (pour axis for board tasks).
+        roll_dir = float(window.key_down("x")) - float(window.key_down("z"))
+        if not (x_dir or y_dir or z_dir or roll_dir):
             self._stop()
             return
         if dt <= 0.0:
@@ -676,8 +697,9 @@ class UniversalRobotControls:
             y_dir * self.XY_SPEED * dt,
             z_dir * self.Z_SPEED * dt,
         ], dtype=np.float64)
+        roll = float(roll_dir) * self.ROLL_SPEED * dt
         for side in self.selected:
-            self._drive(side, step, dt)
+            self._drive(side, step, dt, roll=roll)
 
 
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
@@ -769,6 +791,7 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
         body = (
             "  Arrow keys        move selected arm(s) in world XY\n"
             "  E / Q             raise / lower selected arm(s)\n"
+            "  Z / X             tip gripper left / right (world Y)\n"
             "  1 / 2 / 3         select left / right / both arms\n"
             + body
         )
