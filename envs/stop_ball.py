@@ -993,17 +993,53 @@ class stop_ball(Office_base_task):
         self._traj_step = 0
         self._armed = True
 
+    def _is_interactive(self):
+        """True for viewer teleop (robot or keyboard), not scripted collect."""
+        return bool(getattr(self, "_interactive_session", False)) or bool(
+            getattr(self, "_interactive_robot_mode", False)
+        )
+
+    def _near_any_arm(self, dist=0.09):
+        """True if the ball centre is within `dist` (xy) of either TCP."""
+        for side in ("left", "right"):
+            try:
+                if float(np.linalg.norm(self._ball_to_tcp(side)[:2])) <= float(dist):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _try_recouple_ball(self):
+        """Restore robot↔ball contacts.
+
+        Expert: wait until the hand is clear of the sphere so the approach
+        sweep cannot swat the ball. Interactive: always restore — the gap gate
+        was leaving contacts off while the user held the hand on the path, so
+        the (still decoupled) ball tunneled straight through the arm.
+        """
+        if self._ball_rigid is None or self._robot_groups_backup is None:
+            return
+        if self._is_interactive():
+            self._recouple_ball_to_robot()
+            return
+        try:
+            gap = float(np.linalg.norm(self._ball_to_tcp(self.arm_side)[:2]))
+        except Exception:
+            return
+        if gap >= self.MIN_COUPLE_GAP:
+            self._recouple_ball_to_robot()
+
     def _go_live(self):
         """Hand the rolling ball to PhysX just before it reaches the gripper."""
         if self._ball_state != "rolling" or self._ball_rigid is None:
             return
-        # Contacts stay off until the hand has stopped moving, otherwise the
-        # arm sweeps through its approach and swats the ball across the table.
-        # Switching them on while the ball already overlaps the gripper would
-        # launch it, so a late arm simply misses instead.
-        gap = float(np.linalg.norm(self._ball_to_tcp(self.arm_side)[:2]))
-        if self._arm_in_place and gap >= self.MIN_COUPLE_GAP:
+        # Expert: contacts stay off until the hand has stopped and is clear,
+        # otherwise the approach sweep swats the ball. Interactive: always
+        # enable contacts so teleop can physically block the ball.
+        if self._is_interactive():
             self._recouple_ball_to_robot()
+        elif self._arm_in_place:
+            self._try_recouple_ball()
         v = float(self.roll_speed)
         direction = np.array(
             [float(self._roll_dir[0]), float(self._roll_dir[1]), 0.0], dtype=np.float64,
@@ -1042,6 +1078,33 @@ class stop_ball(Office_base_task):
         except Exception:
             return 0.0
 
+    def _boost_ball_along_path(self):
+        """Re-inject roll velocity so a missed ball keeps going off the table.
+
+        PhysX damping / friction can stall a live ball that never hit the arm;
+        without this boost it would rest on the table and look like a stop.
+        """
+        if self._ball_rigid is None:
+            return
+        direction = np.array(
+            [float(self._roll_dir[0]), float(self._roll_dir[1]), 0.0],
+            dtype=np.float64,
+        )
+        n = float(np.linalg.norm(direction[:2]))
+        if n < 1e-6:
+            direction = np.array([0.0, -1.0, 0.0], dtype=np.float64)
+        else:
+            direction[:2] /= n
+        v = float(self.roll_speed)
+        spin_axis = self._roll_axis()
+        try:
+            self._ball_rigid.set_linear_velocity(direction * v)
+            self._ball_rigid.set_angular_velocity(
+                spin_axis * (v / max(self.ball_radius, 1e-4)),
+            )
+        except Exception:
+            pass
+
     def _poll_arm_contact(self):
         """Record whether the ball has touched any robot link (PhysX contacts)."""
         if self._arm_contacted or self.ball is None:
@@ -1079,44 +1142,75 @@ class stop_ball(Office_base_task):
         if self._ball_state == "live":
             # PhysX owns the ball now — watch contacts and whether it stays up.
             self._live_steps += 1
+            if self._is_interactive() and self._robot_groups_backup is not None:
+                self._recouple_ball_to_robot()
             self._poll_arm_contact()
             p = self._ball_centre()
             if self._ball_off_table(p):
                 self._fell_off = True
                 self._ball_state = "fallen"
             elif self._ball_speed() <= self.settle_speed:
-                self._settle_steps += 1
-                if self._settle_steps >= self.settle_hold_steps:
-                    self._ball_state = "stopped"
-                    self._stopped = True
+                # Only the arm may stop the ball. A miss must keep rolling off.
+                if self._arm_contacted:
+                    self._settle_steps += 1
+                    if self._settle_steps >= self.settle_hold_steps:
+                        self._ball_state = "stopped"
+                        self._stopped = True
+                else:
+                    self._settle_steps = 0
+                    # Never boost while overlapping a hand — that drives through it.
+                    if not self._near_any_arm():
+                        self._boost_ball_along_path()
+            elif (
+                not self._arm_contacted
+                and not self._near_any_arm()
+                and self._ball_speed() < 0.55 * float(self.roll_speed)
+            ):
+                # Miss far from either hand: top up speed so damping cannot stall it.
+                self._boost_ball_along_path()
             else:
                 self._settle_steps = 0
             return
         if self._ball_state != "rolling":
             return
         if self._traj_step >= len(self._traj):
-            self._ball_state = "fallen"
-            self._fell_off = True
+            # Traj ended mid-air / off-edge; only count as fallen if off the table.
+            p = self._ball_centre()
+            if self._ball_off_table(p):
+                self._ball_state = "fallen"
+                self._fell_off = True
+            elif self._is_interactive() or self._armed:
+                # Keep going under PhysX so a late miss still rolls off.
+                self._go_live()
             return
         # Handoff runs here rather than in the policy loop because the arm may
         # still be executing its approach when the ball nears the block point.
         # The hand rarely lands exactly on the planned intercept, so measure
         # against the live TCP and keep the index as a backstop.
-        if self._armed and self._arm_in_place and self._traj_step > int(self._land_idx):
-            near = float(np.linalg.norm(self._ball_to_tcp(self.arm_side)[:2]))
-            if near <= self.handoff_distance or self._traj_step >= self._handoff_idx:
+        # Interactive: go live as soon as the ball is on the table so teleop
+        # collisions work (scripted kinematic pose teleports through the arm).
+        interactive = self._is_interactive()
+        if self._armed and self._traj_step > int(self._land_idx):
+            if interactive:
                 self._go_live()
                 return
+            if self._arm_in_place:
+                near = float(np.linalg.norm(self._ball_to_tcp(self.arm_side)[:2]))
+                if near <= self.handoff_distance or self._traj_step >= self._handoff_idx:
+                    self._go_live()
+                    return
 
         pos, quat = self._traj[self._traj_step]
         self._set_entity_pose(self.ball, self._ball_pose_for(pos, quat))
         if self._traj_step >= self._fall_off_idx and not self._stopped:
-            self._fell_off = True
+            # Only mark fallen once the ball has actually left the table —
+            # do not end interactive early while it is still mid-path.
             off_xy = (
                 float(pos[1]) <= self.table_edge_y + 0.01
                 or abs(float(pos[0])) >= self.table_x_edge - 0.01
             )
             if off_xy or pos[2] < self.table_top - 0.05:
+                self._fell_off = True
                 self._ball_state = "fallen"
         self._traj_step += 1
 
@@ -1218,13 +1312,39 @@ class stop_ball(Office_base_task):
         self.move(self.move_by_displacement(arm_tag, x=dx))
 
     def _settle_live_ball(self):
-        """Let PhysX resolve the block, the deflection and the roll-out."""
-        for _ in range(int(self.max_live_steps)):
+        """Resolve the PhysX phase: arm stop on the table, or miss → fall off.
+
+        Without an arm hit the ball is kept on its exit heading until it leaves
+        the table. Budget expiry never counts as a stop for a miss; after a hit
+        we wait for a real settle (or a later fall) instead of freezing early.
+        """
+        for i in range(max(int(self.max_live_steps), 900)):
+            if self._ball_state != "live":
+                break
+            if not self._arm_contacted and self._ball_speed() < 0.6 * float(self.roll_speed):
+                self._boost_ball_along_path()
+            self._dwell(1)
+        if self._ball_state != "live":
+            return
+        if not self._arm_contacted:
+            # Miss: keep driving the exit heading until the ball leaves the table.
+            for _ in range(1200):
+                if self._ball_state != "live" or self._fell_off:
+                    break
+                if self._ball_speed() < 0.8 * float(self.roll_speed):
+                    self._boost_ball_along_path()
+                self._dwell(1)
+            return
+        # Hit but still moving: give it time to settle on the table or fall off.
+        for _ in range(900):
             if self._ball_state != "live":
                 break
             self._dwell(1)
-        if self._ball_state == "live" and not self._ball_off_table(self._ball_centre()):
-            # Still creeping after the budget: count it as held on the table.
+        if (
+            self._ball_state == "live"
+            and not self._ball_off_table(self._ball_centre())
+            and self._ball_speed() <= max(self.settle_speed * 4.0, 0.08)
+        ):
             self._ball_state = "stopped"
             self._stopped = True
 
@@ -1245,10 +1365,14 @@ class stop_ball(Office_base_task):
             self._dwell(15)
             self.plan_success = True
         elif self._ball_state == "rolling":
+            # No live handoff (e.g. arm never arrived): finish the scripted path
+            # so the ball falls off the table instead of freezing mid-roll.
             while self._traj_step < len(self._traj):
                 self._dwell(1)
                 if self._fell_off or self._ball_state == "fallen":
                     break
+        elif self._ball_state == "live":
+            self._settle_live_ball()
 
         self.info["info"] = {
             "{A}": f"027_table-tennis/base{self.ball_id}",

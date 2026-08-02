@@ -129,6 +129,7 @@ class HouseholdController:
         self._failure_visual_original = {}
         if task in (
             "fill_coffee_jar", "pour_beer", "measure_ingredient", "catch_cup",
+            "stop_ball",
         ) and robot:
             self._close_grippers_at_start()
         # catch_cup: leave the pillow dynamic so gripper contact can shove it.
@@ -807,6 +808,7 @@ class HouseholdController:
                 e._allow_shove = True
                 e._release_mouse()
             elif self.task == "stop_ball":
+                # Ball goes live at handoff; a miss keeps rolling until fall-off.
                 e._release_ball()
             elif self.task == "clean_table" and not bool(e.cup_tipped):
                 e._animate_tip()
@@ -920,6 +922,9 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     if post_setup is not None:
         post_setup(env)
     env._interactive_robot_mode = args.control == "robot"
+    # Viewer sessions (keyboard or robot teleop) — tasks use this for live physics
+    # handoff / miss-continues-until-fall behavior (e.g. stop_ball).
+    env._interactive_session = True
     print_mode_controls(task, args.control, keyboard=keyboard_controls, robot=robot_controls)
     controller = HouseholdController(env, task, robot=args.control == "robot")
     viewer = env.viewer
