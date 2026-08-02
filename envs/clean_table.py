@@ -45,11 +45,12 @@ class clean_table(Base_Task):
     CLEAN_TOL_DEFAULT = 0.08  # fraction of spawned spots that may remain dirty
     POST_TIP_WAIT_DEFAULT = 180
     EXPERT_WIPE_LEVEL_DEFAULT = 0.12
-    # Sponge must be this close (m) beyond spot radius to clear it.
-    # Include a bit of sponge half-extent so contact matches the yellow pad.
-    SPOT_CONTACT_EXTRA = 0.020
+    # Extra XY margin (m) beyond the pad half-extents when testing spot overlap.
+    SPOT_CONTACT_EXTRA = 0.004
+    # Pad bottom must be within this of the table top to count as wiping.
+    SPONGE_TABLE_CONTACT_Z = 0.012
     # Consecutive contact steps required before a single spot clears.
-    SPOT_CLEAR_DWELL = 10
+    SPOT_CLEAR_DWELL = 6
     # Keep sponge this far above the table while translating between dabs.
     WIPE_SAFE_Z = 0.11
     # Don't dab within this margin of the (live) mug footprint.
@@ -83,6 +84,7 @@ class clean_table(Base_Task):
         self._wipe_armed = False
         self._wipe_target = None
         self._wipe_contact_steps = 0
+        self._wipe_contact_map = {}
         self._sponge_welded = False
         self._sponge_weld_offset = None
         self._sponge_hold_quat = None
@@ -139,6 +141,7 @@ class clean_table(Base_Task):
         self._wipe_armed = False
         self._wipe_target = None
         self._wipe_contact_steps = 0
+        self._wipe_contact_map = {}
         self._sponge_welded = False
         self._sponge_weld_offset = None
         self._sponge_hold_quat = None
@@ -1026,28 +1029,28 @@ class clean_table(Base_Task):
         print("[clean_table] top-down hold locked for vertical dabs")
 
     def _sponge_pad_world(self) -> np.ndarray:
-        """World pad-center used for wiping / contact (TCP-driven while held)."""
-        if self._sponge_welded:
-            tcp = self._tcp_pos(self.arm)
-            hz = float(
-                getattr(
-                    self,
-                    "_sponge_handle_z",
-                    self.SPONGE_HALF[2] + self.SPONGE_HANDLE_HALF[2],
-                )
-            )
-            p = np.array(
-                [float(tcp[0]), float(tcp[1]), float(tcp[2]) - hz], dtype=float
-            )
-            p[2] = max(float(p[2]), self.table_top + float(self.SPONGE_HALF[2]) * 0.5)
-            return p
+        """World pad-center of the yellow sponge entity (source of wipe contact)."""
         return np.asarray(self.sponge.get_pose().p, dtype=float)
 
     def _sync_welded_sponge(self) -> None:
         """Keep the real yellow pad glued under the TCP while held."""
         if not self._sponge_welded:
             return
-        p = self._sponge_pad_world()
+        tcp = self._tcp_pos(self.arm)
+        hz = float(
+            getattr(
+                self,
+                "_sponge_handle_z",
+                self.SPONGE_HALF[2] + self.SPONGE_HANDLE_HALF[2],
+            )
+        )
+        p = np.array(
+            [float(tcp[0]), float(tcp[1]), float(tcp[2]) - hz], dtype=float
+        )
+        # Keep the pad above the table when the TCP dips, but never invent a
+        # table-height pad while the arm is still high (that cleared stains from
+        # mid-air proximity).
+        p[2] = max(float(p[2]), self.table_top + float(self.SPONGE_HALF[2]))
         flat = sapien.Pose(p.tolist(), [1, 0, 0, 0])
         self._set_sponge_pose(flat)
         self._sponge_weld_offset = self._ee_pose(self.arm).inv() * flat
@@ -1163,13 +1166,26 @@ class clean_table(Base_Task):
             )
         return ok
 
+    def _sponge_on_table(self, sp: np.ndarray | None = None) -> bool:
+        """True when the yellow pad bottom is pressing the tabletop."""
+        if sp is None:
+            sp = self._sponge_pad_world()
+        pad_bottom = float(sp[2]) - float(self.SPONGE_HALF[2])
+        return pad_bottom <= self.table_top + float(
+            getattr(self, "SPONGE_TABLE_CONTACT_Z", 0.012)
+        )
+
     def _spot_touching(self, spot: dict, sp: np.ndarray) -> bool:
-        """True when the sponge pad overlaps this one spot on the table."""
-        if sp[2] > self.table_top + 0.08:
+        """True when the sponge pad footprint overlaps this spot on the table."""
+        if not self._sponge_on_table(sp):
             return False
-        extra = float(self.spot_contact_extra) + 0.5 * float(self.SPONGE_HALF[0])
-        dist = float(np.linalg.norm(sp[:2] - spot["pos"]))
-        return dist <= (float(spot["radius"]) + extra)
+        # Axis-aligned pad box vs circular stain.
+        hx = float(self.SPONGE_HALF[0]) + float(self.spot_contact_extra)
+        hy = float(self.SPONGE_HALF[1]) + float(self.spot_contact_extra)
+        r = float(spot["radius"])
+        dx = abs(float(sp[0]) - float(spot["pos"][0]))
+        dy = abs(float(sp[1]) - float(spot["pos"][1]))
+        return dx <= (hx + r) and dy <= (hy + r)
 
     def _clear_spot(self, spot: dict) -> None:
         """Mark one spill lobe cleaned and refresh the visible puddle."""
@@ -1210,31 +1226,74 @@ class clean_table(Base_Task):
         )
 
     def _try_clear_spots_under_sponge(self) -> int:
-        """Clear at most the armed wipe target after sustained table contact."""
-        if not self._expert_wiping or not self._wipe_armed or not self.spill_active:
-            self._wipe_contact_steps = 0
-            return 0
-        target = self._wipe_target
-        if target is None or target.get("cleaned"):
+        """Clear dirty spots the yellow pad is pressing on the table.
+
+        Runs for expert and interactive play — no ``_expert_wiping`` gate. Contact
+        uses the sponge entity pose (pad on table + XY overlap), not arm proximity.
+        """
+        if not self.spill_active or self.laptop_reached:
+            self._wipe_contact_map = {}
             self._wipe_contact_steps = 0
             return 0
         try:
             sp = self._sponge_pad_world()
         except Exception:
+            self._wipe_contact_map = {}
             self._wipe_contact_steps = 0
             return 0
 
-        if not self._spot_touching(target, sp):
+        if not self._sponge_on_table(sp):
+            self._wipe_contact_map = {}
             self._wipe_contact_steps = 0
             return 0
 
-        self._wipe_contact_steps += 1
-        if self._wipe_contact_steps < max(1, int(self.spot_clear_dwell)):
+        # Expert dabs may arm a single target; otherwise wipe every overlapping lobe.
+        dirty = self._dirty_spots()
+        if self._wipe_armed and self._wipe_target is not None:
+            target = self._wipe_target
+            candidates = (
+                [target]
+                if (not target.get("cleaned")) and target in dirty
+                else []
+            )
+            # Also clear any other lobes the pad covers in the same press.
+            for s in dirty:
+                if s is not target and self._spot_touching(s, sp):
+                    candidates.append(s)
+        else:
+            candidates = [s for s in dirty if self._spot_touching(s, sp)]
+
+        if not candidates:
+            self._wipe_contact_map = {}
+            self._wipe_contact_steps = 0
             return 0
 
-        self._clear_spot(target)
-        self._wipe_contact_steps = 0
-        return 1
+        dwell = max(1, int(self.spot_clear_dwell))
+        if not getattr(self, "_expert_wiping", False):
+            # Interactive teleop: clear promptly once the pad is on the stain.
+            dwell = max(1, min(dwell, 3))
+
+        if not isinstance(getattr(self, "_wipe_contact_map", None), dict):
+            self._wipe_contact_map = {}
+
+        active_ids = {id(s) for s in candidates}
+        for sid in list(self._wipe_contact_map.keys()):
+            if sid not in active_ids:
+                del self._wipe_contact_map[sid]
+
+        cleared = 0
+        for spot in candidates:
+            if not self._spot_touching(spot, sp):
+                continue
+            sid = id(spot)
+            self._wipe_contact_map[sid] = int(self._wipe_contact_map.get(sid, 0)) + 1
+            if self._wipe_contact_map[sid] < dwell:
+                continue
+            self._clear_spot(spot)
+            self._wipe_contact_map.pop(sid, None)
+            cleared += 1
+        self._wipe_contact_steps = cleared
+        return cleared
 
     def _step_spill(self):
         if not self.spill_active or self.laptop_reached:
@@ -1419,7 +1478,7 @@ class clean_table(Base_Task):
         # Clear every dirty lobe currently under the pad (one vertical press).
         if not self.laptop_reached:
             sp = self._sponge_pad_world()
-            if float(sp[2]) <= self.table_top + 0.10:
+            if self._sponge_on_table(sp):
                 for s in list(self._dirty_spots()):
                     if self._spot_touching(s, sp):
                         self._clear_spot(s)

@@ -5,8 +5,8 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Mug tips and spill starts as soon as the viewer is ready\n  Space: hold/release sponge | arrows/Q/E: move it\n  F while over a spot: dab/clean it (repeat for contact dwell)\n  V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  Mug tips and spill starts as soon as the viewer is ready\n  Space: grasp/release sponge | F: dab the next dirty spot\n  V: top-down/head camera | Escape: quit\n"""
+KEYBOARD = """\n  Mug tips and spill starts as soon as the viewer is ready\n  Space: hold/release sponge | arrows/Q/E: move it\n  Press the yellow pad onto a stain to wipe it (must touch the table)\n  F: force-clear stains currently under the sponge\n  V: top-down/head camera | Escape: quit\n"""
+ROBOT = """\n  Mug tips and spill starts as soon as the viewer is ready\n  Space: grasp/release sponge | lower pad onto a stain to wipe it\n  F: dab the next dirty spot\n  V: top-down/head camera | Escape: quit\n"""
 
 if __name__ == "__main__":
     a = make_parser("clean_table", __doc__)

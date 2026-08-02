@@ -206,7 +206,13 @@ class HouseholdController:
                 if not bool(e.cup_tipped):
                     e._animate_tip()
                 else:
-                    cleared = e._try_clear_spots_under_sponge()
+                    # Instant clear for spots the pad is already pressing.
+                    prev = int(getattr(e, "spot_clear_dwell", 6))
+                    e.spot_clear_dwell = 1
+                    try:
+                        cleared = e._try_clear_spots_under_sponge()
+                    finally:
+                        e.spot_clear_dwell = prev
                     print(f"[clean_table] cleared {cleared} spot(s) under the sponge")
         except Exception as exc:
             print(f"[{t}] action unavailable: {exc}")

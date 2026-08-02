@@ -112,5 +112,5 @@ task_args:
     clean_tol: 0.08
     post_tip_wait: 180
     expert_wipe_level: 0.12
-    spot_contact_extra: 0.020
-    spot_clear_dwell: 8
+    spot_contact_extra: 0.004
+    spot_clear_dwell: 6
