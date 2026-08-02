@@ -185,11 +185,12 @@ task_args:
     tip_duration: 2.20          # s; upright→on-side lean on the shelf
     upright_hold: 0.0           # s; reactive — tip starts immediately
     drop_x_jitter: 0.06         # m; lateral drift of drop-off x vs cup start x
-    land_y_min: -0.07           # m; random landing y band (reachable push target)
-    land_y_max: -0.01           # m; keep clear of shelf lip for the arm push
+    land_y_min: 0.00            # m; slow PhysX drop contact band (near shelf lip)
+    land_y_max: 0.06            # m; keep exit speed low so cup does not skid off
+    pillow_scale: 1.20          # +20% cushion (visual + collision)
     pillow_start_y: -0.20       # m; on the table, with room behind for the gripper
     push_step: 0.060            # m; length of each gripper stroke against the face
-    pillow_catch_xy_tol: 0.04   # m; XY pad — pillow must cover the landing
+    pillow_catch_xy_tol: 0.05   # m; XY pad — pillow must cover the landing
     pillow_mass: 0.35           # kg; cushion the gripper shoves across the table
     post_place_dwell: 12        # sim steps after catch/miss before episode ends
   mouse_object_drop:

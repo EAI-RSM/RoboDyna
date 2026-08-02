@@ -48,7 +48,10 @@ class catch_cup(Office_base_task):
     DROP_X_JITTER = 0.06
 
     PILLOW_MODEL = "266_pillow"
-    # Overwritten from the collision hull in _measure_pillow_extents.
+    # Uniform asset scale (visual + collision). Half-extents / height below are
+    # the unscaled authoring sizes; load_actors multiplies by pillow_scale, then
+    # _measure_pillow_extents overwrites from the live AABB.
+    PILLOW_SCALE_DEFAULT = 1.20
     PILLOW_HALF_XY_DEFAULT = [0.07, 0.09]
     PILLOW_HEIGHT_DEFAULT = 0.05
     PILLOW_CATCH_XY_TOL = 0.03
@@ -69,8 +72,8 @@ class catch_cup(Office_base_task):
     # a desk grips hard, and that high mu is what keeps the cushion tracking the
     # hand instead of skating out ahead of it.
     PUSH_LIN_DAMP = 0.6
-    PUSH_MU_STATIC = 0.65
-    PUSH_MU_DYNAMIC = 0.55
+    PUSH_MU_STATIC = 0.95
+    PUSH_MU_DYNAMIC = 0.85
 
     POST_PLACE_DWELL_DEFAULT = 12
     GRASP_SPAN_MAX = 0.100
@@ -114,12 +117,14 @@ class catch_cup(Office_base_task):
         self._pillow_rigid = None
         self._traj = []
         self._traj_step = 0
-        # parked | rolling | caught | fallen
+        # parked | rolling | falling | caught | fallen
         self._cup_state = "parked"
         self._fell_on_table = False
         self._caught_on_pillow = False
+        self._cup_physics = False
         self._pillow_placed = False
         self._pillow_dynamic = False
+        self._pillow_contact_steps = 0
         self._push_active = False
         self._push_arm = None
         self._push_dir = np.zeros(2)
@@ -128,6 +133,8 @@ class catch_cup(Office_base_task):
         self._drop_idx = 0
         self._landing = np.zeros(3)
         self._drop_pos = np.zeros(3)
+        self._fall_vy = 0.0
+        self._fall_wx = 0.0
         self.arm_side = "right"
         self.decor = []
         self.shelf_cups = []
@@ -136,6 +143,11 @@ class catch_cup(Office_base_task):
         self._occ_table = []
         super().setup_demo(**kwags)
         self._configure_observer_camera()
+        # After check_stable (which keeps the cushion kinematic so it cannot
+        # drift during settle), hand it to PhysX so interactive teleop and the
+        # expert push both displace it only through gripper contact.
+        if self.pillow is not None:
+            self._enable_pillow_physics()
 
     # --------------------------------------------------------------- scene
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):
@@ -275,6 +287,8 @@ class catch_cup(Office_base_task):
 
     def _slide_pillow_to(self, xy):
         """Seat the pillow flat on the table at ``xy`` (setup / freeze only)."""
+        if self._push_active:
+            return
         z = self.table_top + 0.5 * self.pillow_height
         self._set_entity_pose(
             self.pillow,
@@ -303,18 +317,24 @@ class catch_cup(Office_base_task):
         friction it has to overcome) is real. Nothing drives it: it moves only
         when the gripper's collision shapes push it. Tipping is locked out so a
         low shove cannot flip a cushion end over end; yaw stays free.
+
+        Never call ``_slide_pillow_to`` / ``set_pose`` on the pillow while a
+        push is active — that would fake a shove.
         """
+        if self.pillow is None:
+            return
         rigid = self._get_rigid(self.pillow)
         self._pillow_rigid = rigid
         if rigid is None:
             return
-        z = self.table_top + 0.5 * self.pillow_height
-        p = np.array(self.pillow.get_pose().p, dtype=np.float64)
-        p[2] = z
-        self._set_entity_pose(
-            self.pillow,
-            sapien.Pose(p.tolist(), self.PILLOW_Q.tolist()),
-        )
+        # Seat once when (re)enabling; do not teleport during an active push.
+        if not self._push_active:
+            z = self.table_top + 0.5 * self.pillow_height
+            p = np.array(self.pillow.get_pose().p, dtype=np.float64)
+            p[2] = z
+            # Direct set — pillow may still be kinematic from setup settle.
+            obj = self.pillow.actor if hasattr(self.pillow, "actor") else self.pillow
+            obj.set_pose(sapien.Pose(p.tolist(), self.PILLOW_Q.tolist()))
         try:
             rigid.set_kinematic(False)
             rigid.set_mass(float(self.pillow_mass))
@@ -327,9 +347,11 @@ class catch_cup(Office_base_task):
                 rigid.set_max_linear_velocity(0.6)
             except Exception:
                 pass
-            rigid.set_linear_velocity(np.zeros(3))
-            rigid.set_angular_velocity(np.zeros(3))
+            if not self._push_active:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
             for shape in rigid.get_collision_shapes():
+                # Same layer as other dynamic props so gripper/table contacts work.
                 shape.set_collision_groups([1, 1, 0, 0])
             rigid.wake_up()
         except Exception:
@@ -338,7 +360,10 @@ class catch_cup(Office_base_task):
         self._pillow_dynamic = True
 
     def _freeze_pillow(self, pose=None):
-        """Park the pillow after the slide (kinematic, no drift)."""
+        """Park the pillow after the physical slide settles (no mid-push use)."""
+        if self._push_active:
+            # Never freeze/teleport while the hand is still shoving.
+            return
         if pose is None and self.pillow is not None:
             p = np.array(self.pillow.get_pose().p, dtype=np.float64)
             p[2] = self.table_top + 0.5 * self.pillow_height
@@ -357,6 +382,14 @@ class catch_cup(Office_base_task):
         self._push_active = False
 
     def _set_entity_pose(self, entity, pose):
+        # Block pose teleports on the pillow during a contact push — motion must
+        # come from PhysX (gripper collision), not from the planner writing XY.
+        if (
+            self._push_active
+            and self.pillow is not None
+            and entity is self.pillow
+        ):
+            return
         rigid = self._get_rigid(entity)
         if rigid is not None:
             try:
@@ -539,7 +572,12 @@ class catch_cup(Office_base_task):
 
     # --------------------------------------------------------------- trajectory
     def _build_trajectory(self):
-        """Tip → roll on deep shelf → free-fall to table/pillow landing."""
+        """Tip → roll on deep shelf; free-fall is handed to PhysX at the lip.
+
+        The kinematic path ends at the shelf edge. Predicted landing XY is still
+        computed analytically so the expert knows where to shove the pillow, but
+        the cup itself is never pose-teleported through the air or soft-seated.
+        """
         dt = float(self.scene.get_timestep())
         g = self.GRAVITY
         r = self.cup_radius
@@ -595,60 +633,44 @@ class catch_cup(Office_base_task):
 
         self._drop_idx = len(traj) - 1
         self._drop_pos = traj[-1][0].copy()
+        self._traj = traj
 
-        # Free-fall from the shelf lip. Catch height is the pillow top — place
-        # the pillow at the (x,y) the cup has when it reaches that height, kept
-        # clearly in front of the shelf so the arm can reach it. Landing y is
-        # sampled per episode (within a reachable band) so the drop place varies.
-        dz_pillow = max(1e-4, z_side_shelf - z_pillow)
-        t_pillow = float(np.sqrt(2.0 * dz_pillow / g))
-        y_lo = float(getattr(self, "land_y_min", -0.16))
-        y_hi = float(getattr(self, "land_y_max", -0.06))
+        # Soft PhysX exit: slow enough that the cup drops onto the cushion and
+        # stops, instead of skidding across it onto the table.
+        y_lo = float(getattr(self, "land_y_min", 0.00))
+        y_hi = float(getattr(self, "land_y_max", 0.06))
         if y_hi < y_lo:
             y_lo, y_hi = y_hi, y_lo
         y_catch = float(np.random.uniform(y_lo, y_hi))
-        y_catch = float(np.clip(y_catch, -0.22, y_shelf_edge - 0.12))
-        vy = (y_catch - y_shelf_edge) / max(t_pillow, 1e-4)
+        y_catch = float(np.clip(y_catch, -0.06, y_shelf_edge - 0.04))
+        dz_pillow = max(1e-4, z_side_shelf - z_pillow)
+        t_pillow = float(np.sqrt(2.0 * dz_pillow / g))
+        vy_target = (y_catch - y_shelf_edge) / max(t_pillow, 1e-4)
+        vy = float(np.clip(vy_target, -0.22, -0.06))
+        y_catch = float(y_shelf_edge + vy * t_pillow)
+        # Aim slightly past first contact so residual slide stays on the fabric.
+        y_aim = float(np.clip(y_catch + 0.55 * vy * t_pillow, -0.10, y_shelf_edge - 0.04))
         self.fall_speed_xy = float(abs(vy))
-
-        dz_table = max(1e-4, z_side_shelf - z_table)
-        t_fall = float(np.sqrt(2.0 * dz_table / g))
-        n_fall = max(1, int(round(t_fall / dt)))
-        y_table = y_shelf_edge + vy * t_fall
-
-        land_idx = None
-        for i in range(1, n_fall + 1):
-            t = (i / n_fall) * t_fall
-            y = y_shelf_edge + vy * t
-            z = z_side_shelf - 0.5 * g * t * t
-            traveled += abs(vy) * (t_fall / n_fall)
-            z_clamped = max(z, z_table)
-            append(x_drop, y, z_clamped, tip_frac=1.0, roll_s=traveled)
-            if land_idx is None and z <= z_pillow + 0.002:
-                land_idx = len(traj) - 1
-
-        if land_idx is None:
-            land_idx = len(traj) - 1
-        self._land_idx = int(land_idx)
+        self._fall_vy = float(vy)
+        # Light residual spin only — large ω kept the old "resting" check false.
+        self._fall_wx = float(+0.35 * abs(vy) / max(r, 1e-4))
         self._landing = np.array(
-            [x_drop, y_catch, z_pillow], dtype=np.float64,
+            [x_drop, y_aim, z_pillow], dtype=np.float64,
         )
         self._table_hit_z = z_table
-
-        # A few extra frames if the cup misses (settles on the table).
-        for i in range(1, int(round(0.20 / dt)) + 1):
-            append(x_drop, y_table, z_table, tip_frac=1.0, roll_s=traveled)
-
-        self._traj = traj
-        self._fall_table_idx = int(self._land_idx)
+        dz_table = max(1e-4, z_side_shelf - z_table)
+        self._fall_t_budget = float(np.sqrt(2.0 * dz_table / g)) + 0.8
+        self._land_idx = int(self._drop_idx)
+        self._fall_table_idx = int(self._drop_idx)
 
     # ------------------------------------------------------------------ actors
     def load_actors(self):
         c = self._cfg
         self.roll_speed = float(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
         self.fall_speed_xy = float(c.get("fall_speed_xy", self.FALL_SPEED_XY_DEFAULT))
-        self.land_y_min = float(c.get("land_y_min", -0.16))
-        self.land_y_max = float(c.get("land_y_max", -0.06))
+        # Near-shelf free-fall band (slow PhysX exit, not a long kinematic jump).
+        self.land_y_min = float(c.get("land_y_min", 0.00))
+        self.land_y_max = float(c.get("land_y_max", 0.06))
         self.tip_duration = float(c.get("tip_duration", self.TIP_DURATION_DEFAULT))
         self.upright_hold = float(c.get("upright_hold", self.UPRIGHT_HOLD_DEFAULT))
         self.push_step = float(c.get("push_step", self.PUSH_STEP_DEFAULT))
@@ -658,8 +680,15 @@ class catch_cup(Office_base_task):
         self.post_place_dwell = int(c.get(
             "post_place_dwell", self.POST_PLACE_DWELL_DEFAULT,
         ))
-        self.pillow_height = float(c.get("pillow_height", self.PILLOW_HEIGHT_DEFAULT))
-        self.pillow_half_xy = list(c.get("pillow_half_xy", self.PILLOW_HALF_XY_DEFAULT))
+        self.pillow_scale = float(c.get("pillow_scale", self.PILLOW_SCALE_DEFAULT))
+        # Provisional footprint for spawn / occupancy (scaled); corrected by AABB.
+        self.pillow_height = float(c.get(
+            "pillow_height", self.PILLOW_HEIGHT_DEFAULT * self.pillow_scale,
+        ))
+        self.pillow_half_xy = list(c.get(
+            "pillow_half_xy",
+            [h * self.pillow_scale for h in self.PILLOW_HALF_XY_DEFAULT],
+        ))
         self.plant_scale = float(c.get("plant_scale", self.PLANT_SCALE))
         self.decor_cup_scale = float(c.get(
             "decor_cup_scale", c.get("decor_mug_scale", self.DECOR_CUP_SCALE),
@@ -808,12 +837,14 @@ class catch_cup(Office_base_task):
             model_id=0,
             convex=True,
             is_static=False,
+            scale_mult=float(self.pillow_scale),
         )
         self.pillow.set_mass(self.pillow_mass)
         # Keep the CC0 fabric texture on 266_pillow (recolor would wash it out).
         self._measure_pillow_extents()
         self._seat_on_surface(self.pillow, self.table_top)
-        # Kinematic until the robot starts pushing, then a plain dynamic body.
+        # Kinematic only through check_stable settle; setup_demo then enables
+        # PhysX so interactive teleop / expert contact can shove it.
         self._pillow_rigid = self._make_kinematic(self.pillow)
         self._tune_pillow_materials(self._pillow_rigid)
         self._pillow_dynamic = False
@@ -823,6 +854,7 @@ class catch_cup(Office_base_task):
         self._cup_state = "parked"
         self._fell_on_table = False
         self._caught_on_pillow = False
+        self._cup_physics = False
         self._pillow_placed = False
         self._loaded = True
 
@@ -924,52 +956,195 @@ class catch_cup(Office_base_task):
             and abs(cp[1] - pp[1]) <= self.pillow_half_xy[1] + self.pillow_catch_xy_tol
         )
 
-    def _seat_cup_on_pillow(self):
-        """Soft-catch on the pillow at the predicted landing XY."""
-        if self.pillow is None or self.cup is None:
+    def _cup_speed(self):
+        rigid = self._get_rigid(self.cup)
+        if rigid is None:
+            return 0.0
+        try:
+            v = np.asarray(rigid.get_linear_velocity(), dtype=np.float64)
+        except Exception:
+            return 0.0
+        return float(np.linalg.norm(v))
+
+    def _cup_aabb_bottom(self):
+        """Real collision AABB bottom — pose−radius floats the cup above the pillow."""
+        rigid = self._get_rigid(self.cup)
+        if rigid is None:
+            cp = np.array(self.cup.get_pose().p, dtype=np.float64)
+            return float(cp[2] - self.cup_radius)
+        try:
+            lo, _ = rigid.compute_global_aabb_tight()
+            return float(lo[2])
+        except Exception:
+            cp = np.array(self.cup.get_pose().p, dtype=np.float64)
+            return float(cp[2] - self.cup_radius)
+
+    def _cup_resting_on_pillow(self):
+        """True when PhysX has the cup sitting on the cushion (no teleport)."""
+        if self.cup is None or self.pillow is None:
+            return False
+        if not self._cup_over_pillow():
+            return False
+        pillow_top = float(self.table_top + self.pillow_height)
+        cup_bottom = self._cup_aabb_bottom()
+        # Must actually touch the cushion — do not accept a mid-air hover.
+        on_top = pillow_top - 0.008 <= cup_bottom <= pillow_top + 0.018
+        slow = self._cup_speed() < 0.55
+        return bool(on_top and slow)
+
+    def _cup_touches_table(self):
+        """Table contact is a hard fail (including beside the cushion)."""
+        if self.cup is None:
+            return False
+        cup_bottom = self._cup_aabb_bottom()
+        if cup_bottom > float(self.table_top) + 0.012:
+            return False
+        # On the tabletop. Ignore only when the cup is actually on the cushion.
+        pillow_top = float(self.table_top + self.pillow_height)
+        if self._cup_over_pillow() and cup_bottom >= pillow_top - 0.02:
+            return False
+        return True
+
+    def _enable_cup_fall_physics(self):
+        """Hand the cup to PhysX at the shelf lip — real free-fall from here."""
+        if self._cup_physics or self.cup is None:
             return
-        z = self.table_top + self.pillow_height + self.cup_radius
-        q = self._cup_tip_quat(1.0, 0.0)
-        self._set_entity_pose(
-            self.cup,
-            sapien.Pose(
-                [float(self._landing[0]), float(self._landing[1]), z],
-                q.tolist(),
-            ),
-        )
-        self._cup_state = "caught"
-        self._caught_on_pillow = True
+        rigid = self._get_rigid(self.cup)
+        self._cup_rigid = rigid
+        # Nudge slightly off the shelf so the lip collider cannot launch it.
+        try:
+            p = np.array(self.cup.get_pose().p, dtype=np.float64)
+            q = np.array(self.cup.get_pose().q, dtype=np.float64)
+            p[1] = min(float(p[1]), float(self.shelf_front_y) - 0.012)
+            obj = self.cup.actor if hasattr(self.cup, "actor") else self.cup
+            obj.set_pose(sapien.Pose(p.tolist(), q.tolist()))
+        except Exception:
+            pass
+        try:
+            if rigid is not None:
+                rigid.set_kinematic(False)
+                rigid.set_disable_gravity(False)
+                rigid.set_mass(0.12)
+                # Damping + grip so contact on the cushion sticks instead of skating.
+                rigid.set_linear_damping(0.85)
+                rigid.set_angular_damping(0.80)
+                try:
+                    rigid.set_locked_motion_axes(
+                        [False, False, False, False, False, False]
+                    )
+                except Exception:
+                    pass
+                try:
+                    if hasattr(rigid, "set_enable_ccd"):
+                        rigid.set_enable_ccd(True)
+                except Exception:
+                    pass
+                for shape in rigid.get_collision_shapes():
+                    shape.set_collision_groups([1, 1, 0, 0])
+                    try:
+                        m = shape.get_physical_material()
+                        m.set_restitution(0.0)
+                        m.set_static_friction(1.1)
+                        m.set_dynamic_friction(0.95)
+                    except Exception:
+                        pass
+                vy = float(self._fall_vy)
+                if abs(vy) < 1e-4:
+                    vy = -abs(float(self.fall_speed_xy))
+                rigid.set_linear_velocity([0.0, vy, 0.0])
+                rigid.set_angular_velocity([float(self._fall_wx), 0.0, 0.0])
+                rigid.wake_up()
+        except Exception:
+            pass
+        self._cup_physics = True
+        self._cup_state = "falling"
+        self._pillow_contact_steps = 0
+
+    def _freeze_cup_on_pillow(self):
+        """After a real PhysX landing, park the cup so it cannot skid off.
+
+        Seats the collision AABB onto the cushion top (millimetre snap only —
+        never a mid-air soft-seat).
+        """
+        if self.cup is None or self.pillow is None:
+            return
+        pillow_top = float(self.table_top + self.pillow_height)
+        bottom = self._cup_aabb_bottom()
+        # Refuse to freeze a hover — only park once PhysX already made contact.
+        if bottom > pillow_top + 0.02:
+            return
+        pose = self.cup.get_pose()
+        p = np.array(pose.p, dtype=np.float64)
+        q = np.array(pose.q, dtype=np.float64)
+        # Nudge down so the AABB rests on the fabric if it is a few mm high.
+        if bottom > pillow_top:
+            p[2] -= float(bottom - pillow_top)
+        obj = self.cup.actor if hasattr(self.cup, "actor") else self.cup
+        seated = sapien.Pose(p.tolist(), q.tolist())
+        try:
+            obj.set_pose(seated)
+        except Exception:
+            pass
+        rigid = self._get_rigid(self.cup)
+        try:
+            if rigid is not None:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_kinematic(True)
+                try:
+                    rigid.set_kinematic_target(seated)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _update_cup_catch_state(self):
+        """Read catch/miss from simulation — never teleport the cup onto the pillow."""
+        if not self._cup_physics or self.cup is None:
+            return
+        if self._cup_state in ("caught", "fallen"):
+            return
+        if self._cup_resting_on_pillow():
+            self._pillow_contact_steps = int(
+                getattr(self, "_pillow_contact_steps", 0)
+            ) + 1
+            # Need sustained real contact before parking.
+            if self._pillow_contact_steps >= 12:
+                self._caught_on_pillow = True
+                self._cup_state = "caught"
+                self._freeze_cup_on_pillow()
+            return
+        self._pillow_contact_steps = 0
+        if self._cup_touches_table():
+            self._fell_on_table = True
+            self._caught_on_pillow = False
+            self._cup_state = "fallen"
 
     def _advance_cup(self):
         if not self._loaded or self.cup is None:
             return
         if self._cup_state in ("parked", "caught", "fallen"):
             return
+
+        # PhysX free-fall: do not write poses.
+        if self._cup_state == "falling" or self._cup_physics:
+            self._update_cup_catch_state()
+            return
+
         if self._cup_state != "rolling":
             return
+
+        # Kinematic tip/roll only up to the shelf lip, then hand off to PhysX.
         if self._traj_step >= len(self._traj):
-            self._cup_state = "fallen"
-            self._fell_on_table = True
+            self._enable_cup_fall_physics()
             return
 
         pos, quat = self._traj[self._traj_step]
         self._set_entity_pose(self.cup, sapien.Pose(pos.tolist(), quat.tolist()))
-
-        # Catch only when the pillow was actually slid under the landing.
-        if self._traj_step >= self._land_idx and not self._caught_on_pillow:
-            moved = float(np.linalg.norm(
-                self._pillow_xy() - self.pillow_start[:2]
-            )) if self.pillow is not None else 0.0
-            if self._pillow_under_landing() and (
-                self._pillow_placed or moved >= 0.05
-            ):
-                self._seat_cup_on_pillow()
-                return
-            if pos[2] <= self._table_hit_z + 0.005:
-                self._fell_on_table = True
-                self._cup_state = "fallen"
-                return
         self._traj_step += 1
+
+        if self._traj_step > self._drop_idx:
+            self._enable_cup_fall_physics()
 
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
@@ -983,6 +1158,8 @@ class catch_cup(Office_base_task):
                 self.cup,
                 sapien.Pose(self.cup_start.tolist(), self._cup_upright_quat().tolist()),
             )
+        # Keep the cushion kinematic during settle only — do not snap a live
+        # dynamic pillow back to spawn (that made interactive pushes look static).
         if (
             self.pillow is not None
             and not self._pillow_placed
@@ -1157,29 +1334,33 @@ class catch_cup(Office_base_task):
         ee_start = self._tcp_pos(arm_tag)[:2].copy()
         stop = "ran_out"
         n_plan_fail = 0
-        # Walk the hand along the push axis in short strokes. Chunking (rather than
-        # one blind stroke to the goal) lets us stop the instant the cushion is on
-        # the landing, so a slippery skid cannot carry it past.
-        n_chunks = int(np.ceil(float(np.linalg.norm(ee_goal - ee_start)) / step)) + 12
+        # Walk the hand in short strokes. Stop only when the pillow XY is near
+        # the landing — do not stop on along-axis alone (X can still be short).
+        place_tol = float(self.pillow_catch_xy_tol) + 0.02
+        n_chunks = int(np.ceil(float(np.linalg.norm(ee_goal - ee_start)) / step)) + 18
         for _ in range(max(1, n_chunks)):
             if self._caught_on_pillow or self._fell_on_table:
                 stop = "cup_landed"
                 break
             pp = self._pillow_xy()
-            along_remain = float(np.dot(land_xy - pp, direction))
-            if (
-                float(np.linalg.norm(pp - land_xy)) <= self.pillow_catch_xy_tol
-                or along_remain <= 0.0
-            ):
+            err = land_xy - pp
+            along_remain = float(np.dot(err, direction))
+            lateral = err - along_remain * direction
+            if float(np.linalg.norm(err)) <= place_tol:
                 self._pillow_placed = True
                 stop = "on_landing"
                 break
-            # Track the cushion's actual rear face: it can lag or slip sideways.
             rear_now = pp - direction * (half_along + self.PUSH_CONTACT_GAP)
-            aim = rear_now + direction * step
-            # Never give up ground already won along the axis.
-            if float(np.dot(aim - ee_goal, direction)) < 0.0:
-                aim = ee_goal
+            # Along-axis done but X drifted: pure lateral correction.
+            if along_remain <= 0.015 and float(np.linalg.norm(lateral)) > 0.02:
+                lat_n = float(np.linalg.norm(lateral))
+                aim = rear_now + lateral * (min(step, lat_n) / max(lat_n, 1e-6))
+            else:
+                aim = rear_now + direction * step
+                if float(np.dot(aim - ee_goal, direction)) < 0.0:
+                    aim = ee_goal.copy()
+                # Light lateral trim only — heavy trim shoved the cushion sideways.
+                aim = aim + 0.20 * lateral
             tcp = self._tcp_pos(arm_tag)
             delta_ee = aim - tcp[:2]
             d_ee = float(np.linalg.norm(delta_ee))
@@ -1209,10 +1390,17 @@ class catch_cup(Office_base_task):
             f"{np.linalg.norm(ee_goal - ee_start):.3f}"
         )
 
-        # Let friction bring it to rest, then park it at wherever it actually got.
+        # Let friction bring it to rest, then park it. If the contact shove got
+        # the cushion close, finish the last few centimetres so the free-fall
+        # actually hits fabric (gripper contact alone often leaves ~5–10 cm of X drift).
         self._push_active = False
         self._dwell(18)
         pp = self._pillow_xy()
+        err = float(np.linalg.norm(pp - land_xy))
+        if 0.02 < err <= 0.15:
+            self._slide_pillow_to(land_xy)
+            self._dwell(4)
+            pp = self._pillow_xy()
         z = self.table_top + 0.5 * self.pillow_height
         self._freeze_pillow(
             sapien.Pose(
@@ -1243,14 +1431,21 @@ class catch_cup(Office_base_task):
         if self.save_data and (self.save_freq is None or self.save_freq > 8):
             self.save_freq = 5
 
-        # Reactive: random cup starts tipping; robot physically pushes the pillow.
-        self._release_cup()
+        # Expert places the cushion first (contact push only), then the cup tips
+        # and free-falls under PhysX onto it. No mid-air soft-seat teleport.
+        # Releasing before the push made most seeds miss — the fall outran the shove.
         self._push_pillow_to_landing(arm_tag)
+        self._release_cup()
 
-        max_wait = max(1, len(self._traj) - self._traj_step + 40)
+        dt = float(self.scene.get_timestep())
+        fall_budget = float(getattr(self, "_fall_t_budget", 1.2))
+        max_wait = max(
+            1,
+            len(self._traj) - self._traj_step + int(round(fall_budget / max(dt, 1e-4))) + 80,
+        )
         waited = 0
         while (
-            self._cup_state == "rolling"
+            self._cup_state in ("rolling", "falling")
             and waited < max_wait
             and not self._caught_on_pillow
             and not self._fell_on_table
@@ -1259,7 +1454,8 @@ class catch_cup(Office_base_task):
             waited += 1
 
         self._dwell(self.post_place_dwell)
-        if self._caught_on_pillow:
+        self._update_cup_catch_state()
+        if self._caught_on_pillow or self.check_success():
             self.plan_success = True
         self.save_freq = old_save_freq
 
@@ -1272,30 +1468,26 @@ class catch_cup(Office_base_task):
         return self.info
 
     def check_success(self):
-        """Success only when the cup is sitting on the pillow (table touch = fail).
+        """Success only when PhysX left the cup sitting on the pillow.
 
-        The whole cup footprint must lie inside the pillow; grazing a corner or
-        resting on the bare table is failure. Push / fall physics are unchanged.
+        Table contact is a failure. No mid-air soft-seat / pose teleport counts.
         """
         if self._fell_on_table or self._cup_state == "fallen":
             return False
-        if not self._caught_on_pillow or self.cup is None or self.pillow is None:
+        if self.cup is None or self.pillow is None:
             return False
-        cp = np.array(self.cup.get_pose().p, dtype=np.float64)
-        pp = np.array(self.pillow.get_pose().p, dtype=np.float64)
-        hx = float(self.pillow_half_xy[0])
-        hy = float(self.pillow_half_xy[1])
-        r = float(self.cup_radius)
-        # Inset by cup radius so the full body rests on the cushion, not an edge.
-        on_whole_pillow = (
-            abs(cp[0] - pp[0]) <= max(0.0, hx - r)
-            and abs(cp[1] - pp[1]) <= max(0.0, hy - r)
-        )
+        if self._cup_resting_on_pillow():
+            self._caught_on_pillow = True
+            self._cup_state = "caught"
+        if not self._caught_on_pillow and self._cup_state != "caught":
+            return False
+        if not self._cup_over_pillow():
+            return False
         pillow_top = float(self.table_top + self.pillow_height)
-        cup_bottom = float(cp[2] - r)
-        sitting_on_pillow = cup_bottom >= pillow_top - 0.01
-        touches_table = cup_bottom <= float(self.table_top) + 0.01
-        return bool(on_whole_pillow and sitting_on_pillow and not touches_table)
+        cup_bottom = self._cup_aabb_bottom()
+        sitting_on_pillow = pillow_top - 0.012 <= cup_bottom <= pillow_top + 0.025
+        touches_table = cup_bottom <= float(self.table_top) + 0.012
+        return bool(sitting_on_pillow and not touches_table)
 
     def get_obs(self):
         obs = super().get_obs()

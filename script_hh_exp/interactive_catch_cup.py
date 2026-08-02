@@ -5,8 +5,8 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Cup starts moving as soon as the viewer is ready\n  Space: hold/release landing pillow | arrows/Q/E: move it\n  V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  Cup starts moving as soon as the viewer is ready\n  Space: grasp/release pillow\n  V: top-down/head camera | Escape: quit\n"""
+KEYBOARD = """\n  Cup starts moving as soon as the viewer is ready\n  Pillow is PhysX-dynamic (pushable); Space: optional god-mode hold\n  arrows/Q/E (while held): teleport pillow | V: camera | Escape: quit\n"""
+ROBOT = """\n  Cup starts moving as soon as the viewer is ready\n  Pillow is PhysX-dynamic — shove it with the closed gripper (no teleport)\n  Space: close/open gripper for pushing | V: camera | Escape: quit\n"""
 
 if __name__ == "__main__":
     a = make_parser("catch_cup", __doc__)
