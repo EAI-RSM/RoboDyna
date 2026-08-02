@@ -43,3 +43,7 @@ board over the pot, then hold `R` or `T` to tilt it left or right.
 Physics, task-specific kinematic updates, and `check_success()` remain in the
 original environment classes; the runner only supplies viewer controls and
 the small set of task actions shown in each script's banner.
+
+Time-sensitive scenarios start automatically after their first viewer frame:
+the bug, cup, mouse/object, rolling ball, and clean-table spill do not wait for
+an `F` key press.

@@ -595,7 +595,8 @@ class boil_milk(KitchenS_base_task):
     def _spawn_spill_puddle(self, scale: float = 1.0):
         """Compact white milk puddle under the pot (visual only).
 
-        Spill outer radius = 20% of pot diameter (small ring under the base).
+        Spill outer radius is slightly larger than the pot footprint so the
+        spill reads as a visible white puddle around the base.
         ``scale`` is kept for call-site compatibility; size is fixed.
         """
         del scale  # fixed size — no grow-animation
@@ -609,11 +610,10 @@ class boil_milk(KitchenS_base_task):
         cx, cy = float(self.pot_xy[0]), float(self.pot_xy[1])
         z = float(self.range_top_z) + 0.003
         pot_r = float(self.pot_radius)
-        pot_diameter = 2.0 * pot_r
-        spill_r = 0.20 * pot_diameter
-        milk = sapien.render.RenderMaterial(base_color=[0.96, 0.96, 0.93, 1.0])
+        spill_r = 1.12 * pot_r
+        milk = sapien.render.RenderMaterial(base_color=[0.97, 0.97, 0.95, 0.97])
         milk.metallic = 0.0
-        milk.roughness = 0.55
+        milk.roughness = 0.65
         vertical_q = [0.70710678, 0.0, 0.70710678, 0.0]
 
         builder = self.scene.create_actor_builder()
@@ -621,7 +621,7 @@ class boil_milk(KitchenS_base_task):
         builder.add_cylinder_visual(
             pose=sapien.Pose([0, 0, 0], vertical_q),
             radius=float(spill_r),
-            half_length=0.0012,
+            half_length=0.0010,
             material=milk,
         )
         builder.set_initial_pose(sapien.Pose(p=[cx, cy, z]))

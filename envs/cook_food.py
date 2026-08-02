@@ -8,9 +8,8 @@ plate of raw meat sits to the right of the stove.
 
 Food types (``task_args.cook_food.food_type`` or random):
   - meat    — 200_steak; red → brown → black; ideal ~medium (0.5)
-  - chicken — 258_chicken; white → lite pink → dark yellow → brown → black;
-              ideal = dark yellow (~0.5)
   - sausage — 259_sausage; pink → red → dark red → black; ideal = dark red (~0.66)
+  - onion_half — CC0 Kenney onion half; white → yellow → brown; ideal = deep brown
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ from .utils.create_actor import create_actor, create_visual_box, UnStableError
 
 
 class cook_food(KitchenS_base_task):
-    """Cook one of three foods on the KitchenS range, then place onto a plate."""
+    """Cook meat, sausage, or onion on the KitchenS range, then place onto a plate."""
 
     COOK_STEPS_DEFAULT: ClassVar[int] = 2000
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.10
@@ -46,7 +45,7 @@ class cook_food(KitchenS_base_task):
     # yaw of +90° swings the handle to +X (right side of the stove).
     SKILLET_HANDLE_YAW: ClassVar[float] = 0.5 * np.pi
     FOOD_QPOS: ClassVar[list[float]] = [0.707, 0.707, 0.0, 0.0]
-    FOOD_TYPES: ClassVar[tuple[str, ...]] = ("meat", "chicken", "sausage")
+    FOOD_TYPES: ClassVar[tuple[str, ...]] = ("meat", "sausage", "onion_half")
     # Front-left burner on the cooktop; handle points +X (right).
     ACTIVE_BURNER: ClassVar[str] = "left_front"
     # Cooktop slightly left; arms stay on their own sides via park poses.
@@ -72,20 +71,6 @@ class cook_food(KitchenS_base_task):
                 (1.0, [0.10, 0.05, 0.03]),
             ],
         },
-        "chicken": {
-            "modelname": "258_chicken",
-            "model_id": 0,
-            "scale_mult": 0.85,
-            "mass": 0.04,
-            "target_doneness_range": (0.45, 0.58),
-            "color_stops": [
-                (0.0, [0.96, 0.94, 0.88]),
-                (0.25, [1.00, 0.72, 0.70]),
-                (0.50, [0.78, 0.55, 0.12]),
-                (0.75, [0.42, 0.22, 0.08]),
-                (1.0, [0.06, 0.04, 0.03]),
-            ],
-        },
         "sausage": {
             "modelname": "259_sausage",
             "model_id": 0,
@@ -97,6 +82,21 @@ class cook_food(KitchenS_base_task):
                 (0.33, [0.85, 0.18, 0.16]),
                 (0.66, [0.45, 0.06, 0.06]),
                 (1.0, [0.05, 0.03, 0.03]),
+            ],
+        },
+        "onion_half": {
+            "modelname": "270_onion_half",
+            "model_id": 0,
+            "scale_mult": 0.20,
+            "mass": 0.025,
+            "target_doneness_range": (0.78, 0.84),
+            "color_stops": [
+                (0.0, [0.96, 0.96, 0.96]),
+                (0.18, [0.92, 0.92, 0.92]),
+                (0.36, [0.83, 0.70, 0.55]),
+                (0.58, [0.71, 0.49, 0.24]),
+                (0.80, [0.47, 0.26, 0.07]),
+                (1.00, [0.54, 0.20, 0.14]),
             ],
         },
     }
@@ -150,7 +150,7 @@ class cook_food(KitchenS_base_task):
         return
 
     def _configure_head_camera(self) -> None:
-        """Pull the head camera well back/up and widen FOV so the stove is clear."""
+        """Use a close head framing that keeps the cooking workspace readable."""
         cams = getattr(self, "cameras", None)
         if cams is None:
             return
@@ -164,7 +164,10 @@ class cook_food(KitchenS_base_task):
         dx = float(getattr(self, "decor_plate_xy", (rx + 0.25, ry))[0])
         # Frame board + stove + deco plate (no sink / microwave).
         center_x = 0.5 * (bx + dx)
-        cam_pos = np.array([center_x * 0.35 + float(rx) * 0.65, -1.20, 1.95], dtype=float)
+        # Match the close-up KitchenS head framing used by the other cooking
+        # tasks.  The previous y=-1.20/z=1.95, 58° setup made the workspace
+        # unnecessarily small in the main task and interactive viewer.
+        cam_pos = np.array([center_x * 0.35 + float(rx) * 0.65, -0.98, 1.74], dtype=float)
         look_at = np.array([float(rx), float(ry) * 0.10, 0.82], dtype=float)
         forward = look_at - cam_pos
         forward /= np.linalg.norm(forward)
@@ -178,10 +181,10 @@ class cook_food(KitchenS_base_task):
         m[:3, 3] = cam_pos
         camera.entity.set_pose(sapien.Pose(m))
         try:
-            camera.set_fovy(float(np.deg2rad(58)))
+            camera.set_fovy(float(np.deg2rad(52)))
         except Exception:
             try:
-                camera.fovy = float(np.deg2rad(58))
+                camera.fovy = float(np.deg2rad(52))
             except Exception:
                 pass
 
@@ -527,14 +530,24 @@ class cook_food(KitchenS_base_task):
         angle = float(np.clip(angle, -self.KNOB_MAX_ANGLE, 0.0))
         self.knob_angle = angle
         if drive_fire:
-            self.fire_intensity = float(-angle / self.KNOB_MAX_ANGLE)
-            self.stove_on = self.fire_intensity > 0.02
+            scaled_intensity = float(-angle / self.KNOB_MAX_ANGLE)
+            if scaled_intensity > 0.0:
+                self.fire_intensity = float(np.clip(scaled_intensity, 0.0, 1.0))
+                self.stove_on = True
+            else:
+                self.fire_intensity = 0.0
+                self.stove_on = False
             if self.stove_on:
                 self.turned_on_once = True
             elif self.turned_on_once and self.max_doneness > 0.05:
                 self.turned_off_after_cook = True
 
-        self._set_knob_joint_angle(angle)
+        # Explicit state changes (keyboard/reset/after-contact commit) must keep
+        # the articulated tick aligned with task state. While a gripper is
+        # actively torquing the free joint, leave qpos to PhysX.
+        self._set_knob_joint_angle(
+            angle, hard=not bool(getattr(self, "_knob_grasp_active", False))
+        )
         if drive_fire:
             self._set_burner_visuals(self.fire_intensity)
 
@@ -681,7 +694,7 @@ class cook_food(KitchenS_base_task):
         food = np.asarray(self.food.get_pose().p, dtype=float)
         xy_ok = float(np.linalg.norm(food[:2] - bowl[:2])) < float(tol)
         # Must sit near the bowl floor — a grasp held over the pan fails this z band.
-        # Steak/chicken meshes rest ~2–4 cm above the functional point on the
+        # Food meshes rest ~2–4 cm above the functional point on the
         # flush cooktop; keep the ceiling loose enough for those thicknesses.
         z_delta = float(food[2] - bowl[2])
         z_ok = -0.01 <= z_delta <= 0.045

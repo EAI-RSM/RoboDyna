@@ -45,9 +45,9 @@ task_args:
     randomize_layout: true
     beans_full: 160                              # rim = 100% fill
     force_thresholds: [3.0, 6.0, 10.0, 14.0]   # N  (light → hard)
-    beans_per_force_level: [10, 20, 30, 40]     # → ~6%/13%/19%/25% fill
-    force_stiffness: 300.0                       # N/m spring engagement proxy
-    force_engage_slack: 0.05                     # m above button where force starts
+    beans_per_force_level: [1, 5, 10, 15]       # light → hard press
+    force_stiffness: 800.0                       # N/m spring engagement proxy
+    force_engage_slack: 0.05                     # m pressure engagement above key top
     press_depths: [0.020, 0.030, 0.044, 0.057]  # expert depths for levels 1–4
     press_sample_s: 0.40
     fill_tol: 0.05                               # ±5% success band
@@ -83,12 +83,11 @@ task_args:
     microwave_scale_mult: 1.3   # +30% microwave
   pour_beer:
     scene_id: 0
-    bottle_beer_frac: 0.90
-    pour_rate: 0.004
-    foam_gain: 1.8
-    foam_decay: 0.0035
-    expert_foam_stop: 0.82
-    expert_foam_resume: 0.55
+    pour_rate: 0.00055
+    foam_gain: 0.80
+    foam_decay: 0.0045
+    expert_foam_pause: 0.16
+    expert_foam_resume: 0.09
     target_liquid: 0.90
     full_liquid_tol: 0.05
   clean_table:

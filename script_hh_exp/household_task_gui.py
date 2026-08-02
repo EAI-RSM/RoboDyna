@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -38,6 +39,21 @@ CARD_BG = "#202c38"
 CARD_BORDER = "#405367"
 TEXT_PRIMARY = "#f4f8fb"
 TEXT_SECONDARY = "#aebdca"
+RANDOM_SEED_MAX = 500
+
+
+def resolve_seed(value: str) -> int:
+    """Return the entered seed, or generate a fresh one when left blank."""
+    value = value.strip()
+    if not value:
+        return secrets.randbelow(RANDOM_SEED_MAX + 1)
+    try:
+        seed = int(value)
+    except ValueError as exc:
+        raise ValueError("Seed must be a whole number or left blank for a random seed.") from exc
+    if not 0 <= seed <= RANDOM_SEED_MAX:
+        raise ValueError(f"Seed must be between 0 and {RANDOM_SEED_MAX}.")
+    return seed
 
 
 class RoundedButton(tk.Canvas):
@@ -204,19 +220,46 @@ class HouseholdTaskLauncher(tk.Tk):
 
         controls = tk.Frame(header, bg=HEADER_BG)
         controls.pack(side="right", padx=22, pady=16)
-        tk.Label(controls, text="Control", bg=HEADER_BG, fg=TEXT_SECONDARY, font=("Sans", 16, "bold")).pack(
-            side="left", padx=(0, 10)
+
+        seed_group = tk.Frame(controls, bg=HEADER_BG)
+        seed_group.pack(side="left", padx=(0, 18))
+        tk.Label(
+            seed_group,
+            text="Seed (blank = random)",
+            bg=HEADER_BG,
+            fg=TEXT_SECONDARY,
+            font=("Sans", 13, "bold"),
+        ).pack(anchor="w")
+        self.seed_entry = tk.Entry(
+            seed_group,
+            width=14,
+            font=("Sans", 22, "bold"),
+            bg="#f7fafc",
+            fg="#182633",
+            insertbackground="#182633",
+            relief="flat",
         )
+        self.seed_entry.pack(ipady=8, pady=(4, 0))
+
+        control_group = tk.Frame(controls, bg=HEADER_BG)
+        control_group.pack(side="left", padx=(0, 12))
+        tk.Label(
+            control_group,
+            text="Control",
+            bg=HEADER_BG,
+            fg=TEXT_SECONDARY,
+            font=("Sans", 13, "bold"),
+        ).pack(anchor="w")
         self.control = ttk.Combobox(
-            controls,
+            control_group,
             values=("keyboard", "robot"),
             state="readonly",
             width=11,
-            font=("Sans", 32, "bold"),
+            font=("Sans", 22, "bold"),
             style="Task.TCombobox",
         )
         self.control.set("robot")
-        self.control.pack(side="left", padx=(0, 12))
+        self.control.pack(ipady=4, pady=(4, 0))
         self.exit_button = RoundedButton(
             controls,
             text="Exit",
@@ -379,7 +422,20 @@ class HouseholdTaskLauncher(tk.Tk):
         if not script.exists():
             messagebox.showerror("Task unavailable", f"Missing launcher:\n{script}")
             return
-        command = [sys.executable, str(script), "--control", self.control.get()]
+        try:
+            seed = resolve_seed(self.seed_entry.get())
+        except ValueError as exc:
+            messagebox.showerror("Invalid seed", str(exc))
+            self.seed_entry.focus_set()
+            return
+        command = [
+            sys.executable,
+            str(script),
+            "--seed",
+            str(seed),
+            "--control",
+            self.control.get(),
+        ]
         try:
             self.child = subprocess.Popen(command, cwd=ROOT, start_new_session=True)
         except Exception as exc:
@@ -390,9 +446,10 @@ class HouseholdTaskLauncher(tk.Tk):
         for i, button in enumerate(self.task_buttons):
             button.configure(state="normal" if i == index else "disabled")
         self.control.configure(state="disabled")
+        self.seed_entry.configure(state="disabled")
         self.task_buttons[index].configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
         self.status.configure(
-            text=f"Running {label}. Close its viewer or press Stop to return.",
+            text=f"Running {label} with seed {seed}. Close its viewer or press Stop to return.",
             fg="#70d6a2",
         )
 
@@ -416,6 +473,7 @@ class HouseholdTaskLauncher(tk.Tk):
 
     def _reset_task_buttons(self):
         self.control.configure(state="readonly")
+        self.seed_entry.configure(state="normal")
         for button in self.task_buttons:
             button.configure(state="normal", text="Play", bg=PLAY_BLUE, activebackground=PLAY_BLUE_ACTIVE)
 

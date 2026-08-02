@@ -6,7 +6,7 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """\n  Space: hold/release food | arrows/Q/E: move it\n  F: toggle burner knob | V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  1/2/3: select arm(s) | arrows/Q/E: Cartesian arm teleoperation\n  Space: grasp/release food | F: toggle burner knob\n  V: top-down/head camera | Escape: quit\n"""
+ROBOT = """\n  Space: grasp/release food | F: toggle burner knob\n  V: top-down/head camera | Escape: quit\n"""
 
 if __name__ == "__main__":
     a = make_parser("cook_food", __doc__)

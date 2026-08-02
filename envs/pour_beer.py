@@ -42,6 +42,10 @@ class pour_beer(KitchenS_base_task):
     LEVER_OPEN_RAD = 0.55 * np.pi  # ~99° forward (−Y) when fully open
     LEVER_DEADZONE = 0.06  # rad — below this, no flow
     LEVER_OPEN_THRESH = 0.18  # rad — counts as "opened" for success
+    LEVER_RETURN_STEP = 0.045  # rad per physics tick; visual spring-back speed
+    FLOW_START_FRAC = 0.20
+    FLOW_CURVE_EXP = 0.65
+    FLOW_RATE_SCALE = 1.65
 
     EE_TO_TCP = 0.12
     LEVER_HOVER = 0.05
@@ -79,6 +83,8 @@ class pour_beer(KitchenS_base_task):
     STAIN_COLOR_LOBE = [0.93, 0.70, 0.04, 1.0]
     STAIN_COLOR_DRIP = [0.90, 0.68, 0.08, 0.95]
     GLASS_RGBA = [0.82, 0.93, 0.98, 0.22]
+    # Interactive viewer look (matches trap_bug plain trap): no transmission/IOR.
+    PLAIN_GLASS_RGBA = [0.18, 0.32, 0.48, 0.55]
     CHROME = [0.78, 0.80, 0.84, 1.0]
     CHROME_DARK = [0.50, 0.52, 0.56, 1.0]
     WOOD = [0.55, 0.32, 0.14, 1.0]
@@ -118,6 +124,7 @@ class pour_beer(KitchenS_base_task):
         self.cup = None
         self.table_top = 0.74
         self.coaster_top_z = 0.75
+        self._plain_glass = bool(self._cfg.get("plain_glass", False))
 
         super().setup_demo(**kwags)
         self._style_bar_wall()
@@ -257,22 +264,28 @@ class pour_beer(KitchenS_base_task):
         return builder.build(name=name)
 
     def _make_glass_transparent(self, actor):
+        plain = bool(getattr(self, "_plain_glass", False))
+        color = list(self.PLAIN_GLASS_RGBA if plain else self.GLASS_RGBA)
+        transmission = 0.0 if plain else 0.88
+        transmission_roughness = 1.0 if plain else 0.03
+        roughness = 0.55 if plain else 0.05
+        ior = 1.0 if plain else 1.45
         try:
             for c in actor.actor.get_components():
                 if not isinstance(c, sapien.render.RenderBodyComponent):
                     continue
                 for s in c.render_shapes:
                     try:
-                        s.material.set_base_color(list(self.GLASS_RGBA))
-                        s.material.set_transmission(0.88)
-                        s.material.set_transmission_roughness(0.03)
-                        s.material.set_roughness(0.05)
+                        s.material.set_base_color(color)
+                        s.material.set_transmission(transmission)
+                        s.material.set_transmission_roughness(transmission_roughness)
+                        s.material.set_roughness(roughness)
                         s.material.set_metallic(0.0)
-                        s.material.set_ior(1.45)
+                        s.material.set_ior(ior)
                     except Exception:
                         try:
-                            s.material.base_color = list(self.GLASS_RGBA)
-                            s.material.transmission = 0.88
+                            s.material.base_color = color
+                            s.material.transmission = transmission
                         except Exception:
                             pass
         except Exception:
@@ -742,6 +755,13 @@ class pour_beer(KitchenS_base_task):
         span = max(1e-6, float(self.lever_open_rad) - float(self.LEVER_DEADZONE))
         return float(np.clip((angle - self.LEVER_DEADZONE) / span, 0.0, 1.0))
 
+    def _flow_frac(self, angle: float | None = None) -> float:
+        frac = self._lever_open_frac(angle)
+        if frac <= 0.0:
+            return 0.0
+        curved = float(frac ** self.FLOW_CURVE_EXP)
+        return float(np.clip(self.FLOW_START_FRAC + (1.0 - self.FLOW_START_FRAC) * curved, 0.0, 1.0))
+
     def _spawn_lever(self):
         """Kinematic wooden handle hinged at the faucet head (pose updated each step)."""
         self._lever_entity = self._remove_entity(self._lever_entity)
@@ -862,6 +882,13 @@ class pour_beer(KitchenS_base_task):
         else:
             self._apply_lever_pose(cur + step * np.sign(ang - cur))
 
+    def _spring_return_lever(self):
+        if self._lever_held or self.lever_angle <= 1e-4:
+            return
+        cur = float(self.lever_angle)
+        next_ang = max(0.0, cur - max(0.012, self.LEVER_RETURN_STEP * (0.35 + 0.65 * cur / max(self.lever_open_rad, 1e-6))))
+        self._apply_lever_pose(next_ang)
+
     # ------------------------------------------------------------------ fluids
     def _cup_center_xy(self) -> np.ndarray:
         return np.asarray(self.cup_xy, dtype=float)
@@ -914,7 +941,7 @@ class pour_beer(KitchenS_base_task):
 
     def _sync_stream(self, force: bool = False):
         """Beer cylinder from spout → glass; thickness scales with lever open frac."""
-        frac = self._lever_open_frac()
+        frac = self._flow_frac()
         if (
             not force
             and abs(frac - self._stream_frac_cached) < 0.04
@@ -1041,13 +1068,12 @@ class pour_beer(KitchenS_base_task):
         if first:
             # Cut the tap once it crests — spill puddle already marks the fail.
             self._lever_held = False
-            self._apply_lever_pose(0.0)
 
     def _step_fluids(self):
         """Bottle-like fill: while lever open, beer+foam rise continuously with rate∝angle."""
-        frac = self._lever_open_frac()
+        frac = self._flow_frac()
         if frac > 1e-4 and not self.overflowed:
-            d = float(self.pour_rate) * frac
+            d = float(self.pour_rate) * frac * float(self.FLOW_RATE_SCALE)
             add_liq = d
             add_foam = d * self.foam_gain
             new_liq = float(self.liquid_level) + add_liq
@@ -1080,6 +1106,7 @@ class pour_beer(KitchenS_base_task):
         if not getattr(self, "_loaded", False):
             return
         self._drive_lever_from_ee()
+        self._spring_return_lever()
         self._step_fluids()
 
     def _idle_steps(self, n_steps: int, until=None):
@@ -1286,9 +1313,15 @@ class pour_beer(KitchenS_base_task):
 
         # 3) Ensure the lever is closed by hand.
         if (not self.overflowed) and self._lever_open_frac() > 0.05:
-            self._sweep_lever_to(arm, target_frac=0.0, n_steps=5)
+            self._sweep_lever_to(arm, target_frac=0.12, n_steps=3)
         self._release_lever(arm)
-        self._idle_steps(50, until=lambda: self.foam_level < 0.05 or self.overflowed)
+        self._idle_steps(
+            70,
+            until=lambda: (
+                self.overflowed
+                or (self.foam_level < 0.05 and self._lever_open_frac() < 0.02)
+            ),
+        )
 
         if self.overflowed:
             self.plan_success = False

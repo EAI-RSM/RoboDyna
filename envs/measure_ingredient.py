@@ -110,6 +110,8 @@ class measure_ingredient(KitchenS_base_task):
     SILVER_DARK = [0.55, 0.57, 0.60, 1.0]
     RING_RED = [0.78, 0.05, 0.05]
     GLASS = [0.88, 0.95, 0.98, 0.14]
+    # Interactive viewer look (matches trap_bug plain trap): no transmission/IOR.
+    PLAIN_GLASS = [0.18, 0.32, 0.48, 0.55]
     VERTICAL_CYL_Q = [0.70710678, 0.0, 0.70710678, 0.0]
 
     def setup_demo(self, **kwags):
@@ -138,6 +140,7 @@ class measure_ingredient(KitchenS_base_task):
         self.target_fill = 0.25
         self._decor_layout = {}
         self._apply_oil_style(self._parse_oil_style(self._cfg))
+        self._plain_glass = bool(self._cfg.get("plain_glass", False))
         self._liquid_entity = None
         self._stream_entity = None
         self._spill_entity = None
@@ -638,7 +641,26 @@ class measure_ingredient(KitchenS_base_task):
             mat.metallic = float(metallic)
         return mat
 
+    def _plain_glass_material(self):
+        """Simple alpha-transparent plastic — no glass transmission/IOR (viewer-friendly)."""
+        mat = sapien.render.RenderMaterial(base_color=list(self.PLAIN_GLASS))
+        try:
+            mat.set_transmission(0.0)
+            mat.set_transmission_roughness(1.0)
+            mat.set_roughness(0.55)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.55
+            mat.metallic = 0.0
+        try:
+            mat.set_ior(1.0)
+        except Exception:
+            pass
+        return mat
+
     def _glass_material(self, rgba=None, transmission=0.90):
+        if bool(getattr(self, "_plain_glass", False)):
+            return self._plain_glass_material()
         c = list(rgba if rgba is not None else self.GLASS)
         if len(c) == 3:
             c = c + [0.18]
@@ -1112,15 +1134,18 @@ class measure_ingredient(KitchenS_base_task):
                 except Exception:
                     pass
 
-        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
-        glass.set_transmission(1.0)
-        glass.set_transmission_roughness(0.0)
-        glass.set_roughness(0.04)
-        glass.set_metallic(0.0)
-        try:
-            glass.set_ior(1.0)
-        except Exception:
-            pass
+        if bool(getattr(self, "_plain_glass", False)):
+            glass = self._plain_glass_material()
+        else:
+            glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
+            glass.set_transmission(1.0)
+            glass.set_transmission_roughness(0.0)
+            glass.set_roughness(0.04)
+            glass.set_metallic(0.0)
+            try:
+                glass.set_ior(1.0)
+            except Exception:
+                pass
 
         wall_h = h - bottom_t
         wall_half = wall_h * 0.5

@@ -5,10 +5,14 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Space/F: press the coffee dispenser once\n  Repeat until the beans reach the requested red fill line\n  V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  1/2/3: select arm(s) | arrows/Q/E: Cartesian arm teleoperation\n  F: press the dispenser | V: top-down/head camera | Escape: quit\n"""
+KEYBOARD = """\n  Use robot control for this task: select an arm, move above the blue key, then lower in Z to press\n  V: top-down/head camera | Escape: quit\n"""
+ROBOT = """\n  Select one arm, move it above the blue key, then lower with Q to press and raise with E to release\n  Coffee dispenses only from measured key pressure; Space is unused for this task\n  V: top-down/head camera | Escape: quit\n"""
 
 if __name__ == "__main__":
     a = make_parser("fill_coffee_jar", __doc__)
-    result = run_task("fill_coffee_jar", a.parse_args(), KEYBOARD, ROBOT)
+    args = a.parse_args()
+    # Interactive SAPIEN viewer: plain alpha glass (no transmission/IOR).
+    if not any(str(x).startswith("plain_glass=") for x in (args.task_arg or [])):
+        args.task_arg.append("plain_glass=true")
+    result = run_task("fill_coffee_jar", args, KEYBOARD, ROBOT)
     raise SystemExit(10 if result is False else 0 if result is True else 2)

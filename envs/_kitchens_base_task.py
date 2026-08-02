@@ -37,7 +37,6 @@ class KitchenS_base_task(Base_Task):
         "right_front": (0.103, -0.103),
         "left_rear": (-0.103, 0.103),
         "right_rear": (0.103, 0.103),
-        "center": (0.0, 0.0),
     }
     # Top-facing rotary knob on the bottom-right corner of the slab.
     KNOB_LOCAL_XY = (0.165, -0.165)
@@ -563,17 +562,19 @@ class KitchenS_base_task(Base_Task):
         # Default active burner: left-rear (boil_milk); tasks may reassign.
         self.burner_xy = self.burner_positions["left_rear"]
 
-        # Cover the GLB's always-orange burner cups so "off" reads cold. The
-        # active burner disc is then recolored blue only when the knob is on.
-        cover_mat = sapien.render.RenderMaterial(
-            base_color=[0.14, 0.14, 0.15, 1.0]
-        )
-        cover_mat.metallic = 0.35
-        cover_mat.roughness = 0.55
+        # Cover the GLB's baked burner cups only while lit. The covers start
+        # hidden so an off stove has no gray disks in viewer mode.
         cover_r = 0.055 * scale_mult
         cyl_q = [0.70710678, 0.0, 0.70710678, 0.0]
         self._burner_covers = []
+        self._burner_cover_home_poses = {}
+        self._burner_cover_shapes = {}
         for bname, (bx, by) in self.burner_positions.items():
+            cover_mat = sapien.render.RenderMaterial(
+                base_color=[0.0, 0.0, 0.0, 0.0]
+            )
+            cover_mat.metallic = 0.35
+            cover_mat.roughness = 0.55
             cb = self.scene.create_actor_builder()
             cb.set_physx_body_type("static")
             cb.add_cylinder_visual(
@@ -582,10 +583,15 @@ class KitchenS_base_task(Base_Task):
                 half_length=0.0016 * scale_mult,
                 material=cover_mat,
             )
-            cb.set_initial_pose(
-                sapien.Pose(p=[bx, by, self.range_top_z + 0.0016])
-            )
-            self._burner_covers.append(cb.build(name=f"burner_cover_{bname}"))
+            home = sapien.Pose(p=[bx, by, self.range_top_z + 0.0016])
+            cb.set_initial_pose(self._fire_hidden_pose())
+            cover = cb.build(name=f"burner_cover_{bname}")
+            self._burner_covers.append(cover)
+            self._burner_cover_home_poses[bname] = home
+            self._burner_cover_shapes[bname] = []
+            for c in cover.get_components():
+                if isinstance(c, sapien.render.RenderBodyComponent):
+                    self._burner_cover_shapes[bname].extend(list(c.render_shapes))
 
         burner_mat = sapien.render.RenderMaterial(
             base_color=[0.20, 0.20, 0.22, 1.0]
@@ -600,15 +606,7 @@ class KitchenS_base_task(Base_Task):
             half_length=0.0015 * scale_mult,
             material=burner_mat,
         )
-        burner_builder.set_initial_pose(
-            sapien.Pose(
-                p=[
-                    self.burner_xy[0],
-                    self.burner_xy[1],
-                    self.range_top_z + 0.002,
-                ]
-            )
-        )
+        burner_builder.set_initial_pose(self._fire_hidden_pose())
         self.active_burner = burner_builder.build(name="active_burner")
         self._burner_shapes = []
         for c in self.active_burner.get_components():
@@ -928,16 +926,64 @@ class KitchenS_base_task(Base_Task):
             except Exception:
                 pass
 
+        active_name = str(getattr(self, "burner_name", "") or "")
+        cover_homes = getattr(self, "_burner_cover_home_poses", {}) or {}
+        cover_shapes = getattr(self, "_burner_cover_shapes", {}) or {}
+        for bname, cover in zip(
+            getattr(self, "burner_positions", {}) or {},
+            getattr(self, "_burner_covers", []) or [],
+        ):
+            show_cover = bool(lit and bname == active_name)
+            try:
+                cover.set_pose(cover_homes.get(bname, hidden) if show_cover else hidden)
+            except Exception:
+                pass
+            for s in cover_shapes.get(bname, []) or []:
+                try:
+                    mat = s.material
+                    mat.set_base_color(disc_col if show_cover else [0.0, 0.0, 0.0, 0.0])
+                    if hasattr(mat, "set_emission"):
+                        mat.set_emission(disc_col if show_cover else [0.0, 0.0, 0.0, 1.0])
+                    elif hasattr(mat, "emission"):
+                        mat.emission = disc_col if show_cover else [0.0, 0.0, 0.0, 1.0]
+                except Exception:
+                    pass
+
         # Knob angle is contact-driven only. Fire visuals never teleport the joint.
 
     def _get_knob_joint_angle(self) -> float:
         art = getattr(self, "stove_knob_articulation", None)
+        fallback = float(getattr(self, "knob_angle", self.KNOB_OFF_ANGLE))
+        if art is not None:
+            try:
+                return float(art.get_qpos()[0])
+            except Exception:
+                pass
+        joint = getattr(self, "_knob_joint", None)
+        if joint is not None:
+            try:
+                return float(joint.get_drive_target()[0])
+            except Exception:
+                pass
+            try:
+                return float(joint.drive_target)
+            except Exception:
+                pass
+        return fallback
+
+    def _set_knob_articulation_qpos(self, angle: float) -> None:
+        art = getattr(self, "stove_knob_articulation", None)
         if art is None:
-            return float(getattr(self, "knob_angle", self.KNOB_OFF_ANGLE))
+            return
         try:
-            return float(art.get_qpos()[0])
+            art.set_qpos([angle])
         except Exception:
-            return float(getattr(self, "knob_angle", self.KNOB_OFF_ANGLE))
+            pass
+        try:
+            if hasattr(art, "set_qvel"):
+                art.set_qvel([0.0])
+        except Exception:
+            pass
 
     def _hold_knob_joint(self, *, stiff: bool) -> None:
         """Stiff park when free; fully undriven while jaws torque the cap."""
@@ -970,9 +1016,7 @@ class KitchenS_base_task(Base_Task):
         try:
             joint.set_drive_target(angle)
             if hard:
-                art.set_qpos([angle])
-                if hasattr(art, "set_qvel"):
-                    art.set_qvel([0.0])
+                self._set_knob_articulation_qpos(angle)
         except Exception:
             pass
 

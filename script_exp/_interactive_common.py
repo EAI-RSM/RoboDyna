@@ -223,6 +223,7 @@ class ViewerViewToggle:
     # Viewer default is 90°; narrow this so the table fills the frame
     # while still showing both arms.
     DEFAULT_TOPDOWN_FOVY = float(np.deg2rad(65.0))
+    # Fallback only: when available, the selected head camera's own fovy is used.
     DEFAULT_HEAD_FOVY = float(np.pi / 2.0)
 
     def __init__(
@@ -306,6 +307,16 @@ class ViewerViewToggle:
             except Exception:
                 pass
 
+    def _head_fovy(self) -> float:
+        """Use the render camera's lens so head view keeps its intended framing."""
+        try:
+            fovy = float(self._head.fovy)
+            if np.isfinite(fovy) and fovy > 0.0:
+                return fovy
+        except Exception:
+            pass
+        return self.DEFAULT_HEAD_FOVY
+
     def _set_viewer_pose(self, pose):
         """Snap free-fly camera to ``pose`` and keep the FPS controller in sync."""
         try:
@@ -319,7 +330,7 @@ class ViewerViewToggle:
 
     def apply(self, announce=True):
         if self.mode == "head" and self._head is not None:
-            self._set_fovy(self.DEFAULT_HEAD_FOVY)
+            self._set_fovy(self._head_fovy())
             self._set_viewer_pose(self._head.global_pose)
             if announce:
                 print("View: head_camera")

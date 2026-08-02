@@ -847,7 +847,7 @@ task_args:
     knob_contact_radius: 0.06   # m; pinch-to-knob distance that counts as held
   cook_food:
     # KitchenS: food starts on chopping board → pan → cook via knob → plate.
-    # food_type: meat|chicken|sausage|random
+    # food_type: meat|sausage|onion_half|random
     scene_id: 0
     food_type: random
     burner: left_front
@@ -864,15 +864,14 @@ task_args:
     board_scale_mult: 0.07
     knob_contact_radius: 0.06
   pour_beer:
-    # KitchenS: pour beer from bottle into glass; foam rises while pouring.
+    # KitchenS: pull the hinged beer-tap lever by hand; flow follows opening.
     # Pause so foam settles; foam over the rim = fail. Fill glass (~90% beer) to succeed.
     scene_id: 0
-    bottle_beer_frac: 0.90
-    pour_rate: 0.004
-    foam_gain: 1.8
-    foam_decay: 0.0035
-    expert_foam_stop: 0.82
-    expert_foam_resume: 0.55
+    pour_rate: 0.00055
+    foam_gain: 0.80
+    foam_decay: 0.0045
+    expert_foam_pause: 0.16
+    expert_foam_resume: 0.09
     target_liquid: 0.90
     full_liquid_tol: 0.05
   clean_table:
