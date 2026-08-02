@@ -8,11 +8,11 @@ kinematic mouse then runs a pre-planned, obstacle-free route along the shelf,
 turns in behind exactly one target, and physically shoves it forward until it
 goes over the front edge.
 
-Everything after the basket is placed is simulated, not animated: the target is
-a dynamic body, the fall and the landing come out of the solver, and success is
-read off the resting pose. Nothing is teleported into place. The mouse starts
-scurrying at episode start while the arm places the basket; the final shove
-waits until the catcher is down.
+Everything after the basket is placed is simulated, not animated: shelf objects
+are free dynamic bodies the mouse can shove, the fall and the landing come out
+of the solver, and success is read off the resting pose. Nothing is teleported
+into place. The mouse starts scurrying at episode start while the arm places
+the basket; the final shove waits until the catcher is down.
 """
 
 from ._office_base_task import Office_base_task
@@ -1126,23 +1126,38 @@ class mouse_object_drop(Office_base_task):
         return float(sign * -0.10), float(y_default)
 
     # ----------------------------------------------------------- kinematics
-    def _activate_target(self):
-        """Hand the target over to physics just before the mouse sets off.
-
-        It is held kinematic while the arm works so it cannot drift, then
-        released — from here on nothing about the fall is scripted.
-        """
-        if self._target_live or self.target is None:
+    def _release_actor_to_physics(self, actor, *, mass=None):
+        """Make a shelf actor a free dynamic body the mouse can shove."""
+        rigid = self._get_rigid(actor)
+        if rigid is None:
             return
-        rigid = self._get_rigid(self.target)
-        if rigid is not None:
-            try:
-                rigid.set_kinematic(False)
-                rigid.set_disable_gravity(False)
-                rigid.set_linear_damping(0.02)
-                rigid.set_angular_damping(0.05)
-            except Exception:
-                pass
+        try:
+            if mass is not None:
+                rigid.set_mass(float(mass))
+        except Exception:
+            pass
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+            rigid.set_linear_damping(0.02)
+            rigid.set_angular_damping(0.05)
+        except Exception:
+            pass
+
+    def _activate_target(self):
+        """Hand every shelf object over to physics just before the mouse sets off.
+
+        All cups/bottles start kinematic so they cannot drift during settle, then
+        are released together. Non-targets stay free so a scurrying mouse that
+        brushes them can push them aside instead of freezing against a static
+        wall. Only the chosen target's fall is scored.
+        """
+        if self._target_live:
+            return
+        for i, entry in enumerate(self.shelf_objects):
+            label = str(entry.get("label", ""))
+            mass = 0.12 if "bottle" in label else 0.08
+            self._release_actor_to_physics(entry["actor"], mass=mass)
         self._target_live = True
 
     def _release_mouse(self):
@@ -1248,17 +1263,28 @@ class mouse_object_drop(Office_base_task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
             return
+        # Interactive: once the catcher sits under the landing, finish the shove.
+        # (Expert play_once sets this flag after the pick-and-place.)
+        if (
+            not getattr(self, "_allow_shove", True)
+            and self.basket is not None
+            and self._basket_under_landing()
+        ):
+            self._allow_shove = True
+            self._basket_placed = True
         self._advance_mouse()
         self._update_catch_state()
-        # Keep non-target shelf objects pinned upright (never tip/fall).
-        for i, entry in enumerate(self.shelf_objects):
-            if i == self.target_idx:
-                continue
-            uq = entry.get("upright_q", self.UPRIGHT_Q)
-            self._set_entity_pose(
-                entry["actor"],
-                sapien.Pose(entry["start"].tolist(), np.asarray(uq).tolist()),
-            )
+        # Pin non-targets only while the shelf is still kinematic. After
+        # _activate_target they are free dynamic bodies and must not be teleported.
+        if not self._target_live:
+            for i, entry in enumerate(self.shelf_objects):
+                if i == self.target_idx:
+                    continue
+                uq = entry.get("upright_q", self.UPRIGHT_Q)
+                self._set_entity_pose(
+                    entry["actor"],
+                    sapien.Pose(entry["start"].tolist(), np.asarray(uq).tolist()),
+                )
 
     def check_stable(self):
         # Only the still-kinematic target is held; once physics owns it, and

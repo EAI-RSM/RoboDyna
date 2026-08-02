@@ -801,7 +801,10 @@ class HouseholdController:
             elif self.task == "catch_cup":
                 e._release_cup()
             elif self.task == "mouse_object_drop":
+                # Release all shelf objects to PhysX and let the mouse finish the
+                # shove (do not leave it waiting forever at the stand-off).
                 e._activate_target()
+                e._allow_shove = True
                 e._release_mouse()
             elif self.task == "stop_ball":
                 e._release_ball()
