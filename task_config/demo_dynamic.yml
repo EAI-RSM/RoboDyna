@@ -1000,17 +1000,23 @@ task_args:
     laptop_x: 0.20
     mug_y: -0.02
     laptop_y: -0.02
-    sponge_y: -0.16
+    sponge_y: -0.18
+    sponge_dx: 0.12
+    sponge_grasp_open: 1.0
+    sponge_grasp_close: 0.25
     mug_id: 0
     mug_scale_mult: 0.60
     laptop_id: 0
     spill_steps: 7500
     reach_laptop_level: 0.88
     clean_tol: 0.08
-    post_tip_wait: 180
-    expert_wipe_level: 0.12
+    post_tip_wait: 40
+    expert_wipe_level: 0.20
+    initial_puddle_level: 0.22
     spot_contact_extra: 0.004
     spot_clear_dwell: 6
+    wipe_safe_z: 0.11
+    mug_avoid_margin: 0.025
   fill_coffee_jar:
     # KitchenS: press button on coffee dispenser → beans into marked jar.
     # No microwave. Decor: random coffee-box + milk + mug; kettle on a random burner.

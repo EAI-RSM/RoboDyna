@@ -53,13 +53,16 @@ task_args:
     laptop_id: 0
     laptop_yaw: 1.5707963267948966   # +90° Z — screen/keyboard toward robot (−Y)
     sponge_dx: 0.12                  # outboard of mug so handle grasp clears the cup
-    sponge_grasp_open: 0.40
-    sponge_grasp_close: 0.16
-    spill_steps: 16000
+    sponge_grasp_open: 1.0
+    sponge_grasp_close: 0.25
+    # Lower = faster spread (was 16000; ~1.45× faster toward laptop).
+    spill_steps: 11000
     reach_laptop_level: 0.92
     clean_tol: 0.08
-    post_tip_wait: 120
-    expert_wipe_level: 0.10
+    # Tip reveals a multi-spot puddle immediately; short settle then dab each lobe.
+    post_tip_wait: 40
+    expert_wipe_level: 0.20
+    initial_puddle_level: 0.22
     spot_contact_extra: 0.004
     spot_clear_dwell: 6
     wipe_safe_z: 0.11

@@ -133,6 +133,10 @@ class HouseholdController:
             "stop_ball",
         ) and robot:
             self._close_grippers_at_start()
+        elif task == "clean_table" and robot:
+            # clean_table only — do not open grippers for any other task.
+            # Space approaches the handle cube open, then closes on it.
+            self._open_clean_table_grippers_at_start()
         # catch_cup: leave the pillow dynamic so gripper contact can shove it.
         # Other keyboard tasks start kinematic so arrows can teleport the prop.
         if not robot and self.actor is not None and task != "catch_cup":
@@ -150,6 +154,25 @@ class HouseholdController:
             self.env.together_close_gripper(save_freq=None)
         except Exception as exc:
             print(f"[{self.task}] could not pre-close grippers: {exc}")
+        self.env.plan_success = True
+
+    def _open_clean_table_grippers_at_start(self):
+        """clean_table only: start robot mode with both grippers fully open."""
+        if self.task != "clean_table":
+            return
+        try:
+            self.env.plan_success = True
+            opener = getattr(self.env, "together_open_gripper", None)
+            if callable(opener):
+                opener(save_freq=None, left_pos=1.0, right_pos=1.0)
+            else:
+                from envs.utils.action import ArmTag
+
+                for side in ("left", "right"):
+                    self.env.plan_success = True
+                    self.env.move(self.env.open_gripper(ArmTag(side), pos=1.0))
+        except Exception as exc:
+            print(f"[clean_table] could not pre-open grippers: {exc}")
         self.env.plan_success = True
 
     def _keyboard_action(self):

@@ -43,8 +43,11 @@ class clean_table(Base_Task):
     SPILL_STEPS_DEFAULT = 7500
     REACH_LAPTOP_LEVEL_DEFAULT = 0.88
     CLEAN_TOL_DEFAULT = 0.08  # fraction of spawned spots that may remain dirty
-    POST_TIP_WAIT_DEFAULT = 180
-    EXPERT_WIPE_LEVEL_DEFAULT = 0.12
+    POST_TIP_WAIT_DEFAULT = 60
+    EXPERT_WIPE_LEVEL_DEFAULT = 0.20
+    # Spill amount right after tip — high enough that the whole initial
+    # multi-spot puddle is visible (no "wait by the mug for the next lobe").
+    INITIAL_PUDDLE_LEVEL_DEFAULT = 0.22
     # Extra XY margin (m) beyond the pad half-extents when testing spot overlap.
     SPOT_CONTACT_EXTRA = 0.004
     # Pad bottom must be within this of the table top to count as wiping.
@@ -57,10 +60,16 @@ class clean_table(Base_Task):
     MUG_AVOID_MARGIN = 0.025
 
     SPONGE_HALF = (0.038, 0.028, 0.014)
-    # Small grasp stub on top of the pad (meters, half-extents).
-    SPONGE_HANDLE_HALF = (0.012, 0.009, 0.016)
+    # Small grasp cube on top of the pad (meters, half-extents) ~16×12×40 mm.
+    # Tall enough that a top-down pinch seats on the cube, not the pad face.
+    SPONGE_HANDLE_HALF = (0.008, 0.006, 0.020)
     SPONGE_HANDLE_COLOR = (0.55, 0.42, 0.22)
+    # Fully open for approach (narrow openings leave a bad WSG wrist that
+    # teleports on the next move). Close to ~handle width (~16 mm ≈ 0.25).
+    SPONGE_GRASP_OPEN = 1.0
+    SPONGE_GRASP_CLOSE = 0.25
     EE_TO_TCP = 0.12
+    GRASP_TCP_TOL = 0.04
     MUG_SCALE_MULT = 0.60  # stock mug is large; shrink for graspable station size
     MUG_MASS = 0.18
 
@@ -117,6 +126,9 @@ class clean_table(Base_Task):
         self.post_tip_wait = int(cfg.get("post_tip_wait", self.POST_TIP_WAIT_DEFAULT))
         self.expert_wipe_level = float(
             cfg.get("expert_wipe_level", self.EXPERT_WIPE_LEVEL_DEFAULT)
+        )
+        self.initial_puddle_level = float(
+            cfg.get("initial_puddle_level", self.INITIAL_PUDDLE_LEVEL_DEFAULT)
         )
         self.spot_contact_extra = float(
             cfg.get("spot_contact_extra", self.SPOT_CONTACT_EXTRA)
@@ -335,7 +347,9 @@ class clean_table(Base_Task):
         except Exception:
             pass
 
-        # Pad (entity origin = pad center).
+        # Pad (entity origin = pad center). Visual + collision for table rest;
+        # pad collision is disabled while pinching the handle so fingers cannot
+        # stop on the wide yellow body.
         builder.add_box_collision(
             pose=sapien.Pose([0, 0, 0]),
             half_size=[hx, hy, hz],
@@ -346,7 +360,7 @@ class clean_table(Base_Task):
             half_size=[hx, hy, hz],
             material=pad_mat,
         )
-        # Handle stub on top.
+        # Handle stub on top — the only shape the gripper should pinch.
         builder.add_box_collision(
             pose=sapien.Pose([0, 0, handle_z]),
             half_size=[hhx, hhy, hhz],
@@ -392,6 +406,8 @@ class clean_table(Base_Task):
         self._sponge_handle_z = handle_z
         self._sponge_handle_half = (hhx, hhy, hhz)
         self._sponge_rigid = None
+        self._sponge_pad_shape = None
+        self._sponge_handle_shape = None
         for c in self.sponge.actor.get_components():
             if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
                 try:
@@ -400,6 +416,20 @@ class clean_table(Base_Task):
                 except Exception:
                     pass
                 self._sponge_rigid = c
+                try:
+                    shapes = list(c.get_collision_shapes())
+                    # Spawn order: pad then handle.
+                    if len(shapes) >= 1:
+                        self._sponge_pad_shape = shapes[0]
+                    if len(shapes) >= 2:
+                        self._sponge_handle_shape = shapes[1]
+                    # SAPIEN box shapes default to contype/conaffinity 0 (no
+                    # contacts). Turn both on so the pad rests on the table and
+                    # the handle can actually stop the fingers.
+                    for shape in shapes:
+                        self._set_shape_collision_enabled(shape, True)
+                except Exception:
+                    pass
                 break
         self._sponge_spawn_pose = pose
 
@@ -557,7 +587,16 @@ class clean_table(Base_Task):
         return None
 
     def _build_spill_spots(self):
-        """Precompute discrete spill spots (irregular path). Each clears on contact."""
+        """Precompute overlapping spill lobes (one visual puddle, many clearables).
+
+        Layout:
+          1) Under-mug seep (visual only).
+          2) Initial puddle — overlapping small lobes that form one larger stain
+             past the rim (all spawn early). A single sponge press may clear
+             several at once; that is intended.
+          3) Growth stream toward the laptop — only spawns while dirt remains;
+             growth freezes the moment the table is fully clean.
+        """
         origin = self.spill_origin
         d = self.spill_dir
         lat = self.spill_lat
@@ -577,31 +616,66 @@ class clean_table(Base_Task):
             }
         )
 
-        # Main stream + side fingers along the flow (teardrop / amoeba).
-        n_main = 10
+        # Initial puddle: organic overlapping lobes (NOT a grid). Centers sit
+        # well inside each other's radii so they read as one coffee stain.
+        puddle_base = 0.045
+        # (along, lat, radius) — irregular teardrop / amoeba cluster.
+        puddle_lobes = (
+            (0.000, 0.000, 0.028),
+            (0.012, 0.016, 0.024),
+            (0.014, -0.014, 0.025),
+            (0.028, 0.004, 0.026),
+            (0.022, 0.022, 0.022),
+            (0.024, -0.020, 0.023),
+            (0.040, -0.006, 0.024),
+            (0.038, 0.018, 0.021),
+            (0.036, -0.018, 0.021),
+            (0.052, 0.002, 0.020),
+            (0.048, 0.014, 0.018),
+            (0.050, -0.012, 0.019),
+        )
+        for i, (along_off, lat_off, rad) in enumerate(puddle_lobes):
+            along = puddle_base + along_off
+            # Small organic jitter — keep overlap, avoid lattice look.
+            ja = 0.004 * np.sin(phase + 1.3 * i)
+            jl = 0.005 * np.cos(phase * 0.7 + 0.9 * i)
+            spots.append(
+                {
+                    "pos": origin + d * (along + ja) + lat * (lat_off + jl),
+                    "radius": float(rad),
+                    "spawn": float(0.05 + 0.008 * i),
+                    "cleaned": False,
+                    "along": float(along + ja),
+                    "initial_puddle": True,
+                }
+            )
+
+        # Growth stream past the puddle toward the laptop (only while dirty).
+        stream_start = puddle_base + 0.070
+        stream_len = max(0.08, path - stream_start)
+        n_main = 7
         for i in range(n_main):
-            t = (i + 0.4) / n_main  # 0 near rim → 1 at tip
-            along = t * path
-            wobble = 0.014 * np.sin(2.1 * np.pi * t + phase)
-            wobble += 0.010 * np.sin(5.0 * np.pi * t + 0.6 * phase)
-            width = 0.020 + 0.030 * (np.sin(np.pi * min(t, 0.95)) ** 0.55)
+            t = (i + 0.35) / n_main
+            along = stream_start + t * stream_len
+            wobble = 0.012 * np.sin(2.1 * np.pi * t + phase)
+            wobble += 0.008 * np.sin(5.0 * np.pi * t + 0.6 * phase)
+            width = 0.018 + 0.016 * (np.sin(np.pi * min(t, 0.95)) ** 0.55)
             spots.append(
                 {
                     "pos": origin + d * along + lat * wobble,
                     "radius": float(width),
-                    "spawn": float(0.06 + 0.88 * t),
+                    "spawn": float(0.40 + 0.55 * t),
                     "cleaned": False,
                     "along": float(along),
                 }
             )
-            # Side fingers mid-path.
-            if 0.18 < t < 0.82:
-                side = (0.024 + 0.020 * t) * (1.0 if i % 2 == 0 else -0.95)
+            if 0.15 < t < 0.85:
+                side = (0.018 + 0.012 * t) * (1.0 if i % 2 == 0 else -0.9)
                 spots.append(
                     {
                         "pos": origin + d * along + lat * (wobble + side),
-                        "radius": float(width * 0.58),
-                        "spawn": float(0.10 + 0.85 * t),
+                        "radius": float(width * 0.70),
+                        "spawn": float(0.45 + 0.50 * t),
                         "cleaned": False,
                         "along": float(along),
                     }
@@ -612,12 +686,17 @@ class clean_table(Base_Task):
             {
                 "pos": origin + d * path + lat * (0.008 * np.sin(phase)),
                 "radius": 0.016,
-                "spawn": 0.95,
+                "spawn": 0.96,
                 "cleaned": False,
                 "along": path,
             }
         )
         self._spill_spots = spots
+
+    def _table_fully_clean(self) -> bool:
+        """True when every spawned wipeable lobe has been cleared."""
+        wipeable = [s for s in self._active_spots() if not s.get("under_mug")]
+        return bool(wipeable) and not self._dirty_spots()
 
     def _active_spots(self) -> list[dict]:
         """Spots that have spawned at the current spill_amount."""
@@ -779,7 +858,12 @@ class clean_table(Base_Task):
             if t > 0.65 and not self.spill_active:
                 self.cup_tipped = True
                 self.spill_active = True
-                self.spill_amount = max(self.spill_amount, 0.05)
+                # Reveal the full initial multi-spot puddle immediately.
+                puddle = float(
+                    getattr(self, "initial_puddle_level", self.INITIAL_PUDDLE_LEVEL_DEFAULT)
+                )
+                self.spill_amount = max(self.spill_amount, 0.5 * puddle)
+                self.max_spill_amount = max(self.max_spill_amount, self.spill_amount)
                 self._rebuild_spill(force=True)
             self._idle_steps(1)
 
@@ -789,7 +873,11 @@ class clean_table(Base_Task):
         self._coffee_entity = self._remove_entity(self._coffee_entity)
         self.cup_tipped = True
         self.spill_active = True
-        self.spill_amount = max(self.spill_amount, 0.08)
+        puddle = float(
+            getattr(self, "initial_puddle_level", self.INITIAL_PUDDLE_LEVEL_DEFAULT)
+        )
+        self.spill_amount = max(self.spill_amount, puddle)
+        self.max_spill_amount = max(self.max_spill_amount, self.spill_amount)
         self._rebuild_spill(force=True)
         # Release to real dynamics so arm/sponge hits can shove the mug.
         self._enable_mug_physics()
@@ -965,7 +1053,7 @@ class clean_table(Base_Task):
         tcp = self._tcp_pos(arm)
         handle = self._sponge_handle_world()
         dist = float(np.linalg.norm(tcp - handle))
-        if dist > 0.10:
+        if dist > 0.12:
             print(f"[clean_table] refuse sponge weld — tcp-handle={dist:.3f}")
             return False
         self._freeze_sponge()
@@ -974,17 +1062,33 @@ class clean_table(Base_Task):
         print(f"[clean_table] sponge welded via handle (tcp-handle={dist:.3f})")
         return True
 
+    def _set_shape_collision_enabled(self, shape, enabled: bool) -> None:
+        if shape is None:
+            return
+        try:
+            # PhysX contact filter: [1,1,0,0] still collides with the WSG fingers
+            # on this build — only an all-zero mask lets the pinch close through
+            # the yellow pad. Re-enable with the default [1,1,1,1] mask.
+            if enabled:
+                shape.set_collision_groups([1, 1, 1, 1])
+            else:
+                shape.set_collision_groups([0, 0, 0, 0])
+        except Exception:
+            pass
+
+    def _set_pad_collision_enabled(self, enabled: bool) -> None:
+        """Toggle only the wide yellow pad — leave the handle pinchable."""
+        self._set_shape_collision_enabled(
+            getattr(self, "_sponge_pad_shape", None), enabled
+        )
+
     def _set_sponge_collision_enabled(self, enabled: bool) -> None:
         """While held, ignore collisions so PhysX cannot yank the pad off the EE."""
         if self._sponge_rigid is None:
             return
         try:
             for shape in self._sponge_rigid.get_collision_shapes():
-                # groups: [affinity1, affinity2, contype, conaffinity] — zero = no contacts
-                if enabled:
-                    shape.set_collision_groups([1, 1, 1, 1])
-                else:
-                    shape.set_collision_groups([1, 1, 0, 0])
+                self._set_shape_collision_enabled(shape, enabled)
         except Exception:
             pass
 
@@ -1011,22 +1115,15 @@ class clean_table(Base_Task):
         self._sync_welded_sponge()
 
     def _adopt_top_down_hold(self) -> None:
-        """Pad flat + wrist top-down — same posture used to pick and to dab.
+        """Pad flat under the TCP — same seating used to pick and to dab.
 
-        Seat the real sponge under the TCP (no off-camera parking / twin). The
-        pad stays perpendicular to the table for every wipe.
+        Do not re-issue ``close_gripper`` here: a second close on an already
+        pinched WSG flings the arm to a wild IK pose. The grasp path already
+        closed on the handle; just seat the pad under the current TCP.
         """
-        arm = self.arm
         self._sponge_hold_quat = [float(v) for v in GRASP_DIRECTION_DIC["top_down"]]
-        # Lock wrist top-down at the current grasp TCP, then attach the pad.
-        tcp = self._tcp_pos(arm)
-        self.plan_success = True
-        self.move(self.move_to_pose(arm, self._ee_pose_at_tcp(tcp)))
-        close_pos = float(self._cfg.get("sponge_grasp_close", 0.16))
-        self.move(self.close_gripper(arm, pos=close_pos))
-        self._idle_steps(2)
         self._seat_sponge_in_hand()
-        print("[clean_table] top-down hold locked for vertical dabs")
+        print("[clean_table] sponge seated on handle for vertical dabs")
 
     def _sponge_pad_world(self) -> np.ndarray:
         """World pad-center of the yellow sponge entity (source of wipe contact)."""
@@ -1083,87 +1180,132 @@ class clean_table(Base_Task):
                     quat=self._hold_ee_quat(),
                 )
 
-    def _grasp_sponge(self) -> bool:
-        """Pick the sponge by its small top handle (keeps fingers off the mug).
+    def _top_down_pose(self, tcp_xyz) -> list[float]:
+        """EE pose with TCP at ``tcp_xyz`` and wrist locked top-down."""
+        return [
+            float(tcp_xyz[0]),
+            float(tcp_xyz[1]),
+            float(tcp_xyz[2]) + float(self.EE_TO_TCP),
+            *[float(v) for v in GRASP_DIRECTION_DIC["top_down"]],
+        ]
 
-        Scripted top-down approach to the handle contact frame. Avoids the old
-        mid-grasp ``freeze_sponge(spawn)`` loop that teleported the pad back to
-        the table and made the planner look like it was struggling.
+    def _grasp_sponge(self) -> bool:
+        """Pick the small top cube — same pattern as ``make_soup._grasp_board``.
+
+        Order matters (this is what was wrong before):
+          1) OPEN gripper
+          2) hover straight ABOVE the cube (no side / outside approach)
+          3) lower onto the cube
+          4) CLOSE only then
+          5) seat + lift
         """
         arm = self.arm
         spawn = self._sponge_spawn_pose
         self._freeze_sponge(spawn)
+        self._sponge_hold_quat = [float(v) for v in GRASP_DIRECTION_DIC["top_down"]]
 
-        open_pos = float(self._cfg.get("sponge_grasp_open", 0.40))
-        close_pos = float(self._cfg.get("sponge_grasp_close", 0.16))
+        open_pos = float(self._cfg.get("sponge_grasp_open", self.SPONGE_GRASP_OPEN))
+        close_pos = float(
+            self._cfg.get("sponge_grasp_close", self.SPONGE_GRASP_CLOSE)
+        )
+        tcp_tol = float(self._cfg.get("grasp_tcp_tol", self.GRASP_TCP_TOL))
 
+        # Pad must use the all-zero collision mask ([1,1,0,0] still blocks the
+        # WSG). Keep the handle collidable so fingers stop on the cube.
+        self._set_pad_collision_enabled(False)
+        self._set_shape_collision_enabled(
+            getattr(self, "_sponge_handle_shape", None), True
+        )
+
+        # 1) Open first — never approach the cube with a closed gripper.
+        self.plan_success = True
         self.move(self.open_gripper(arm, pos=open_pos))
         self._idle_steps(2)
         self._freeze_sponge(spawn)
 
-        grasped = False
-        for cid in (0, 1, 2, 3):
+        handle = self._sponge_handle_world()
+
+        # 2) Hover straight above the cube (make_soup style).
+        hover = False
+        for z_off, dx, dy in (
+            (0.14, 0.0, 0.0),
+            (0.18, 0.0, 0.0),
+            (0.14, -0.02, 0.02),
+            (0.22, 0.0, 0.0),
+        ):
+            target = np.array(
+                [handle[0] + dx, handle[1] + dy, handle[2] + z_off], dtype=float
+            )
             self.plan_success = True
             self._freeze_sponge(spawn)
-            pre = self.get_grasp_pose(
-                self.sponge, arm, contact_point_id=cid, pre_dis=0.12
-            )
-            grasp = self.get_grasp_pose(
-                self.sponge, arm, contact_point_id=cid, pre_dis=0.0
-            )
-            if pre is None or grasp is None or pre[0] == -1 or grasp[0] == -1:
-                continue
-
             self.move(
-                (
+                (arm, [Action(arm, "move", target_pose=self._top_down_pose(target))])
+            )
+            if self.plan_success:
+                hover = True
+                print(f"[clean_table] handle hover ok z_off={z_off}")
+                break
+        if not hover:
+            print("[clean_table] handle hover unreachable")
+            self._set_sponge_collision_enabled(True)
+            self._set_pad_collision_enabled(True)
+            return False
+
+        # 3) Descend onto the cube with relative world steps (make_soup style).
+        handle = self._sponge_handle_world()
+        goal = np.array(
+            [handle[0], handle[1], float(handle[2]) + 0.012], dtype=float
+        )
+        top_down = list(GRASP_DIRECTION_DIC["top_down"])
+        for _ in range(6):
+            self._freeze_sponge(spawn)
+            delta = goal - self._tcp_pos(arm)
+            if float(np.linalg.norm(delta)) < 0.010:
+                break
+            step = np.clip(delta, -0.05, 0.05)
+            before = self._tcp_pos(arm)
+            self.plan_success = True
+            self.move(
+                self.move_by_displacement(
                     arm,
-                    [
-                        Action(arm, "move", target_pose=pre),
-                        Action(
-                            arm,
-                            "move",
-                            target_pose=grasp,
-                            constraint_pose=[1, 1, 1, 0, 0, 0],
-                        ),
-                        Action(arm, "close", target_gripper_pos=close_pos),
-                    ],
+                    x=float(step[0]),
+                    y=float(step[1]),
+                    z=float(step[2]),
+                    quat=top_down,
+                    move_axis="world",
                 )
             )
-            handle = self._sponge_handle_world()
-            tcp = self._tcp_pos(arm)
-            near = float(np.linalg.norm(tcp - handle)) < 0.05
-            if self.plan_success and near:
-                grasped = True
-                print(f"[clean_table] handle grasp ok contact={cid}")
-                break
-            print(
-                f"[clean_table] handle grasp contact={cid} "
-                f"plan_ok={self.plan_success} near={near}"
-            )
-            self.plan_success = True
+            after = self._tcp_pos(arm)
+            if (not self.plan_success) or float(np.linalg.norm(after - before)) > 0.20:
+                print("[clean_table] handle descent failed")
+                self.plan_success = True
+                self._set_sponge_collision_enabled(True)
+                return False
 
-        if not grasped:
-            print("[clean_table] handle grasp displacement fallback")
-            self.plan_success = True
-            self._freeze_sponge(spawn)
-            handle = self._sponge_handle_world()
-            hover = handle.copy()
-            hover[2] = max(float(handle[2]) + 0.10, self.table_top + 0.16)
-            self._drive_tcp_toward(hover, max_steps=22, step=0.05)
-            self._drive_tcp_toward(
-                handle + np.array([0.0, 0.0, 0.012]), max_steps=16, step=0.03
-            )
-            self.move(self.close_gripper(arm, pos=close_pos))
+        # 4) Close only once the TCP is on the cube.
+        dist = float(np.linalg.norm(self._tcp_pos(arm) - self._sponge_handle_world()))
+        if dist > tcp_tol * 2.5:
+            print(f"[clean_table] refuse close — TCP far from handle ({dist:.3f} m)")
+            self._set_sponge_collision_enabled(True)
+            return False
+        self.plan_success = True
+        self.move(self.close_gripper(arm, pos=close_pos))
+        self._idle_steps(6)
 
-        self._idle_steps(3)
-        # Weld + seat pad under the fingers (same top-down pose used for dabs).
-        ok = self._weld_sponge_to_ee(arm)
-        if ok:
-            self._adopt_top_down_hold()
-            tcp = self._tcp_pos(arm)
-            self._move_tcp_abs(
-                [tcp[0], tcp[1], self._handle_tcp_z(self._safe_z())]
-            )
+        dist = float(np.linalg.norm(self._tcp_pos(arm) - self._sponge_handle_world()))
+        if dist > tcp_tol * 2.5:
+            print(f"[clean_table] refuse weld — TCP far from handle ({dist:.3f} m)")
+            self._set_sponge_collision_enabled(True)
+            return False
+
+        # 5) Seat pad under TCP (disables all sponge contacts while held).
+        self._seat_sponge_in_hand()
+        self._lift_sponge()
+        ok = bool(self._sponge_welded)
+        if not ok:
+            self._set_sponge_collision_enabled(True)
+        else:
+            print(f"[clean_table] grasped handle cube tcp-dist={dist:.3f} arm={arm}")
         return ok
 
     def _sponge_on_table(self, sp: np.ndarray | None = None) -> bool:
@@ -1200,16 +1342,8 @@ class clean_table(Base_Task):
             f"[clean_table] cleared spot along={spot['along']:.3f} "
             f"r={spot['radius']:.3f} dirty_left={len(self._dirty_spots())}"
         )
-        # No wipeable dirt left → freeze only once the spill has actually
-        # progressed (avoids aborting at amt≈0.1 after the first lobe).
-        wipeable_active = [
-            s for s in self._active_spots() if not s.get("under_mug")
-        ]
-        if (
-            wipeable_active
-            and not self._dirty_spots()
-            and self.spill_amount >= 0.30
-        ):
+        # Fully clean → stop growth immediately (no new lobes after a wipe-out).
+        if self._table_fully_clean():
             self._freeze_spill_growth("table clean")
             self.cleaned_ok = True
         self._rebuild_spill(force=True)
@@ -1305,20 +1439,12 @@ class clean_table(Base_Task):
         self._try_clear_spots_under_sponge()
 
         if not self._spill_frozen:
-            wipeable_active = [
-                s for s in self._active_spots() if not s.get("under_mug")
-            ]
-            table_clean = (
-                wipeable_active
-                and not self._dirty_spots()
-                and self.spill_amount >= 0.30
-            )
-            if table_clean:
+            if self._table_fully_clean():
+                # No dirt left → never spawn another lobe.
                 self._freeze_spill_growth("table clean")
                 self.cleaned_ok = True
             else:
-                # While dabbing, grow slower so the expert can finish vertical
-                # presses without the front racing to the laptop.
+                # Dirt remains → keep spreading (slower while the expert dabs).
                 rate = 1.0 / max(1, self.spill_steps)
                 if getattr(self, "_expert_wiping", False):
                     rate *= 0.35
@@ -1381,17 +1507,29 @@ class clean_table(Base_Task):
 
     # ------------------------------------------------------------------ expert motion
     def _move_ok(self, dx=0.0, dy=0.0, dz=0.0, quat=None) -> bool:
-        if quat is None and self._sponge_welded:
-            quat = self._hold_ee_quat()
+        # Prefer keeping the current wrist (quat=None). Forcing top_down after a
+        # narrow pinch often teleports the WSG; only override when caller asks.
+        before = self._tcp_pos(self.arm)
         self.plan_success = True
         self.move(
             self.move_by_displacement(
-                self.arm, x=float(dx), y=float(dy), z=float(dz), quat=quat
+                self.arm,
+                x=float(dx),
+                y=float(dy),
+                z=float(dz),
+                quat=quat,
+                move_axis="world",
             )
         )
         ok = bool(self.plan_success)
+        after = self._tcp_pos(self.arm)
+        jump = float(np.linalg.norm(after - before))
+        # Reject teleports from bad wrist configs so wipe can try another step.
+        if ok and jump > 0.25:
+            ok = False
         if not ok:
             self.plan_success = True
+            return False
         self._sync_welded_sponge()
         return ok
 
@@ -1501,9 +1639,7 @@ class clean_table(Base_Task):
             if s.get("under_mug") and not s["cleaned"]:
                 s["cleaned"] = True
         self._rebuild_spill(force=True)
-        # Re-seat + re-close so tip collisions cannot leave an empty gripper.
-        close_pos = float(self._cfg.get("sponge_grasp_close", 0.16))
-        self.move(self.close_gripper(self.arm, pos=close_pos))
+        # Re-seat only — a second close_gripper flings the WSG arm.
         self._seat_sponge_in_hand()
         self._lift_sponge()
 
@@ -1515,14 +1651,9 @@ class clean_table(Base_Task):
                 key=lambda s: (float(s["along"]), float(s["spawn"])),
             )
             if not dirty:
-                # Spill may not have spawned wipeable lobes yet — wait, don't
-                # freeze as "clean" at amt≈0.1 with only under-mug cleared.
-                if self.spill_amount < 0.35 and not self._spill_frozen:
-                    self._idle_steps(8)
-                    continue
+                # Table is clean — freeze growth so no new spots appear.
                 self._freeze_spill_growth("wipe done")
-                if self.spill_amount >= 0.35:
-                    self.cleaned_ok = True
+                self.cleaned_ok = True
                 break
 
             # After a failed dab, advance along the spill instead of stalling.
@@ -1548,7 +1679,8 @@ class clean_table(Base_Task):
                 self._idle_steps(3)
             else:
                 self._last_failed_along = float(spot["along"])
-            if not self._dirty_spots() and self.spill_amount >= 0.35:
+            if self._table_fully_clean():
+                self._freeze_spill_growth("wipe done")
                 self.cleaned_ok = True
                 break
 
@@ -1561,8 +1693,28 @@ class clean_table(Base_Task):
         arm = self.arm
         self.plan_success = True
 
-        # 1) Grab sponge on the mug side before the tip.
-        self._idle_steps(10)
+        # 1) Mug tips and stains immediately — do not wait for the sponge pick.
+        self._idle_steps(4)
+        self._animate_tip(n_steps=24)
+        # Puddle is already active; short settle while spill keeps spreading.
+        self._idle_steps(
+            max(int(self.post_tip_wait), 12),
+            until=lambda: (
+                len(self._dirty_spots()) >= 3
+                or self.spill_amount >= max(
+                    float(self.expert_wipe_level),
+                    float(self.initial_puddle_level),
+                )
+                or self.laptop_reached
+            ),
+        )
+
+        if self.laptop_reached:
+            self.plan_success = False
+            self.info["info"] = self._info_dict(arm)
+            return self.info
+
+        # 2) Grab the sponge while the spill is already on the table.
         if not self._grasp_sponge():
             self.plan_success = False
             self.info["info"] = self._info_dict(arm)
@@ -1577,23 +1729,12 @@ class clean_table(Base_Task):
         )
         self._sync_welded_sponge()
 
-        # 2) Mug tips toward laptop; irregular spill grows from the rim.
-        self._animate_tip(n_steps=24)
-        # Wait until wipeable lobes exist (not just under-mug seep).
-        self._idle_steps(
-            max(int(self.post_tip_wait), 80),
-            until=lambda: (
-                len(self._dirty_spots()) > 0
-                or self.spill_amount >= max(0.20, float(self.expert_wipe_level))
-                or self.laptop_reached
-            ),
-        )
-
         if self.laptop_reached:
             self.plan_success = False
             self.info["info"] = self._info_dict(arm)
             return self.info
 
+        # 3) Wipe the active puddle (growth continues only while dirt remains).
         self._wipe_spill()
 
         if self.laptop_reached:
