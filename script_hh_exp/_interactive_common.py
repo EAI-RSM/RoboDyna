@@ -143,18 +143,12 @@ class HouseholdController:
                 pass
 
     def _close_grippers_at_start(self):
-        """Start robot mode with both grippers closed."""
-        from envs.utils.action import ArmTag
-
-        for side in ("left", "right"):
-            try:
-                arm = ArmTag(side)
-                self.env.plan_success = True
-                moved = self.env.move(self.env.close_gripper(arm))
-                if moved is False or not bool(getattr(self.env, "plan_success", True)):
-                    print(f"[{self.task}] could not pre-close {side} gripper")
-            except Exception as exc:
-                print(f"[{self.task}] could not pre-close {side} gripper: {exc}")
+        """Start robot mode with both grippers closed at once."""
+        try:
+            self.env.plan_success = True
+            self.env.together_close_gripper(save_freq=None)
+        except Exception as exc:
+            print(f"[{self.task}] could not pre-close grippers: {exc}")
         self.env.plan_success = True
 
     def _keyboard_action(self):

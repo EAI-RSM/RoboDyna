@@ -405,16 +405,18 @@ class make_soup(KitchenS_base_task):
 
         self._spawn_pot(float(bx), float(by), cfg)
         pot_r = float(self.pot_radius)
+        # Ring sits just outside the pot floor so the blue halo is visible.
         self._build_stove_fire_ring(
             float(bx),
             float(by),
-            float(self.range_top_z) + 0.0015,
-            float(pot_r + 0.009),
-            n=28,
-            half_size=[0.007, 0.0035, 0.002],
+            float(self.range_top_z) + 0.0035,
+            float(pot_r + 0.016),
+            n=32,
+            half_size=[0.010, 0.005, 0.0035],
         )
         self._rebuild_water(force=True)
         self._set_stove_fire(False)
+        self.knob_angle = float(self.KNOB_OFF_ANGLE)
 
         rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0)) + 101)
         board_x, board_y = self._sample_board_xy(cfg, rng)
