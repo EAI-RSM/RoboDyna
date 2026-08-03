@@ -28,11 +28,13 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    action_failed,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
     print_mode_controls,
+    require_selected_arms,
 )
 
 
@@ -118,6 +120,11 @@ def _clear_cook_latches(env):
 
 
 def _active_stations(env, mode):
+    """Stations whose arm matches ``mode`` (highlighted gripper).
+
+    Never fall back to the other arm's station when the selected gripper has
+    no matching station — that would move an unselected gripper.
+    """
     left_st, right_st = _stations_by_arm(env)
     if mode == "all":
         return list(env.stations)
@@ -125,8 +132,6 @@ def _active_stations(env, mode):
         return [left_st]
     if mode == "right" and right_st is not None:
         return [right_st]
-    if mode in ("left", "right") and len(env.stations) == 1:
-        return [env.stations[0]]
     return []
 
 
@@ -136,11 +141,9 @@ def _arms_for_mode(env, mode):
 
 
 def _station_for_side(env, side):
+    """Station owned by ``side`` only — never the other arm's station."""
     left_st, right_st = _stations_by_arm(env)
-    st = left_st if side == "left" else right_st
-    if st is None and len(getattr(env, "stations", []) or []) == 1:
-        st = env.stations[0]
-    return st
+    return left_st if side == "left" else right_st
 
 
 def _snap_steaks_to_pans(env):
@@ -180,48 +183,173 @@ def _steaks_on_pans(env):
     return bool(env.stations) and all(env._steak_on_pan_station(st) for st in env.stations)
 
 
+def _stations_for_selected(env):
+    """Stations owned by the currently highlighted gripper(s)."""
+    selected = require_selected_arms(env, exactly_one=False)
+    if not selected:
+        return []
+    selected_set = set(selected)
+    stations = [
+        st for st in (getattr(env, "stations", None) or [])
+        if str(st["arm"]) in selected_set
+    ]
+    if not stations:
+        action_failed(
+            env, selected,
+            detail="has no cook station / steak to transfer",
+        )
+    return stations
+
+
+def _place_selected_steaks_on_pans(env, stations):
+    """Place already-held steaks for ``stations`` only (no other-arm motion)."""
+    for st in stations:
+        arm = st["arm"]
+        pan_target = env._pan_place_target(st)
+        env.plan_success = True
+        env.move(
+            env.place_actor(
+                st["steak"],
+                target_pose=pan_target,
+                arm_tag=arm,
+                constrain="free",
+                pre_dis=0.10,
+                dis=0.02,
+                is_open=True,
+            )
+        )
+        if not env.plan_success:
+            return False
+        env.move(env.move_by_displacement(arm_tag=arm, z=0.10, move_axis="arm"))
+        if not env.plan_success:
+            return False
+        if not env._steak_on_pan_station(st):
+            env.plan_success = True
+            env.move(
+                env.place_actor(
+                    st["steak"],
+                    target_pose=pan_target,
+                    arm_tag=arm,
+                    constrain="free",
+                    pre_dis=0.10,
+                    dis=0.02,
+                    is_open=True,
+                )
+            )
+        if not env._steak_on_pan_station(st):
+            env.plan_success = False
+            return False
+    return True
+
+
+def _return_selected_steaks_to_boards(env, stations):
+    """Return cooked steaks for ``stations`` only (no other-arm motion)."""
+    for st in stations:
+        arm = st["arm"]
+        p = st["board"].get_pose().p
+        board_target = [float(p[0]), float(p[1]), float(st["board_top"]) + 0.03]
+        st["awaiting_return_grasp"] = True
+        env.plan_success = True
+        env.move(env.open_gripper(arm))
+        if not env.plan_success:
+            return False
+        env.move(env._safe_grasp_actor(st["steak"], arm_tag=arm, pre_grasp_dis=0.1))
+        if not env.plan_success:
+            return False
+        env._latch_grasp_doneness(st, force=True)
+        env.move(env.move_by_displacement(arm_tag=arm, z=0.12, move_axis="arm"))
+        if not env.plan_success:
+            return False
+        env.move(
+            env.place_actor(
+                st["steak"],
+                target_pose=board_target,
+                arm_tag=arm,
+                constrain="free",
+                pre_dis=0.10,
+                dis=0.015,
+                is_open=True,
+            )
+        )
+        if not env.plan_success:
+            return False
+        env.move(env.move_by_displacement(arm_tag=arm, z=0.08))
+    return True
+
+
 def _toggle_steak_transfer(env, *, robot: bool):
-    """Move all steaks between boards and pans using one toggle action."""
+    """Move steaks between boards and pans for the selected arm(s) only."""
 
     _clear_cook_latches(env)
-    on_pans = _steaks_on_pans(env)
     if not robot:
-        if on_pans:
+        if _steaks_on_pans(env):
             _snap_steaks_to_boards(env)
         else:
             _snap_steaks_to_pans(env)
         return
 
+    stations = _stations_for_selected(env)
+    if not stations:
+        return
+    arms = [str(st["arm"]) for st in stations]
+    stations = sorted(stations, key=lambda st: str(st["arm"]))
+
+    on_pans = all(env._steak_on_pan_station(st) for st in stations)
     if on_pans:
-        env._return_steaks_to_boards()
-        print("Robot returned steak(s) from pan(s) to board(s).")
+        env.plan_success = True
+        try:
+            if len(stations) == len(env.stations):
+                env._return_steaks_to_boards()
+                ok = bool(env.plan_success)
+            else:
+                ok = _return_selected_steaks_to_boards(env, stations)
+        except Exception as exc:
+            action_failed(env, arms, detail=f"could not return steak(s): {exc}")
+            return
+        if not ok or not env.plan_success:
+            action_failed(env, arms, detail="could not return steak(s) to board(s)")
+            return
+        print(f"Robot returned steak(s) with {'+'.join(arms)} arm(s).")
         return
 
-    # The task's placement helper expects each steak to be held first.
-    stations = sorted(env.stations, key=lambda st: str(st["arm"]))
-    open_actions = [env.open_gripper(st["arm"]) for st in stations]
-    if len(open_actions) == 1:
-        env.move(open_actions[0])
-    else:
-        env.move(open_actions[0], open_actions[1])
-    grasp_actions = [
+    env.plan_success = True
+    env.move(*[env.open_gripper(st["arm"]) for st in stations])
+    if not env.plan_success:
+        action_failed(env, arms, detail="could not open gripper before steak grasp")
+        return
+    env.move(*[
         env._safe_grasp_actor(st["steak"], arm_tag=st["arm"], pre_grasp_dis=0.10)
         for st in stations
-    ]
-    if len(grasp_actions) == 1:
-        env.move(grasp_actions[0])
-        env.move(env.move_by_displacement(stations[0]["arm"], z=0.10, move_axis="arm"))
-    else:
-        env.move(grasp_actions[0], grasp_actions[1])
-        env.move(
-            env.move_by_displacement(stations[0]["arm"], z=0.10, move_axis="arm"),
-            env.move_by_displacement(stations[1]["arm"], z=0.10, move_axis="arm"),
+    ])
+    if not env.plan_success:
+        action_failed(
+            env, arms,
+            detail="could not grasp steak (out of reach or plan failed)",
         )
-    env._place_steaks_on_pans()
+        return
+    env.move(*[
+        env.move_by_displacement(st["arm"], z=0.10, move_axis="arm")
+        for st in stations
+    ])
+    if not env.plan_success:
+        action_failed(env, arms, detail="could not lift steak after grasp")
+        return
+    try:
+        if len(stations) == len(env.stations):
+            env._place_steaks_on_pans()
+            ok = bool(env.plan_success)
+        else:
+            ok = _place_selected_steaks_on_pans(env, stations)
+    except Exception as exc:
+        action_failed(env, arms, detail=f"could not place steak(s): {exc}")
+        return
+    if not ok or not env.plan_success:
+        action_failed(env, arms, detail="could not place steak(s) on pan(s)")
+        return
     if not env.use_cook_button:
-        for st in env.stations:
+        for st in stations:
             st["cooking_active"] = True
-    print("Robot moved steak(s) from board(s) to pan(s).")
+    print(f"Robot moved steak(s) to pan(s) with {'+'.join(arms)} arm(s).")
 
 
 class KeyboardState:
@@ -276,11 +404,25 @@ def _requested_cook_mode(window):
 
 def _selected_cook_mode(env, window):
     if not window.key_down("space"):
+        env._interactive_cook_fail_latched = False
         return None
-    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+    if not selected:
+        return None
     if len(selected) == 2:
         return "all"
-    return selected[0] if selected else None
+    mode = selected[0]
+    # Selected gripper has no station → flash red once per Space hold.
+    if not _active_stations(env, mode):
+        if not getattr(env, "_interactive_cook_fail_latched", False):
+            action_failed(
+                env, selected,
+                detail="has no cook station for this action",
+            )
+            env._interactive_cook_fail_latched = True
+        return None
+    env._interactive_cook_fail_latched = False
+    return mode
 
 
 def _station_cook_finished(env, st):
@@ -433,6 +575,26 @@ class CookKeyController:
             self._started_at = None
 
     def update(self, requested_mode):
+        if requested_mode is not None:
+            active = {
+                str(st["arm"])
+                for st in _active_stations(self.env, requested_mode)
+            } & self.hover_qpos.keys()
+            if not active:
+                # Highlighted arm(s) cannot cook (no station / not prepared).
+                if requested_mode != self.mode and not getattr(
+                    self.env, "_interactive_cook_fail_latched", False
+                ):
+                    selected = tuple(
+                        getattr(self.env, "_interactive_selected_arms", ()) or ()
+                    )
+                    action_failed(
+                        self.env, selected or (requested_mode,),
+                        detail="cannot cook with this gripper",
+                    )
+                    self.env._interactive_cook_fail_latched = True
+                _clear_cook_latches(self.env)
+                return
         if requested_mode != self.mode:
             # A release immediately reverses any incomplete downward transition.
             self._begin_transition(requested_mode)

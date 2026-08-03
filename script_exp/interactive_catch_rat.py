@@ -25,7 +25,13 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    action_failed,
+    make_viewer_view_toggle,
+    print_mode_controls,
+    report_task_result,
+    require_selected_arms,
+)
 
 # ur5-wsg gripper visual links (recolored to show arm selection).
 _GRIPPER_LINK_NAMES = (
@@ -401,6 +407,9 @@ class RobotCatchController:
             print(f"Selected {side.upper()} (gripper highlighted; click moves this arm).")
 
     def approach(self):
+        selected = require_selected_arms(self.env, exactly_one=not self.dual)
+        if not selected:
+            return
         self.busy = True
         if self.dual:
             self.env.move(
@@ -408,20 +417,26 @@ class RobotCatchController:
                 self.env._approach_rat(1, self.ArmTag("right")),
             )
         else:
-            arm = self.ArmTag(self.selected)
+            arm = self.ArmTag(selected[0])
+            self.selected = selected[0]
+            self._highlight.set_selected(self.selected)
             self.env.move(self.env._approach_rat(0, arm))
         self.approached = bool(self.env.plan_success)
-        print("Approached hole(s)." if self.approached else "Approach failed.")
+        if self.approached:
+            print("Approached hole(s).")
+        else:
+            action_failed(self.env, selected, detail="approach failed")
         self.busy = False
 
     def go_to_xy(self, x, y):
         """Move the selected arm above ``(x, y)`` on the board (world frame)."""
         if self.busy or self.done:
             return False
-        # Prefer the arm on that side of the table; explicit selection overrides in dual.
-        arm_name = self.selected
+        selected = require_selected_arms(self.env, exactly_one=True)
+        if not selected:
+            return False
+        arm_name = selected[0]
         if not self.dual:
-            arm_name = "right" if float(x) > 0 else "left"
             self._select(arm_name)
         arm = self.ArmTag(arm_name)
         self.busy = True
@@ -439,7 +454,7 @@ class RobotCatchController:
             self.approached = True
             print(f"Moved {arm_name} arm to ({float(x):.3f}, {float(y):.3f}).")
         else:
-            print(f"Move to ({float(x):.3f}, {float(y):.3f}) failed.")
+            action_failed(self.env, (arm_name,), detail="move failed")
             self.env.plan_success = True
             self.env._last_plan_fail = None
         self.busy = False
@@ -449,8 +464,12 @@ class RobotCatchController:
         return self.go_to_xy(x, y)
 
     def close_selected(self):
+        selected = require_selected_arms(self.env, exactly_one=not self.dual)
+        if not selected:
+            return
         self.busy = True
-        if self.dual:
+        caught = False
+        if self.dual and len(selected) == 2:
             # Close both when Space is used in dual after approach.
             self.env.move(
                 self.env.close_gripper(self.ArmTag("left")),
@@ -465,13 +484,19 @@ class RobotCatchController:
                     self.env.move_by_displacement(self.ArmTag("right"), z=0.12, move_axis="arm"),
                 )
                 self.done = True
-        else:
-            arm = self.ArmTag(self.selected)
+                caught = True
+        elif len(selected) == 1:
+            arm = self.ArmTag(selected[0])
+            self.selected = selected[0]
+            self._highlight.set_selected(self.selected)
             self.env.move(self.env.close_gripper(arm))
             self.env._dwell(10)
             if _try_finish_catch(self.env, 0, arm):
                 self.env.move(self.env.move_by_displacement(arm, z=0.12, move_axis="arm"))
                 self.done = True
+                caught = True
+        if not caught:
+            action_failed(self.env, selected, detail="catch failed")
         self.busy = False
 
     def update(self, window):

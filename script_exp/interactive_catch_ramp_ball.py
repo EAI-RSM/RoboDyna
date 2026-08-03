@@ -25,7 +25,13 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    action_failed,
+    make_viewer_view_toggle,
+    print_mode_controls,
+    report_task_result,
+    resolve_action_arm,
+)
 
 
 CONTROLS_KEYBOARD = """
@@ -177,22 +183,21 @@ class RobotCupController:
         self._space = EdgeKey()
 
     def _choose_arm(self):
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
-        if selected:
-            return self.ArmTag(selected[0])
-        x, _ = _aim_xy(self.env)
-        return self.ArmTag("right" if float(x) > 0 else "left")
+        return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
 
     def grasp(self):
         self.busy = True
         self.arm = self._choose_arm()
+        if self.arm is None:
+            self.busy = False
+            return
         self.env.move(self.env.grasp_actor(self.env.cup, arm_tag=self.arm, pre_grasp_dis=0.08))
         if self.env.plan_success:
             self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
             self.holding = True
             print(f"Picked up cup with {self.arm} arm. Move, then Space to drop.")
         else:
-            print("Grasp failed; planner disabled further robot actions.")
+            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def drop(self):

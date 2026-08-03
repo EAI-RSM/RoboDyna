@@ -27,10 +27,12 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    edge_pressed,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
     print_mode_controls,
+    require_selected_arms,
 )
 
 
@@ -295,6 +297,7 @@ def main():
 
     edges = EdgeDirection()
     robot_controller = None
+    keys_prev: dict = {}
     if args.control == "robot":
         robot_controller = RobotShelfKeyController(env, ArmTag, viewer)
 
@@ -304,7 +307,12 @@ def main():
             frame_start = time.perf_counter()
             if args.control == "robot":
                 selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-                requested = selected[0] if len(selected) == 1 and viewer.window.key_down("space") else None
+                if viewer.window.key_down("space"):
+                    if len(selected) != 1 and edge_pressed(viewer.window, "space", keys_prev):
+                        require_selected_arms(env, exactly_one=True)
+                    requested = selected[0] if len(selected) == 1 else None
+                else:
+                    requested = None
                 direction = requested if requested is not None and requested != edges.prev else None
                 edges.prev = requested
             else:

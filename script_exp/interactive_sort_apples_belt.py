@@ -35,9 +35,11 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    edge_pressed,
     make_button_controller,
     make_viewer_view_toggle,
     report_task_result,
+    require_selected_arms,
 )
 
 
@@ -473,6 +475,7 @@ def main():
     belt_clear_since = None
     arm_teleop = None
     robot_controller = None
+    keys_prev: dict = {}
     if args.control == "robot":
         arm_teleop = FastArmTeleop(env)
         env._interactive_space_click = True
@@ -551,6 +554,8 @@ def main():
             elif arm_teleop is not None:
                 arm_teleop.update(viewer.window)
                 if robot_controller is not None:
+                    if edge_pressed(viewer.window, "space", keys_prev):
+                        require_selected_arms(env, exactly_one=False)
                     robot_controller.update(_space_button_mode(env, viewer.window))
             env._update_kinematic_tasks()
             env.scene.step()

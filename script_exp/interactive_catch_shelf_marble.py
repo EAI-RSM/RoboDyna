@@ -27,11 +27,13 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    edge_pressed,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     make_button_controller,
     report_task_result,
     print_mode_controls,
+    require_selected_arms,
 )
 
 
@@ -163,6 +165,7 @@ def main():
     env._expert_hold = None
 
     robot_controller = None
+    keys_prev: dict = {}
     if args.control == "robot":
         robot_controller = _make_robot_controller(env, ArmTag, args.robot_motion)
 
@@ -185,10 +188,15 @@ def main():
             if args.control == "keyboard":
                 _update_keyboard(env, viewer.window)
             elif robot_controller is not None:
-                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
                 mode = None
                 if viewer.window.key_down("space"):
-                    mode = "dump" if len(selected) == 2 else (selected[0] if selected else None)
+                    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+                    if not selected and edge_pressed(viewer.window, "space", keys_prev):
+                        require_selected_arms(env, exactly_one=False)
+                    elif len(selected) == 2:
+                        mode = "dump"
+                    elif len(selected) == 1:
+                        mode = selected[0]
                 robot_controller.update(mode)
             env._update_kinematic_tasks()
             env.scene.step()

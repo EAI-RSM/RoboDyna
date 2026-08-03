@@ -26,9 +26,11 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    edge_pressed,
     make_viewer_view_toggle,
     report_task_result,
     print_mode_controls,
+    require_selected_arms,
 )
 
 
@@ -296,6 +298,7 @@ def main():
     stamp_controller = KeyboardStampController(env, ArmTag)
     arrow_presses = ArrowPresses()
     last_under = None
+    keys_prev: dict = {}
 
     viewer = env.viewer
     if viewer is None:
@@ -320,10 +323,10 @@ def main():
             views.update(viewer.window)
             frame_start = time.perf_counter()
             if args.control == "robot":
-                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-                requested = selected if viewer.window.key_press("space") else ()
-                for side in requested:
-                    stamp_controller.tap("red" if side == "left" else "green")
+                if edge_pressed(viewer.window, "space", keys_prev):
+                    selected = require_selected_arms(env, exactly_one=False)
+                    for side in selected:
+                        stamp_controller.tap("red" if side == "left" else "green")
             else:
                 arrow_presses.update(viewer.window, stamp_controller)
             stamp_controller.update()

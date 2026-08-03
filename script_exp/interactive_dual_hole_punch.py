@@ -26,10 +26,12 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    edge_pressed,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
     print_mode_controls,
+    require_selected_arms,
 )
 
 
@@ -342,6 +344,7 @@ def main():
     _start_belts(env)
 
     edge = EdgeSides()
+    keys_prev: dict = {}
 
     viewer = env.viewer
     if viewer is None:
@@ -365,8 +368,13 @@ def main():
             views.update(viewer.window)
             frame_start = time.perf_counter()
             if args.control == "robot":
-                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-                sides = selected if viewer.window.key_down("space") else ()
+                if viewer.window.key_down("space"):
+                    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
+                    if not selected and edge_pressed(viewer.window, "space", keys_prev):
+                        require_selected_arms(env, exactly_one=False)
+                    sides = selected
+                else:
+                    sides = ()
             else:
                 sides = _requested_sides(viewer.window)
             fired = edge.poll(sides)

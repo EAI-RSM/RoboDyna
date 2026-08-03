@@ -28,7 +28,13 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    action_failed,
+    make_viewer_view_toggle,
+    print_mode_controls,
+    report_task_result,
+    resolve_action_arm,
+)
 
 
 CONTROLS_KEYBOARD = """
@@ -200,9 +206,10 @@ class RobotDartController:
 
     def grasp(self):
         self.busy = True
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
-        if selected:
-            self.arm = self.ArmTag(selected[0])
+        self.arm = resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
+        if self.arm is None:
+            self.busy = False
+            return
         self.env.move(self.env.grasp_actor(
             self.env.dart, arm_tag=self.arm, pre_grasp_dis=0.08, contact_point_id=0,
         ))
@@ -221,7 +228,7 @@ class RobotDartController:
             self.holding = True
             print(f"Grasped dart with {self.arm}. Arrows/E/Q aim; Space jabs.")
         else:
-            print("Dart grasp failed.")
+            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def jab(self):

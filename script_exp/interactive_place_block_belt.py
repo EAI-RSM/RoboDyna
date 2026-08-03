@@ -19,6 +19,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
+    action_failed,
     add_robot_motion_arg,
     arrow_nudge_xy,
     bootstrap_repo,
@@ -27,6 +28,7 @@ from _interactive_common import (  # noqa: E402
     hold_dynamic_at,
     print_banner,
     release_dynamic,
+    require_selected_arms,
     run_viewer_loop,
 )
 
@@ -81,6 +83,8 @@ def _prepare_robot_hold(env, arm_tag):
     """Pick the block, then carry it to the normal belt hover position."""
     match_dist, hover_x, release_x, lane_y = _match_geometry(env)
     env.move(env.grasp_actor(env.block, arm_tag=arm_tag, pre_grasp_dis=0.1))
+    if not env.plan_success:
+        return False
     env.move(env.move_by_displacement(arm_tag=arm_tag, z=0.14, move_axis="arm"))
     dx = hover_x - float(env.block.get_pose().p[0])
     dy = lane_y - float(env.block.get_pose().p[1])
@@ -95,6 +99,7 @@ def _prepare_robot_hold(env, arm_tag):
     env._released = False
     env._belt_active = False
     env._release_delay_left = 0
+    return True
 
 
 def _do_release(env, use_robot: bool):
@@ -203,11 +208,18 @@ def main():
                 if use_robot:
                     from envs.utils.action import ArmTag
 
+                    selected = require_selected_arms(env, exactly_one=True)
+                    if not selected:
+                        return
+                    selected_arm = selected[0]
                     print(f"Robot: picking with {selected_arm} arm and lifting over the belt…")
-                    _prepare_robot_hold(env, ArmTag(selected_arm))
+                    if _prepare_robot_hold(env, ArmTag(selected_arm)):
+                        print("Holding above the belt. Nudge with arrows, then press Space to release.")
+                    else:
+                        action_failed(env, (selected_arm,), detail="grasp failed")
                 else:
                     _prepare_keyboard_hold(env)
-                print("Holding above the belt. Nudge with arrows, then press Space to release.")
+                    print("Holding above the belt. Nudge with arrows, then press Space to release.")
             else:
                 _do_release(env, use_robot)
 

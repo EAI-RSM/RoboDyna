@@ -29,7 +29,13 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    action_failed,
+    make_viewer_view_toggle,
+    print_mode_controls,
+    report_task_result,
+    resolve_action_arm,
+)
 
 
 # Standalone-demo-only world-Y placement adjustment.  The task environment and
@@ -374,13 +380,14 @@ class RobotCupController:
 
     def grasp(self):
         self.busy = True
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
-        if selected:
-            self.side = selected[0]
-            self.arm = self.ArmTag(self.side)
+        self.arm = resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
+        if self.arm is None:
+            self.busy = False
+            return
+        self.side = str(self.arm)
         contact_id, pre = self.env._find_cup_grasp(self.arm)
         if pre is None:
-            print("No cup grasp pose found.")
+            action_failed(self.env, (self.side,), detail="no cup grasp pose")
             self.busy = False
             return
         self.env.move(self.env.close_gripper(self.arm, pos=0.6))
@@ -399,7 +406,7 @@ class RobotCupController:
                 "Space releases here."
             )
         else:
-            print("Grasp failed; planner disabled further robot actions.")
+            action_failed(self.env, (self.side,), detail="grasp failed")
         self.busy = False
 
     def place(self):

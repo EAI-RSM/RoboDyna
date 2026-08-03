@@ -25,7 +25,13 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    action_failed,
+    make_viewer_view_toggle,
+    print_mode_controls,
+    report_task_result,
+    resolve_action_arm,
+)
 
 
 CONTROLS_KEYBOARD = """
@@ -266,13 +272,14 @@ class RobotBatController:
         self.motion = None
 
     def _choose_arm(self):
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
-        side = selected[0] if selected else ("left" if self.env.mirrored else "right")
-        return self.ArmTag(side)
+        return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
 
     def grasp(self):
         self.busy = True
         self.arm = self._choose_arm()
+        if self.arm is None:
+            self.busy = False
+            return
         # Preserve the task's normal grasp sequence; it establishes the weld
         # offset used by the held-bat controller.
         self.env.move(self.env.grasp_actor(
@@ -288,7 +295,7 @@ class RobotBatController:
             self.motion.move_bat_to(panel[0], panel[1], panel[2] + 0.10)
             print(f"Picked up bat with {self.arm} arm. Use arrows/E/Q to adjust it.")
         else:
-            print("Grasp failed; planner disabled further robot actions.")
+            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def nudge(self, window):

@@ -20,6 +20,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
+    action_failed,
     add_robot_motion_arg,
     bootstrap_repo,
     configure_task,
@@ -27,6 +28,7 @@ from _interactive_common import (  # noqa: E402
     hold_dynamic_at,
     print_banner,
     release_dynamic,
+    require_selected_arms,
     run_viewer_loop,
 )
 
@@ -68,14 +70,16 @@ def _nudge_from_keys(window, xy_step=0.022, z_step=0.016):
     return float(dx), float(dy), float(dz)
 
 
-def _prepare_robot_hold(env, selected_arm=None):
+def _prepare_robot_hold(env, selected_arm):
     from envs.utils.action import ArmTag
 
-    arm_name = selected_arm or ("left" if env.ball_side == "left" else "right")
+    arm_name = selected_arm
     arm_tag = ArmTag(arm_name)
     env.selected_arm = arm_name
     env._cap_tracking = True
     env.move(env.grasp_actor(env.ball, arm_tag=arm_tag, pre_grasp_dis=0.08))
+    if not env.plan_success:
+        return False
     # Clear the container before translating, then stage just beside it. Do
     # not pre-align to the moving hole: the user positions the ball with keys.
     transport_z = float(
@@ -105,6 +109,7 @@ def _prepare_robot_hold(env, selected_arm=None):
     env._interactive_holding = True
     env._interactive_released = False
     env.ball_released = False
+    return True
 
 
 class RobotHoldMotion:
@@ -236,13 +241,18 @@ def main():
         if edge_pressed(window, "space", keys_prev):
             if not getattr(env, "_interactive_holding", False):
                 if use_robot:
+                    selected = require_selected_arms(env, exactly_one=True)
+                    if not selected:
+                        return
                     print("Robot: picking up the ball…")
-                    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-                    _prepare_robot_hold(env, selected[0] if selected else None)
-                    hold_motion = RobotHoldMotion(env, env._interactive_arm, args.robot_motion)
+                    if _prepare_robot_hold(env, selected[0]):
+                        hold_motion = RobotHoldMotion(env, env._interactive_arm, args.robot_motion)
+                        print("Holding ball. Use arrows/E/Q to position it; Space releases.")
+                    else:
+                        action_failed(env, (selected[0],), detail="grasp failed")
                 else:
                     _prepare_keyboard_hold(env)
-                print("Holding ball. Use arrows/E/Q to position it; Space releases.")
+                    print("Holding ball. Use arrows/E/Q to position it; Space releases.")
             elif not env._interactive_released:
                 _do_release(env, use_robot)
 

@@ -26,7 +26,13 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    action_failed,
+    make_viewer_view_toggle,
+    print_mode_controls,
+    report_task_result,
+    require_selected_arms,
+)
 
 
 CONTROLS_KEYBOARD = """
@@ -336,15 +342,20 @@ class RobotMoleController:
 
     def jab(self):
         self.busy = True
+        selected = require_selected_arms(self.env, exactly_one=True)
+        if not selected:
+            self.busy = False
+            return
+        self.selected_arm = selected[0]
         arm = self._arm()
         self.env.plan_success = True
         if self.selected_arm not in self.env.hammer_cubes:
             if self.env.pickup_mallet_to_ready(arm):
                 print(f"Picked up {self.selected_arm} mallet; it is ready at hover height.")
             else:
-                print(f"Could not pick up the {self.selected_arm} mallet.")
-            self.busy = False
-            return
+                action_failed(self.env, (self.selected_arm,), detail="mallet pickup failed")
+                self.busy = False
+                return
         cube_p = self.env._mallet_head_center(arm)
         idx = next(
             (i for i, hole_idx in enumerate(self.env.mole_holes)
@@ -353,7 +364,7 @@ class RobotMoleController:
             None,
         )
         if idx is None:
-            print("No unhit mole under the selected cube.")
+            action_failed(self.env, (self.selected_arm,), detail="no mole under mallet")
             self.busy = False
             return
         self.env._mole_state[idx]["freeze_bob"] = True

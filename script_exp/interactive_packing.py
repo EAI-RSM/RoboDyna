@@ -18,13 +18,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
+    action_failed,
     add_robot_motion_arg,
     bootstrap_repo,
     configure_task,
     edge_pressed,
     print_banner,
+    require_selected_arms,
     run_viewer_loop,
-    selected_robot_arms,
 )
 
 bootstrap_repo()
@@ -61,10 +62,8 @@ def _picks_for_selection(env, selection):
         return None
     if selection == "both":
         return [(on_belt[side], side) for side in ("left", "right") if side in on_belt]
-    other = "right" if selection == "left" else "left"
-    for side in (selection, other):
-        if side in on_belt:
-            return [(on_belt[side], selection)]
+    if selection in on_belt:
+        return [(on_belt[selection], selection)]
     return None
 
 
@@ -200,8 +199,11 @@ def main():
         # Gripper highlighting belongs to the shared 1/2/3 controls; a second
         # recolor here would cache the already-tinted color and leave the
         # previously selected arm lit.
-        arms = selected_robot_arms(env, fallback=("left",))
-        new_selected = "both" if len(arms) == 2 else arms[0]
+        if use_robot:
+            arms = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+        else:
+            arms = tuple(getattr(env, "_interactive_selected_arms", ()) or ("left",))
+        new_selected = "both" if len(arms) == 2 else (arms[0] if arms else None)
         if new_selected != selected:
             selected = new_selected
 
@@ -209,6 +211,10 @@ def main():
             return
 
         if edge_pressed(window, "space", keys_prev):
+            if use_robot:
+                arms = require_selected_arms(env, exactly_one=False)
+                if not arms:
+                    return
             pending_pack = True
             print(f"Armed: {selected} arm will pack the next fruit on the belt.")
 
@@ -232,7 +238,11 @@ def main():
                 finally:
                     busy = False
                     env._belt_running = True
-                if wrong is None:
+                if wrong is None and use_robot:
+                    pack_arms = tuple(str(arm) for _idx, arm in picks)
+                    action_failed(env, pack_arms, detail="pack failed")
+                    pending_pack = True
+                elif wrong is None:
                     print("Pack failed; press Space to try again.")
                     pending_pack = True
                 elif wrong:

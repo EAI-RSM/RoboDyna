@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    action_failed,
     arm_ik,
     make_viewer_view_toggle,
     RobotButtonController,
@@ -34,7 +35,7 @@ from _interactive_common import (  # noqa: E402
     edge_pressed,
     report_task_result,
     print_mode_controls,
-    selected_robot_arms,
+    require_selected_arms,
 )
 
 
@@ -853,19 +854,19 @@ def main():
                 keyboard.update(viewer.window, env)
             elif robot is not None:
                 if edge_pressed(viewer.window, "space", keys_prev):
-                    selected = selected_robot_arms(env, fallback=())
-                    if len(selected) != 1:
-                        print("Select one arm first: 1 (left) or 2 (right).")
+                    selected = require_selected_arms(env, exactly_one=True)
+                    if not selected:
+                        continue
+                    side = selected[0]
+                    idx = _nearest_button_for_arm(env, side)
+                    if idx is None:
+                        action_failed(env, (side,), detail="no key under selected arm")
+                    elif str(env._arm_for_door(idx)) != side:
+                        action_failed(env, (side,), detail="nearest key belongs to other arm")
                     else:
-                        side = selected[0]
-                        idx = _nearest_button_for_arm(env, side)
-                        if idx is None:
-                            print(f"Move the {side} arm over a key first.")
-                        else:
-                            color = env.button_color_names[idx]
-                            arm = env._arm_for_door(idx)
-                            print(f"Robot tapping button {idx} ({color}) with {arm} arm...")
-                            robot.request(idx)
+                        color = env.button_color_names[idx]
+                        print(f"Robot tapping button {idx} ({color}) with {side} arm...")
+                        robot.request(idx)
                 robot.update()
             env._update_kinematic_tasks()
             env.scene.step()

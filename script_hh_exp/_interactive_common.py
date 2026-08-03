@@ -30,10 +30,15 @@ if str(ROOT / "script_exp") not in sys.path:
     sys.path.insert(0, str(ROOT / "script_exp"))
 
 from script_exp._interactive_common import (  # noqa: E402
+    action_failed,
     configure_task,
+    flash_gripper_failure,
+    gripper_failure_feedback,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
+    require_selected_arms,
+    resolve_action_arm,
 )
 
 
@@ -94,12 +99,10 @@ def _set_pose(actor, xyz, quat=None, kinematic=True):
         pass
 
 
-def _arm_tag(env):
+def _arm_tag(env, *, exactly_one: bool = True):
+    """Return the highlighted arm, or ``None`` when no action should run."""
     from envs.utils.action import ArmTag
-    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
-    if selected:
-        return ArmTag(selected[0])
-    return ArmTag(str(getattr(env, "arm_side", "right")))
+    return resolve_action_arm(env, ArmTag, exactly_one=exactly_one)
 
 
 class HouseholdController:
@@ -125,8 +128,6 @@ class HouseholdController:
         self.board_over_pot = False
         self.trap_released = False
         self.scenario_started = False
-        self._failure_visual_until = 0.0
-        self._failure_visual_original = {}
         if task in (
             "fill_coffee_jar", "pour_beer", "measure_ingredient", "catch_cup",
             "stop_ball",
@@ -287,9 +288,8 @@ class HouseholdController:
         return bool(real_contact or geometric_contact or stalled)
 
     def _start_fill_press(self):
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
-        if len(selected) != 1:
-            print("[fill_coffee_jar] select one arm, move it above the dispenser, then hold Space")
+        selected = require_selected_arms(self.env, exactly_one=True)
+        if not selected:
             return
         side = selected[0]
         from envs.utils.action import ArmTag
@@ -309,7 +309,10 @@ class HouseholdController:
             moved = self.env.move(self.env.move_to_pose(arm, self.env._touch_tip_pose(hover_dis)))
         if moved is False or not bool(getattr(self.env, "plan_success", True)):
             self.env._interactive_teleop_locked = False
-            print("[fill_coffee_jar] could not move selected arm above the blue button")
+            action_failed(
+                self.env, (side,),
+                detail="could not move above the blue button",
+            )
             return
         tcp_z = float(self._fill_tcp_pose(side)[2])
         self._fill_press_state = {
@@ -379,7 +382,8 @@ class HouseholdController:
 
     def _robot_action(self):
         """Use the environment's physical robot helper for discrete actions."""
-        e, t, arm = self.env, self.task, _arm_tag(self.env)
+        e, t = self.env, self.task
+        arm = None
         try:
             # A failed plan latches this flag false. Each deliberate key press
             # starts a fresh attempt so the same action can be retried.
@@ -387,13 +391,24 @@ class HouseholdController:
             if t == "boil_milk":
                 self._turn_boil_milk_knob()
             elif t == "fill_coffee_jar":
+                arm = _arm_tag(e)
+                if arm is None:
+                    return
                 e._press_dispenser(arm, force_level=4)
+                if not bool(getattr(e, "plan_success", True)):
+                    action_failed(e, (str(arm),), detail="dispenser press failed")
             elif t == "pour_beer":
-                # Arm motion only — lever bends from gripper pressure / springs back.
+                arm = _arm_tag(e)
+                if arm is None:
+                    return
                 if not self.holding:
                     self.holding = bool(e._grasp_lever(arm))
+                    if not self.holding:
+                        action_failed(e, (str(arm),), detail="could not grasp lever")
                 elif e._lever_open_frac() < 0.10:
                     e._sweep_lever_to(arm, 0.70, n_steps=8, stop_on_foam=True)
+                    if not bool(getattr(e, "plan_success", True)):
+                        action_failed(e, (str(arm),), detail="lever sweep failed")
                 else:
                     e._release_lever(arm)
                     self.holding = False
@@ -420,7 +435,10 @@ class HouseholdController:
                     if spot is not None:
                         e._dab_spot(spot)
         except Exception as exc:
-            print(f"[{t}] action unavailable: {exc}")
+            if arm is not None:
+                action_failed(e, (str(arm),), detail=f"action unavailable: {exc}")
+            else:
+                print(f"[{t}] action unavailable: {exc}")
 
     def _snap_stove_knob(self, want_on: bool, *, continuous_angle: float | None = None):
         """Instant interactive knob/fire update (no planner reach).
@@ -443,14 +461,10 @@ class HouseholdController:
             e._set_stove(bool(want_on))
 
     def _turn_make_soup_knob(self):
-        """Contact-driven cooktop twist with the selected / task arm (no teleport)."""
+        """Contact-driven cooktop twist with the selected arm only."""
         e = self.env
-        selected = tuple(getattr(e, "_interactive_selected_arms", ()) or ())
-        from envs.utils.action import ArmTag
-
-        arm = ArmTag(selected[0]) if len(selected) == 1 else getattr(e, "arm", None)
+        arm = _arm_tag(e)
         if arm is None:
-            print("[make_soup] no arm available to turn the knob")
             return
         previous_arm = getattr(e, "arm", None)
         action_error = None
@@ -470,10 +484,12 @@ class HouseholdController:
                 "carry it over the pot, then hold Z/X to tip"
             )
             return
-        if action_error is not None:
-            print(f"[make_soup] {arm} arm could not turn the knob: {action_error}")
-        else:
-            print("[make_soup] knob did not reach the heat threshold; stove still off")
+        detail = (
+            f"could not turn the knob: {action_error}"
+            if action_error is not None
+            else "knob did not reach the heat threshold; stove still off"
+        )
+        action_failed(e, (str(arm),), detail=detail)
 
     def _return_arm_after_failure(self, arm):
         """Best-effort recovery for a failed scripted reach."""
@@ -490,59 +506,49 @@ class HouseholdController:
         except Exception as exc:
             print(f"[boil_milk] could not return {arm} arm to origin: {exc}")
 
-    def _restore_failure_visual(self):
-        for material, color in self._failure_visual_original.values():
-            try:
-                material.set_base_color(color)
-                material.base_color = color
-            except Exception:
-                pass
-        self._failure_visual_original.clear()
-
     def _show_failed_arm_red(self, arm):
         """Tint the failed arm's gripper red for two seconds."""
-        self._restore_failure_visual()
-        side = str(arm)
-        robot = getattr(self.env, "robot", None)
-        articulation = getattr(robot, f"{side}_entity", None)
-        if articulation is None:
-            return
-        gripper_links = {
-            "wsg_50_base_link", "gripper_left", "gripper_right",
-            "finger_left", "finger_right",
-        }
-        red = [0.92, 0.04, 0.03, 1.0]
-        for link in articulation.get_links():
-            if link.get_name() not in gripper_links:
-                continue
-            for component in link.entity.get_components():
-                if not isinstance(component, sapien.render.RenderBodyComponent):
-                    continue
-                for shape in component.render_shapes:
-                    material = shape.material
-                    key = id(material)
-                    if key not in self._failure_visual_original:
-                        self._failure_visual_original[key] = (
-                            material, list(material.base_color)
-                        )
-                    try:
-                        material.set_base_color(red)
-                        material.base_color = red
-                    except Exception:
-                        pass
-        self._failure_visual_until = time.perf_counter() + 2.0
+        flash_gripper_failure(self.env, (str(arm),))
 
     def _update_failure_visual(self):
-        if self._failure_visual_original and time.perf_counter() >= self._failure_visual_until:
-            self._restore_failure_visual()
-            self._failure_visual_until = 0.0
+        gripper_failure_feedback(self.env).update()
 
     def _turn_boil_milk_knob(self):
-        """Toggle boil_milk burner instantly (interactive — no expert reach)."""
+        """Turn the knob with exactly the arm selected by interactive controls."""
         e = self.env
-        wanted_on = not bool(getattr(e, "stove_on", False))
-        self._snap_stove_knob(wanted_on)
-        print(f"[boil_milk] stove {'on' if wanted_on else 'off'}")
+        arm = _arm_tag(e)
+        if arm is None:
+            return
+
+        previous_arm = getattr(e, "arm", None)
+        stove_was_on = bool(getattr(e, "stove_on", False))
+        wanted_on = not stove_was_on
+        action_error = None
+        try:
+            e.arm = arm
+            e.plan_success = True
+            e._turn_knob(wanted_on)
+        except Exception as exc:
+            action_error = exc
+        finally:
+            e.arm = previous_arm
+            e._ignore_knob = False
+
+        # The physical stove state is authoritative. If it did not reach the
+        # requested state, the next Space press requests that same action again.
+        reached_target = bool(getattr(e, "stove_on", False)) == wanted_on
+        if reached_target:
+            print(f"[boil_milk] knob turned with {arm} arm")
+            return
+
+        detail = (
+            f"could not turn the knob: {action_error}"
+            if action_error is not None
+            else "could not turn the knob"
+        )
+        print(f"[boil_milk] {arm} arm failed; returning it to origin")
+        self._return_arm_after_failure(arm)
+        action_failed(e, (str(arm),), detail=detail)
 
     def _turn_cook_food_knob(self):
         """Toggle cook_food heat instantly, matching main intensity."""
@@ -602,23 +608,45 @@ class HouseholdController:
             self._task_action()
             return
         arm = _arm_tag(self.env)
+        if arm is None:
+            return
         try:
             if not self.holding:
                 self.env.plan_success = True
                 if self.task == "make_soup":
-                    grasped = bool(self.env._grasp_board())
+                    # Force the selected arm into the task helper (no food_arm fallback).
+                    previous_arm = getattr(self.env, "arm", None)
+                    try:
+                        self.env.arm = arm
+                        grasped = bool(self.env._grasp_board())
+                    finally:
+                        self.env.arm = previous_arm
                     if grasped:
                         # Allow PhysX release once the board tips past the hold angle.
                         self.env._pour_armed = True
                 elif self.task == "clean_table":
+                    # Sponge lives on the mug-side arm; require that gripper.
+                    task_arm = getattr(self.env, "arm", None)
+                    if task_arm is None or str(arm) != str(task_arm):
+                        action_failed(
+                            self.env,
+                            (str(arm),),
+                            detail=(
+                                f"select the {task_arm} arm (sponge side) "
+                                f"with {'2' if str(task_arm) == 'right' else '1'}"
+                            ),
+                        )
+                        return
                     grasped = bool(self.env._grasp_sponge())
                 else:
-                    if self.task == "cook_food":
-                        food_arm = getattr(self.env, "food_arm", arm)
+                    # Always grasp with the highlighted gripper — never a
+                    # reachability-based other arm (e.g. cook_food.food_arm).
+                    grasp_fn = getattr(self.env, "_safe_grasp_actor", None)
+                    if callable(grasp_fn) and self.task == "cook_food":
                         moved = self.env.move(
-                            self.env._safe_grasp_actor(
+                            grasp_fn(
                                 self.actor,
-                                arm_tag=food_arm,
+                                arm_tag=arm,
                                 pre_grasp_dis=0.10,
                                 contact_point_id=0,
                             )
@@ -635,8 +663,13 @@ class HouseholdController:
                     if grasped and self.task == "trap_bug":
                         self.env.weld_trap_to_gripper(arm)
                 self.holding = grasped
-                result = "ok" if self.holding else "failed; press Space to retry"
-                print(f"[{self.task}] grasp {result}")
+                if self.holding:
+                    print(f"[{self.task}] grasp ok ({arm})")
+                else:
+                    action_failed(
+                        self.env, (str(arm),),
+                        detail="could not grasp (out of reach or plan failed)",
+                    )
             else:
                 self.env.plan_success = True
                 moved = self.env.move(self.env.open_gripper(arm))
@@ -644,20 +677,31 @@ class HouseholdController:
                     getattr(self.env, "plan_success", True)
                 )
                 if not released:
-                    print(f"[{self.task}] release failed; press Space to retry")
+                    action_failed(
+                        self.env, (str(arm),),
+                        detail="release failed",
+                    )
                     return
                 if self.task == "make_soup":
                     self.env._release_board_weld()
                 elif self.task == "clean_table":
                     self.env._sponge_welded = False
                     self.env._sponge_weld_offset = None
+                    try:
+                        self.env._set_sponge_collision_enabled(True)
+                        self.env._set_pad_collision_enabled(True)
+                    except Exception:
+                        pass
                 elif self.task == "trap_bug":
                     self.env.release_trap()
                     self.trap_released = True
                 self.holding = False
                 print(f"[{self.task}] released")
         except Exception as exc:
-            print(f"[{self.task}] grasp/release unavailable: {exc}")
+            action_failed(
+                self.env, (str(arm),),
+                detail=f"grasp/release unavailable: {exc}",
+            )
 
     def _toggle_catch_cup_push_grip(self):
         """Space closes/opens the gripper for a physical pillow shove (no weld)."""
@@ -686,26 +730,28 @@ class HouseholdController:
                 print("[catch_cup] pillow released — PhysX pushable again")
             return
         arm = _arm_tag(e)
+        if arm is None:
+            return
         try:
             e.plan_success = True
             if not self.holding:
                 moved = e.move(e.close_gripper(arm))
                 ok = moved is not False and bool(getattr(e, "plan_success", True))
                 self.holding = bool(ok)
-                print(
-                    "[catch_cup] gripper closed — shove the pillow with contact"
-                    if ok else "[catch_cup] close gripper failed; press Space to retry"
-                )
+                if ok:
+                    print("[catch_cup] gripper closed — shove the pillow with contact")
+                else:
+                    action_failed(e, (str(arm),), detail="close gripper failed")
             else:
                 moved = e.move(e.open_gripper(arm))
                 ok = moved is not False and bool(getattr(e, "plan_success", True))
                 if not ok:
-                    print("[catch_cup] open gripper failed; press Space to retry")
+                    action_failed(e, (str(arm),), detail="open gripper failed")
                     return
                 self.holding = False
                 print("[catch_cup] gripper opened")
         except Exception as exc:
-            print(f"[catch_cup] gripper toggle unavailable: {exc}")
+            action_failed(e, (str(arm),), detail=f"gripper toggle unavailable: {exc}")
 
     def _grasp_or_release_measure_jar(self):
         """Space: grasp/release the oil jar. Oil key is Z-press only (no F)."""
@@ -731,20 +777,28 @@ class HouseholdController:
             return
 
         arm = _arm_tag(e)
+        if arm is None:
+            return
         try:
             e.plan_success = True
             if not self.holding:
                 self.holding = bool(e.interactive_grasp_jar(arm))
                 if not self.holding:
-                    print("[measure_ingredient] grasp failed; press Space to retry")
+                    action_failed(
+                        e, (str(arm),),
+                        detail="could not grasp jar (out of reach or plan failed)",
+                    )
             else:
                 released = bool(e.interactive_release_jar(arm))
                 if not released:
-                    print("[measure_ingredient] release failed; press Space to retry")
+                    action_failed(e, (str(arm),), detail="release failed")
                     return
                 self.holding = False
         except Exception as exc:
-            print(f"[measure_ingredient] grasp/release unavailable: {exc}")
+            action_failed(
+                e, (str(arm),),
+                detail=f"grasp/release unavailable: {exc}",
+            )
 
     def update(self, window):
         self._update_failure_visual()

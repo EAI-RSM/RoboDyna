@@ -22,11 +22,13 @@ import sapien
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
+    action_failed,
     bootstrap_repo,
     arrow_nudge_xy,
     configure_task,
     edge_pressed,
     print_banner,
+    require_selected_arms,
     run_viewer_loop,
 )
 
@@ -130,8 +132,7 @@ def _do_grasp(env, arm):
     env.move(env.open_gripper(arm))
     env.plan_success = True
     if not env._try_front_grasp(arm, grasp_dis=env.FRONT_GRASP_DIS, gripper_pos=0.0):
-        print(f"Grasp failed (plan={env.plan_success}, "
-              f"fail={getattr(env, '_last_plan_fail', None)}).")
+        action_failed(env, (str(arm),), detail="grasp failed")
         return False
 
     # Frozen clear-then-lift (same as play_once).
@@ -247,7 +248,10 @@ def main():
             if env._interactive_phase == "wait":
                 from envs.utils.action import ArmTag
 
-                _do_grasp(env, ArmTag(selected_arm))
+                selected = require_selected_arms(env, exactly_one=True)
+                if not selected:
+                    return
+                _do_grasp(env, ArmTag(selected[0]))
             elif env._interactive_phase == "hold":
                 _do_drop(env)
                 highlight.clear()

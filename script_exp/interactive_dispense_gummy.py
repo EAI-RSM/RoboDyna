@@ -28,13 +28,14 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    action_failed,
     arm_ik,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     edge_pressed,
     report_task_result,
     print_mode_controls,
-    selected_robot_arms,
+    require_selected_arms,
 )
 
 
@@ -444,26 +445,22 @@ def main():
                 space_down = bool(viewer.window.key_down("space"))
                 robot.set_space_held(space_down)
                 if edge_pressed(viewer.window, "space", keys_prev):
-                    selected = selected_robot_arms(env, fallback=())
-                    if len(selected) != 1:
-                        print("Select one arm first: 1 (left) or 2 (right).")
+                    selected = require_selected_arms(env, exactly_one=True)
+                    if not selected:
+                        continue
+                    side = selected[0]
+                    key = _nearest_key_for_arm(env, side)
+                    if key is None:
+                        action_failed(env, (side,), detail="no key under selected arm")
                     else:
-                        side = selected[0]
-                        key = _nearest_key_for_arm(env, side)
-                        if key is None:
-                            if side == "left":
-                                print("Move the left arm over the red dispense key first.")
-                            else:
-                                print("Move the right arm over a left/right belt key first.")
-                        else:
-                            hold = bool(robot.continuous and key in ("left", "right"))
-                            label = (
-                                "red dispense"
-                                if key == "dispense"
-                                else f"belt {key}"
-                            )
-                            print(f"Robot pressing {label} key with {side} arm...")
-                            robot.request(key, hold_while_space=hold)
+                        hold = bool(robot.continuous and key in ("left", "right"))
+                        label = (
+                            "red dispense"
+                            if key == "dispense"
+                            else f"belt {key}"
+                        )
+                        print(f"Robot pressing {label} key with {side} arm...")
+                        robot.request(key, hold_while_space=hold)
                 robot.update()
             env._update_kinematic_tasks()
             env.scene.step()

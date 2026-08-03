@@ -25,7 +25,13 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    action_failed,
+    make_viewer_view_toggle,
+    print_mode_controls,
+    report_task_result,
+    resolve_action_arm,
+)
 
 
 CONTROLS_KEYBOARD = """
@@ -199,13 +205,14 @@ class RobotKeeperController:
         self._space = EdgeKey()
 
     def _choose_arm(self):
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
-        side = selected[0] if selected else ("left" if self.env.mirrored else "right")
-        return self.ArmTag(side)
+        return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
 
     def grasp(self):
         self.busy = True
         self.arm = self._choose_arm()
+        if self.arm is None:
+            self.busy = False
+            return
         self.env.move(self.env.close_gripper(self.arm, pos=0.6))
         self.env.move(self.env.grasp_actor(
             self.env.goalkeeper,
@@ -219,7 +226,7 @@ class RobotKeeperController:
             self.holding = True
             print(f"Grasped keeper with {self.arm} arm. Arrows nudge; Space releases.")
         else:
-            print("Grasp failed; planner disabled further robot actions.")
+            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def release(self):

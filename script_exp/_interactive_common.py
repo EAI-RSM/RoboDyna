@@ -535,15 +535,23 @@ class UniversalRobotControls:
         self._highlight_materials = {}
         env._interactive_selected_arms = self.selected
         env._interactive_universal_controls = True
+        env._interactive_robot_controls = self
+        # Ensure the shared failure feedback exists for Space/action paths.
+        gripper_failure_feedback(env)
         self._highlight_selected()
 
     def _highlight_selected(self):
+        # A new selection cancels any failure tint so the highlight is readable.
+        fb = getattr(self.env, "_interactive_gripper_failure", None)
+        if isinstance(fb, GripperFailureFeedback) and fb._original:
+            fb.restore()
         for material, color in self._highlight_materials.values():
             try:
                 material.set_base_color(color)
                 material.base_color = color
             except Exception:
                 pass
+        self._highlight_materials.clear()
         colors = {
             "left": [1.0, 0.85, 0.10, 1.0],
             "right": [0.15, 0.75, 1.0, 1.0],
@@ -552,10 +560,7 @@ class UniversalRobotControls:
             articulation = (self.env.robot.left_entity if side == "left"
                             else self.env.robot.right_entity)
             for link in articulation.get_links():
-                if link.get_name() not in {
-                    "wsg_50_base_link", "gripper_left", "gripper_right",
-                    "finger_left", "finger_right",
-                }:
+                if link.get_name() not in GRIPPER_LINK_NAMES:
                     continue
                 for component in link.entity.get_components():
                     try:
@@ -676,6 +681,7 @@ class UniversalRobotControls:
 
     def update(self, window):
         self._select(window)
+        gripper_failure_feedback(self.env).update()
         now = time.perf_counter()
         dt = 0.0 if self._last_update is None else min(now - self._last_update, self.MAX_DT)
         self._last_update = now
@@ -811,6 +817,138 @@ def selected_robot_arms(env, fallback=("left",)):
 
     selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
     return selected or tuple(fallback)
+
+
+GRIPPER_LINK_NAMES = frozenset({
+    "wsg_50_base_link", "gripper_left", "gripper_right",
+    "finger_left", "finger_right",
+})
+GRIPPER_FAILURE_RED = [0.92, 0.04, 0.03, 1.0]
+GRIPPER_FAILURE_SECONDS = 2.0
+
+
+def require_selected_arms(env, *, exactly_one: bool = False):
+    """Return currently highlighted arms, or ``()`` when the action must not run.
+
+    Unselected grippers never act. When ``exactly_one`` is set, both-arms (3)
+    is also rejected so the caller can require a single highlighted gripper.
+    """
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+    if not selected:
+        print("Select an arm first: 1 (left) or 2 (right)"
+              + ("" if exactly_one else " [or 3 for both]") + ".")
+        return ()
+    if exactly_one and len(selected) != 1:
+        print("Select exactly one arm with 1 (left) or 2 (right).")
+        return ()
+    return selected
+
+
+def resolve_action_arm(env, arm_tag_cls, *, exactly_one: bool = True):
+    """Return an ``ArmTag`` for the highlighted gripper, or ``None`` to abort."""
+    selected = require_selected_arms(env, exactly_one=exactly_one)
+    if not selected:
+        return None
+    return arm_tag_cls(selected[0])
+
+
+class GripperFailureFeedback:
+    """Tint failed gripper mesh(es) red for a short, non-acting feedback window."""
+
+    def __init__(self, env):
+        self.env = env
+        self._until = 0.0
+        self._original = {}
+
+    def active(self) -> bool:
+        return bool(self._original) and time.perf_counter() < self._until
+
+    def restore(self):
+        for material, color in self._original.values():
+            try:
+                material.set_base_color(color)
+                material.base_color = color
+            except Exception:
+                pass
+        self._original.clear()
+        self._until = 0.0
+
+    def _tint_side(self, side: str):
+        robot = getattr(self.env, "robot", None)
+        if robot is None:
+            return
+        articulation = getattr(robot, f"{side}_entity", None)
+        if articulation is None:
+            return
+        try:
+            import sapien
+        except Exception:
+            return
+        for link in articulation.get_links():
+            if link.get_name() not in GRIPPER_LINK_NAMES:
+                continue
+            for component in link.entity.get_components():
+                if not isinstance(component, sapien.render.RenderBodyComponent):
+                    continue
+                for shape in component.render_shapes:
+                    material = shape.material
+                    key = id(material)
+                    if key not in self._original:
+                        self._original[key] = (material, list(material.base_color))
+                    try:
+                        material.set_base_color_texture(None)
+                        material.set_base_color(GRIPPER_FAILURE_RED)
+                        material.base_color = GRIPPER_FAILURE_RED
+                    except Exception:
+                        pass
+
+    def flash(self, arms, message: str | None = None):
+        """Show red for ``GRIPPER_FAILURE_SECONDS``; do not perform any motion."""
+        sides = tuple(str(a) for a in (arms or ()) if str(a) in ("left", "right"))
+        if not sides:
+            return
+        self.restore()
+        for side in sides:
+            self._tint_side(side)
+        self._until = time.perf_counter() + GRIPPER_FAILURE_SECONDS
+        if message:
+            print(message)
+
+    def update(self):
+        if self._original and time.perf_counter() >= self._until:
+            self.restore()
+            controls = getattr(self.env, "_interactive_robot_controls", None)
+            if controls is not None and hasattr(controls, "_highlight_selected"):
+                try:
+                    controls._highlight_selected()
+                except Exception:
+                    pass
+
+
+def gripper_failure_feedback(env) -> GripperFailureFeedback:
+    fb = getattr(env, "_interactive_gripper_failure", None)
+    if not isinstance(fb, GripperFailureFeedback):
+        fb = GripperFailureFeedback(env)
+        env._interactive_gripper_failure = fb
+    return fb
+
+
+def flash_gripper_failure(env, arms, message: str | None = None):
+    """Shared entry point: red gripper flash when a selected-arm action fails."""
+    gripper_failure_feedback(env).flash(arms, message=message)
+
+
+def action_failed(env, arms, detail: str = "action failed") -> bool:
+    """Flash red, clear the plan-failure latch, return False for callers."""
+    sides = tuple(str(a) for a in (arms or ()) if str(a))
+    label = "+".join(sides) if sides else "arm"
+    flash_gripper_failure(env, sides, f"{label} {detail}; no motion applied")
+    try:
+        env.plan_success = True
+        env._last_plan_fail = None
+    except Exception:
+        pass
+    return False
 
 
 class RobotButtonController:
@@ -1107,9 +1245,11 @@ class RobotButtonController:
     def update(self, requested_mode):
         if not self.env.plan_success:
             detail = getattr(self.env, "_last_plan_fail", None)
-            print(f"Robot button trajectory failed ({detail or 'unknown'}); controls remain available.")
-            self.env.plan_success = True
-            self.env._last_plan_fail = None
+            sides = tuple(self.arms_for_mode(self.mode or requested_mode))
+            action_failed(
+                self.env, sides,
+                detail=f"button trajectory failed ({detail or 'unknown'})",
+            )
         if self.hold and requested_mode == self.mode:
             if requested_mode is not None:
                 self.set_latch(self.env, requested_mode)
@@ -1118,15 +1258,24 @@ class RobotButtonController:
         if self.mode is not None:
             self._lift_from_buttons(self.mode)
         if requested_mode is not None:
-            self._move_to_buttons(requested_mode)
-            if not self.hold:
-                # Edge tap: press then release in one update.
-                self.clear_latch(self.env)
-                self._lift_from_buttons(requested_mode)
+            sides = tuple(self.arms_for_mode(requested_mode))
+            if not sides:
+                # No highlighted arm maps to this action — do nothing.
                 requested_mode = None
+            else:
+                self._move_to_buttons(requested_mode)
+                if not self.hold:
+                    # Edge tap: press then release in one update.
+                    self.clear_latch(self.env)
+                    self._lift_from_buttons(requested_mode)
+                    requested_mode = None
         if not self.env.plan_success:
             detail = getattr(self.env, "_last_plan_fail", None)
-            print(f"Robot button motion failed ({detail or 'unknown'}); release and try again.")
+            sides = tuple(self.arms_for_mode(requested_mode or self.mode))
+            action_failed(
+                self.env, sides,
+                detail=f"button motion failed ({detail or 'unknown'})",
+            )
             if self._hover_qpos:
                 self._interpolate_to_qpos(self._hover_qpos)
                 self._hover_qpos.clear()
