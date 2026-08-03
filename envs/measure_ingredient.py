@@ -1266,8 +1266,9 @@ class measure_ingredient(KitchenS_base_task):
 
     def _viewer_oil_material(self):
         """Fully opaque oil for viewer compositing through alpha glass walls."""
-        rgba = list(self.OIL_COLOR_SOLID)
-        rgba[3] = 1.0
+        # Slightly darker amber than OIL_COLOR_SOLID so the fill reads clearly
+        # in the interactive hollow-jar viewer (bright yellow washes out).
+        rgba = [0.78, 0.58, 0.06, 1.0]
         mat = sapien.render.RenderMaterial(base_color=rgba)
         try:
             mat.set_transmission(0.0)
