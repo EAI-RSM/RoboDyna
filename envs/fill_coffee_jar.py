@@ -133,6 +133,19 @@ class fill_coffee_jar(KitchenS_base_task):
         },
     }
 
+    # Stove L/R anchors (microwave omitted in this task).
+    RANGE_Y = 0.14
+    RANGE_X_RIGHT = 0.28
+    RANGE_X_LEFT = -0.28
+    # Tight station band so the top-button press still reaches force thresholds.
+    # Wider |x| / far −y poses plan the reach but often register near-zero force.
+    STATION_X_LEFT = (-0.105, -0.07)
+    STATION_X_RIGHT = (0.055, 0.085)
+    # Dispenser Y jitter relative to the baseline ``disp_y`` (meters).
+    DISP_Y_UP = 0.015   # +1.5 cm
+    DISP_Y_DOWN = 0.02  # −2 cm
+    JAR_Y_MIN = -0.17
+
     def setup_demo(self, **kwags):
         self._cfg = dict(kwags.get("task_args", {}).get("fill_coffee_jar", {}))
         if kwags.get("scene_id") is None:
@@ -141,6 +154,11 @@ class fill_coffee_jar(KitchenS_base_task):
         self.replace_sink_with_range = True
         self.omit_sink = True  # solid counter; no sink basin or faucet tap
         self._ensure_kettle_assets()
+
+        rng = np.random.RandomState(self._layout_seed + 17)
+        self.stove_side, self.range_position_override = self._sample_stove_side(
+            self._cfg, rng
+        )
 
         self._loaded = False
         self.beans = []
@@ -172,6 +190,26 @@ class fill_coffee_jar(KitchenS_base_task):
 
         super().setup_demo(**kwags)
         self._configure_observer_camera()
+
+    def _sample_stove_side(self, cfg, rng: np.random.RandomState):
+        """Place the cooktop on the left or right half of the counter."""
+        side = str(cfg.get("stove_side", "random")).lower().strip()
+        if side not in ("left", "right"):
+            side = str(rng.choice(["left", "right"]))
+        range_y = float(cfg.get("range_xy", [self.RANGE_X_RIGHT, self.RANGE_Y])[1])
+        if side == "left":
+            range_xy = [float(cfg.get("range_x_left", self.RANGE_X_LEFT)), range_y]
+        else:
+            range_xy = [
+                float(
+                    cfg.get(
+                        "range_x_right",
+                        cfg.get("range_xy", [self.RANGE_X_RIGHT, self.RANGE_Y])[0],
+                    )
+                ),
+                range_y,
+            ]
+        return side, range_xy
 
     def _load_microwave(self, table_height, table_xy_bias):
         """Leave the left/back counter open — no microwave in this task."""
@@ -555,8 +593,41 @@ class fill_coffee_jar(KitchenS_base_task):
                 return False
         return True
 
+    def _decor_free_bounds(self):
+        """Open counter half opposite the stove, away from the jar approach corridor."""
+        rx = float(getattr(self, "range_xy", (self.RANGE_X_RIGHT, self.RANGE_Y))[0])
+        rhx = float(getattr(self, "range_half_size", (0.14, 0.16))[0])
+        # Prefer the free half (same side as the dispenser).
+        free_sign = -1.0 if rx >= 0.0 else 1.0
+        if free_sign < 0:
+            x_lo, x_hi = -0.42, min(-0.02, float(rx - rhx - 0.06))
+        else:
+            x_lo, x_hi = max(0.02, float(rx + rhx + 0.06)), 0.42
+        # Keep back / mid counter; jar corridor occupies the near-robot apron.
+        y_lo, y_hi = -0.02, 0.22
+        if x_hi <= x_lo + 0.06:
+            x_lo, x_hi = (free_sign * 0.34, free_sign * 0.12) if free_sign < 0 else (
+                free_sign * 0.12,
+                free_sign * 0.34,
+            )
+            if x_lo > x_hi:
+                x_lo, x_hi = x_hi, x_lo
+        return float(x_lo), float(x_hi), float(y_lo), float(y_hi)
+
+    def _jar_corridor_blocker(self):
+        """Keep decor out of the robot approach lane in front of the jar."""
+        jx, jy = float(self.jar_xy[0]), float(self.jar_xy[1])
+        # Corridor from jar toward the robot (−Y), wide enough for the arm.
+        half_x = max(float(self.JAR_HALF_XY[0]) + 0.06, 0.10)
+        half_y = 0.14
+        cy = jy - half_y
+        return (
+            np.array([jx, cy], dtype=float),
+            np.array([half_x, half_y], dtype=float),
+        )
+
     def _spawn_counter_decor(self, cfg, rng: np.random.RandomState):
-        """Coffee box + milk carton + mug on the open counter (no microwave)."""
+        """Coffee box + milk carton + mug on open space (clear of stove / station / corridor)."""
         coffee_ids = self._available_model_ids(self.COFFEE_BOX_MODEL) or [0]
         milk_ids = self._available_model_ids(self.MILK_BOX_MODEL) or [0]
         mug_ids = [i for i in self._available_model_ids(self.MUG_MODEL) if i <= 8] or [0]
@@ -588,10 +659,10 @@ class fill_coffee_jar(KitchenS_base_task):
         blockers = list(self._layout_blockers())
         blockers.append((self.dispenser_xy, self.DISP_HALF_XY))
         blockers.append((self.jar_xy, self.JAR_HALF_XY))
+        blockers.append(self._jar_corridor_blocker())
 
-        # Open counter where the microwave used to be (back / mid-left) plus apron.
-        x_lo, x_hi = -0.38, 0.12
-        y_lo, y_hi = -0.08, 0.20
+        x_lo, x_hi, y_lo, y_hi = self._decor_free_bounds()
+        free_sign = -1.0 if float(self.dispenser_xy[0]) <= 0.0 else 1.0
         specs = [
             ("coffee", coffee_half, coffee_scale, self.COFFEE_BOX_MODEL, coffee_id, "decor_coffee_box"),
             ("milk", milk_half, milk_scale, self.MILK_BOX_MODEL, milk_id, "decor_milk_box"),
@@ -600,7 +671,7 @@ class fill_coffee_jar(KitchenS_base_task):
         placed = {}
         for key, half, scale, model, mid, name in specs:
             pose_xy = None
-            for _ in range(60):
+            for _ in range(80):
                 xy = np.array(
                     [rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi)], dtype=float
                 )
@@ -608,11 +679,11 @@ class fill_coffee_jar(KitchenS_base_task):
                     pose_xy = xy
                     break
             if pose_xy is None:
-                # Deterministic fallback cluster behind the station.
+                # Deterministic fallback behind the station on the free half.
                 fallback = {
-                    "coffee": np.array([-0.30, 0.14]),
-                    "milk": np.array([-0.22, 0.14]),
-                    "mug": np.array([-0.26, 0.04]),
+                    "coffee": np.array([free_sign * 0.30, 0.14]),
+                    "milk": np.array([free_sign * 0.22, 0.14]),
+                    "mug": np.array([free_sign * 0.26, 0.04]),
                 }
                 pose_xy = fallback[key]
             yaw = float(rng.uniform(-0.6, 0.6))
@@ -693,41 +764,67 @@ class fill_coffee_jar(KitchenS_base_task):
         return val
 
     def _sample_station_layout(self, cfg, rng: np.random.RandomState):
-        """Place dispenser+jar on the left arm side without fixture overlap.
+        """Place dispenser+jar on the free half opposite the stove.
 
         Keeps a shared X (nozzle alignment) with the jar in front (−y) of the
-        dispenser. When ``randomize_layout`` is false, uses fixed config defaults.
+        dispenser so the jar stays under the nozzle. Pose jitter is kept inside
+        a tight press-reliable band (far stations often register ~0 N on the button).
         """
-        randomize = bool(cfg.get("randomize_layout", False))
+        randomize = bool(cfg.get("randomize_layout", True))
         blockers = self._layout_blockers()
-        # Jitter around the proven left-arm station (reachability is tight).
-        base_x = float(cfg.get("station_x", -0.08))
+        rx = float(getattr(self, "range_xy", (self.RANGE_X_RIGHT, self.RANGE_Y))[0])
+        free_sign = -1.0 if rx >= 0.0 else 1.0
+        # Baseline station on the free half (left when stove is right, and vice versa).
+        base_x = float(cfg.get("station_x", free_sign * 0.08))
+        if np.sign(base_x) != 0 and np.sign(base_x) != free_sign:
+            base_x = float(free_sign * abs(base_x))
         base_disp_y = float(cfg.get("disp_y", -0.02))
         base_jar_y = float(cfg.get("jar_y", -0.16))
+        y_lo = base_disp_y - float(cfg.get("disp_y_down", self.DISP_Y_DOWN))
+        y_hi = base_disp_y + float(cfg.get("disp_y_up", self.DISP_Y_UP))
+        jar_y_min = float(cfg.get("jar_y_min", self.JAR_Y_MIN))
+        if free_sign < 0:
+            x_lo, x_hi = (
+                float(cfg.get("station_x_left_lo", self.STATION_X_LEFT[0])),
+                float(cfg.get("station_x_left_hi", self.STATION_X_LEFT[1])),
+            )
+        else:
+            x_lo, x_hi = (
+                float(cfg.get("station_x_right_lo", self.STATION_X_RIGHT[0])),
+                float(cfg.get("station_x_right_hi", self.STATION_X_RIGHT[1])),
+            )
 
         if not randomize:
-            side_x, disp_y, jar_y = base_x, base_disp_y, base_jar_y
+            side_x = float(np.clip(base_x, x_lo, x_hi))
+            disp_y = float(np.clip(base_disp_y, y_lo, y_hi))
+            gap = float(np.clip(base_disp_y - base_jar_y, 0.125, 0.145))
+            jar_y = max(disp_y - gap, jar_y_min)
             if not self._station_clear(side_x, disp_y, jar_y, blockers):
-                for x in np.linspace(side_x, -0.05, 20):
+                for x in np.linspace(side_x, 0.5 * (x_lo + x_hi), 20):
                     if self._station_clear(float(x), disp_y, jar_y, blockers):
                         side_x = float(x)
                         break
             return side_x, disp_y, jar_y
 
-        for _ in range(80):
-            # Small jitter only — larger offsets make the tall lid approach unplannable.
-            side_x = float(np.clip(base_x + rng.uniform(-0.015, 0.015), -0.11, -0.05))
-            disp_y = float(np.clip(base_disp_y + rng.uniform(-0.015, 0.015), -0.04, 0.01))
-            gap = float((base_disp_y - base_jar_y) + rng.uniform(-0.015, 0.015))
-            gap = float(np.clip(gap, 0.125, 0.155))
+        for _ in range(100):
+            side_x = float(rng.uniform(x_lo, x_hi))
+            disp_y = float(rng.uniform(y_lo, y_hi))
+            # Keep jar under the nozzle: same X, modest gap ahead of the dispenser.
+            gap = float(rng.uniform(0.125, 0.145))
             jar_y = disp_y - gap
-            if jar_y < -0.20:
+            if jar_y < jar_y_min:
                 continue
             if self._station_clear(side_x, disp_y, jar_y, blockers):
                 return side_x, disp_y, jar_y
 
-        # Deterministic fallback that clears scene_0 fixtures.
-        return base_x, base_disp_y, base_jar_y
+        # Deterministic fallback on the free half (center of the press-safe band).
+        gap = float(np.clip(base_disp_y - base_jar_y, 0.125, 0.145))
+        disp_y = float(np.clip(base_disp_y, y_lo, y_hi))
+        return (
+            float(np.clip(base_x, x_lo, x_hi)),
+            disp_y,
+            max(disp_y - gap, jar_y_min),
+        )
 
     # ------------------------------------------------------------------ actors
     def load_actors(self):
@@ -800,6 +897,8 @@ class fill_coffee_jar(KitchenS_base_task):
         )
         print(
             f"[fill_coffee_jar] KitchenS scene={self.scene_id} seed={seed} "
+            f"stove_side={getattr(self, 'stove_side', '?')} "
+            f"range={np.round(getattr(self, 'range_xy', (0, 0)), 3).tolist()} "
             f"target={self.target_fill:.0%}±{self.fill_tol:.0%} "
             f"disp={self.dispenser_xy.tolist()} jar={self.jar_xy.tolist()} "
             f"layout_ok={self.layout_ok} "
@@ -1660,7 +1759,7 @@ class fill_coffee_jar(KitchenS_base_task):
         return int(best)
 
     def play_once(self):
-        # Station is constrained to the left half; use left arm.
+        # Station lives on the free half opposite the stove; pick that arm.
         arm = ArmTag("left" if float(self.dispenser_xy[0]) <= 0.0 else "right")
         self.move(self.close_gripper(arm))
         if not self.plan_success:
@@ -1707,6 +1806,8 @@ class fill_coffee_jar(KitchenS_base_task):
             "{C}": "252_coffee_bean/base0",
             "{a}": str(arm),
             "{L}": f"{level_pct}%",
+            "{side}": str(getattr(self, "stove_side", "right")),
+            "{burner}": str(getattr(self, "kettle_burner", "")),
         }
         return self.info
 
@@ -1749,5 +1850,7 @@ class fill_coffee_jar(KitchenS_base_task):
             "mug_id": int(getattr(self, "mug_id", -1)),
             "kettle_id": int(getattr(self, "kettle_id", -1)),
             "kettle_burner": str(getattr(self, "kettle_burner", "")),
+            "stove_side": str(getattr(self, "stove_side", "right")),
+            "range_xy": list(np.asarray(getattr(self, "range_xy", (0, 0)), dtype=float)),
         }
         return obs

@@ -47,9 +47,18 @@ class boil_milk(KitchenS_base_task):
     MILK_COLOR = [0.96, 0.96, 0.93, 0.92]
     TARGET_RING_COLOR = (0.92, 0.08, 0.08)
 
+    # Default cooktop / microwave anchors when stove_side randomizes L/R.
+    RANGE_Y = 0.14
+    RANGE_X_RIGHT = 0.28
+    RANGE_X_LEFT = -0.28
+    MICROWAVE_Y = 0.18
+    MICROWAVE_X_RIGHT = 0.32
+    MICROWAVE_X_LEFT = -0.32
+    BURNER_NAMES = ("left_front", "right_front", "left_rear", "right_rear")
+
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("boil_milk", {})
-        # Prefer scene_0 so the range is on the right (reachable by the right arm).
+        # Prefer scene_0; actual L/R is driven by stove_side + overrides below.
         if kwags.get("scene_id") is None:
             kwags["scene_id"] = int(self._cfg.get("scene_id", 0))
         self.replace_sink_with_range = True
@@ -59,9 +68,13 @@ class boil_milk(KitchenS_base_task):
         # Stove was 1.5× default, then cut 30% → 1.05×. Microwave +30%.
         self.range_scale_mult = float(self._cfg.get("range_scale_mult", 1.05))
         self.microwave_scale_mult = float(self._cfg.get("microwave_scale_mult", 1.3))
-        # Cooktop on the right half; top-facing knob stays in right-arm reach.
-        rel = self._cfg.get("range_xy", [0.28, 0.14])
-        self.range_position_override = [float(rel[0]), float(rel[1])]
+
+        seed = int(kwags.get("seed", 0) or 0)
+        self._layout_seed = seed
+        rng = np.random.RandomState(seed + 17)
+        self.stove_side, self.range_position_override, self.microwave_xy_override = (
+            self._sample_stove_microwave_layout(self._cfg, rng)
+        )
 
         # Per-step state must exist before any early _update_kinematic_tasks call.
         self.stove_on = False
@@ -86,8 +99,49 @@ class boil_milk(KitchenS_base_task):
         ring = float(self._cfg.get("target_ring", self.TARGET_RING_DEFAULT))
         self.target_ring = float(np.clip(ring, 0.0, 100.0))
         self.target_level = self.target_ring / 100.0
+        self.pot_burner = "left_rear"
 
         super().setup_demo(**kwags)
+
+    def _sample_stove_microwave_layout(self, cfg, rng: np.random.RandomState):
+        """Place stove left or right; microwave always on the opposite side."""
+        side = str(cfg.get("stove_side", "random")).lower().strip()
+        if side not in ("left", "right"):
+            side = str(rng.choice(["left", "right"]))
+        range_y = float(cfg.get("range_xy", [self.RANGE_X_RIGHT, self.RANGE_Y])[1])
+        mw_y = float(cfg.get("microwave_y", self.MICROWAVE_Y))
+        if side == "left":
+            range_xy = [
+                float(cfg.get("range_x_left", self.RANGE_X_LEFT)),
+                range_y,
+            ]
+            mw_xy = [
+                float(cfg.get("microwave_x_right", self.MICROWAVE_X_RIGHT)),
+                mw_y,
+            ]
+        else:
+            range_xy = [
+                float(cfg.get("range_x_right",
+                              cfg.get("range_xy", [self.RANGE_X_RIGHT, self.RANGE_Y])[0])),
+                range_y,
+            ]
+            mw_xy = [
+                float(cfg.get("microwave_x_left", self.MICROWAVE_X_LEFT)),
+                mw_y,
+            ]
+        return side, range_xy, mw_xy
+
+    def _select_pot_burner(self, cfg, rng: np.random.RandomState) -> str:
+        burners = getattr(self, "burner_positions", None) or {}
+        names = [n for n in self.BURNER_NAMES if n in burners] or list(burners.keys())
+        if not names:
+            return "left_rear"
+        choice = cfg.get("pot_burner", "random")
+        if isinstance(choice, str) and choice.lower().strip() not in ("", "random"):
+            name = choice.lower().strip()
+            if name in burners:
+                return name
+        return str(rng.choice(names))
 
     # ---------------------------------------------------------------- actors
     def load_actors(self):
@@ -134,6 +188,13 @@ class boil_milk(KitchenS_base_task):
 
         if not hasattr(self, "burner_xy"):
             raise UnStableError("cooking range missing — KitchenS base did not load a range")
+
+        rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0) or 0) + 41)
+        self.pot_burner = self._select_pot_burner(cfg, rng)
+        if self.pot_burner in getattr(self, "burner_positions", {}):
+            self.burner_xy = self.burner_positions[self.pot_burner]
+        # KitchenS fire cover / lit-burner logic keys off ``burner_name``.
+        self.burner_name = str(self.pot_burner)
 
         # Stainless saucepan (tea-pan style): thin hollow cylinder + dual-rod
         # handle with black grips — matches Desktop/images/tea_pan.jpeg.
@@ -257,9 +318,10 @@ class boil_milk(KitchenS_base_task):
         self.pot_radius = pot_r
         self.pot_height = pot_h
 
-        # Blue fire halo around the pot base, concentric with the burner disc
-        # (same geometry as make_soup).
+        # Blue fire halo around the pot base on the selected burner (not a fixed
+        # left_rear default) — disc + ring + cover all follow ``burner_xy``.
         self._clear_stove_fire_ring()
+        self._stove_fire_visual = None  # force cover/disc refresh on next set
         self._build_stove_fire_ring(
             cx,
             cy,
@@ -276,18 +338,93 @@ class boil_milk(KitchenS_base_task):
         self._load_milk_box(cfg)
         self._load_mug(cfg)
 
-        # Arm that can reach the knob (range is always on +x in scene_0 / scene_2).
+        # Arm that can reach the knob (left stove → left arm, right → right).
         self.arm = ArmTag("right" if self.knob_xy[0] >= 0 else "left")
+        print(
+            f"[boil_milk] stove_side={getattr(self, 'stove_side', '?')} "
+            f"range={np.round(self.range_xy, 3).tolist()} "
+            f"mw={None if self.microwave_xy is None else np.round(self.microwave_xy, 3).tolist()} "
+            f"burner={self.pot_burner} arm={self.arm} "
+            f"knob_x={float(self.knob_xy[0]):.3f}"
+        )
+
+    @staticmethod
+    def _aabb_overlap(c1, h1, c2, h2, margin: float = 0.0) -> bool:
+        c1 = np.asarray(c1, dtype=float)
+        c2 = np.asarray(c2, dtype=float)
+        h1 = np.asarray(h1, dtype=float)
+        h2 = np.asarray(h2, dtype=float)
+        m = float(margin)
+        return bool(
+            abs(float(c1[0] - c2[0])) < (float(h1[0]) + float(h2[0]) + m)
+            and abs(float(c1[1] - c2[1])) < (float(h1[1]) + float(h2[1]) + m)
+        )
+
+    def _fixture_blockers(self):
+        """Microwave + cooktop footprints for decor non-overlap."""
+        blockers = []
+        if getattr(self, "range_xy", None) is not None:
+            blockers.append((
+                np.asarray(self.range_xy, dtype=float),
+                np.asarray(getattr(self, "range_half_size", (0.14, 0.16)), dtype=float),
+            ))
+        if getattr(self, "microwave_xy", None) is not None and getattr(
+            self, "microwave_half_xy", None
+        ) is not None:
+            blockers.append((
+                np.asarray(self.microwave_xy, dtype=float),
+                np.asarray(self.microwave_half_xy, dtype=float),
+            ))
+        return blockers
 
     def _counter_apron_bounds(self):
-        """Open apron between microwave and range left edge (x, y limits)."""
-        hx = getattr(self, "range_half_size", (0.14, 0.16))[0]
-        rx = float(self.range_xy[0]) if hasattr(self, "range_xy") else 0.42
-        x_lo, x_hi = -0.08, float(rx - hx - 0.08)
-        y_lo, y_hi = -0.14, 0.10
-        if x_hi <= x_lo + 0.04:
-            x_lo, x_hi = -0.05, 0.12
+        """Open counter between microwave and stove (adapts to either L/R layout)."""
+        blockers = self._fixture_blockers()
+        if len(blockers) >= 2:
+            (a_c, a_h), (b_c, b_h) = blockers[0], blockers[1]
+            # Order by X so the gap between fixtures is the free apron.
+            if float(a_c[0]) > float(b_c[0]):
+                a_c, a_h, b_c, b_h = b_c, b_h, a_c, a_h
+            x_lo = float(a_c[0] + a_h[0] + 0.04)
+            x_hi = float(b_c[0] - b_h[0] - 0.04)
+        else:
+            hx = getattr(self, "range_half_size", (0.14, 0.16))[0]
+            rx = float(self.range_xy[0]) if hasattr(self, "range_xy") else 0.28
+            if rx >= 0:
+                x_lo, x_hi = -0.08, float(rx - hx - 0.08)
+            else:
+                x_lo, x_hi = float(rx + hx + 0.08), 0.08
+        y_lo, y_hi = -0.18, 0.12
+        if x_hi <= x_lo + 0.05:
+            # Fallback mid-apron if fixtures sit too close.
+            x_lo, x_hi = -0.10, 0.10
         return x_lo, x_hi, y_lo, y_hi
+
+    def _sample_free_prop_xy(
+        self,
+        half_xy,
+        blockers,
+        rng: np.random.RandomState,
+        margin: float = 0.025,
+        fallback=None,
+    ):
+        """Sample a non-overlapping XY in the open apron."""
+        x_lo, x_hi, y_lo, y_hi = self._counter_apron_bounds()
+        hx, hy = float(half_xy[0]), float(half_xy[1])
+        for _ in range(80):
+            x = float(rng.uniform(x_lo + hx, x_hi - hx)) if x_hi - x_lo > 2 * hx else 0.5 * (x_lo + x_hi)
+            y = float(rng.uniform(y_lo + hy, y_hi - hy)) if y_hi - y_lo > 2 * hy else 0.5 * (y_lo + y_hi)
+            cand = np.array([x, y], dtype=float)
+            ok = True
+            for b_c, b_h in blockers:
+                if self._aabb_overlap(cand, (hx, hy), b_c, b_h, margin):
+                    ok = False
+                    break
+            if ok:
+                return (float(cand[0]), float(cand[1]))
+        if fallback is not None:
+            return fallback
+        return (float(0.5 * (x_lo + x_hi)), float(0.5 * (y_lo + y_hi)))
 
     @staticmethod
     def _model_data(modelname: str, model_id: int) -> dict:
@@ -362,41 +499,42 @@ class boil_milk(KitchenS_base_task):
                 )
         return actor
 
-    def _apron_prop_slots(self, milk_half, mug_half, gap: float):
-        """Two non-overlapping apron slots stacked in Y (apron is too narrow in X).
+    def _apron_prop_slots(self, milk_half, mug_half, gap: float, rng=None):
+        """Sample two non-overlapping apron poses clear of MW / stove / each other.
 
         Returns ``(milk_xy, mug_xy)`` visual-center positions with ≥ ``gap`` clearance
         between body radii. Mug uses a cavity-focused radius (handle excluded), matching
         ``clean_table``'s ``0.42 * width`` heuristic for ``039_mug``.
         """
-        x_lo, x_hi, y_lo, y_hi = self._counter_apron_bounds()
+        if rng is None:
+            rng = np.random.RandomState(
+                int(getattr(self, "_layout_seed", 0) or 0) + 91
+            )
         milk_hx, milk_hz = float(milk_half[0]), float(milk_half[1])
         mug_hx, mug_hz = float(mug_half[0]), float(mug_half[1])
-        milk_r = float(max(milk_hx, milk_hz))
+        milk_half_xy = (milk_hx, milk_hz)
         # 039_mug extents include the handle; body/cavity is much smaller.
-        mug_r = 0.42 * float(max(2.0 * mug_hx, 2.0 * mug_hz))
-        pad = max(milk_r, mug_r)
-        x_mid = float(np.clip(
-            0.5 * (x_lo + min(x_hi, 0.06)),
-            x_lo + pad + 0.005,
-            x_hi - pad - 0.005,
-        ))
-        y_floor = float(y_lo + 0.01)
-        y_ceil = float(y_hi - 0.01)
-        need = milk_r + mug_r + float(gap)
-        # Pack to opposite Y extremes so the narrow apron still clears.
-        milk_y = float(y_ceil - milk_r)
-        mug_y = float(y_floor + mug_r)
-        if milk_y - mug_y < need:
-            # Stretch: pin to bounds even if padding is tight.
-            milk_y = float(y_hi - milk_r)
-            mug_y = float(y_lo + mug_r)
-        if milk_y < mug_y:
-            milk_y, mug_y = mug_y, milk_y
-        jitter = float(np.random.uniform(-0.012, 0.012))
-        milk_x = float(np.clip(x_mid + jitter, x_lo + milk_r, x_hi - milk_r))
-        mug_x = float(np.clip(x_mid - jitter, x_lo + mug_r, x_hi - mug_r))
-        return (milk_x, milk_y), (mug_x, mug_y)
+        mug_body = (
+            0.42 * float(max(2.0 * mug_hx, 2.0 * mug_hz)) * 0.5,
+            0.42 * float(max(2.0 * mug_hx, 2.0 * mug_hz)) * 0.5,
+        )
+        # Inflate halves by gap/2 so the sampled centers keep an air gap.
+        milk_sample = (milk_hx + 0.5 * gap, milk_hz + 0.5 * gap)
+        mug_sample = (mug_body[0] + 0.5 * gap, mug_body[1] + 0.5 * gap)
+
+        blockers = self._fixture_blockers()
+        x_lo, x_hi, y_lo, y_hi = self._counter_apron_bounds()
+        milk_fb = (float(0.5 * (x_lo + x_hi)), float(y_hi - milk_hz - 0.01))
+        mug_fb = (float(0.5 * (x_lo + x_hi)), float(y_lo + mug_body[1] + 0.01))
+
+        milk_xy = self._sample_free_prop_xy(
+            milk_sample, blockers, rng, margin=0.02, fallback=milk_fb
+        )
+        blockers = blockers + [(np.asarray(milk_xy, dtype=float), np.asarray(milk_half_xy))]
+        mug_xy = self._sample_free_prop_xy(
+            mug_sample, blockers, rng, margin=0.02, fallback=mug_fb
+        )
+        return milk_xy, mug_xy
 
     def _yup_visual_center_offset(self, modelname: str, model_id: int, scale: float, q):
         """World offset from actor pose → mesh geometric center (upright Y-up props)."""
@@ -412,10 +550,11 @@ class boil_milk(KitchenS_base_task):
 
     def _load_milk_box(self, cfg):
         """Place a random ``038_milk-box`` on the apron (paired slots with mug)."""
+        rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0) or 0) + 91)
         n_variants = 4
         mid = int(cfg.get("milk_box_id", -1))
         if mid < 0 or mid >= n_variants:
-            mid = int(np.random.randint(0, n_variants))
+            mid = int(rng.randint(0, n_variants))
         self.milk_box_id = mid
         target_h = float(cfg.get("milk_box_height", self.MILK_TARGET_HEIGHT))
         scale = self._scale_for_target_height(
@@ -428,7 +567,7 @@ class boil_milk(KitchenS_base_task):
         # Mug sizing needed for joint slot placement (same defaults as _load_mug).
         mug_mid = int(cfg.get("mug_id", 0))
         if mug_mid < 0 or mug_mid >= 10:
-            mug_mid = 0
+            mug_mid = int(rng.randint(0, 10))
         mug_target_h = float(cfg.get("mug_height", self.MUG_TARGET_HEIGHT))
         mug_scale = self._scale_for_target_height(
             "039_mug", mug_mid, mug_target_h, cfg.get("mug_scale")
@@ -436,12 +575,14 @@ class boil_milk(KitchenS_base_task):
         mhx, mhz = self._yup_authored_half_xy("039_mug", mug_mid)
         mug_half = (mhx * mug_scale, mhz * mug_scale)
         gap = float(cfg.get("mug_gap", 0.03))
-        milk_xy, mug_xy = self._apron_prop_slots(self._milk_half_xy, mug_half, gap)
+        milk_xy, mug_xy = self._apron_prop_slots(
+            self._milk_half_xy, mug_half, gap, rng=rng
+        )
         self._planned_mug_xy = mug_xy
         self._planned_mug_scale = mug_scale
         self._planned_mug_id = mug_mid
 
-        yaw = float(np.random.uniform(-0.6, 0.6))
+        yaw = float(rng.uniform(-0.6, 0.6))
         try:
             self.milk_box = self._place_upright_prop(
                 "038_milk-box", mid, milk_xy, scale, yaw, f"038_milk-box/base{mid}"
@@ -470,7 +611,8 @@ class boil_milk(KitchenS_base_task):
             self.milk_box_xy[1] - 0.14,
         )
 
-        yaw = float(np.random.uniform(-0.5, 0.5))
+        rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0) or 0) + 97)
+        yaw = float(rng.uniform(-0.5, 0.5))
         upright = np.array([0.70710678, 0.70710678, 0.0, 0.0], dtype=np.float64)
         q = qmult(euler2quat(0.0, 0.0, yaw, axes="sxyz"), upright)
         # Compensate 039_mug origin ≠ cavity center so the cup body lands on the slot.
@@ -773,6 +915,8 @@ class boil_milk(KitchenS_base_task):
             "{B}": "cooking_range",
             "{C}": "stove_knob",
             "{a}": str(arm),
+            "{side}": str(getattr(self, "stove_side", "right")),
+            "{burner}": str(getattr(self, "pot_burner", "left_rear")),
         }
         return self.info
 
@@ -805,5 +949,8 @@ class boil_milk(KitchenS_base_task):
             "target_level": float(self.target_level),
             "baseline_level": float(self.baseline_level),
             "spill_amount": float(getattr(self, "_spill_amount", 0.0)),
+            "stove_side": str(getattr(self, "stove_side", "right")),
+            "pot_burner": str(getattr(self, "pot_burner", "left_rear")),
+            "range_xy": list(np.asarray(getattr(self, "range_xy", (0, 0)), dtype=float)),
         }
         return obs

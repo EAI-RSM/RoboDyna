@@ -41,22 +41,36 @@ save_failed_cases: false
 check_render_success: true
 task_args:
   clean_table:
-    # Mug on one side, 015_laptop on the opposite; irregular spill from rim → laptop.
-    mug_side: right          # left | right | random
-    mug_x: 0.20
+    # Per-seed layout / spill / décor diversification (default on).
+    randomize_layout: true
+    # left | right | random — with randomize_layout, side is coin-flipped unless
+    # force_side: true locks this value.
+    laptop_side: random
+    force_side: false
+    # Legacy mug_side still accepted (inverted to laptop_side when laptop_side unset).
+    mug_side: random
+    # Base laptop pose (mirrored ±X); jittered ±20% X / ±30% Y when randomizing.
     laptop_x: 0.20
-    mug_y: -0.02
     laptop_y: -0.02
+    # Center-to-center X gap (meters), randomized per seed. Tip/spill mug → laptop.
+    mug_laptop_gap_min: 0.30
+    mug_laptop_gap_max: 0.40
+    mug_y_min: -0.10
+    mug_y_max: 0.50
+    # Deterministic fallbacks used only when randomize_layout: false.
+    mug_x: 0.20
+    mug_y: -0.02
     sponge_y: -0.18
     mug_id: 0
     mug_scale_mult: 0.60
     laptop_id: 0
     laptop_yaw: 1.5707963267948966   # +90° Z — screen/keyboard toward robot (−Y)
-    sponge_dx: 0.12                  # outboard of mug so handle grasp clears the cup
+    sponge_dx: 0.12                  # offset away from laptop (not in spill corridor)
     sponge_grasp_open: 1.0
     sponge_grasp_close: 0.25
-    # Lower = faster spread (was 16000; ~1.45× faster toward laptop).
+    # Lower = faster spread; per-seed rate also jitters by spill_speed_jitter.
     spill_steps: 11000
+    spill_speed_jitter: 0.30         # ±30% of configured spill rate
     reach_laptop_level: 0.92
     clean_tol: 0.08
     # Tip reveals a multi-spot puddle immediately; short settle then dab each lobe.
@@ -67,7 +81,8 @@ task_args:
     spot_clear_dwell: 6
     wipe_safe_z: 0.11
     mug_avoid_margin: 0.025
-    # Back-of-table décor (away from spill lane at y≈-0.02).
+    # Décor defaults (used when randomize_layout: false); otherwise sampled in the
+    # upper 30% of table Y with non-overlap rejection.
     decor_y: 0.24
     plant_x: -0.44
     plant_scale: 0.55

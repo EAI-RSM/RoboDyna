@@ -107,6 +107,15 @@ class trap_bug(Office_base_task):
         self._trap_anchor_pose = None
         self._bug_captured = False
         self._sim_steps = 0
+        # Bias the office shelf to the requested run side (skip centered shelf so
+        # left/right lanes stay unambiguous). Trap always spawns on that same side.
+        run_side = str(self._cfg.get("run_side", "random")).lower().strip()
+        if run_side == "left":
+            self._office_arr_choices = [0]
+        elif run_side == "right":
+            self._office_arr_choices = [2]
+        else:
+            self._office_arr_choices = [0, 2]
         super().setup_demo(**kwags)
         self._configure_observer_camera()
 
@@ -276,17 +285,23 @@ class trap_bug(Office_base_task):
         return float(np.arctan2(vx, self._bug_forward_y * vy))
 
     def _select_bug_species(self):
+        """Pick bug species from ``bug_type`` / ``species`` or randomize.
+
+        Config:
+          - ``bug_type`` / ``species``: ``cockroach`` | ``spider`` | ``ant`` | ``random``
+          - ``bug_types``: pool used when random (default all three)
+        """
         c = self._cfg
-        forced = c.get("bug_type") or c.get("species")
+        forced = c.get("bug_type", c.get("species", "random"))
         choices = list(c.get("bug_types", self.DEFAULT_BUG_TYPES))
-        if forced is not None:
-            key = str(forced).lower().strip()
-            if key not in self.BUG_SPECIES:
-                raise ValueError(f"unknown trap_bug species: {forced}")
-        else:
+        key = str(forced).lower().strip() if forced is not None else "random"
+        if key in ("", "random", "none", "any"):
             key = str(np.random.choice(choices)).lower().strip()
-            if key not in self.BUG_SPECIES:
-                raise ValueError(f"unknown trap_bug species in bug_types: {key}")
+        if key not in self.BUG_SPECIES:
+            raise ValueError(
+                f"unknown trap_bug species: {forced!r} "
+                f"(expected one of {list(self.BUG_SPECIES)} or 'random')"
+            )
         spec = self.BUG_SPECIES[key]
         self.bug_type = key
         self.bug_model = spec["model"]
@@ -294,6 +309,18 @@ class trap_bug(Office_base_task):
         self._bug_forward_y = float(np.sign(spec.get("forward_y", -1.0)) or -1.0)
         self._bug_mass = float(spec["mass"])
         return spec
+
+    def _resolve_run_side(self, shelf_x: float) -> int:
+        """+1 = bug/trap on right, −1 = left. Honors ``run_side`` config."""
+        run_side = str(self._cfg.get("run_side", "random")).lower().strip()
+        if run_side == "left":
+            return -1
+        if run_side == "right":
+            return 1
+        # random / unset: follow shelf offset, or coin-flip if shelf is centered.
+        if abs(shelf_x) > 1e-6:
+            return int(np.sign(shelf_x))
+        return int(np.random.choice([-1, 1]))
 
     # ------------------------------------------------------------------ actors
     def load_actors(self):
@@ -320,12 +347,9 @@ class trap_bug(Office_base_task):
         shelf_x = float(self.office_info["furn_x_v"]["shelf"][self.arr_v])
         shelf_front_y = float(self.shelf_lims[1])
 
-        # Run outward from an offset shelf; center layout randomizes left/right.
-        self.run_sign = (
-            int(np.sign(shelf_x))
-            if abs(shelf_x) > 1e-6
-            else int(np.random.choice([-1, 1]))
-        )
+        # Bug runs left or right; trap is placed on that same side so the arm
+        # can pick it up and drop it over the bug (reachability is side-bound).
+        self.run_sign = self._resolve_run_side(shelf_x)
         self.arm_side = "right" if self.run_sign > 0 else "left"
 
         # Spawn under the bookshelf front lip, head already aimed along the run.
@@ -370,7 +394,7 @@ class trap_bug(Office_base_task):
             xmin, xmax = -0.32, -0.02
         self._table_bounds = (xmin, xmax, -0.25, min(shelf_front_y - 0.02, 0.12))
 
-        # Trap on the same side the bug will run toward.
+        # Trap on the same side the bug will run toward (pickable by that arm).
         trap_x = float(np.clip(
             self.run_sign * np.random.uniform(0.16, 0.28),
             -0.30, 0.30,
@@ -379,6 +403,11 @@ class trap_bug(Office_base_task):
         trap_z = self.table_top + self.trap_half[2]
         self.trap = self._create_glass_trap(
             sapien.Pose(p=[trap_x, trap_y, trap_z], q=[1, 0, 0, 0]))
+        print(
+            f"[trap_bug] bug={self.bug_type} run_side="
+            f"{'right' if self.run_sign > 0 else 'left'} "
+            f"arm={self.arm_side} trap=({trap_x:.2f},{trap_y:.2f})"
+        )
         self.trap_mass = float(c.get("trap_mass", self.TRAP_MASS))
         try:
             self.trap.set_mass(self.trap_mass)

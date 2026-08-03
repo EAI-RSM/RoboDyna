@@ -31,6 +31,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+from copy import deepcopy
 
 sys.path.insert(0, "./")
 sys.path.insert(0, "./script/bench_script")
@@ -43,6 +45,10 @@ from envs import CONFIGS_PATH
 from envs.utils.images_to_video import images_to_video
 from envs.utils.pkl2hdf5 import load_pkl_file
 from script.collect_data import class_decorator, get_embodiment_config, run
+
+
+class DemoRenderTimeout(Exception):
+    """Raised when a failure-demo render hits the wall-clock cap."""
 
 # Bird's-eye framing: above table center, looking straight down.
 TOPDOWN_POS = np.array([0.0, 0.05, 1.85], dtype=np.float64)
@@ -305,6 +311,162 @@ def _cleanup_scratch(save_root: str, task_name: str) -> None:
             os.remove(p)
 
 
+def record_fail_demo(
+    task_name: str,
+    seed: int,
+    config_name: str = "demo_dynamic",
+    task_arg_overrides: list[str] | None = None,
+    tag: str | None = None,
+    max_seconds: float = 60.0,
+    dest_dir: str | None = None,
+) -> dict:
+    """Record a failure demo with a wall-clock render cap.
+
+    Plans once (saving the traj even when check_success fails), then renders
+    until ``max_seconds`` elapses. On timeout, merges whatever frames are in
+    the cache and treats the clip as a failure demo.
+    """
+    save_root = os.path.abspath(f"./tmp_{task_name}_failrec")
+    video_dir = os.path.join(save_root, "video")
+    os.makedirs(video_dir, exist_ok=True)
+    _cleanup_scratch(save_root, task_name)
+    os.makedirs(save_root, exist_ok=True)
+
+    overrides = list(task_arg_overrides or [])
+    if not any(o.startswith("allow_fail=") for o in overrides):
+        overrides.append("allow_fail=true")
+
+    args = build_args(task_name, config_name, save_root, None, overrides)
+    args["save_failed_cases"] = True
+    args["check_render_success"] = False
+    args["episode_num"] = 1
+    args["collect_data"] = True
+    args["use_seed"] = False
+
+    ver = next_version(video_dir)
+    stem = f"v{ver}_{tag}" if tag else f"v{ver}_fail"
+    out_head = os.path.join(video_dir, f"{stem}_head.mp4")
+    out_topdown = os.path.join(video_dir, f"{stem}_topdown.mp4")
+    out_side = os.path.join(video_dir, f"{stem}_sidebyside.mp4")
+
+    task = class_decorator(task_name)
+    _orig_setup = task.setup_demo
+
+    def _setup_demo(**kwags):
+        kwags["seed"] = int(seed)
+        _orig_setup(**kwags)
+        configure_topdown_camera(task)
+
+    task.setup_demo = _setup_demo
+
+    # ----- plan pass (no RGB) -----
+    plan_args = dict(args)
+    plan_args.update(
+        collect_data=False,
+        save_data=False,
+        eval_video_log=False,
+        need_plan=True,
+        render_freq=0,
+    )
+    print(f"[fail-demo] plan seed={seed} tag={tag}", flush=True)
+    task.setup_demo(now_ep_num=0, seed=int(seed), **plan_args)
+    task.play_once()
+    plan_ok = bool(task.plan_success and task.check_success())
+    print(
+        f"[fail-demo] plan done plan_success={task.plan_success} "
+        f"check_success={task.check_success()} ok={plan_ok}",
+        flush=True,
+    )
+    task.save_traj_data(0)
+    try:
+        task.close_env()
+    except Exception:
+        pass
+
+    # ----- render pass with wall-clock cap -----
+    render_args = deepcopy(args)
+    render_args.update(need_plan=False, render_freq=0, save_data=True)
+    task.setup_demo(now_ep_num=0, seed=int(seed), **render_args)
+    traj = task.load_tran_data(0)
+    render_args["left_joint_path"] = traj["left_joint_path"]
+    render_args["right_joint_path"] = traj["right_joint_path"]
+    task.set_path_lst(render_args)
+
+    t0 = time.monotonic()
+    _orig_take = task._take_picture
+    timed_out = False
+
+    def _take_picture_capped():
+        nonlocal timed_out
+        if time.monotonic() - t0 >= float(max_seconds):
+            timed_out = True
+            raise DemoRenderTimeout(
+                f"render hit {max_seconds:.0f}s wall-clock cap "
+                f"(frames={getattr(task, 'FRAME_IDX', '?')})"
+            )
+        return _orig_take()
+
+    task._take_picture = _take_picture_capped
+    print(f"[fail-demo] render seed={seed} max_seconds={max_seconds}", flush=True)
+    try:
+        task.play_once()
+    except DemoRenderTimeout as e:
+        print(f"[fail-demo] {e} — saving partial video as failure", flush=True)
+    finally:
+        task._take_picture = _orig_take
+
+    cache_path = f"{task.save_dir}/.cache/episode{task.ep_num}/"
+    fps = 250.0 / float(task.save_freq) if task.save_freq else 15.0
+    n_frames = len(glob.glob(os.path.join(cache_path, "*.pkl")))
+    print(f"[fail-demo] merge {n_frames} frames from {cache_path}", flush=True)
+    if n_frames == 0:
+        raise RuntimeError(f"No frames saved before timeout for {task_name} seed={seed}")
+    merge_dual_view_videos(cache_path, out_head, out_topdown, out_side, fps=fps)
+
+    try:
+        task.close_env(clear_cache=True)
+    except Exception:
+        pass
+    try:
+        task.remove_data_cache()
+    except Exception:
+        pass
+
+    copied = {}
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
+        for view, src in (
+            ("head", out_head),
+            ("topdown", out_topdown),
+            ("sidebyside", out_side),
+        ):
+            if os.path.isfile(src):
+                name = f"{tag or 'fail'}_seed{seed}_{view}.mp4"
+                dst = os.path.join(dest_dir, name)
+                shutil.copy2(src, dst)
+                copied[view] = dst
+                print(f"[fail-demo] COPIED {dst}", flush=True)
+
+    _cleanup_scratch(save_root, task_name)
+    print(
+        f"[fail-demo] ready timed_out={timed_out} plan_ok={plan_ok} "
+        f"frames~{n_frames}",
+        flush=True,
+    )
+    return {
+        "version": ver,
+        "tag": tag,
+        "seed": seed,
+        "timed_out": timed_out,
+        "plan_ok": plan_ok,
+        "head": out_head,
+        "topdown": out_topdown,
+        "sidebyside": out_side,
+        "copied": copied,
+        "n_frames": n_frames,
+    }
+
+
 def record_demo(
     task_name: str,
     config_name: str = "demo_dynamic",
@@ -404,19 +566,55 @@ def main():
         help="Condition label embedded in output names, e.g. opt2_blocker "
              "→ vN_opt2_blocker_head.mp4",
     )
+    parser.add_argument(
+        "--fail",
+        action="store_true",
+        help="Record a failure demo (saves even when check_success fails).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Force episode seed (required with --fail).",
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=float,
+        default=60.0,
+        help="Wall-clock render cap for --fail demos (default: 60). "
+             "On timeout, merge whatever frames exist and save as failure.",
+    )
+    parser.add_argument(
+        "--dest",
+        default=None,
+        help="Optional copy destination dir (e.g. rand_demo/<task>/failure).",
+    )
     ns = parser.parse_args()
     # Alias: users sometimes say place_block_task
     task = ns.task
     if task in ("place_block_task", "place_block"):
         print(f"Note: '{task}' -> place_block_belt")
         task = "place_block_belt"
-    record_demo(
-        task,
-        config_name=ns.config,
-        option=ns.option,
-        task_arg_overrides=ns.task_arg,
-        tag=ns.tag,
-    )
+    if ns.fail:
+        if ns.seed is None:
+            parser.error("--fail requires --seed")
+        record_fail_demo(
+            task,
+            seed=ns.seed,
+            config_name=ns.config,
+            task_arg_overrides=ns.task_arg,
+            tag=ns.tag or "fail",
+            max_seconds=ns.max_seconds,
+            dest_dir=ns.dest,
+        )
+    else:
+        record_demo(
+            task,
+            config_name=ns.config,
+            option=ns.option,
+            task_arg_overrides=ns.task_arg,
+            tag=ns.tag,
+        )
 
 
 if __name__ == "__main__":

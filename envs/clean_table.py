@@ -2,14 +2,16 @@
 
 Setup (dual UR5e / ur5-wsg):
   - A coffee mug tips over toward the laptop (fall along the spill direction).
-  - A real ``015_laptop`` sits on the **opposite** side (~30 cm away).
+  - A real ``015_laptop`` sits left **or** right of the mug (seed-randomized)
+    at a fixed ~25 cm X gap; tip/spill always run mug → laptop.
   - Spill starts at the mug *rim* on the table, then spreads toward the laptop
-    with an irregular lobed / teardrop shape.
-  - A yellow sponge on the mug side; the matching arm **dabs** each stain
-    (lift → lower onto the table → lift), avoiding the mug. Mug is dynamic so
-    collisions from the arm/sponge move it instead of ghosting through.
-  - Background décor along the back of the table: plant, office file holder,
-    pen cup, and alarm clock.
+    with a seed-randomized irregular lobed / teardrop shape (±30% speed).
+  - A yellow sponge on the mug side (offset away from the laptop); the matching
+    arm **dabs** each stain (lift → lower onto the table → lift), avoiding the
+    mug. Mug is dynamic so collisions from the arm/sponge move it instead of
+    ghosting through.
+  - Background décor randomized in the upper 30% of the table Y span (no overlap):
+    plant, office file holder, pen cup, and alarm clock.
 """
 from __future__ import annotations
 
@@ -73,6 +75,16 @@ class clean_table(Base_Task):
     MUG_SCALE_MULT = 0.60  # stock mug is large; shrink for graspable station size
     MUG_MASS = 0.18
 
+    # Table is 1.2 × 0.7 m (see Base_Task.create_table_and_wall).
+    TABLE_HALF_X = 0.55
+    TABLE_HALF_Y = 0.32
+    # Center-to-center X gap (m), randomized per seed in this band.
+    MUG_LAPTOP_GAP = (0.30, 0.40)
+    MUG_Y_RANGE = (-0.10, 0.50)
+    # Décor lives in the far / "upper" 30% of the table Y span.
+    DECOR_Y_FRAC = 0.30
+    SPILL_SPEED_JITTER = 0.30  # ±30% of configured spill rate
+
     def setup_demo(self, **kwags):
         self._cfg = dict(kwags.get("task_args", {}).get("clean_table", {}))
 
@@ -108,6 +120,10 @@ class clean_table(Base_Task):
         self.table_top = 0.74
         self._spill_seed = 0
         self._lobe_phase = 0.0
+        self._spill_speed_mult = 1.0
+        self._spill_pattern = {}
+        self.laptop_side = -1.0
+        self.mug_side = 1.0
         self.wipe_safe_z = self.WIPE_SAFE_Z
         self.mug_avoid_margin = self.MUG_AVOID_MARGIN
 
@@ -118,7 +134,6 @@ class clean_table(Base_Task):
         cfg = self._cfg
         self.table_top = 0.74 + float(self.table_z_bias)
 
-        self.spill_steps = int(cfg.get("spill_steps", self.SPILL_STEPS_DEFAULT))
         self.reach_laptop_level = float(
             cfg.get("reach_laptop_level", self.REACH_LAPTOP_LEVEL_DEFAULT)
         )
@@ -159,38 +174,7 @@ class clean_table(Base_Task):
         self._sponge_hold_quat = None
         self._mug_rigid = None
 
-        # Mug on one side, laptop on the opposite side (spill travels along ±X).
-        side_cfg = cfg.get("mug_side", "random")
-        if side_cfg in ("left", "right"):
-            mug_side = -1.0 if side_cfg == "left" else 1.0
-        else:
-            mug_side = 1.0 if (np.random.rand() > 0.5) else -1.0
-
-        mug_x = float(cfg.get("mug_x", 0.20)) * mug_side
-        laptop_x = float(cfg.get("laptop_x", 0.20)) * (-mug_side)
-        mug_y = float(cfg.get("mug_y", -0.02))
-        laptop_y = float(cfg.get("laptop_y", -0.02))
-        # Sponge on the mug side, toward the robot and outboard so the handle
-        # grasp stays clear of the mug.
-        sponge_dx = float(cfg.get("sponge_dx", 0.12))
-        sponge_x = mug_x + (sponge_dx if mug_side > 0 else -sponge_dx)
-        sponge_y = float(cfg.get("sponge_y", -0.18))
-
-        self.mug_side = mug_side
-        self.arm = ArmTag("right" if mug_side >= 0 else "left")
-        self.cup_xy = np.array([mug_x, mug_y], dtype=float)  # alias used by helpers
-        self.mug_xy = self.cup_xy.copy()
-        self.laptop_xy = np.array([laptop_x, laptop_y], dtype=float)
-        self.sponge_xy = np.array([sponge_x, sponge_y], dtype=float)
-
-        # Main flow: mug → laptop (mostly ±X, small Y component if positions differ).
-        delta = self.laptop_xy - self.mug_xy
-        n = float(np.linalg.norm(delta))
-        self.spill_dir = (delta / n) if n > 1e-6 else np.array([-mug_side, 0.0])
-        self.spill_lat = np.array([-self.spill_dir[1], self.spill_dir[0]], dtype=float)
-
-        self._spill_seed = int(cfg.get("spill_seed", np.random.randint(0, 10_000)))
-        self._lobe_phase = float((self._spill_seed % 97) / 97.0 * 2.0 * np.pi)
+        self._sample_layout_and_spill()
 
         self._spawn_mug()
         self._spawn_coffee_in_mug()
@@ -201,12 +185,12 @@ class clean_table(Base_Task):
         # Rim contact on the table after tip — origin of the spill (NOT under the body).
         rim_along = float(getattr(self, "mug_half_height", 0.04)) + 0.008
         self.spill_origin = self.mug_xy + self.spill_dir * rim_along
-        # Path length from rim to near edge of laptop.
+        # Path ends at the laptop near edge (do NOT floor at 0.14 — that overshoots
+        # into the chassis on short gaps and used to hide geometric contact).
         laptop_half = float(getattr(self, "laptop_half_along", 0.10))
         laptop_near = self.laptop_xy - self.spill_dir * laptop_half
-        self.spill_path_len = max(
-            0.14, float(np.dot(laptop_near - self.spill_origin, self.spill_dir))
-        )
+        raw_path = float(np.dot(laptop_near - self.spill_origin, self.spill_dir))
+        self.spill_path_len = max(0.04, raw_path)
         self.laptop_near_xy = laptop_near
 
         self.add_prohibit_area(self.mug, padding=0.04)
@@ -215,11 +199,168 @@ class clean_table(Base_Task):
         self._build_spill_spots()
         self._loaded = True
         print(
-            f"[clean_table] arm={self.arm} mug={self.mug_xy} laptop={self.laptop_xy} "
-            f"sponge={self.sponge_xy} dir={self.spill_dir} path={self.spill_path_len:.3f}m "
-            f"spill_steps={self.spill_steps} spots={len(self._spill_spots)} "
-            f"seed={self._spill_seed}"
+            f"[clean_table] arm={self.arm} laptop_side="
+            f"{'right' if self.laptop_side > 0 else 'left'} "
+            f"mug={self.mug_xy} laptop={self.laptop_xy} sponge={self.sponge_xy} "
+            f"dir={self.spill_dir} path={self.spill_path_len:.3f}m "
+            f"spill_steps={self.spill_steps} speed_mult={self._spill_speed_mult:.2f} "
+            f"spots={len(self._spill_spots)} seed={self._spill_seed}"
         )
+
+    def _sample_layout_and_spill(self):
+        """Seed-randomized laptop/mug/sponge poses, spill speed, and pattern seed.
+
+        Base layout (matches the original working scene): laptop on one side of
+        the mug with a fixed ~25 cm X gap. Mirroring puts the laptop on the
+        opposite side of the mug. Tip/spill always run from mug → laptop.
+        """
+        cfg = self._cfg
+        randomize = bool(cfg.get("randomize_layout", True))
+
+        base_laptop_y = float(cfg.get("laptop_y", -0.02))
+        gap_lo, gap_hi = self.MUG_LAPTOP_GAP
+        gap_lo = float(cfg.get("mug_laptop_gap_min", gap_lo))
+        gap_hi = float(cfg.get("mug_laptop_gap_max", gap_hi))
+        mug_y_lo, mug_y_hi = self.MUG_Y_RANGE
+        mug_y_lo = float(cfg.get("mug_y_min", mug_y_lo))
+        mug_y_hi = float(cfg.get("mug_y_max", mug_y_hi))
+
+        # Laptop side relative to mug: left => laptop.x < mug.x (original).
+        side_cfg = cfg.get("laptop_side", None)
+        if side_cfg is None:
+            mug_side_cfg = cfg.get("mug_side", "random")
+            if mug_side_cfg == "left":
+                side_cfg = "right"
+            elif mug_side_cfg == "right":
+                side_cfg = "left"
+            else:
+                side_cfg = "random"
+
+        if side_cfg in ("left", "right") and (
+            (not randomize) or bool(cfg.get("force_side", False))
+        ):
+            laptop_side = -1.0 if side_cfg == "left" else 1.0
+        else:
+            laptop_side = 1.0 if (np.random.rand() > 0.5) else -1.0
+
+        # Per-seed center-to-center gap (default 20–40 cm).
+        gap = float(np.random.uniform(gap_lo, gap_hi)) if randomize else float(gap_lo)
+        gap = max(0.30, min(0.40, gap))
+
+        if randomize:
+            # Pair straddles the midline: mug on one half, laptop on the other,
+            # exactly ``gap`` apart along X (original working geometry).
+            half = 0.5 * gap
+            mid = float(np.random.uniform(-0.15, 0.15) * half)
+            # laptop_side < 0 ⇒ laptop left of mug (original).
+            mug_x = mid - laptop_side * half
+            laptop_x = mid + laptop_side * half
+            # ±20% rigid shift of the whole pair (gap unchanged).
+            x_jit = float(np.random.uniform(-0.20, 0.20)) * half
+            mug_x -= x_jit
+            laptop_x -= x_jit
+            mug_x = laptop_x - laptop_side * gap
+
+            decor_y_lo = self.TABLE_HALF_Y - float(self.DECOR_Y_FRAC) * (
+                2.0 * self.TABLE_HALF_Y
+            )
+            mug_y_hi_eff = min(mug_y_hi, decor_y_lo - 0.04, self.TABLE_HALF_Y - 0.04)
+            mug_y_lo_eff = max(mug_y_lo, -self.TABLE_HALF_Y + 0.04)
+            if mug_y_lo_eff > mug_y_hi_eff:
+                mug_y_lo_eff, mug_y_hi_eff = -0.10, 0.08
+            mug_y = float(np.random.uniform(mug_y_lo_eff, mug_y_hi_eff))
+            y_jit = float(np.random.uniform(0.70, 1.30))  # ±30%
+            laptop_y = float(base_laptop_y * y_jit)
+            laptop_y = float(np.clip(laptop_y, mug_y - 0.06, mug_y + 0.06))
+            laptop_y = float(
+                np.clip(laptop_y, -self.TABLE_HALF_Y + 0.04, self.TABLE_HALF_Y - 0.04)
+            )
+            mug_x = float(
+                np.clip(mug_x, -self.TABLE_HALF_X + 0.05, self.TABLE_HALF_X - 0.05)
+            )
+            laptop_x = float(
+                np.clip(laptop_x, -self.TABLE_HALF_X + 0.05, self.TABLE_HALF_X - 0.05)
+            )
+            # If clipping broke the gap, restore it from the mug.
+            if abs(laptop_x - mug_x) < gap - 1e-4:
+                laptop_x = mug_x + laptop_side * gap
+                laptop_x = float(
+                    np.clip(
+                        laptop_x, -self.TABLE_HALF_X + 0.05, self.TABLE_HALF_X - 0.05
+                    )
+                )
+                mug_x = laptop_x - laptop_side * gap
+                mug_x = float(
+                    np.clip(mug_x, -self.TABLE_HALF_X + 0.05, self.TABLE_HALF_X - 0.05)
+                )
+        else:
+            # Deterministic: opposite halves with configured gap.
+            half = 0.5 * gap
+            mug_x = (-laptop_side) * half
+            laptop_x = laptop_side * half
+            mug_y = float(cfg.get("mug_y", -0.02))
+            laptop_y = base_laptop_y
+
+        mug_side = 1.0 if mug_x >= 0.0 else -1.0
+        # Sponge on the mug half, toward the robot, offset away from the laptop.
+        sponge_dx = float(cfg.get("sponge_dx", 0.12))
+        sponge_x = mug_x - laptop_side * sponge_dx
+        sponge_y = float(cfg.get("sponge_y", -0.18))
+        if randomize:
+            sponge_y = float(
+                np.clip(
+                    sponge_y + np.random.uniform(-0.04, 0.04),
+                    -self.TABLE_HALF_Y + 0.05,
+                    min(mug_y, 0.0) - 0.06,
+                )
+            )
+            sponge_x = float(
+                np.clip(sponge_x, -self.TABLE_HALF_X + 0.05, self.TABLE_HALF_X - 0.05)
+            )
+
+        self.laptop_side = float(laptop_side)
+        self.mug_side = float(mug_side)
+        self.arm = ArmTag("right" if mug_side >= 0 else "left")
+        self.cup_xy = np.array([mug_x, mug_y], dtype=float)
+        self.mug_xy = self.cup_xy.copy()
+        self.laptop_xy = np.array([laptop_x, laptop_y], dtype=float)
+        self.sponge_xy = np.array([sponge_x, sponge_y], dtype=float)
+        self._layout_gap = float(abs(laptop_x - mug_x))
+
+        # Spill / tip direction: always mug → laptop.
+        delta = self.laptop_xy - self.mug_xy
+        n = float(np.linalg.norm(delta))
+        self.spill_dir = (
+            (delta / n) if n > 1e-6 else np.array([float(laptop_side), 0.0])
+        )
+        self.spill_lat = np.array([-self.spill_dir[1], self.spill_dir[0]], dtype=float)
+
+        # Spill speed ±30% of configured rate (lower spill_steps → faster).
+        base_steps = int(cfg.get("spill_steps", self.SPILL_STEPS_DEFAULT))
+        speed_jit = float(cfg.get("spill_speed_jitter", self.SPILL_SPEED_JITTER))
+        if randomize and speed_jit > 0:
+            self._spill_speed_mult = float(
+                np.random.uniform(1.0 - speed_jit, 1.0 + speed_jit)
+            )
+            self.spill_steps = max(1, int(round(base_steps / self._spill_speed_mult)))
+        else:
+            self._spill_speed_mult = 1.0
+            self.spill_steps = base_steps
+
+        self._spill_seed = int(cfg.get("spill_seed", np.random.randint(0, 10_000)))
+        self._lobe_phase = float((self._spill_seed % 97) / 97.0 * 2.0 * np.pi)
+        # Extra pattern knobs used by _build_spill_spots (organic stream variety).
+        rng = np.random.RandomState(self._spill_seed)
+        self._spill_pattern = {
+            "wobble1": float(rng.uniform(0.008, 0.018)),
+            "wobble2": float(rng.uniform(0.004, 0.012)),
+            "freq1": float(rng.uniform(1.6, 2.8)),
+            "freq2": float(rng.uniform(3.5, 6.5)),
+            "width_scale": float(rng.uniform(0.85, 1.20)),
+            "side_bias": float(rng.uniform(-0.25, 0.25)),
+            "n_main": int(rng.randint(6, 10)),
+            "puddle_spread": float(rng.uniform(0.85, 1.20)),
+        }
 
     def _spawn_mug(self):
         self.mug_id = int(self._cfg.get("mug_id", 0))
@@ -313,17 +454,19 @@ class clean_table(Base_Task):
             fix_root_link=True,
         )
         self.laptop_id = lid
-        # Near-edge half-size along spill (±X). PartNet extents are mesh-local —
-        # multiply by authored scale (≈0.15) so we don't clamp path to the floor.
+        # Table footprint half-extents (m). PartNet extents are mesh-local —
+        # multiply by authored scale (≈0.15). After laptop_yaw ≈ +90° Z,
+        # model Y → world ±X (spill axis) and model X → world ±Y.
         self.laptop_half_along = 0.10
+        self.laptop_half_lat = 0.08
         try:
             cfg = getattr(self.laptop, "config", {}) or {}
             ext = np.array(cfg.get("extents", [0.2, 0.15, 0.2]), dtype=float)
             sc = cfg.get("scale", 0.15)
             sc = float(sc[0] if isinstance(sc, (list, tuple)) else sc)
             world = ext * sc
-            # After laptop_yaw ≈ +90° Z, model Y maps to world ±X (spill axis).
             self.laptop_half_along = 0.45 * float(max(world[0], world[1]))
+            self.laptop_half_lat = 0.45 * float(min(world[0], world[1]))
         except Exception:
             pass
 
@@ -496,64 +639,218 @@ class clean_table(Base_Task):
         self.decor.append(actor)
         return actor
 
+    def _decor_y_band(self):
+        """Upper (far) 30% of the table Y span, in world coords."""
+        y_max = self.TABLE_HALF_Y
+        y_min = -self.TABLE_HALF_Y
+        span = y_max - y_min
+        lo = y_max - float(self.DECOR_Y_FRAC) * span
+        return float(lo), float(y_max - 0.02)
+
+    def _occupied_rects(self):
+        """Axis-aligned keep-out boxes for mug / laptop / sponge / spill corridor."""
+        rects = []
+        for xy, hx, hy in (
+            (self.mug_xy, 0.07, 0.07),
+            (self.laptop_xy, 0.14, 0.12),
+            (self.sponge_xy, 0.07, 0.07),
+        ):
+            rects.append(
+                [
+                    float(xy[0] - hx),
+                    float(xy[1] - hy),
+                    float(xy[0] + hx),
+                    float(xy[1] + hy),
+                ]
+            )
+        # Spill corridor from mug toward laptop.
+        mid = 0.5 * (self.mug_xy + self.laptop_xy)
+        along = max(0.10, float(np.linalg.norm(self.laptop_xy - self.mug_xy)) * 0.55)
+        lat = 0.08
+        # Approximate AABB of the corridor (axis-aligned; slightly oversized).
+        rects.append(
+            [
+                float(min(self.mug_xy[0], self.laptop_xy[0]) - 0.06),
+                float(min(self.mug_xy[1], self.laptop_xy[1]) - lat),
+                float(max(self.mug_xy[0], self.laptop_xy[0]) + 0.06),
+                float(max(self.mug_xy[1], self.laptop_xy[1]) + lat),
+            ]
+        )
+        # Keep mid used so linters don't complain if along is unused later.
+        _ = (mid, along)
+        return rects
+
+    @staticmethod
+    def _rects_overlap(a, b, pad: float = 0.0) -> bool:
+        return not (
+            a[2] + pad <= b[0]
+            or b[2] + pad <= a[0]
+            or a[3] + pad <= b[1]
+            or b[3] + pad <= a[1]
+        )
+
+    def _sample_decor_xy(self, half_xy, occupied, rng, max_tries: int = 80):
+        """Sample a non-overlapping XY in the upper-Y décor band."""
+        y_lo, y_hi = self._decor_y_band()
+        hx, hy = float(half_xy[0]), float(half_xy[1])
+        x_lo, x_hi = -self.TABLE_HALF_X + hx + 0.02, self.TABLE_HALF_X - hx - 0.02
+        y_lo = max(y_lo, -self.TABLE_HALF_Y + hy + 0.02)
+        y_hi = min(y_hi, self.TABLE_HALF_Y - hy - 0.02)
+        if y_lo > y_hi or x_lo > x_hi:
+            return None
+        for _ in range(int(max_tries)):
+            x = float(rng.uniform(x_lo, x_hi))
+            y = float(rng.uniform(y_lo, y_hi))
+            rect = [x - hx, y - hy, x + hx, y + hy]
+            if any(self._rects_overlap(rect, o, pad=0.015) for o in occupied):
+                continue
+            return np.array([x, y], dtype=float), rect
+        return None
+
     def _spawn_decorations(self):
-        """Plant, office file holder, pen cup, and clock along the back of the table."""
+        """Plant, file holder, pen cup, and clock in the upper 30% Y band (no overlap)."""
         cfg = self._cfg
         self.decor = []
-        back_y = float(cfg.get("decor_y", 0.24))
+        randomize = bool(cfg.get("randomize_layout", True))
+        rng = np.random.RandomState(
+            int(cfg.get("decor_seed", self._spill_seed + 17))
+        )
+        occupied = self._occupied_rects()
+        y_lo, y_hi = self._decor_y_band()
+        back_y = float(cfg.get("decor_y", 0.5 * (y_lo + y_hi)))
 
-        # Plant (pot) — far left back, clear of the spill lane.
-        plant_x = float(cfg.get("plant_x", -0.44))
+        def _place_or_default(default_xy, half_xy, fallback_x: float | None = None):
+            if not randomize:
+                return np.array(default_xy, dtype=float), [
+                    default_xy[0] - half_xy[0],
+                    default_xy[1] - half_xy[1],
+                    default_xy[0] + half_xy[0],
+                    default_xy[1] + half_xy[1],
+                ]
+            hit = self._sample_decor_xy(half_xy, occupied, rng)
+            if hit is not None:
+                return hit
+            # Fallback: try a few distinct slots in the décor band.
+            candidates = []
+            if fallback_x is not None:
+                candidates.append(float(fallback_x))
+            candidates.extend(
+                [
+                    -0.45 * self.laptop_side,
+                    0.45 * self.laptop_side,
+                    -0.30,
+                    0.30,
+                    0.0,
+                    -0.48,
+                    0.48,
+                ]
+            )
+            for x0 in candidates:
+                x = float(
+                    np.clip(
+                        x0,
+                        -self.TABLE_HALF_X + half_xy[0],
+                        self.TABLE_HALF_X - half_xy[0],
+                    )
+                )
+                for y in (back_y, y_lo + 0.02, y_hi - 0.02, 0.5 * (y_lo + y_hi)):
+                    y = float(np.clip(y, y_lo, y_hi))
+                    rect = [
+                        x - half_xy[0],
+                        y - half_xy[1],
+                        x + half_xy[0],
+                        y + half_xy[1],
+                    ]
+                    if any(self._rects_overlap(rect, o, pad=0.015) for o in occupied):
+                        continue
+                    return np.array([x, y], dtype=float), rect
+            # Last resort: accept default even if tight.
+            x, y = float(default_xy[0]), float(default_xy[1])
+            rect = [x - half_xy[0], y - half_xy[1], x + half_xy[0], y + half_xy[1]]
+            return np.array([x, y], dtype=float), rect
+
+        # Plant (pot).
+        plant_half = (0.07, 0.07)
+        plant_xy, plant_rect = _place_or_default(
+            [float(cfg.get("plant_x", -0.44)), back_y],
+            plant_half,
+            fallback_x=-0.44,
+        )
+        occupied.append(plant_rect)
         plant_id = int(cfg.get("plant_id", 0))
         plant_scale = float(cfg.get("plant_scale", 0.55))
         self.plant = self._spawn_static_prop(
             "120_plant",
             plant_id,
-            [plant_x, back_y],
+            plant_xy,
             scale_mult=plant_scale,
             pad=0.04,
             name="120_plant",
         )
 
-        # Office file holder (same bench asset / orientation as the office scene).
-        file_x = float(cfg.get("file_x", 0.02))
-        file_y = float(cfg.get("file_y", back_y + 0.01))
+        # Office file holder.
+        file_half = (0.12, 0.09)
+        file_xy, file_rect = _place_or_default(
+            [
+                float(cfg.get("file_x", 0.02)),
+                float(cfg.get("file_y", back_y + 0.01)),
+            ],
+            file_half,
+            fallback_x=0.02,
+        )
+        occupied.append(file_rect)
         file_scale = cfg.get("file_scale", [0.38, 0.70, 0.40])
         file_q = cfg.get("file_quat", [0.7071, 0.7071, 0.0, 0.0])
         try:
             self.file_holder = self._create_bench_glb(
                 "122_file-holder",
                 sapien.Pose(
-                    p=[file_x, file_y, self.table_top + 0.075],
+                    p=[float(file_xy[0]), float(file_xy[1]), self.table_top + 0.075],
                     q=list(file_q),
                 ),
                 scale=file_scale,
                 mass=0.1,
             )
             self.decor.append(self.file_holder)
-            # Manual prohibit box (bench GLB is a raw Entity, not an Actor wrapper).
             self.prohibited_area.append(
-                [file_x - 0.12, file_y - 0.09, file_x + 0.12, file_y + 0.09]
+                [
+                    float(file_xy[0]) - 0.12,
+                    float(file_xy[1]) - 0.09,
+                    float(file_xy[0]) + 0.12,
+                    float(file_xy[1]) + 0.09,
+                ]
             )
         except Exception as e:
             print(f"[clean_table] file holder spawn failed: {e}")
             self.file_holder = None
 
-        # Pen holder / pen cup — back right.
-        pen_x = float(cfg.get("pencup_x", 0.40))
+        # Pen holder / pen cup.
+        pen_half = (0.05, 0.05)
+        pen_xy, pen_rect = _place_or_default(
+            [float(cfg.get("pencup_x", 0.40)), back_y - 0.02],
+            pen_half,
+            fallback_x=0.40,
+        )
+        occupied.append(pen_rect)
         pen_id = int(cfg.get("pencup_id", 0))
         pen_scale = float(cfg.get("pencup_scale", 1.0))
         self.pencup = self._spawn_static_prop(
             "059_pencup",
             pen_id,
-            [pen_x, back_y - 0.02],
+            pen_xy,
             scale_mult=pen_scale,
             pad=0.03,
             name="059_pencup",
         )
 
         # Alarm clock facing the robot (−Y).
-        clock_x = float(cfg.get("clock_x", -0.18))
+        clock_half = (0.05, 0.05)
+        clock_xy, clock_rect = _place_or_default(
+            [float(cfg.get("clock_x", -0.18)), back_y - 0.04],
+            clock_half,
+            fallback_x=-0.18,
+        )
+        occupied.append(clock_rect)
         clock_id = int(cfg.get("clock_id", 0))
         clock_scale = float(cfg.get("clock_scale", 0.60))
         face_robot_q = t3d.quaternions.qmult(
@@ -563,17 +860,18 @@ class clean_table(Base_Task):
         self.clock = self._spawn_static_prop(
             "046_alarm-clock",
             clock_id,
-            [clock_x, back_y - 0.04],
+            clock_xy,
             scale_mult=clock_scale,
             quat=face_robot_q.tolist(),
             pad=0.03,
             name="046_alarm-clock",
         )
         print(
-            f"[clean_table] décor plant=({plant_x:.2f},{back_y:.2f}) "
-            f"file=({file_x:.2f},{file_y:.2f}) "
-            f"pencup=({pen_x:.2f},{back_y - 0.02:.2f}) "
-            f"clock=({clock_x:.2f},{back_y - 0.04:.2f})"
+            f"[clean_table] décor band y=[{y_lo:.2f},{y_hi:.2f}] "
+            f"plant=({plant_xy[0]:.2f},{plant_xy[1]:.2f}) "
+            f"file=({file_xy[0]:.2f},{file_xy[1]:.2f}) "
+            f"pencup=({pen_xy[0]:.2f},{pen_xy[1]:.2f}) "
+            f"clock=({clock_xy[0]:.2f},{clock_xy[1]:.2f})"
         )
 
     # ------------------------------------------------------------------ spill visuals
@@ -596,12 +894,24 @@ class clean_table(Base_Task):
              several at once; that is intended.
           3) Growth stream toward the laptop — only spawns while dirt remains;
              growth freezes the moment the table is fully clean.
+
+        Stream wobble / width / lobe count are seed-randomized so each episode
+        spreads with a different organic pattern toward the laptop.
         """
         origin = self.spill_origin
         d = self.spill_dir
         lat = self.spill_lat
         path = float(self.spill_path_len)
         phase = self._lobe_phase
+        pat = getattr(self, "_spill_pattern", None) or {}
+        wobble1 = float(pat.get("wobble1", 0.012))
+        wobble2 = float(pat.get("wobble2", 0.008))
+        freq1 = float(pat.get("freq1", 2.1))
+        freq2 = float(pat.get("freq2", 5.0))
+        width_scale = float(pat.get("width_scale", 1.0))
+        side_bias = float(pat.get("side_bias", 0.0))
+        n_main = int(pat.get("n_main", 7))
+        puddle_spread = float(pat.get("puddle_spread", 1.0))
         spots: list[dict] = []
 
         # Under-mug seep (visual only — dabbing there would hit the mug).
@@ -618,7 +928,7 @@ class clean_table(Base_Task):
 
         # Initial puddle: organic overlapping lobes (NOT a grid). Centers sit
         # well inside each other's radii so they read as one coffee stain.
-        puddle_base = 0.045
+        puddle_base = 0.030
         # (along, lat, radius) — irregular teardrop / amoeba cluster.
         puddle_lobes = (
             (0.000, 0.000, 0.028),
@@ -635,14 +945,15 @@ class clean_table(Base_Task):
             (0.050, -0.012, 0.019),
         )
         for i, (along_off, lat_off, rad) in enumerate(puddle_lobes):
-            along = puddle_base + along_off
+            along = puddle_base + along_off * puddle_spread
             # Small organic jitter — keep overlap, avoid lattice look.
             ja = 0.004 * np.sin(phase + 1.3 * i)
-            jl = 0.005 * np.cos(phase * 0.7 + 0.9 * i)
+            jl = 0.005 * np.cos(phase * 0.7 + 0.9 * i) + side_bias * 0.01
+            lat_scaled = lat_off * puddle_spread
             spots.append(
                 {
-                    "pos": origin + d * (along + ja) + lat * (lat_off + jl),
-                    "radius": float(rad),
+                    "pos": origin + d * (along + ja) + lat * (lat_scaled + jl),
+                    "radius": float(rad * (0.92 + 0.08 * width_scale)),
                     "spawn": float(0.05 + 0.008 * i),
                     "cleaned": False,
                     "along": float(along + ja),
@@ -651,15 +962,15 @@ class clean_table(Base_Task):
             )
 
         # Growth stream past the puddle toward the laptop (only while dirty).
-        stream_start = puddle_base + 0.070
-        stream_len = max(0.08, path - stream_start)
-        n_main = 7
+        stream_start = puddle_base + 0.055
+        stream_len = max(0.05, path - stream_start)
         for i in range(n_main):
             t = (i + 0.35) / n_main
             along = stream_start + t * stream_len
-            wobble = 0.012 * np.sin(2.1 * np.pi * t + phase)
-            wobble += 0.008 * np.sin(5.0 * np.pi * t + 0.6 * phase)
-            width = 0.018 + 0.016 * (np.sin(np.pi * min(t, 0.95)) ** 0.55)
+            wobble = wobble1 * np.sin(freq1 * np.pi * t + phase)
+            wobble += wobble2 * np.sin(freq2 * np.pi * t + 0.6 * phase)
+            wobble += side_bias * 0.012 * t
+            width = (0.018 + 0.016 * (np.sin(np.pi * min(t, 0.95)) ** 0.55)) * width_scale
             spots.append(
                 {
                     "pos": origin + d * along + lat * wobble,
@@ -671,6 +982,7 @@ class clean_table(Base_Task):
             )
             if 0.15 < t < 0.85:
                 side = (0.018 + 0.012 * t) * (1.0 if i % 2 == 0 else -0.9)
+                side += side_bias * 0.01
                 spots.append(
                     {
                         "pos": origin + d * along + lat * (wobble + side),
@@ -684,8 +996,8 @@ class clean_table(Base_Task):
         # Leading tip.
         spots.append(
             {
-                "pos": origin + d * path + lat * (0.008 * np.sin(phase)),
-                "radius": 0.016,
+                "pos": origin + d * path + lat * (0.008 * np.sin(phase) + side_bias * 0.006),
+                "radius": 0.016 * width_scale,
                 "spawn": 0.96,
                 "cleaned": False,
                 "along": path,
@@ -748,6 +1060,43 @@ class clean_table(Base_Task):
         if not dirty:
             return 0.0
         return float(max(s["along"] + s["radius"] for s in dirty))
+
+    def _spot_hits_laptop(self, spot: dict) -> bool:
+        """True if a spill lobe disk intersects the laptop table footprint."""
+        if self.laptop_xy is None:
+            return False
+        hx = float(getattr(self, "laptop_half_along", 0.10))
+        hy = float(getattr(self, "laptop_half_lat", 0.08))
+        c = np.asarray(self.laptop_xy, dtype=float)
+        p = np.asarray(spot["pos"], dtype=float)
+        r = float(spot["radius"])
+        # Circle vs AABB: distance from center to box, then compare to radius.
+        dx = max(abs(float(p[0] - c[0])) - hx, 0.0)
+        dy = max(abs(float(p[1] - c[1])) - hy, 0.0)
+        return (dx * dx + dy * dy) <= (r * r)
+
+    def _mark_laptop_reached_if_contact(self) -> bool:
+        """Fail as soon as any active (spawned) wipeable lobe touches the laptop.
+
+        Checked on dirty *and* already-cleaned active lobes: wiping coffee off
+        the chassis after contact still counts as failure.
+        """
+        if self.laptop_reached:
+            return True
+        for s in self._active_spots():
+            if s.get("under_mug"):
+                continue
+            if self._spot_hits_laptop(s):
+                self.laptop_reached = True
+                print(
+                    f"[clean_table] FAIL spill contacted laptop "
+                    f"along={float(s.get('along', 0.0)):.3f} "
+                    f"r={float(s['radius']):.3f} "
+                    f"amt={self.spill_amount:.2f} "
+                    f"cleaned={bool(s.get('cleaned'))}"
+                )
+                return True
+        return False
 
     def _spill_radius(self) -> float:
         dirty = self._dirty_spots()
@@ -826,11 +1175,14 @@ class clean_table(Base_Task):
                 pass
 
     def _animate_tip(self, n_steps: int = 24):
-        """Tip the mug onto its side with the opening toward the laptop (fall left)."""
+        """Tip the mug onto its side with the opening toward the laptop.
+
+        ``tip_axis = Z × spill_dir`` already flips when the laptop mirrors, so
+        a fixed +90° swings the mouth onto spill_dir for both left and right
+        laptop placements (same as the original working left-laptop scene).
+        """
         upright = np.asarray(self.MUG_UPRIGHT_Q, dtype=float)
         axis = self._tip_axis()
-        # +90° about tip_axis: upright +Z swings onto spill_dir (toward laptop).
-        # −90° tipped the mouth the wrong way (mug body fell right / outward).
         tip_ang = 0.5 * np.pi
         tipped_q = t3d.quaternions.qmult(
             t3d.quaternions.axangle2quat(axis, tip_ang), upright
@@ -1434,6 +1786,13 @@ class clean_table(Base_Task):
             return
         prev_key = getattr(self, "_spill_visual_cached", None)
 
+        # Geometric contact BEFORE wipe: clearing a lobe on the chassis must
+        # not erase the failure (coffee already reached the laptop).
+        self._mark_laptop_reached_if_contact()
+        if self.laptop_reached:
+            self._rebuild_spill(force=self._spill_visual_key() != prev_key)
+            return
+
         # Clear first, then decide freeze/grow. Growing before clear let new
         # lobes spawn on the step after the table looked empty.
         self._try_clear_spots_under_sponge()
@@ -1451,8 +1810,10 @@ class clean_table(Base_Task):
                 self.spill_amount = min(1.0, self.spill_amount + rate)
                 self.max_spill_amount = max(self.max_spill_amount, self.spill_amount)
 
-        # Fail when growth reaches the laptop *and* leading dirty spots remain.
-        if not self._spill_frozen:
+        # New lobes may spawn into the laptop; also keep the old fractional
+        # front check as a backup for long-gap stream tips.
+        self._mark_laptop_reached_if_contact()
+        if (not self.laptop_reached) and (not self._spill_frozen):
             front = self._spill_front_along()
             front_frac = front / max(1e-6, float(self.spill_path_len))
             if (
@@ -1789,5 +2150,7 @@ class clean_table(Base_Task):
             "laptop_reached": bool(self.laptop_reached),
             "cleaned_ok": bool(self.cleaned_ok),
             "mug_side": float(self.mug_side),
+            "laptop_side": float(getattr(self, "laptop_side", 0.0)),
+            "spill_speed_mult": float(getattr(self, "_spill_speed_mult", 1.0)),
         }
         return obs
