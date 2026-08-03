@@ -15,6 +15,9 @@ Episode randomization (task_args.pour_beer):
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import sapien
 import sapien.render
@@ -111,6 +114,9 @@ class pour_beer(KitchenS_base_task):
 
     # Non-overlap layout (axis-aligned footprint half-sizes, meters).
     LAYOUT_MARGIN = 0.030
+    # Keep prop AABBs this far inside the counter rim (static props must look seated;
+    # larger than a hairline so long items like the baguette don't read as overhanging).
+    TABLE_EDGE_MARGIN = 0.04
     # Reserved clear zone covering glass + tap base + lever arc.
     STATION_HALF_XY = (0.10, 0.16)
     STATION_X_RANGE = (0.06, 0.16)
@@ -500,18 +506,124 @@ class pour_beer(KitchenS_base_task):
                 return False
         return True
 
+    def _table_half_xy(self):
+        """Half-extents of the KitchenS counter top in world XY (meters)."""
+        area = (getattr(self, "kitchens_info", None) or {}).get("table_area", [1.2, 0.7])
+        return 0.5 * float(area[0]), 0.5 * float(area[1])
+
+    def _footprint_on_table(self, center, half, margin=None):
+        """True iff the axis-aligned footprint lies fully on the counter."""
+        if margin is None:
+            margin = self.TABLE_EDGE_MARGIN
+        thx, thy = self._table_half_xy()
+        bias = getattr(self, "table_xy_bias", [0.0, 0.0])
+        c = np.asarray(center, dtype=float)
+        h = np.asarray(half, dtype=float)
+        cx = float(c[0] - float(bias[0]))
+        cy = float(c[1] - float(bias[1]))
+        return (
+            cx - h[0] >= -thx + margin
+            and cx + h[0] <= thx - margin
+            and cy - h[1] >= -thy + margin
+            and cy + h[1] <= thy - margin
+        )
+
+    def _clamp_footprint_to_table(self, center, half, margin=None):
+        """Shift a footprint center so its AABB stays on the counter."""
+        if margin is None:
+            margin = self.TABLE_EDGE_MARGIN
+        thx, thy = self._table_half_xy()
+        bias = getattr(self, "table_xy_bias", [0.0, 0.0])
+        h = np.asarray(half, dtype=float)
+        xy = np.asarray(center, dtype=float).copy()
+        # Work in table-local coords, then restore bias.
+        lx = float(xy[0] - float(bias[0]))
+        ly = float(xy[1] - float(bias[1]))
+        lx = float(np.clip(lx, -thx + h[0] + margin, thx - h[0] - margin))
+        ly = float(np.clip(ly, -thy + h[1] + margin, thy - h[1] - margin))
+        return np.array([lx + float(bias[0]), ly + float(bias[1])], dtype=float)
+
+    @staticmethod
+    def _model_data(modelname: str, model_id: int) -> dict:
+        path = Path("assets/objects") / modelname / f"model_data{int(model_id)}.json"
+        with open(path) as f:
+            return json.load(f)
+
+    def _yup_local_half_xy(self, modelname: str, model_id: int, scale_mult: float = 1.0):
+        """Local XY half-extents for a Y-up mesh after ``GLASS_UPRIGHT_Q`` (pre-yaw)."""
+        data = self._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        if isinstance(sc, (int, float)):
+            sc = [float(sc)] * 3
+        try:
+            mult = [float(m) for m in scale_mult]
+        except TypeError:
+            mult = [float(scale_mult)] * 3
+        ext = data["extents"]
+        # Upright quat maps local Y→world Z; footprint uses local X/Z.
+        return (
+            0.5 * float(sc[0]) * float(mult[0]) * float(ext[0]),
+            0.5 * float(sc[2]) * float(mult[2]) * float(ext[2]),
+        )
+
+    @staticmethod
+    def _rotated_half_xy(half_xy, yaw_deg: float):
+        """World AABB half-extents of a local footprint rotated by yaw about Z."""
+        hx, hy = float(half_xy[0]), float(half_xy[1])
+        yaw = np.deg2rad(float(yaw_deg))
+        c, s = abs(np.cos(yaw)), abs(np.sin(yaw))
+        return np.array([hx * c + hy * s, hx * s + hy * c], dtype=float)
+
+    def _prop_pose_z(self, modelname: str, model_id: int, scale_mult: float, surface_z: float):
+        """Pose Z so a Y-up mesh under ``GLASS_UPRIGHT_Q`` rests on ``surface_z``."""
+        data = self._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        if isinstance(sc, (int, float)):
+            sc = [float(sc)] * 3
+        try:
+            mult = [float(m) for m in scale_mult]
+        except TypeError:
+            mult = [float(scale_mult)] * 3
+        final_sy = float(sc[1]) * float(mult[1])
+        cy = float(data.get("center", [0.0, 0.0, 0.0])[1])
+        ey = float(data["extents"][1])
+        bottom_local_y = cy - 0.5 * ey
+        return float(surface_z - bottom_local_y * final_sy)
+
+    def _inset_xy_ranges(self, x_range, y_range, half):
+        """Shrink a sampling rectangle so the footprint AABB stays on-table."""
+        thx, thy = self._table_half_xy()
+        m = self.TABLE_EDGE_MARGIN
+        h = np.asarray(half, dtype=float)
+        x_lo = max(float(x_range[0]), -thx + h[0] + m)
+        x_hi = min(float(x_range[1]), thx - h[0] - m)
+        y_lo = max(float(y_range[0]), -thy + h[1] + m)
+        y_hi = min(float(y_range[1]), thy - h[1] - m)
+        return (x_lo, x_hi), (y_lo, y_hi)
+
     def _sample_free_xy(self, rng, half, blockers, x_range, y_range, tries=80):
-        x_lo, x_hi = float(x_range[0]), float(x_range[1])
-        y_lo, y_hi = float(y_range[0]), float(y_range[1])
         half = np.asarray(half, dtype=float)
+        (x_lo, x_hi), (y_lo, y_hi) = self._inset_xy_ranges(x_range, y_range, half)
+        if x_lo > x_hi or y_lo > y_hi:
+            # Region too small for this footprint — park at the clamped region center.
+            mid = np.array(
+                [
+                    0.5 * (float(x_range[0]) + float(x_range[1])),
+                    0.5 * (float(y_range[0]) + float(y_range[1])),
+                ],
+                dtype=float,
+            )
+            return self._clamp_footprint_to_table(mid, half)
         for _ in range(int(tries)):
             p = np.array([rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi)], dtype=float)
-            if self._footprint_clear(p, half, blockers):
+            if self._footprint_clear(p, half, blockers) and self._footprint_on_table(p, half):
                 return p
-        # Fallback: densest search for max clearance.
+        # Fallback: densest search for max clearance (still on-table).
         best, best_score = None, -1e9
         for _ in range(120):
             p = np.array([rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi)], dtype=float)
+            if not self._footprint_on_table(p, half):
+                continue
             if not blockers:
                 return p
             score = min(
@@ -525,7 +637,10 @@ class pour_beer(KitchenS_base_task):
                 best, best_score = p, score
             if score >= 0.0:
                 return p
-        return best if best is not None else np.array([0.45, -0.20], dtype=float)
+        if best is not None:
+            return best
+        mid = np.array([0.5 * (x_lo + x_hi), 0.5 * (y_lo + y_hi)], dtype=float)
+        return self._clamp_footprint_to_table(mid, half)
 
     def _station_center_xy(self):
         """Midpoint between glass and tap (reserved clear zone center)."""
@@ -667,8 +782,12 @@ class pour_beer(KitchenS_base_task):
         scale_mult: float = 1.0,
         half_xy=None,
     ):
+        try:
+            z = self._prop_pose_z(modelname, model_id, scale_mult, self.table_top) + float(z_off)
+        except Exception:
+            z = self.table_top + float(z_off)
         pose = sapien.Pose(
-            [float(xy[0]), float(xy[1]), self.table_top + float(z_off)],
+            [float(xy[0]), float(xy[1]), float(z)],
             self._yaw_upright(yaw_deg),
         )
         try:
@@ -696,47 +815,61 @@ class pour_beer(KitchenS_base_task):
         return actor
 
     def _build_bar_props(self, rng=None):
-        """Sparse bar décor — keep the tap station clear; optional non-overlap randomize."""
+        """Sparse bar décor — keep the tap station clear; optional non-overlap randomize.
+
+        Footprints come from each asset's ``model_data`` (scaled + yaw-rotated AABB) and
+        are clamped so the full base stays on the counter — long props like the baguette
+        must not hang off the rim.
+        """
         if rng is None:
             rng = self._layout_rng(202)
         cfg = self._cfg
         randomize = bool(cfg.get("randomize_layout", False))
 
-        # (model, id, half_xy, scale, default_xy, default_yaw, region_xy)
+        # (model, id, scale, default_xy, default_yaw, region_xy)
+        # default_xy is a preferred center; it is clamped onto the table using the
+        # real yaw-aware footprint before spawn.
         catalog = [
-            ("255_beer_bottle", 0, (0.040, 0.040), 1.00, [-0.50, 0.24], -10,
-             ((-0.55, -0.20), (0.16, 0.28))),
-            ("001_bottle", 2, (0.035, 0.035), 1.00, [-0.32, 0.24], 8,
-             ((-0.40, -0.12), (0.16, 0.28))),
-            ("001_bottle", 5, (0.035, 0.035), 1.00, [0.34, 0.24], -8,
-             ((0.22, 0.55), (0.16, 0.28))),
-            ("255_beer_bottle", 0, (0.040, 0.040), 1.00, [0.52, 0.24], 12,
-             ((0.30, 0.55), (0.16, 0.28))),
-            ("088_wineglass", 0, (0.040, 0.040), 0.38, [-0.08, 0.22], 15,
-             ((-0.25, 0.00), (0.14, 0.26))),
-            ("039_mug", 0, (0.045, 0.045), 0.65, [0.20, 0.22], 30,
-             ((0.18, 0.40), (0.14, 0.26))),
-            ("025_chips-tub", 0, (0.055, 0.045), 1.00, [-0.46, -0.10], -20,
-             ((-0.55, -0.28), (-0.22, 0.10))),
-            ("025_chips-tub", 2, (0.055, 0.045), 1.00, [0.50, -0.12], 30,
-             ((0.30, 0.55), (-0.22, 0.10))),
-            ("071_can", 0, (0.035, 0.035), 1.00, [-0.50, -0.22], -35,
-             ((-0.55, -0.30), (-0.28, -0.08))),
-            ("054_baguette", 2, (0.080, 0.035), 1.00, [-0.52, 0.14], 65,
-             ((-0.55, -0.30), (0.05, 0.22))),
+            ("255_beer_bottle", 0, 1.00, [-0.42, 0.22], -10,
+             ((-0.50, -0.18), (0.14, 0.26))),
+            ("001_bottle", 2, 1.00, [-0.28, 0.22], 8,
+             ((-0.38, -0.12), (0.14, 0.26))),
+            ("001_bottle", 5, 1.00, [0.30, 0.22], -8,
+             ((0.18, 0.48), (0.14, 0.26))),
+            ("255_beer_bottle", 0, 1.00, [0.42, 0.22], 12,
+             ((0.28, 0.50), (0.14, 0.26))),
+            ("088_wineglass", 0, 0.38, [-0.06, 0.20], 15,
+             ((-0.22, 0.02), (0.12, 0.24))),
+            ("039_mug", 0, 0.65, [0.18, 0.20], 30,
+             ((0.12, 0.36), (0.12, 0.24))),
+            ("025_chips-tub", 0, 1.00, [-0.38, -0.14], -20,
+             ((-0.50, -0.24), (-0.20, 0.02))),
+            ("025_chips-tub", 2, 1.00, [0.36, -0.12], 30,
+             ((0.22, 0.48), (-0.22, 0.04))),
+            ("071_can", 0, 1.00, [-0.42, -0.22], -35,
+             ((-0.52, -0.30), (-0.26, -0.08))),
+            # Baguette is ~28 cm long — park well inboard, long axis along +X.
+            ("054_baguette", 2, 1.00, [-0.26, 0.12], 90,
+             ((-0.40, -0.14), (0.02, 0.20))),
         ]
 
         station_c = self._station_center_xy()
         station_h = np.asarray(self.STATION_HALF_XY, dtype=float)
         blockers = [(station_c, station_h)]
 
-        for model, mid, half, scale, default_xy, default_yaw, region in catalog:
-            half = np.asarray(half, dtype=float)
+        for model, mid, scale, default_xy, default_yaw, region in catalog:
+            try:
+                local_half = self._yup_local_half_xy(model, mid, scale)
+            except Exception as e:
+                print(f"[pour_beer] skip prop {model}/base{mid}: {e}")
+                continue
+
             if randomize:
+                yaw = float(default_yaw) + float(rng.uniform(-25.0, 25.0))
+                half = self._rotated_half_xy(local_half, yaw)
                 xy = self._sample_free_xy(rng, half, blockers, region[0], region[1])
                 # Reject if it still clips the station (extra guard).
                 if not self._footprint_clear(xy, half, [(station_c, station_h)]):
-                    # Park far from station on the region's far edge.
                     x_lo, x_hi = region[0]
                     y_lo, y_hi = region[1]
                     candidates = [
@@ -753,17 +886,36 @@ class pour_beer(KitchenS_base_task):
                             abs(p[1] - station_c[1]) - (half[1] + station_h[1]),
                         ),
                     )
-                yaw = float(default_yaw) + float(rng.uniform(-25.0, 25.0))
+                    xy = self._clamp_footprint_to_table(xy, half)
             else:
-                xy = np.asarray(default_xy, dtype=float)
                 yaw = float(default_yaw)
+                half = self._rotated_half_xy(local_half, yaw)
+                xy = self._clamp_footprint_to_table(np.asarray(default_xy, dtype=float), half)
                 if not self._footprint_clear(xy, half, blockers):
-                    # Nudge away from station along +/−x.
-                    for dx in (0.08, -0.08, 0.14, -0.14, 0.20, -0.20):
-                        cand = xy + np.array([dx, 0.0])
-                        if self._footprint_clear(cand, half, blockers):
+                    # Prefer inward nudges (toward x=0) so we don't walk props off the rim.
+                    sign = -1.0 if float(xy[0]) >= 0.0 else 1.0
+                    deltas = []
+                    for mag in (0.06, 0.10, 0.14, 0.18, 0.22):
+                        deltas.append(np.array([sign * mag, 0.0]))
+                        deltas.append(np.array([0.0, mag]))
+                        deltas.append(np.array([0.0, -mag]))
+                        deltas.append(np.array([-sign * mag, 0.0]))  # outward last
+                    for dxy in deltas:
+                        cand = self._clamp_footprint_to_table(xy + dxy, half)
+                        if self._footprint_clear(cand, half, blockers) and self._footprint_on_table(
+                            cand, half
+                        ):
                             xy = cand
                             break
+
+            # Final safety: never spawn a prop whose base leaves the counter.
+            xy = self._clamp_footprint_to_table(xy, half)
+            if not self._footprint_on_table(xy, half):
+                print(
+                    f"[pour_beer] skip prop {model}/base{mid}: cannot fit on table "
+                    f"(half={half.tolist()})"
+                )
+                continue
 
             actor = self._spawn_static_prop(
                 model, xy, model_id=mid, yaw_deg=yaw, scale_mult=scale, half_xy=half
