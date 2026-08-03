@@ -1,12 +1,13 @@
 """Catch a shelf object shoved off by a scurrying mouse into a cushioned basket.
 
-Scene: deep full-width wall shelf with a random mix of cups, wineglasses, beer
-bottles, and wine bottles. The robot grasps a custom open basket by the grab
-handle on its robot-facing side (076_breadbasket ships with no contact points,
-so it cannot be grasped at all) and pick-and-places it under the shelf lip. A
-kinematic mouse then runs a pre-planned, obstacle-free route along the shelf,
-turns in behind exactly one target, and physically shoves it forward until it
-goes over the front edge.
+Scene: two-tier full-width wall shelf. Upper: random cups / wineglasses / beer
+and wine bottles (mouse-width X gaps, no Y-lane blocking) plus plant/mug décor.
+Lower: tissue (moved off the table) and a couple of random office props. The
+robot grasps a custom open basket at the table midline (x≈0) and pick-and-places
+it under the shelf lip. A kinematic mouse then runs a pre-planned, obstacle-free
+route, turns in behind exactly one target, and physically shoves it forward
+until it goes over the front edge. Mouse speed is sampled from mean×0.7 to
+mean×1.56 (slow −30%, fast side +20% above the old +30% cap).
 
 Everything after the basket is placed is simulated, not animated: shelf objects
 are free dynamic bodies the mouse can shove, the fall and the landing come out
@@ -52,10 +53,15 @@ class mouse_object_drop(Office_base_task):
     MUG_SCALE = 0.715           # prior 0.55 * 1.30
     N_OBJECTS_DEFAULT = 4
     MOUSE_SPEED_DEFAULT = 0.10
+    MOUSE_SPEED_JITTER_FRAC = 0.30  # slow side: mean × (1 − frac)
+    # Fast-side cap is (1 + frac) raised by this factor (e.g. 1.3 → 1.56).
+    MOUSE_SPEED_FAST_SIDE_MULT = 1.20
     MOUSE_START_GAP_MIN = 0.15
     MOUSE_HALF_XY = 0.020       # mouse body clearance for route planning
     MOUSE_STANDOFF = 0.012      # gap behind the target before the shove begins
     MOUSE_GRID_RES = 0.01       # route search resolution on the shelf plate
+    # Clear gap between fragile footprints so the mouse can scurry between them.
+    OBJ_X_GAP_MIN = 0.06
     SETTLE_STEPS = 420          # sim steps allowed for the object to come to rest
 
     SHELF_WIDTH = 1.20
@@ -63,6 +69,12 @@ class mouse_object_drop(Office_base_task):
     SHELF_THICK = 0.02
     SHELF_Y = 0.26
     SHELF_Z_ABOVE_TABLE = 0.30
+    # Lower shelf tier for former table décor (tissue + random office props).
+    # Shallower / set back toward the wall so the catch zone under the upper
+    # lip stays clear for the basket + handle.
+    SHELF_Z_LOWER_ABOVE_TABLE = 0.12
+    SHELF_LOWER_DEPTH = 0.20
+    SHELF_LOWER_Y = 0.31
 
     # Near-edge vs deep bands along shelf depth (y). Keep clear of the lip/back.
     EDGE_Y_FRAC = (0.10, 0.24)   # fraction of depth from front lip
@@ -72,6 +84,26 @@ class mouse_object_drop(Office_base_task):
     # Usable x span for fragile objects (mouse runway reserved outside this).
     SHELF_OBJ_X_LIM = (-0.36, 0.40)
     SHELF_OBJ_Z_EPS = 0.002      # sit bottoms just above the shelf plate
+
+    # Lower-shelf office décor (tissue moved off the table + extras).
+    KETTLE_IDS = list(range(6))
+    ALARM_IDS = list(range(6))
+    BOOK_IDS = [0, 1]
+    SEAL_IDS = [0, 1, 2, 3, 4, 6]
+    TISSUE_SCALE = 1.10
+    KETTLE_SCALE = 0.95
+    ALARM_SCALE = 0.95
+    BOOK_SCALE = 0.75
+    SEAL_SCALE = 0.90
+    # Always place tissue; then sample this many extras from LOWER_EXTRA_CATALOG.
+    N_LOWER_EXTRA_DEFAULT = 2
+    LOWER_EXTRA_CATALOG = [
+        # (model, id_pool, hx, hy, scale)
+        ("091_kettle", KETTLE_IDS, 0.10, 0.10, KETTLE_SCALE),
+        ("046_alarm-clock", ALARM_IDS, 0.08, 0.06, ALARM_SCALE),
+        ("043_book", BOOK_IDS, 0.08, 0.06, BOOK_SCALE),
+        ("100_seal", SEAL_IDS, 0.045, 0.045, SEAL_SCALE),
+    ]
 
     BASKET_MODEL = "cushion_basket"  # procedural open basket (not 076_breadbasket)
     # The cushion is a part of the basket actor, not a separate body: a loose
@@ -91,6 +123,9 @@ class mouse_object_drop(Office_base_task):
     # Contact frame sits below the bar center: the TCP settles ~1 cm high, so
     # this is what actually puts the fingers around the bar.
     BASKET_GRASP_Z_OFFSET = -0.010
+    # Midline spawn so either arm can reach; y ∈ [current, current+10 cm].
+    BASKET_START_Y_DEFAULT = -0.28
+    BASKET_START_Y_SPAN = 0.10
     CATCH_XY_TOL = 0.035
     POST_PLACE_DWELL_DEFAULT = 14
 
@@ -136,13 +171,14 @@ class mouse_object_drop(Office_base_task):
         self.target_upright_q = self.UPRIGHT_Q.copy()
         self.decor = []
         self._occ_shelf = []
+        self._occ_shelf_lower = []
         self._occ_table = []
         super().setup_demo(**kwags)
         self._configure_observer_camera()
 
     # --------------------------------------------------------------- scene
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):
-        """Office table + wall with a deeper full-width single shelf."""
+        """Office table + wall with a deeper full-width two-tier shelf."""
         self.arr_v = 1
         self.table_xy_bias = list(table_xy_bias)
         table_height = float(self.office_info["table_height"])
@@ -198,32 +234,51 @@ class mouse_object_drop(Office_base_task):
             texture_id=self.table_texture,
         )
 
-        shelf_z = table_height + self.SHELF_Z_ABOVE_TABLE
         shelf_y = self.SHELF_Y
         half_x = 0.5 * self.SHELF_WIDTH
         half_y = 0.5 * self.SHELF_DEPTH
         half_z = 0.5 * self.SHELF_THICK
+        lower_y = float(self.SHELF_LOWER_Y)
+        lower_half_y = 0.5 * float(self.SHELF_LOWER_DEPTH)
+        upper_z = table_height + self.SHELF_Z_ABOVE_TABLE
+        lower_z = table_height + self.SHELF_Z_LOWER_ABOVE_TABLE
         self.shelf = create_box(
             self.scene,
-            sapien.Pose(p=[0.0, shelf_y, shelf_z]),
+            sapien.Pose(p=[0.0, shelf_y, upper_z]),
             half_size=[half_x, half_y, half_z],
             color=(0.55, 0.42, 0.30),
             name="deep_wall_shelf",
             is_static=True,
         )
+        self.shelf_lower = create_box(
+            self.scene,
+            sapien.Pose(p=[0.0, lower_y, lower_z]),
+            half_size=[half_x, lower_half_y, half_z],
+            color=(0.50, 0.38, 0.28),
+            name="deep_wall_shelf_lower",
+            is_static=True,
+        )
         for bx in (-0.45, 0.0, 0.45):
             create_box(
                 self.scene,
-                sapien.Pose(p=[bx, shelf_y + half_y - 0.01, shelf_z - 0.06]),
+                sapien.Pose(p=[bx, shelf_y + half_y - 0.01, upper_z - 0.06]),
                 half_size=[0.012, 0.01, 0.06],
                 color=(0.35, 0.35, 0.35),
                 name="shelf_bracket",
                 is_static=True,
             )
+            create_box(
+                self.scene,
+                sapien.Pose(p=[bx, lower_y + lower_half_y - 0.01, lower_z - 0.04]),
+                half_size=[0.012, 0.01, 0.04],
+                color=(0.35, 0.35, 0.35),
+                name="shelf_bracket_lower",
+                is_static=True,
+            )
 
         self.office_info["furn_x_v"]["shelf"] = [0.0, 0.0, 0.0]
         self.office_info["shelf_area"] = [self.SHELF_WIDTH, self.SHELF_DEPTH]
-        self.office_info["shelf_heights"] = [shelf_z + half_z]
+        self.office_info["shelf_heights"] = [lower_z + half_z, upper_z + half_z]
         self.office_info["shelf_lims"] = [
             -half_x, shelf_y - half_y, half_x, shelf_y + half_y,
         ]
@@ -358,10 +413,13 @@ class mouse_object_drop(Office_base_task):
             cx - hx - pad, cy - hy - pad, cx + hx + pad, cy + hy + pad,
         ))
 
-    def _spawn_static_shelf(self, modelname, model_id, p, hx, hy, scale_mult=1.0):
-        """Static décor seated on the shelf (bottom-origin, non-overlapping)."""
+    def _spawn_static_shelf(
+        self, modelname, model_id, p, hx, hy, scale_mult=1.0, surface="shelf",
+    ):
+        """Static décor seated on upper/lower shelf (bottom-origin, non-overlapping)."""
         cx, cy = float(p[0]), float(p[1])
-        if not self._footprint_ok(self._occ_shelf, cx, cy, hx, hy, pad=0.015):
+        occ = self._occ_shelf_lower if surface == "shelf_lower" else self._occ_shelf
+        if not self._footprint_ok(occ, cx, cy, hx, hy, pad=0.015):
             return None
         pose = sapien.Pose(
             [cx, cy, float(p[2])], self.PROP_UPRIGHT_Q.tolist(),
@@ -377,7 +435,7 @@ class mouse_object_drop(Office_base_task):
         actor = self._create_scaled_static_object(
             modelname, int(model_id), pose, list(scale), collision=False,
         )
-        self._reserve(self._occ_shelf, cx, cy, hx, hy, pad=0.015)
+        self._reserve(occ, cx, cy, hx, hy, pad=0.015)
         self.decor.append(actor)
         return actor
 
@@ -386,13 +444,77 @@ class mouse_object_drop(Office_base_task):
         half_y = 0.5 * self.SHELF_DEPTH
         shelf_y = self.SHELF_Y
         z_top = self.table_top + self.SHELF_Z_ABOVE_TABLE + 0.5 * self.SHELF_THICK
+        z_lower = (
+            self.table_top + self.SHELF_Z_LOWER_ABOVE_TABLE + 0.5 * self.SHELF_THICK
+        )
         self.shelf_plate_z = float(z_top)
+        self.shelf_lower_z = float(z_lower)
         self.shelf_plate_xlim = (-half_x, half_x)
         self.shelf_plate_ylim = (shelf_y - half_y, shelf_y + half_y)
         self.shelf_lims = [
             self.shelf_plate_xlim[0], self.shelf_plate_ylim[0],
             self.shelf_plate_xlim[1], self.shelf_plate_ylim[1],
         ]
+
+    def _x_gap_ok(self, placed, cx, hx, gap):
+        """True if ``cx`` leaves a clear mouse-width gap from every placed object."""
+        for ox, _oy, ohx, _ohy in placed:
+            if abs(cx - ox) < float(ohx) + float(hx) + float(gap):
+                return False
+        return True
+
+    def _y_lane_clear(self, placed, cx, cy, hx, hy):
+        """Reject stacking two objects on the same X corridor (Y blocking)."""
+        for ox, oy, ohx, ohy in placed:
+            # Overlapping X corridors → must not sit one in front of the other.
+            if abs(cx - ox) < float(ohx) + float(hx) + 0.01:
+                if abs(cy - oy) > 0.5 * (float(ohy) + float(hy)):
+                    return False
+        return True
+
+    def _lower_shelf_ylim(self):
+        """World-Y bounds of the set-back lower plate (not the upper plate)."""
+        cy = float(self.SHELF_LOWER_Y)
+        hy = 0.5 * float(self.SHELF_LOWER_DEPTH)
+        return cy - hy, cy + hy
+
+    def _load_lower_shelf_decor(self, z_seat, y0, y1):
+        """Tissue (off the table) + a couple of random non-overlapping office props."""
+        catalog = list(self.LOWER_EXTRA_CATALOG)
+        n_extra = int(self._cfg.get("n_lower_extra", self.N_LOWER_EXTRA_DEFAULT))
+        n_extra = int(np.clip(n_extra, 1, len(catalog)))
+        order = list(np.random.permutation(len(catalog)))
+        extras = [catalog[int(i)] for i in order[:n_extra]]
+        specs = [
+            ("023_tissue-box", self.TISSUE_IDS, 0.07, 0.055, self.TISSUE_SCALE),
+            *extras,
+        ]
+        # Keep décor on the set-back lower plate, not the upper-shelf Y span.
+        ly0, ly1 = self._lower_shelf_ylim()
+        y_mid = float(0.5 * (ly0 + ly1))
+        for model, id_pool, hx, hy, scale in specs:
+            placed = False
+            for _ in range(60):
+                x = float(np.random.uniform(-0.48, 0.48))
+                y = float(np.random.uniform(ly0 + 0.03, ly1 - 0.03))
+                actor = self._spawn_static_shelf(
+                    model, int(np.random.choice(list(id_pool))),
+                    [x, y, z_seat],
+                    hx=hx, hy=hy, scale_mult=scale, surface="shelf_lower",
+                )
+                if actor is not None:
+                    placed = True
+                    break
+            if not placed:
+                # Spread fallbacks across the lower plate.
+                for fx in (-0.38, 0.0, 0.38, -0.20, 0.20):
+                    actor = self._spawn_static_shelf(
+                        model, int(np.random.choice(list(id_pool))),
+                        [float(fx), y_mid, z_seat],
+                        hx=hx, hy=hy, scale_mult=scale, surface="shelf_lower",
+                    )
+                    if actor is not None:
+                        break
 
     def _upright_q(self, name="twin"):
         if name == "decor":
@@ -653,7 +775,16 @@ class mouse_object_drop(Office_base_task):
     # ------------------------------------------------------------------ actors
     def load_actors(self):
         c = self._cfg
-        self.mouse_speed = float(c.get("mouse_speed", self.MOUSE_SPEED_DEFAULT))
+        base_speed = float(c.get("mouse_speed", self.MOUSE_SPEED_DEFAULT))
+        jitter = float(c.get("mouse_speed_jitter_frac", self.MOUSE_SPEED_JITTER_FRAC))
+        jitter = float(np.clip(jitter, 0.0, 0.95))
+        fast_mult = float(c.get(
+            "mouse_speed_fast_side_mult", self.MOUSE_SPEED_FAST_SIDE_MULT,
+        ))
+        self.mouse_speed_mean = float(base_speed)
+        speed_lo = base_speed * (1.0 - jitter)
+        speed_hi = base_speed * (1.0 + jitter) * max(1.0, fast_mult)
+        self.mouse_speed = float(np.random.uniform(speed_lo, speed_hi))
         self.mouse_start_gap_min = float(
             c.get("mouse_start_gap_min", self.MOUSE_START_GAP_MIN)
         )
@@ -665,66 +796,65 @@ class mouse_object_drop(Office_base_task):
         self.basket_height = float(c.get("basket_height", self.BASKET_HEIGHT_DEFAULT))
         n_objects = int(c.get("n_objects", self.N_OBJECTS_DEFAULT))
         n_objects = int(np.clip(n_objects, 3, 5))
+        obj_gap = float(c.get("obj_x_gap_min", self.OBJ_X_GAP_MIN))
 
         self.table_top = 0.74 + float(self.table_z_bias)
         self._measure_shelf_plate()
         self.shelf_front_y = float(self.shelf_plate_ylim[0])
         self.shelf_back_y = float(self.shelf_plate_ylim[1])
         self.shelf_z_surf = float(self.shelf_plate_z)
+        self.shelf_lower_surf = float(
+            getattr(self, "shelf_lower_z", self.shelf_z_surf - 0.18)
+        )
         depth = self.SHELF_DEPTH
         y0, y1 = self.shelf_plate_ylim
         x0, x1 = self.shelf_plate_xlim
 
         self.decor = []
         self._occ_shelf = []
+        self._occ_shelf_lower = []
         self._occ_table = []
         self.shelf_objects = []
         self._decor_obstacles = []  # (cx, cy, hx, hy) for mouse avoidance
         z_seat = self.shelf_z_surf + self.SHELF_OBJ_Z_EPS
+        z_lower = self.shelf_lower_surf + self.SHELF_OBJ_Z_EPS
         y_back = float(y0 + 0.72 * depth)
         y_mid = float(y0 + 0.52 * depth)
 
-        # Décor first so fragile-object slots don't steal their footprints.
+        # Upper-shelf décor first (randomized plant / mug); tissue lives below.
+        plant_x = float(np.random.uniform(-0.48, -0.34))
         plant = self._spawn_static_shelf(
             "120_plant", 0,
-            [-0.42, y_back, z_seat],
+            [plant_x, y_back, z_seat],
             hx=0.09, hy=0.09, scale_mult=self.PLANT_SCALE,
         )
         if plant is not None:
-            self._decor_obstacles.append((-0.42, y_back, 0.09, 0.09))
+            self._decor_obstacles.append((plant_x, y_back, 0.09, 0.09))
         else:
-            plant = self._spawn_static_shelf(
-                "120_plant", 0,
-                [-0.34, y_back, z_seat],
-                hx=0.085, hy=0.085, scale_mult=self.PLANT_SCALE,
-            )
-            if plant is not None:
-                self._decor_obstacles.append((-0.34, y_back, 0.085, 0.085))
-        # Tissue on the table (left), like catch_cup — avoids shelf crowding.
-        tissue_id = int(np.random.choice(self.TISSUE_IDS))
-        tissue_pose = sapien.Pose(
-            [-0.48, -0.18, self.table_top + 0.005],
-            self.PROP_UPRIGHT_Q.tolist(),
-        )
-        try:
-            tissue = create_actor(
-                self, pose=tissue_pose, modelname="023_tissue-box",
-                model_id=tissue_id, convex=True, is_static=True, scale_mult=0.90,
-            )
-            if tissue is not None:
-                self.decor.append(tissue)
-                self._reserve(self._occ_table, -0.48, -0.18, 0.05, 0.04, pad=0.02)
-        except Exception:
-            pass
-        mug_x = float(np.random.uniform(-0.22, -0.12))
+            for px in (-0.42, -0.34, -0.28):
+                plant = self._spawn_static_shelf(
+                    "120_plant", 0,
+                    [px, y_back, z_seat],
+                    hx=0.085, hy=0.085, scale_mult=self.PLANT_SCALE,
+                )
+                if plant is not None:
+                    self._decor_obstacles.append((px, y_back, 0.085, 0.085))
+                    break
         if np.random.rand() < 0.85:
-            mug = self._spawn_static_shelf(
-                "039_mug", int(np.random.randint(0, 13)),
-                [mug_x, y_back, z_seat],
-                hx=0.055, hy=0.055, scale_mult=self.MUG_SCALE,
-            )
-            if mug is not None:
-                self._decor_obstacles.append((mug_x, y_back, 0.055, 0.055))
+            for _ in range(30):
+                mug_x = float(np.random.uniform(-0.28, 0.40))
+                mug_y = float(y0 + np.random.uniform(0.58, 0.78) * depth)
+                mug = self._spawn_static_shelf(
+                    "039_mug", int(np.random.randint(0, 13)),
+                    [mug_x, mug_y, z_seat],
+                    hx=0.055, hy=0.055, scale_mult=self.MUG_SCALE,
+                )
+                if mug is not None:
+                    self._decor_obstacles.append((mug_x, mug_y, 0.055, 0.055))
+                    break
+
+        # Former table props → lower shelf (tissue + random office extras).
+        self._load_lower_shelf_decor(z_lower, y0, y1)
 
         # Narrow mouse corridors at the far ends (mid-depth only — décor can sit behind).
         end_pad = 0.07
@@ -742,22 +872,18 @@ class mouse_object_drop(Office_base_task):
         while len(choices) < n_objects:
             choices.append(catalog[int(np.random.randint(0, len(catalog)))])
 
-        # Mix near-edge / deep; keep x slots evenly spaced (no reshuffle of x).
+        # Mix near-edge / deep; types and exact XY are randomized per seed.
         n_edge = max(1, n_objects // 2)
         modes = (["edge"] * n_edge) + (["deep"] * (n_objects - n_edge))
         np.random.shuffle(modes)
-        # Shuffle type↔mode pairing only; x slots stay left→right spread.
         type_mode = list(zip(choices, modes))
         np.random.shuffle(type_mode)
 
         x_lo, x_hi = self.SHELF_OBJ_X_LIM
-        # Leave a little gap from décor on the far left.
         x_lo = max(x_lo, -0.30)
-        slot_xs = np.linspace(x_lo, x_hi, n_objects)
+        placed_objs = []  # (cx, cy, hx, hy) for gap / Y-lane checks
 
-        for i, ((model, id_pool, smult, rolls, label, uq_name), mode) in enumerate(
-            type_mode
-        ):
+        for (model, id_pool, smult, rolls, label, uq_name), mode in type_mode:
             model_id = (
                 int(np.random.choice(id_pool)) if id_pool is not None else 0
             )
@@ -768,27 +894,37 @@ class mouse_object_drop(Office_base_task):
 
             placed = False
             cx = cy = None
-            for _try in range(60):
-                jitter = 0.025
-                cx = float(np.clip(
-                    slot_xs[i] + np.random.uniform(-jitter, jitter),
-                    x_lo, x_hi,
-                ))
+            for _try in range(80):
+                cx = float(np.random.uniform(x_lo, x_hi))
                 if mode == "edge":
                     f0, f1 = self.EDGE_Y_FRAC
                 else:
                     f0, f1 = self.DEEP_Y_FRAC
                 cy = float(y0 + np.random.uniform(f0, f1) * depth)
+                if not self._x_gap_ok(placed_objs, cx, hx, obj_gap):
+                    continue
+                if not self._y_lane_clear(placed_objs, cx, cy, hx, hy):
+                    continue
                 if self._footprint_ok(self._occ_shelf, cx, cy, hx, hy, pad=0.015):
                     placed = True
                     break
             if not placed:
-                # Last resort: exact slot x, mid of the depth band.
-                cx = float(slot_xs[i])
-                f0, f1 = self.EDGE_Y_FRAC if mode == "edge" else self.DEEP_Y_FRAC
-                cy = float(y0 + 0.5 * (f0 + f1) * depth)
-                if not self._footprint_ok(self._occ_shelf, cx, cy, hx, hy, pad=0.01):
-                    continue
+                # Fallback: linspace-ish slot with the gap constraint.
+                for t in np.linspace(0.0, 1.0, n_objects + 2)[1:-1]:
+                    cx = float(x_lo + t * (x_hi - x_lo))
+                    f0, f1 = self.EDGE_Y_FRAC if mode == "edge" else self.DEEP_Y_FRAC
+                    cy = float(y0 + 0.5 * (f0 + f1) * depth)
+                    if (
+                        self._x_gap_ok(placed_objs, cx, hx, obj_gap * 0.7)
+                        and self._y_lane_clear(placed_objs, cx, cy, hx, hy)
+                        and self._footprint_ok(
+                            self._occ_shelf, cx, cy, hx, hy, pad=0.01,
+                        )
+                    ):
+                        placed = True
+                        break
+            if not placed:
+                continue
 
             # Bottom of mesh sits on the shelf plate (meshes are Y-up, bottom-origin).
             cz = z_seat
@@ -811,6 +947,7 @@ class mouse_object_drop(Office_base_task):
             self._make_kinematic(actor)
             self._set_entity_pose(actor, pose)
             self._reserve(self._occ_shelf, cx, cy, hx, hy, pad=0.015)
+            placed_objs.append((cx, cy, hx, hy))
             entry = {
                 "actor": actor,
                 "model": model,
@@ -936,18 +1073,15 @@ class mouse_object_drop(Office_base_task):
         p0, h0 = self._mouse_point_at(0.0)
         self._spawn_mouse(float(p0[0]), float(p0[1]), z_mouse, h0)
 
-        # Basket near the robot — NOT under the fall. Always spawn on the same
-        # table half as the knock target so the matching gripper can reach it.
+        # Basket on the table midline (x≈0) so either arm can reach it; the
+        # placing arm still follows the knock-target side for the landing.
         self.basket_id = 0
-        basket_y_default = float(c.get("basket_start_y", -0.28))
-        min_sep = float(c.get("basket_drop_sep", 0.16))
-        # One arm both picks the basket and places it under the landing, so the
-        # landing side picks the arm and the spawn has to stay within its reach.
+        basket_y_lo = float(c.get("basket_start_y", self.BASKET_START_Y_DEFAULT))
+        basket_y_span = float(c.get("basket_start_y_span", self.BASKET_START_Y_SPAN))
         self.arm_side = "right" if float(self.drop_x) >= 0.0 else "left"
         basket_x, basket_y = self._sample_basket_start(
-            drop_x=self.drop_x,
-            y_default=basket_y_default,
-            min_sep=min_sep,
+            y_lo=basket_y_lo,
+            y_hi=basket_y_lo + basket_y_span,
         )
         hz = 0.5 * float(self.basket_height)
         self.basket_hz = hz
@@ -1097,36 +1231,23 @@ class mouse_object_drop(Office_base_task):
                 break
         return basket
 
-    def _sample_basket_start(self, drop_x, y_default, min_sep=0.16):
-        """Spawn the basket on the same table half as the knock target.
+    def _sample_basket_start(self, y_lo, y_hi):
+        """Spawn the basket on the table midline so both arms can reach it.
 
-        Left-half drops → left-half basket (left gripper); right-half drops →
-        right-half basket. Never cross the midline: the other arm cannot reach
-        it. Keep a gap from the landing x so the catcher is not already under
-        the fall.
+        X stays near 0; Y is randomized between the prior near-robot pose and
+        10 cm farther toward the shelf. The placing arm is chosen from
+        ``drop_x`` separately.
         """
         hx = float(self.basket_half_xy[0])
         hy = float(self.basket_half_xy[1])
-        sign = 1.0 if float(drop_x) >= 0.0 else -1.0
-        self.arm_side = "right" if sign > 0.0 else "left"
-        # Near-robot band on the target's half only (table x ≈ ±0.10 … ±0.34).
-        near = tuple(sorted((sign * 0.10, sign * 0.28)))
-        far = tuple(sorted((sign * 0.18, sign * 0.34)))
-
-        for attempt in range(40):
-            lo, hi = near if attempt < 24 else far
-            bx = float(np.random.uniform(lo, hi))
-            by = (
-                float(y_default) if attempt == 0
-                else float(np.random.uniform(-0.30, -0.22))
-            )
-            if abs(bx - float(drop_x)) < float(min_sep):
-                continue
+        lo = float(min(y_lo, y_hi))
+        hi = float(max(y_lo, y_hi))
+        for _ in range(40):
+            bx = float(np.random.uniform(-0.03, 0.03))
+            by = float(np.random.uniform(lo, hi))
             if self._footprint_ok(self._occ_table, bx, by, hx, hy):
                 return bx, by
-
-        # Fallback still on the target half, offset from the drop line.
-        return float(sign * 0.22), float(y_default)
+        return 0.0, float(0.5 * (lo + hi))
 
     # ----------------------------------------------------------- kinematics
     def _release_actor_to_physics(self, actor, *, mass=None):
@@ -1294,8 +1415,11 @@ class mouse_object_drop(Office_base_task):
             return False
         bp = np.array(self.basket.get_pose().p, dtype=np.float64)
         land = self._landing
+        hz = float(getattr(self, "basket_hz", 0.5 * self.basket_height))
+        seated = abs(float(bp[2]) - (float(self.table_top) + hz)) <= 0.025
         return bool(
-            abs(bp[0] - land[0]) <= self.basket_half_xy[0] + self.catch_xy_tol
+            seated
+            and abs(bp[0] - land[0]) <= self.basket_half_xy[0] + self.catch_xy_tol
             and abs(bp[1] - land[1]) <= self.basket_half_xy[1] + self.catch_xy_tol
         )
 
@@ -1424,11 +1548,22 @@ class mouse_object_drop(Office_base_task):
             z=float(place_z + 0.004 - bp[2]),
             move_axis="world",
         ))
+        # Second micro-lower if the long carry from x≈0 left the basket high.
+        bp = np.array(self.basket.get_pose().p, dtype=np.float64)
+        if float(bp[2]) > place_z + 0.015:
+            self.plan_success = True
+            self.move(self.move_by_displacement(
+                arm_tag=arm_tag,
+                x=float(land_xy[0] - bp[0]),
+                y=float(land_xy[1] - bp[1]),
+                z=float(place_z + 0.003 - bp[2]),
+                move_axis="world",
+            ))
 
         self.plan_success = True
         self.move(self.open_gripper(arm_tag=arm_tag))
         self._holding_basket = False
-        self._dwell(10)  # let the basket settle on the table under gravity
+        self._dwell(16)  # let the basket settle on the table under gravity
 
         self._basket_placed = bool(self._basket_under_landing())
 
@@ -1524,6 +1659,8 @@ class mouse_object_drop(Office_base_task):
             "target_rolls": bool(getattr(self, "target_rolls", False)),
             "mouse_end": str(getattr(self, "mouse_end", "")),
             "mouse_s": float(getattr(self, "_mouse_s", 0.0)),
+            "mouse_speed": float(getattr(self, "mouse_speed", 0.0)),
+            "mouse_speed_mean": float(getattr(self, "mouse_speed_mean", 0.0)),
             "drop_x": float(getattr(self, "drop_x", 0.0)),
             "landing": list(map(float, self._landing)),
             "n_shelf_objects": int(len(self.shelf_objects)),

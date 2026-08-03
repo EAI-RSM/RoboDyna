@@ -151,11 +151,13 @@ task_args:
     # (reactive) on a randomized heading — may exit front or a side edge.
     # Matching left/right arm blocks the ball (no grasp).
     # Clock/screen/speaker face robot. Desk-sized trophy; screen 1.05×.
+    # Angle / ball pose / shelf décor already randomized; only speed jitters.
     ball_ids: [0, 1]
     ball_scale_mult: 1.6        # 2× then −20% (~6.4 cm diameter)
     trophy_scale_mult: 1.00     # 100% larger than the previous 0.50 scale
     screen_scale_mult: 1.05     # 30% smaller than prior 1.5×
-    roll_speed: 0.15            # m/s; table roll (slow enough for reactive approach)
+    roll_speed: 0.15            # m/s mean; actual = mean × (1 ± roll_speed_jitter_frac)
+    roll_speed_jitter_frac: 0.30
     fall_speed_xy: 0.07         # m/s; retained horizontal speed during shelf→table fall
     shelf_roll_duration: 1.00   # s; ball rolls to shelf lip from episode start
     table_edge_y: -0.30         # m; front edge (past this without stop = fail)
@@ -194,17 +196,19 @@ task_args:
     pillow_mass: 0.35           # kg; cushion the gripper shoves across the table
     post_place_dwell: 12        # sim steps after catch/miss before episode ends
   mouse_object_drop:
-    # Deep wall shelf with random cup/wineglass/beer/wine bottles + plant/mug
-    # décor. Robot pick-places a custom cushioned basket under the shelf lip
-    # (no teleports — carried and released by the gripper). Then a kinematic
-    # mouse runs an obstacle-free arc-length route, physically shoves ONE
-    # target over the lip, and PhysX owns the fall/catch. Success is read off
-    # the resting pose inside the basket.
+    # Two-tier deep shelf: random cup/wineglass/beer/wine + plant/mug on upper
+    # (mouse-width X gaps, no Y-lane blocking); tissue + random office props on
+    # lower. Basket spawns at x≈0 with Y ∈ [basket_start_y, +10 cm]. Mouse
+    # picks one target and shoves it; speed = mean × (1 ± jitter).
     n_objects: 4
-    mouse_speed: 0.10           # m/s; continuous shelf scurry speed
+    n_lower_extra: 2            # random office props on lower shelf (plus tissue)
+    obj_x_gap_min: 0.06         # m; clear gap between fragile footprints
+    mouse_speed: 0.10           # m/s mean; slow = mean×(1−jitter), fast = mean×(1+jitter)×fast_side_mult
+    mouse_speed_jitter_frac: 0.30
+    mouse_speed_fast_side_mult: 1.20  # +20% on the faster-side cap (1.3 → 1.56)
     mouse_start_gap_min: 0.15   # m; prefer a start end this far from the target
-    basket_start_y: -0.28       # m; basket spawn near the robot
-    basket_drop_sep: 0.16       # m; min |basket_x − drop_x| at spawn
+    basket_start_y: -0.28       # m; lower end of basket Y band (near robot)
+    basket_start_y_span: 0.10   # m; upper = basket_start_y + span
     catch_xy_tol: 0.035         # m; XY pad for object-in-basket success
     post_place_dwell: 14        # sim steps after catch/miss before episode ends
   empty_bag:

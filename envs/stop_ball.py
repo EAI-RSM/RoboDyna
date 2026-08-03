@@ -43,6 +43,7 @@ class stop_ball(Office_base_task):
     MILKTEA_IDS = [0, 1, 2, 4, 5, 6]
 
     ROLL_SPEED_DEFAULT = 0.15
+    ROLL_SPEED_JITTER_FRAC = 0.30  # sample table-roll speed in mean ± this fraction
     FALL_SPEED_XY_DEFAULT = 0.07
     SHELF_ROLL_DURATION_DEFAULT = 1.00
     GRAVITY = 9.81
@@ -537,7 +538,13 @@ class stop_ball(Office_base_task):
     # ------------------------------------------------------------------ actors
     def load_actors(self):
         c = self._cfg
-        self.roll_speed = float(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
+        base_speed = float(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
+        jitter = float(c.get("roll_speed_jitter_frac", self.ROLL_SPEED_JITTER_FRAC))
+        jitter = float(np.clip(jitter, 0.0, 0.95))
+        self.roll_speed_mean = float(base_speed)
+        self.roll_speed = float(
+            np.random.uniform(base_speed * (1.0 - jitter), base_speed * (1.0 + jitter))
+        )
         self.fall_speed_xy = float(c.get("fall_speed_xy", self.FALL_SPEED_XY_DEFAULT))
         self.shelf_roll_duration = float(c.get(
             "shelf_roll_duration", self.SHELF_ROLL_DURATION_DEFAULT,
@@ -1421,6 +1428,8 @@ class stop_ball(Office_base_task):
             "arm_side": str(self.arm_side),
             "roll_angle": float(getattr(self, "_roll_angle", 0.0)),
             "exit_edge": str(getattr(self, "_exit_edge", "front")),
+            "roll_speed": float(getattr(self, "roll_speed", 0.0)),
+            "roll_speed_mean": float(getattr(self, "roll_speed_mean", 0.0)),
             "ball_speed": float(self._ball_speed()),
         }
         return obs
