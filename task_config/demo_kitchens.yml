@@ -42,8 +42,15 @@ check_render_success: false
 task_args:
   boil_milk:
     scene_id: 0
+    stove_side: random          # left | right | random
+    pot_burner: random          # left_front | right_front | left_rear | right_rear | random
     # Stove pulled forward off the backsplash so the knob is in easy arm reach.
     range_xy: [0.28, 0.14]
+    range_x_right: 0.28
+    range_x_left: -0.28
+    microwave_y: 0.18
+    microwave_x_left: -0.32
+    microwave_x_right: 0.32
     # The pot boils through the whole reach for the knob (~960 steps), so the
     # rise is slow enough that the shutoff motion still lands under overflow.
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
@@ -70,10 +77,11 @@ task_args:
     # food_type: meat | sausage | onion_half | random
     # Food starts on a chopping board; expert places into pan, cooks via knob, then plates.
     food_type: random
-    # burner: left_front | left_rear | right_front | right_rear
-    burner: left_front
-    # Left + nudged toward the back so arms have room in front.
+    randomize_layout: true
+    stove_pose: random          # current | center | random
+    burner: random              # left_front | right_front | random
     range_xy: [0.10, 0.14]
+    range_center_xy: [0.0, 0.14]
     board_y: -0.02
     plate_y: -0.12
 
@@ -96,6 +104,15 @@ task_args:
     knob_contact_radius: 0.06
   pour_beer:
     scene_id: 0
+    randomize_layout: true
+    station_side: random
+    station_x: 0.10
+    cup_y: -0.08
+    tap_dy: 0.12
+    tap_y_down: 0.10
+    station_x_range_left: [-0.16, -0.06]
+    station_x_range_right: [0.06, 0.16]
+    station_x_range: [0.06, 0.16]
     pour_rate: 0.00055
     foam_gain: 0.60
     foam_decay: 0.0045
@@ -116,18 +133,25 @@ task_args:
     # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
     oil_style: solid
     scale_id: 0
-    # Layout: jar always under dispenser; scale near jar/arm.
-    # randomize_layout=true samples microwave X, station, scale, decor.
-    randomize_layout: false
+    # Layout: MW top-left|corner; dispenser L/R Y±6cm; scale L/R dist±10cm; decor clear.
+    randomize_layout: true
+    microwave_pose: random
+    microwave_top_left: [-0.32, 0.18]
+    microwave_left_corner: [-0.48, 0.22]
     microwave_y: 0.18
-    # Far-left only so the pour station never sits inside the MW footprint.
     microwave_x_range: [-0.42, -0.22]
+    station_side: random
     station_x: -0.08
     station_x_range: [-0.20, -0.02]
+    station_x_range_left: [-0.22, -0.04]
+    station_x_range_right: [0.04, 0.22]
     disp_y: 0.08
+    disp_y_jitter: 0.06
     jar_y: -0.06
     scale_x: -0.32
     scale_y: -0.14
+    scale_dist: 0.25
+    scale_dist_jitter: 0.10
     scale_near_dx_range: [-0.28, -0.16]
     scale_near_dy_range: [-0.12, -0.02]
     decor_on_microwave_prob: 0.35

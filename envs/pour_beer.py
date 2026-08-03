@@ -119,10 +119,18 @@ class pour_beer(KitchenS_base_task):
     TABLE_EDGE_MARGIN = 0.04
     # Reserved clear zone covering glass + tap base + lever arc.
     STATION_HALF_XY = (0.10, 0.16)
+    # Reachable pour stations on either arm half (mirrored).
+    STATION_X_RANGE_LEFT = (-0.16, -0.06)
+    STATION_X_RANGE_RIGHT = (0.06, 0.16)
+    # Legacy single-sided fallback (right); prefer left/right ranges when randomizing.
     STATION_X_RANGE = (0.06, 0.16)
     CUP_Y_RANGE = (-0.14, -0.05)
+    # Tap Y jitter: upper bound = baseline tap_y, lower = baseline − TAP_Y_DOWN.
+    TAP_Y_DOWN = 0.10  # 10 cm toward the robot
     PROP_X_RANGE = (-0.55, 0.55)
     PROP_Y_RANGE = (-0.26, 0.28)
+    # Keep the apron in front of the mug clear for approach / viewing.
+    MUG_CORRIDOR_HALF_XY = (0.10, 0.14)
 
     # Beer/foam must stay near-opaque: the glass shell occludes translucent
     # interiors via depth/alpha sorting (stream outside the cup stays visible).
@@ -647,24 +655,55 @@ class pour_beer(KitchenS_base_task):
         return 0.5 * (np.asarray(self.cup_xy, dtype=float) + np.asarray(self.tap_xy, dtype=float))
 
     def _resolve_station_layout(self, cfg, rng):
-        """Sample cup/tap XY; keep spout aligned over the glass (shared X, fixed dy)."""
+        """Sample tap XY; mug stays under the nozzle (shared X, fixed tap→cup dy).
+
+        Tap Y uses the baseline (``cup_y + tap_dy``) as the *upper* bound and
+        baseline − ``tap_y_down`` (default 10 cm) as the lower bound — matching
+        the fill_coffee_jar dispenser jitter pattern.
+
+        Station X is sampled on the left or right apron half (``station_side``:
+        ``left`` / ``right`` / ``random``) so the matching arm can pour.
+        """
         tap_dy = float(cfg.get("tap_dy", 0.12))
+        base_side = float(cfg.get("station_x", 0.10))
+        base_cup_y = float(cfg.get("cup_y", -0.08))
+        base_tap_y = base_cup_y + tap_dy
+        tap_y_down = float(cfg.get("tap_y_down", self.TAP_Y_DOWN))
         randomize = bool(cfg.get("randomize_layout", False))
         if not randomize:
-            side = float(cfg.get("station_x", 0.10))
-            cup_y = float(cfg.get("cup_y", -0.08))
-            return side, cup_y, tap_dy
+            return base_side, base_cup_y, tap_dy
 
-        x_lo, x_hi = self._parse_range(cfg, "station_x_range", self.STATION_X_RANGE)
-        y_lo, y_hi = self._parse_range(cfg, "cup_y_range", self.CUP_Y_RANGE)
-        for _ in range(60):
-            side = float(rng.uniform(x_lo, x_hi))
-            cup_y = float(rng.uniform(y_lo, y_hi))
-            # Keep the pour station on the reachable right-arm side of the counter.
-            if side < 0.02:
-                continue
-            return side, cup_y, tap_dy
-        return 0.10, -0.08, tap_dy
+        left_range = self._parse_range(
+            cfg, "station_x_range_left", self.STATION_X_RANGE_LEFT
+        )
+        right_range = self._parse_range(
+            cfg, "station_x_range_right", self.STATION_X_RANGE_RIGHT
+        )
+        side_pref = str(cfg.get("station_side", "random")).lower().strip()
+        if side_pref in ("left", "l"):
+            side_order = ["left"]
+        elif side_pref in ("right", "r"):
+            side_order = ["right"]
+        else:
+            # Coin-flip which arm half hosts the tap+mug station.
+            side_order = ["left", "right"]
+            rng.shuffle(side_order)
+
+        y_lo = base_tap_y - tap_y_down
+        y_hi = base_tap_y
+        for side_name in side_order:
+            x_lo, x_hi = left_range if side_name == "left" else right_range
+            for _ in range(40):
+                side = float(rng.uniform(x_lo, x_hi))
+                # Keep a small dead-band at the centerline so arm choice is unambiguous.
+                if abs(side) < 0.02:
+                    continue
+                tap_y = float(rng.uniform(y_lo, y_hi))
+                cup_y = tap_y - tap_dy
+                return side, cup_y, tap_dy
+
+        # Fallback: keep the configured baseline side.
+        return base_side, base_cup_y, tap_dy
 
     def _resolve_rates(self, cfg, rng):
         self.pour_rate = self._sample_scalar_or_range(
@@ -855,7 +894,18 @@ class pour_beer(KitchenS_base_task):
 
         station_c = self._station_center_xy()
         station_h = np.asarray(self.STATION_HALF_XY, dtype=float)
-        blockers = [(station_c, station_h)]
+        # Corridor on the robot side of the mug — props must not block the apron.
+        mug_c = np.asarray(self.cup_xy, dtype=float)
+        corridor_c = np.array([mug_c[0], mug_c[1] - 0.14], dtype=float)
+        corridor_h = np.asarray(self.MUG_CORRIDOR_HALF_XY, dtype=float)
+        tap_c = np.asarray(self.tap_xy, dtype=float)
+        tap_h = np.array([self.BASE_R + 0.02, self.BASE_R + 0.04], dtype=float)
+        blockers = [
+            (station_c, station_h),
+            (mug_c, np.array([0.06, 0.06], dtype=float)),
+            (tap_c, tap_h),
+            (corridor_c, corridor_h),
+        ]
 
         for model, mid, scale, default_xy, default_yaw, region in catalog:
             try:

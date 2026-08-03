@@ -59,10 +59,13 @@ task_args:
     full_liquid_tol: 0.05
     overflow_level: 1.0
     safe_total: 0.90
-    # Layout: randomize cup/tap + bar props with AABB non-overlap clearance.
+    # Layout: tap L/R + Y in [baseline−10cm, baseline]; mug under nozzle; props AABB-clear.
     randomize_layout: true
+    station_side: random
     station_x: 0.10
     cup_y: -0.08
     tap_dy: 0.12
+    tap_y_down: 0.10
+    station_x_range_left: [-0.16, -0.06]
+    station_x_range_right: [0.06, 0.16]
     station_x_range: [0.06, 0.16]
-    cup_y_range: [-0.14, -0.05]

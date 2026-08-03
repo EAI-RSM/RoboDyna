@@ -74,9 +74,19 @@ class measure_ingredient(KitchenS_base_task):
     OVERFLOW_LEVEL = 1.0
     # Layout randomization defaults (see task_args.measure_ingredient).
     MICROWAVE_Y_DEFAULT = 0.18  # stay at the back; only X diversifies
+    # Two discrete MW poses when randomize_layout: top-left (current) or left corner.
+    MICROWAVE_TOP_LEFT = (-0.32, 0.18)
+    MICROWAVE_LEFT_CORNER = (-0.48, 0.22)
     # Keep MW out of the left-arm pour lane (see _sample_microwave_override).
     MICROWAVE_X_RANGE = (-0.42, -0.22)
-    STATION_X_RANGE = (-0.20, -0.02)   # left-arm pour station
+    STATION_X_RANGE = (-0.20, -0.02)   # left-arm pour station (legacy / left side)
+    STATION_X_RANGE_LEFT = (-0.22, -0.04)
+    STATION_X_RANGE_RIGHT = (0.04, 0.22)
+    # Dispenser Y jitter about baseline ``disp_y`` (±6 cm).
+    DISP_Y_JITTER = 0.06
+    # Scale distance from dispenser/jar: baseline ≈ 0.25 m, ± ±10 cm.
+    SCALE_DIST_BASE = 0.25
+    SCALE_DIST_JITTER = 0.10
     SCALE_NEAR_DX_RANGE = (-0.28, -0.16)  # scale toward −x of jar (same arm)
     SCALE_NEAR_DY_RANGE = (-0.12, -0.02)  # slightly toward robot
     DECOR_ON_MICROWAVE_PROB = 0.35
@@ -287,9 +297,10 @@ class measure_ingredient(KitchenS_base_task):
         return best
 
     def _sample_microwave_override(self, cfg, seed: int):
-        """Microwave stays at the back (fixed Y); only X may diversify.
+        """Microwave: top-left (current) or left corner when layout is randomized.
 
-        Reject X samples that leave no collision-free pour-station placement.
+        Reject poses that leave no collision-free pour-station placement on
+        either the left or right arm half.
         """
         mw_y = float(cfg.get("microwave_y", self.MICROWAVE_Y_DEFAULT))
         randomize = bool(cfg.get("randomize_layout", False))
@@ -300,38 +311,52 @@ class measure_ingredient(KitchenS_base_task):
             self.microwave_xy_override = None
             return
 
-        lo, hi = self._parse_range(cfg, "microwave_x_range", self.MICROWAVE_X_RANGE)
-        sx_lo, sx_hi = self._parse_range(cfg, "station_x_range", self.STATION_X_RANGE)
-        disp_y = float(cfg.get("disp_y", 0.08))
-        jar_y = float(cfg.get("jar_y", -0.06))
+        top_left = cfg.get("microwave_top_left", list(self.MICROWAVE_TOP_LEFT))
+        left_corner = cfg.get(
+            "microwave_left_corner", list(self.MICROWAVE_LEFT_CORNER)
+        )
+        pose_name = str(cfg.get("microwave_pose", "random")).lower().strip()
+        rng = np.random.RandomState(int(seed) + 17)
+        if pose_name in ("top_left", "top-left", "current", "default"):
+            candidates = [("top_left", top_left)]
+        elif pose_name in ("left_corner", "left-corner", "corner"):
+            candidates = [("left_corner", left_corner)]
+        else:
+            order = ["top_left", "left_corner"]
+            rng.shuffle(order)
+            pose_map = {"top_left": top_left, "left_corner": left_corner}
+            candidates = [(n, pose_map[n]) for n in order]
+
+        base_disp_y = float(cfg.get("disp_y", 0.08))
+        base_jar_y = float(cfg.get("jar_y", -0.06))
         mw_half = self._estimate_microwave_half_xy(
             cfg.get("microwave_scale_mult", self.MICROWAVE_SCALE_DEFAULT)
         )
-        rng = np.random.RandomState(int(seed) + 17)
-        mw_x = None
-        for _ in range(80):
-            cand = float(rng.uniform(lo, hi))
-            mw_xy = np.array([cand, mw_y], dtype=float)
-            # Must leave at least one valid station X in range.
+        # Station may sit on either arm half — check both ranges.
+        station_ranges = [
+            self._parse_range(cfg, "station_x_range_left", self.STATION_X_RANGE_LEFT),
+            self._parse_range(cfg, "station_x_range_right", self.STATION_X_RANGE_RIGHT),
+            self._parse_range(cfg, "station_x_range", self.STATION_X_RANGE),
+        ]
+        for name, pose in candidates:
+            mw_xy = np.array([float(pose[0]), float(pose[1])], dtype=float)
             ok = False
-            for x in np.linspace(sx_lo, sx_hi, 21):
-                if self._station_clears_microwave(
-                    float(x), disp_y, jar_y, mw_xy, mw_half
-                ):
-                    ok = True
+            for sx_lo, sx_hi in station_ranges:
+                for x in np.linspace(sx_lo, sx_hi, 21):
+                    if self._station_clears_microwave(
+                        float(x), base_disp_y, base_jar_y, mw_xy, mw_half
+                    ):
+                        ok = True
+                        break
+                if ok:
                     break
             if ok:
-                mw_x = cand
-                break
-        if mw_x is None:
-            # Park MW on the far-left so the left-arm station stays clear.
-            need = (
-                float(mw_half[0])
-                + max(float(self.DISP_HALF_XY[0]), float(self.JAR_HALF_XY[0]))
-                + float(self.LAYOUT_MARGIN)
-            )
-            mw_x = float(np.clip(sx_lo - need - 0.02, lo, hi))
-        self.microwave_xy_override = [mw_x, mw_y]
+                self.microwave_xy_override = [float(mw_xy[0]), float(mw_xy[1])]
+                self._microwave_pose_choice = name
+                return
+        # Fallback: current top-left.
+        self.microwave_xy_override = [float(top_left[0]), float(top_left[1])]
+        self._microwave_pose_choice = "top_left"
 
     def _resolve_target_fill(self, cfg, rng: np.random.RandomState) -> float:
         """Parse target_fill: 0.25/0.5/0.75/1.0 or ``random``."""
@@ -397,10 +422,12 @@ class measure_ingredient(KitchenS_base_task):
     def _resolve_layout(self, cfg):
         """Station (jar under dispenser), nearby scale, sparse/on-microwave decor.
 
-        With ``randomize_layout: true``, fixed ``*_xy`` / ``station_x`` / ``scale_*``
-        in yaml are ignored in favor of the ``*_range`` parameters (unless a pin
-        key is set, e.g. ``pin_station_x``). All table props use AABB clearance
-        so the dispenser / jar / scale never sit inside the microwave.
+        With ``randomize_layout: true``:
+          - microwave is top-left or left-corner (chosen in setup)
+          - dispenser on left *or* right (clears MW), Y = baseline ± 6 cm
+          - scale left or right of dispenser at baseline distance ± 10 cm,
+            always on the same arm half so the pour arm can place the jar
+          - baking decor randomized with AABB clearance + jar approach corridor
         """
         rng = self._layout_rng(101)
         randomize = bool(cfg.get("randomize_layout", False))
@@ -411,47 +438,60 @@ class measure_ingredient(KitchenS_base_task):
         mw_top = float(mw_top)
         table_z = float(self.table_top + 0.001)
 
-        disp_y = float(cfg.get("disp_y", 0.08))
-        jar_y = float(cfg.get("jar_y", -0.06))
-        if randomize and bool(cfg.get("randomize_station_y", False)):
-            dlo, dhi = self._parse_range(cfg, "disp_y_range", (0.04, 0.12))
-            jlo, jhi = self._parse_range(cfg, "jar_y_range", (-0.10, -0.02))
-            gap = disp_y - jar_y
-            disp_y = float(rng.uniform(dlo, dhi))
-            jar_y = float(np.clip(disp_y - gap, jlo, jhi))
+        base_disp_y = float(cfg.get("disp_y", 0.08))
+        base_jar_y = float(cfg.get("jar_y", -0.06))
+        gap = float(np.clip(base_disp_y - base_jar_y, 0.10, 0.18))
+        disp_y_jitter = float(cfg.get("disp_y_jitter", self.DISP_Y_JITTER))
 
-        sx_lo, sx_hi = self._parse_range(cfg, "station_x_range", self.STATION_X_RANGE)
         if randomize:
-            if cfg.get("pin_station_x") is not None:
-                side_x = float(cfg["pin_station_x"])
+            # Dispenser Y: current ± 6 cm; jar stays under the nozzle (fixed gap).
+            disp_y = float(
+                rng.uniform(base_disp_y - disp_y_jitter, base_disp_y + disp_y_jitter)
+            )
+            jar_y = disp_y - gap
+
+            left_range = self._parse_range(
+                cfg, "station_x_range_left", self.STATION_X_RANGE_LEFT
+            )
+            right_range = self._parse_range(
+                cfg, "station_x_range_right", self.STATION_X_RANGE_RIGHT
+            )
+            side_pref = str(cfg.get("station_side", "random")).lower().strip()
+            if side_pref in ("left", "l"):
+                side_order = ["left"]
+            elif side_pref in ("right", "r"):
+                side_order = ["right"]
             else:
-                side_x = float(rng.uniform(sx_lo, sx_hi))
-                if not self._station_clears_microwave(
-                    side_x, disp_y, jar_y, mw_xy, mw_half
-                ):
-                    # Resample, then nudge if still blocked.
-                    found = None
-                    for _ in range(40):
-                        cand = float(rng.uniform(sx_lo, sx_hi))
-                        if self._station_clears_microwave(
-                            cand, disp_y, jar_y, mw_xy, mw_half
-                        ):
-                            found = cand
-                            break
-                    side_x = (
-                        found
-                        if found is not None
-                        else self._nudge_x_clear_of_microwave(
-                            side_x, disp_y, jar_y, mw_xy, mw_half, sx_lo, sx_hi
-                        )
-                    )
-            if not self._station_clears_microwave(
-                side_x, disp_y, jar_y, mw_xy, mw_half
-            ):
+                side_order = ["left", "right"]
+                rng.shuffle(side_order)
+
+            side_x = None
+            for side_name in side_order:
+                sx_lo, sx_hi = left_range if side_name == "left" else right_range
+                for _ in range(40):
+                    cand = float(rng.uniform(sx_lo, sx_hi))
+                    if self._station_clears_microwave(
+                        cand, disp_y, jar_y, mw_xy, mw_half
+                    ):
+                        side_x = cand
+                        break
+                if side_x is not None:
+                    break
+            if side_x is None:
+                # Fallback: left station nudged clear of the microwave.
+                sx_lo, sx_hi = left_range
                 side_x = self._nudge_x_clear_of_microwave(
-                    side_x, disp_y, jar_y, mw_xy, mw_half, sx_lo, sx_hi
+                    float(cfg.get("station_x", -0.08)),
+                    disp_y,
+                    jar_y,
+                    mw_xy,
+                    mw_half,
+                    sx_lo,
+                    sx_hi,
                 )
         else:
+            disp_y = base_disp_y
+            jar_y = base_jar_y
             side_x = float(cfg.get("station_x", -0.08))
             if not self._station_clears_microwave(
                 side_x, disp_y, jar_y, mw_xy, mw_half
@@ -471,7 +511,8 @@ class measure_ingredient(KitchenS_base_task):
             (self.jar_xy.copy(), np.asarray(self.JAR_HALF_XY, dtype=float)),
         ]
 
-        # Scale stays near the jar so the pour arm can place it — never in MW.
+        # Scale near the dispenser: left or right side, distance ≈ baseline ± 10 cm.
+        # Must stay on the same arm half so the grasp arm can reach the scale.
         if randomize:
             if cfg.get("pin_scale_x") is not None and cfg.get("pin_scale_y") is not None:
                 scale_xy = np.array(
@@ -479,26 +520,46 @@ class measure_ingredient(KitchenS_base_task):
                     dtype=float,
                 )
             else:
-                dx_lo, dx_hi = self._parse_range(
-                    cfg, "scale_near_dx_range", self.SCALE_NEAR_DX_RANGE
-                )
-                dy_lo, dy_hi = self._parse_range(
-                    cfg, "scale_near_dy_range", self.SCALE_NEAR_DY_RANGE
-                )
+                dist_base = float(cfg.get("scale_dist", self.SCALE_DIST_BASE))
+                dist_jit = float(cfg.get("scale_dist_jitter", self.SCALE_DIST_JITTER))
                 scale_xy = None
-                for _ in range(50):
-                    dx = float(rng.uniform(dx_lo, dx_hi))
-                    dy = float(rng.uniform(dy_lo, dy_hi))
-                    if side_x <= 0:
+                side_signs = [1.0, -1.0]
+                rng.shuffle(side_signs)
+                for sign in side_signs:
+                    for _ in range(40):
+                        dist = float(
+                            rng.uniform(
+                                max(0.14, dist_base - dist_jit),
+                                dist_base + dist_jit,
+                            )
+                        )
+                        # Mostly lateral (±X), slight Y toward the robot.
+                        ang = float(rng.uniform(-0.45, 0.45))
+                        dx = sign * dist * float(np.cos(ang))
+                        dy = -abs(dist * float(np.sin(ang))) - float(
+                            rng.uniform(0.0, 0.04)
+                        )
                         cand = np.array([side_x + dx, jar_y + dy], dtype=float)
-                    else:
-                        cand = np.array([side_x - dx, jar_y + dy], dtype=float)
-                    if self._footprint_clear(cand, self.SCALE_HALF_XY, blockers):
-                        scale_xy = cand
+                        # Same arm half (or near centerline) for reachability.
+                        if side_x <= 0 and cand[0] > 0.06:
+                            continue
+                        if side_x > 0 and cand[0] < -0.06:
+                            continue
+                        cand[0] = float(np.clip(cand[0], -0.50, 0.50))
+                        cand[1] = float(np.clip(cand[1], -0.26, 0.16))
+                        if self._footprint_clear(cand, self.SCALE_HALF_XY, blockers):
+                            scale_xy = cand
+                            break
+                    if scale_xy is not None:
                         break
                 if scale_xy is None:
                     # Fallback: beside the jar, away from the microwave in X.
                     away = -1.0 if side_x <= float(mw_xy[0]) else 1.0
+                    # Keep away on the same arm half.
+                    if side_x <= 0:
+                        away = -abs(away)
+                    else:
+                        away = abs(away)
                     scale_xy = np.array(
                         [side_x + away * 0.22, jar_y - 0.06], dtype=float
                     )

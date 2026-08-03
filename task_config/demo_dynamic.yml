@@ -887,7 +887,9 @@ task_args:
     # Expert places a hollow clear glass trap over it without pausing the bug.
     # Success = trap footprint covers the bug on the table.
     # After walk_time seconds the bug retreats under the shelf (episode fails).
-    bug_types: [cockroach, spider, ant]
+    bug_type: random            # cockroach | spider | ant | random
+    bug_types: [cockroach, spider, ant]  # pool when bug_type=random
+    run_side: random            # left | right | random (trap placed on same side)
     bug_speed_min: 0.07         # m/s base scuttle speed (low)
     bug_speed_max: 0.14         # m/s base scuttle speed (high)
     emerge_steps: 40            # sim steps of emerge before L/R run
@@ -937,12 +939,19 @@ task_args:
     board_z_lift: 0.06          # m; half-height compact board above the table
     board_color: [0.98, 0.82, 0.05]  # RGB board color (yellow)
   boil_milk:
-    # KitchenS: no sink/tap; microwave left, cooking range right. Pot of milk on
-    # a burner; grasp and twist the cooktop knob to toggle heat. White milk rises
-    # while on. Success = milk reaches the red ring, then stove off before spill.
-    # Failure = spill, or shutoff before the milk hits the ring.
-    scene_id: 0                 # MW left, range right (right-arm reach)
-    range_xy: [0.28, 0.14]
+    # KitchenS: no sink/tap. Stove left or right; microwave on the opposite side.
+    # Pot of milk on a random burner; grasp and twist the cooktop knob (same-side
+    # arm) to toggle heat. White milk rises while on. Success = milk reaches the
+    # red ring, then stove off before spill. Failure = spill, or shutoff early.
+    scene_id: 0
+    stove_side: random          # left | right | random
+    pot_burner: random          # left_front | right_front | left_rear | right_rear | random
+    range_xy: [0.28, 0.14]      # Y used; X overridden by stove_side
+    range_x_right: 0.28
+    range_x_left: -0.28
+    microwave_y: 0.18
+    microwave_x_left: -0.32
+    microwave_x_right: 0.32
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
     settle_steps: 1200          # steps for liquid to return toward baseline when off
     baseline_level: 0.35        # resting fill fraction
@@ -958,17 +967,23 @@ task_args:
     microwave_scale_mult: 1.3   # +30% microwave
     milk_box_id: -1             # -1 = random 038_milk-box variant
     milk_box_height: 0.20       # m; ~1 L carton
-    mug_id: 0                   # 039_mug/base0 (classic ceramic)
+    mug_id: -1                  # -1 = random 039_mug; else fixed id
     mug_height: 0.0735          # m; prior 10.5 cm then −30%
-    mug_gap: 0.03               # m; air gap between milk/mug footprints (Y-stacked)
+    mug_gap: 0.03               # m; air gap between milk/mug footprints
     knob_contact_radius: 0.06   # m; pinch-to-knob distance that counts as held
   cook_food:
     # KitchenS: food starts on chopping board → pan → cook via knob → plate.
     # food_type: meat|sausage|onion_half|random
+    # Layout: stove current|center; pan on left_front|right_front (handle inward on right);
+    # board/plate/decor/food jittered with AABB clearance.
     scene_id: 0
     food_type: random
-    burner: left_front
+    randomize_layout: true
+    stove_pose: random          # current | center | random
+    # left_front | right_front | random (random only honored when randomize_layout)
+    burner: random
     range_xy: [0.10, 0.14]
+    range_center_xy: [0.0, 0.14]
     board_y: -0.02
     plate_y: -0.12
     cook_steps: 2000
@@ -990,7 +1005,17 @@ task_args:
     # KitchenS: pull the hinged beer-tap lever by hand; flow follows opening.
     # Pause so foam settles; foam over the rim = fail. Fill beer mug (~90% beer) to succeed.
     # Mug glass materials match measure_ingredient jar (transmission / hollow viewer shell).
+    # Layout: tap L/R + Y in [baseline−10cm, baseline]; mug under nozzle; bar props AABB-clear.
     scene_id: 0
+    randomize_layout: true
+    station_side: random
+    station_x: 0.10
+    cup_y: -0.08
+    tap_dy: 0.12
+    tap_y_down: 0.10
+    station_x_range_left: [-0.16, -0.06]
+    station_x_range_right: [0.06, 0.16]
+    station_x_range: [0.06, 0.16]
     pour_rate: 0.00055
     foam_gain: 0.60
     foam_decay: 0.0045
@@ -999,12 +1024,19 @@ task_args:
     target_liquid: 0.90
     full_liquid_tol: 0.05
   clean_table:
-    # Mug on one side, 015_laptop opposite; irregular spill from rim toward laptop.
-    mug_side: right
-    mug_x: 0.20
+    # Per-seed layout: laptop L/R, mug 15–20 cm gap, spill ±30% speed, décor band.
+    randomize_layout: true
+    laptop_side: random
+    force_side: false
+    mug_side: random
     laptop_x: 0.20
-    mug_y: -0.02
     laptop_y: -0.02
+    mug_laptop_gap_min: 0.30
+    mug_laptop_gap_max: 0.40
+    mug_y_min: -0.10
+    mug_y_max: 0.50
+    mug_x: 0.20
+    mug_y: -0.02
     sponge_y: -0.18
     sponge_dx: 0.12
     sponge_grasp_open: 1.0
@@ -1012,8 +1044,9 @@ task_args:
     mug_id: 0
     mug_scale_mult: 0.60
     laptop_id: 0
-    spill_steps: 7500
-    reach_laptop_level: 0.88
+    spill_steps: 11000
+    spill_speed_jitter: 0.30
+    reach_laptop_level: 0.92
     clean_tol: 0.08
     post_tip_wait: 40
     expert_wipe_level: 0.20
@@ -1024,14 +1057,26 @@ task_args:
     mug_avoid_margin: 0.025
   fill_coffee_jar:
     # KitchenS: press button on coffee dispenser → beans into marked jar.
-    # No microwave. Decor: random coffee-box + milk + mug; kettle on a random burner.
-    # Success = fill in [target_fill ± fill_tol]. Peak button press force → beans
-    # dispensed → fill level (beans/beans_full).
-    # Randomness: target_fill=random (0.25|0.50|0.75); randomize_layout=true
-    # samples non-overlapping dispenser/jar poses per seed.
+    # No microwave. Stove left|right; dispenser on the opposite half inside a
+    # tight press-reliable band (far poses often register ~0 N on the button).
+    # Jar stays under the nozzle. Decor clears stove/station/jar corridor.
+    # Success = fill in [target_fill ± fill_tol]. Peak button press force → beans.
     target_fill: random         # 0.25 | 0.50 | 0.75 | random
     scene_id: 0
+    stove_side: random          # left | right | random
     randomize_layout: true
+    range_xy: [0.28, 0.14]
+    range_x_right: 0.28
+    range_x_left: -0.28
+    station_x: -0.08            # |x| mirrored when stove is on the left
+    station_x_left_lo: -0.105
+    station_x_left_hi: -0.07
+    station_x_right_lo: 0.055
+    station_x_right_hi: 0.085
+    disp_y: -0.02               # baseline dispenser Y
+    disp_y_up: 0.015            # +1.5 cm (keep button press reliable)
+    disp_y_down: 0.02           # −2 cm
+    jar_y_min: -0.17
     beans_full: 160             # rim = 100% fill
     force_thresholds: [3.0, 6.0, 10.0, 14.0]   # N  (light → hard)
     beans_per_force_level: [1, 5, 10, 15]       # light → hard press
@@ -1048,6 +1093,8 @@ task_args:
   measure_ingredient:
     # KitchenS baking counter: pour oil, then place jar on electronic scale.
     # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
+    # Layout: MW top-left|left-corner; dispenser L/R + Y±6cm; scale L/R at dist±10cm;
+    # decor AABB-clear of MW/station/scale with jar approach corridor kept open.
     scene_id: 0
     target_fill: 0.25
     fill_levels: [0.25, 0.50, 0.75, 1.0]
@@ -1058,15 +1105,24 @@ task_args:
     overflow_level: 1.0
     oil_style: solid
     scale_id: 0
-    randomize_layout: false
+    randomize_layout: true
+    microwave_pose: random      # top_left | left_corner | random
+    microwave_top_left: [-0.32, 0.18]
+    microwave_left_corner: [-0.48, 0.22]
     microwave_y: 0.18
     microwave_x_range: [-0.42, -0.22]
+    station_side: random        # left | right | random
     station_x: -0.08
     station_x_range: [-0.20, -0.02]
+    station_x_range_left: [-0.22, -0.04]
+    station_x_range_right: [0.04, 0.22]
     disp_y: 0.08
+    disp_y_jitter: 0.06
     jar_y: -0.06
     scale_x: -0.32
     scale_y: -0.14
+    scale_dist: 0.25
+    scale_dist_jitter: 0.10
     scale_near_dx_range: [-0.28, -0.16]
     scale_near_dy_range: [-0.12, -0.02]
     decor_on_microwave_prob: 0.35
