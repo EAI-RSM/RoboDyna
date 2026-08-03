@@ -819,10 +819,19 @@ class HouseholdController:
             print(f"[{self.task}] automatic start failed: {exc}")
 
     def after_step(self):
-        """Ensure release is armed; landing freeze is handled in the env (pose as-is)."""
+        """Post-physics hooks (release arming, catch/miss latch, trap freeze)."""
+        env = self.env
+        if self.task == "mouse_object_drop":
+            # Catch/miss is evaluated before scene.step inside
+            # _update_kinematic_tasks; re-check after the step so a table
+            # landing latches immediately for terminal failure.
+            try:
+                env._update_catch_state()
+            except Exception:
+                pass
+            return
         if self.task != "trap_bug" or not self.trap_released:
             return
-        env = self.env
         if env.trap is None:
             return
         if not bool(getattr(env, "_trap_released", False)):
@@ -886,8 +895,17 @@ def _terminal_failure(env, task):
         if bool(getattr(env, "_fell_on_table", False)) or getattr(env, "_cup_state", "") == "fallen":
             return "cup fell on the table"
     elif task == "mouse_object_drop":
+        # Live re-check: tipped landings used to miss pose-based contact, so
+        # latch failure from the AABB table test before reading the flags.
+        try:
+            if callable(getattr(env, "_object_touches_table", None)) and env._object_touches_table():
+                env._fell_on_table = True
+                env._caught = False
+                env._obj_state = "fallen"
+        except Exception:
+            pass
         if bool(getattr(env, "_fell_on_table", False)) or getattr(env, "_obj_state", "") == "fallen":
-            return "object missed the basket"
+            return "object fell on the table"
     elif task == "stop_ball":
         if bool(getattr(env, "_fell_off", False)) or getattr(env, "_ball_state", "") == "fallen":
             return "ball fell off the table"

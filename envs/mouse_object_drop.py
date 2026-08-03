@@ -936,14 +936,14 @@ class mouse_object_drop(Office_base_task):
         p0, h0 = self._mouse_point_at(0.0)
         self._spawn_mouse(float(p0[0]), float(p0[1]), z_mouse, h0)
 
-        # Basket near the robot — NOT under the fall. Spawn on either
-        # table half (or the same half but offset), then pick-and-place to land.
+        # Basket near the robot — NOT under the fall. Always spawn on the same
+        # table half as the knock target so the matching gripper can reach it.
         self.basket_id = 0
         basket_y_default = float(c.get("basket_start_y", -0.28))
         min_sep = float(c.get("basket_drop_sep", 0.16))
         # One arm both picks the basket and places it under the landing, so the
         # landing side picks the arm and the spawn has to stay within its reach.
-        self.arm_side = "right" if self._landing[0] >= 0.0 else "left"
+        self.arm_side = "right" if float(self.drop_x) >= 0.0 else "left"
         basket_x, basket_y = self._sample_basket_start(
             drop_x=self.drop_x,
             y_default=basket_y_default,
@@ -1098,21 +1098,23 @@ class mouse_object_drop(Office_base_task):
         return basket
 
     def _sample_basket_start(self, drop_x, y_default, min_sep=0.16):
-        """Spawn the basket near the robot, away from the fall landing x.
+        """Spawn the basket on the same table half as the knock target.
 
-        Candidates straddle the table midline so the basket is not always
-        sitting under the falling object, but stay inside the working arm's
-        reach — the same arm has to carry it all the way to the landing.
+        Left-half drops → left-half basket (left gripper); right-half drops →
+        right-half basket. Never cross the midline: the other arm cannot reach
+        it. Keep a gap from the landing x so the catcher is not already under
+        the fall.
         """
         hx = float(self.basket_half_xy[0])
         hy = float(self.basket_half_xy[1])
-        sign = 1.0 if self.arm_side == "right" else -1.0
-        same = tuple(sorted((sign * 0.12, sign * 0.34)))
-        cross = tuple(sorted((sign * -0.16, sign * -0.05)))
-        bands = [cross, same] if float(np.random.rand()) < 0.6 else [same, cross]
+        sign = 1.0 if float(drop_x) >= 0.0 else -1.0
+        self.arm_side = "right" if sign > 0.0 else "left"
+        # Near-robot band on the target's half only (table x ≈ ±0.10 … ±0.34).
+        near = tuple(sorted((sign * 0.10, sign * 0.28)))
+        far = tuple(sorted((sign * 0.18, sign * 0.34)))
 
         for attempt in range(40):
-            lo, hi = bands[0 if attempt < 24 else 1]
+            lo, hi = near if attempt < 24 else far
             bx = float(np.random.uniform(lo, hi))
             by = (
                 float(y_default) if attempt == 0
@@ -1123,7 +1125,8 @@ class mouse_object_drop(Office_base_task):
             if self._footprint_ok(self._occ_table, bx, by, hx, hy):
                 return bx, by
 
-        return float(sign * -0.10), float(y_default)
+        # Fallback still on the target half, offset from the drop line.
+        return float(sign * 0.22), float(y_default)
 
     # ----------------------------------------------------------- kinematics
     def _release_actor_to_physics(self, actor, *, mass=None):
@@ -1192,7 +1195,28 @@ class mouse_object_drop(Office_base_task):
         bz = float(self.basket.get_pose().p[2])
         return bz + float(getattr(self, "_cushion_top_local", 0.0))
 
-    def _target_in_basket(self):
+    def _target_aabb_bottom(self):
+        """Real collision AABB bottom — pose.z alone misses tipped landings."""
+        if self.target is None:
+            return float(self.table_top + 1.0)
+        rigid = self._get_rigid(self.target)
+        if rigid is None:
+            p = np.array(self.target.get_pose().p, dtype=np.float64)
+            return float(p[2] - self.target_radius)
+        try:
+            lo, _ = rigid.compute_global_aabb_tight()
+            return float(lo[2])
+        except Exception:
+            p = np.array(self.target.get_pose().p, dtype=np.float64)
+            return float(p[2] - self.target_radius)
+
+    def _target_in_basket(self, *, require_settled=False):
+        """True when the target's footprint sits over the cushion pad.
+
+        ``require_settled`` gates success (object must have come to rest). Table
+        miss checks use ``require_settled=False`` so a bounce inside the basket
+        is not misread as a table hit.
+        """
         if self.target is None or self.basket is None:
             return False
         p = np.array(self.target.get_pose().p, dtype=np.float64)
@@ -1202,8 +1226,21 @@ class mouse_object_drop(Office_base_task):
             abs(p[0] - bp[0]) <= half[0] + self.catch_xy_tol
             and abs(p[1] - bp[1]) <= half[1] + self.catch_xy_tol
         )
-        above_cushion = p[2] > self._cushion_top_z() + 0.2 * self.target_radius
-        return bool(inside_xy and above_cushion)
+        if not inside_xy:
+            return False
+        cushion_top = float(self._cushion_top_z())
+        bottom = self._target_aabb_bottom()
+        # Resting on the pad, or clearly inside the basket volume above the table.
+        on_cushion = cushion_top - 0.012 <= bottom <= cushion_top + 0.045
+        in_volume = (
+            bottom > float(self.table_top) + 0.018
+            and bottom < float(bp[2]) + float(self.basket_hz) + 0.06
+        )
+        if not (on_cushion or in_volume):
+            return False
+        if require_settled and self._target_speed() >= 0.60:
+            return False
+        return True
 
     def _target_speed(self):
         rigid = self._get_rigid(self.target)
@@ -1219,23 +1256,26 @@ class mouse_object_drop(Office_base_task):
     def _object_touches_table(self):
         """True once any part of the target is on/through the table top.
 
-        Basket-cushion contact is not a table hit — only pose outside the
-        basket counts. Used as a hard failure: once set, success is impossible.
+        Basket-cushion contact is not a table hit. Used as a hard failure: once
+        set, success is impossible. AABB bottom (not pose.z) so tipped bottles
+        still register when they land on the tabletop.
         """
         if self.target is None:
             return False
-        if self._target_in_basket():
+        # Still on / above the shelf — not a table miss.
+        bottom = self._target_aabb_bottom()
+        if bottom > float(self.shelf_z_surf) - 0.02:
             return False
-        p = np.array(self.target.get_pose().p, dtype=np.float64)
-        # Approximate contact: center within ~radius of the table plane.
-        return bool(p[2] <= self.table_top + self.target_radius + 0.015)
+        if self._target_in_basket(require_settled=False):
+            return False
+        return bool(bottom <= float(self.table_top) + 0.012)
 
     def _update_catch_state(self):
         """Read the outcome off the simulation — nothing is teleported."""
         if not self._target_live or self.target is None or self._fell_on_table:
             return
-        p = np.array(self.target.get_pose().p, dtype=np.float64)
-        if p[2] < self.shelf_z_surf - 0.03 and self._obj_state == "parked":
+        bottom = self._target_aabb_bottom()
+        if bottom < self.shelf_z_surf - 0.03 and self._obj_state == "parked":
             self._obj_state = "falling"
 
         # Table contact outside the basket is an immediate permanent fail.
@@ -1245,7 +1285,7 @@ class mouse_object_drop(Office_base_task):
             self._obj_state = "fallen"
             return
 
-        if self._target_in_basket():
+        if self._target_in_basket(require_settled=True):
             self._caught = True
             self._obj_state = "caught"
 
@@ -1458,9 +1498,18 @@ class mouse_object_drop(Office_base_task):
             return False
         if self.target is None or self.basket is None:
             return False
+        # Live re-check so interactive sessions terminate even if a prior frame
+        # missed the contact latch.
         if self._object_touches_table():
+            self._fell_on_table = True
+            self._caught = False
+            self._obj_state = "fallen"
             return False
-        return bool(self._target_in_basket())
+        if self._target_in_basket(require_settled=True):
+            self._caught = True
+            self._obj_state = "caught"
+            return True
+        return False
 
     def get_obs(self):
         obs = super().get_obs()
