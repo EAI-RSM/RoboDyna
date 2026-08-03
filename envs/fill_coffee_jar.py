@@ -151,6 +151,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self.jar = None
         self.jar_visual = None
         self.fill_visual = None
+        self._jar_visual_hollow = False
         self.decor_coffee_box = None
         self.decor_milk_box = None
         self.decor_mug = None
@@ -286,6 +287,77 @@ class fill_coffee_jar(KitchenS_base_task):
         except Exception:
             mat.roughness = 0.45
             mat.metallic = 0.0
+        return mat
+
+    def _remove_entity(self, ent):
+        if ent is None:
+            return None
+        try:
+            self.scene.remove_entity(ent)
+        except Exception:
+            pass
+        return None
+
+    def _jar_glass_material(self, viewer_shell: bool = False):
+        """Glass for the jar.
+
+        Demo cameras use transmission glass. The interactive SAPIEN viewer does
+        not composite opaque fill behind transmission materials (or a solid
+        cylinder wall), so the viewer shell uses plain alpha glass — same trick
+        as ``measure_ingredient`` / ``trap_bug``.
+        """
+        if viewer_shell:
+            glass = sapien.render.RenderMaterial(
+                base_color=[0.88, 0.94, 0.98, 0.20]
+            )
+            try:
+                glass.set_transmission(0.0)
+                glass.set_transmission_roughness(1.0)
+                glass.set_roughness(0.10)
+                glass.set_metallic(0.0)
+            except Exception:
+                glass.roughness = 0.10
+                glass.metallic = 0.0
+            try:
+                glass.set_ior(1.0)
+            except Exception:
+                pass
+            return glass
+
+        if bool(getattr(self, "_plain_glass", False)):
+            return self._plain_glass_material()
+
+        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
+        try:
+            glass.set_transmission(1.0)
+            glass.set_transmission_roughness(0.0)
+            glass.set_roughness(0.04)
+            glass.set_metallic(0.0)
+        except Exception:
+            pass
+        try:
+            glass.set_ior(1.0)
+        except Exception:
+            pass
+        return glass
+
+    def _viewer_coffee_material(self):
+        """Fully opaque coffee column for viewer compositing through alpha glass."""
+        mat = sapien.render.RenderMaterial(
+            base_color=[0.22, 0.10, 0.04, 1.0]
+        )
+        try:
+            mat.set_transmission(0.0)
+            mat.set_transmission_roughness(1.0)
+            mat.set_roughness(0.85)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.85
+            mat.metallic = 0.0
+        try:
+            mat.set_ior(1.0)
+        except Exception:
+            pass
         return mat
 
     def _add_static_box(self, pose, half_size, material=None, color=None, name="", collision=True):
@@ -952,18 +1024,101 @@ class fill_coffee_jar(KitchenS_base_task):
             self._set_button_press_depth(target)
         self._advance_button_press_visual()
 
+    def _build_jar_visual(self, hollow: bool = False):
+        """Glass jar visual. ``hollow=True`` for SAPIEN viewer (open interior).
+
+        Camera / expert demos keep the smooth solid transmission cylinder (looks
+        correct in offline render). The interactive viewer treats that cylinder
+        as an opaque volume, so viewer mode uses a thin alpha-glass shell instead.
+        """
+        self.jar_visual = self._remove_entity(getattr(self, "jar_visual", None))
+        if self.jar is None:
+            return
+
+        outer_r = self.JAR_INNER_R + 0.0035
+        h = self.JAR_HEIGHT
+        bottom_t = self.JAR_BOTTOM_T
+        upright_q = [0.70710678, 0.0, -0.70710678, 0.0]
+        wall_h = h - bottom_t
+        wall_half = wall_h * 0.5
+        wall_z = bottom_t + wall_half
+        glass = self._jar_glass_material(viewer_shell=bool(hollow))
+
+        try:
+            pose = self.jar.get_pose()
+        except Exception:
+            pose = sapien.Pose(
+                [float(self.jar_xy[0]), float(self.jar_xy[1]), self.table_top + 0.001]
+            )
+        vis = sapien.Entity()
+        vis.set_name("glass_jar_visual")
+        vis.set_pose(pose)
+        render_body = sapien.render.RenderBodyComponent()
+
+        floor = sapien.render.RenderShapeCylinder(
+            radius=outer_r * 0.98,
+            half_length=max(0.0015, bottom_t * 0.5),
+            material=glass,
+        )
+        floor.set_local_pose(sapien.Pose([0.0, 0.0, bottom_t * 0.5], upright_q))
+        render_body.attach(floor)
+
+        if hollow:
+            # Thin faceted glass shell — empty inside so the coffee column reads.
+            wall_t = 0.0024
+            n_seg = 36
+            wall_radius = outer_r - 0.5 * wall_t
+            tangent_half = wall_radius * np.tan(np.pi / n_seg) * 1.03
+            for ang in np.linspace(0.0, 2.0 * np.pi, n_seg, endpoint=False):
+                px = float(wall_radius * np.cos(ang))
+                py = float(wall_radius * np.sin(ang))
+                yaw = float(ang + 0.5 * np.pi)
+                q = [
+                    float(np.cos(0.5 * yaw)),
+                    0.0,
+                    0.0,
+                    float(np.sin(0.5 * yaw)),
+                ]
+                panel = sapien.render.RenderShapeBox(
+                    [float(tangent_half), float(0.5 * wall_t), float(wall_half)],
+                    glass,
+                )
+                panel.set_local_pose(sapien.Pose([px, py, wall_z], q))
+                render_body.attach(panel)
+        else:
+            wall = sapien.render.RenderShapeCylinder(
+                radius=outer_r,
+                half_length=wall_half,
+                material=glass,
+            )
+            wall.set_local_pose(sapien.Pose([0.0, 0.0, wall_z], upright_q))
+            render_body.attach(wall)
+
+        vis.add_component(render_body)
+        self.scene.add_entity(vis)
+        self.jar_visual = vis
+        self._jar_visual_hollow = bool(hollow)
+
+    def use_viewer_hollow_jar(self):
+        """Swap to hollow alpha-glass shell for interactive SAPIEN viewer only."""
+        self._build_jar_visual(hollow=True)
+        # Rebuild fill after the shell so it composites through the alpha walls.
+        self._sync_fill_visual()
+        print(
+            "[fill_coffee_jar] viewer jar: hollow alpha-glass shell "
+            "(coffee fill column visible from the side)"
+        )
+
     def _build_jar(self):
         """Clear glass cylinder (original jar design) — no handle/spout.
 
         Smooth see-through cylinder via ``RenderShapeCylinder`` (IOR=1) + thin
         floor disk. Collision from the hollow jar mesh (no GLB visual).
+        Default visual is the smooth transmission cylinder (demo cameras).
+        Interactive viewer calls ``use_viewer_hollow_jar()`` after setup.
         """
         x, y = self.jar_xy
         z0 = self.table_top + 0.001
-        outer_r = self.JAR_INNER_R + 0.0035
-        h = self.JAR_HEIGHT
-        bottom_t = self.JAR_BOTTOM_T
-        upright_q = [0.70710678, 0.0, -0.70710678, 0.0]
 
         col_path = Path(
             f"assets/objects/{self.JAR_MODEL}/collision/base0.glb"
@@ -978,50 +1133,9 @@ class fill_coffee_jar(KitchenS_base_task):
         except Exception:
             pass
 
-        if bool(getattr(self, "_plain_glass", False)):
-            glass = self._plain_glass_material()
-        else:
-            glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
-            glass.set_transmission(1.0)
-            glass.set_transmission_roughness(0.0)
-            glass.set_roughness(0.04)
-            glass.set_metallic(0.0)
-            try:
-                glass.set_ior(1.0)
-            except Exception:
-                pass
-
-        wall_h = h - bottom_t
-        wall_half = wall_h * 0.5
-        wall_z = bottom_t + wall_half
-
-        vis = sapien.Entity()
-        vis.set_name("glass_jar_visual")
-        vis.set_pose(sapien.Pose([x, y, z0]))
-        render_body = sapien.render.RenderBodyComponent()
-
-        wall = sapien.render.RenderShapeCylinder(
-            radius=outer_r,
-            half_length=wall_half,
-            material=glass,
-        )
-        wall.set_local_pose(sapien.Pose([0.0, 0.0, wall_z], upright_q))
-        render_body.attach(wall)
-
-        floor = sapien.render.RenderShapeCylinder(
-            radius=outer_r * 0.98,
-            half_length=max(0.0015, bottom_t * 0.5),
-            material=glass,
-        )
-        floor.set_local_pose(sapien.Pose([0.0, 0.0, bottom_t * 0.5], upright_q))
-        render_body.attach(floor)
-
-        vis.add_component(render_body)
-        self.scene.add_entity(vis)
-        self.jar_visual = vis
-
         self.jar_bottom_z = self.table_top + self.JAR_BOTTOM_T
         self.jar_fillable_h = self.JAR_HEIGHT - self.JAR_BOTTOM_T
+        self._build_jar_visual(hollow=False)
 
     def _build_fill_rings(self):
         """Add three subtle, thin red rings around the glass jar body."""
@@ -1195,14 +1309,11 @@ class fill_coffee_jar(KitchenS_base_task):
         """Opaque coffee column proportional to beans dispensed (vs red rings).
 
         Top-down cameras flatten a real bean stack into a small floor sprinkle, so
-        the fill body is what makes force-level differences readable.
+        the fill body is what makes force-level differences readable. Interactive
+        viewer uses a fuller opaque column so the level reads through the hollow
+        alpha-glass shell (same approach as measure_ingredient oil).
         """
-        if getattr(self, "fill_visual", None) is not None:
-            try:
-                self.scene.remove_entity(self.fill_visual)
-            except Exception:
-                pass
-            self.fill_visual = None
+        self.fill_visual = self._remove_entity(getattr(self, "fill_visual", None))
 
         h = float(self._pile_height())
         if h < 0.003:
@@ -1211,20 +1322,26 @@ class fill_coffee_jar(KitchenS_base_task):
         x, y = self.jar_xy
         upright_q = [0.70710678, 0.0, -0.70710678, 0.0]
         half = h * 0.5
-        mat = sapien.render.RenderMaterial(base_color=[0.22, 0.10, 0.04, 0.92])
-        try:
-            mat.set_transmission(0.0)
-            mat.set_roughness(0.85)
-            mat.set_metallic(0.0)
-        except Exception:
-            pass
+        viewer_shell = bool(getattr(self, "_jar_visual_hollow", False))
+        if viewer_shell:
+            mat = self._viewer_coffee_material()
+            fill_r = self.JAR_INNER_R * 0.97
+        else:
+            mat = sapien.render.RenderMaterial(base_color=[0.22, 0.10, 0.04, 0.92])
+            try:
+                mat.set_transmission(0.0)
+                mat.set_roughness(0.85)
+                mat.set_metallic(0.0)
+            except Exception:
+                pass
+            fill_r = self.JAR_INNER_R * 0.90
 
         ent = sapien.Entity()
         ent.set_name("coffee_fill_visual")
         ent.set_pose(sapien.Pose([x, y, self.jar_bottom_z]))
         body = sapien.render.RenderBodyComponent()
         col = sapien.render.RenderShapeCylinder(
-            radius=self.JAR_INNER_R * 0.90,
+            radius=fill_r,
             half_length=half,
             material=mat,
         )
