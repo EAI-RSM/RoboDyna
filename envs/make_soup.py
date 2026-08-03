@@ -34,11 +34,20 @@ class make_soup(KitchenS_base_task):
     KNOB_APPROACH_PATH: ClassVar[tuple] = KitchenS_base_task.TOP_KNOB_APPROACH_PATH
     KNOB_GRASP_STANDOFF: ClassVar[float] = 0.012
     ACTIVE_BURNER: ClassVar[str] = "left_front"
-    # Flush cooktop near the back of the apron; X is randomized, Y stays fixed.
+    FRONT_BURNERS: ClassVar[tuple[str, ...]] = ("left_front", "right_front")
+    # Flush cooktop near the back of the apron; discrete slot when randomized.
     RANGE_REL_XY: ClassVar[tuple[float, float]] = (0.18, 0.14)
+    # Stove slots: current apron pose, or back-left / back-right corner.
+    RANGE_SLOTS: ClassVar[dict[str, tuple[float, float]]] = {
+        "current": (0.18, 0.14),
+        "top_left": (-0.18, 0.16),
+        "top_right": (0.30, 0.16),
+    }
     RANGE_SCALE_MULT: ClassVar[float] = 1.0
-    # Stove may slide left/right on this Y; keep knobs in dual-arm reach.
+    # Legacy continuous X slide (used only when randomize_layout=false).
     RANGE_X_RANGE: ClassVar[tuple[float, float]] = (-0.10, 0.30)
+    # Board x near zero → either arm may grasp (both grippers reach).
+    BOARD_CENTER_X_TOL: ClassVar[float] = 0.06
     LAYOUT_MARGIN: ClassVar[float] = 0.03
     # Original thick-walled soup pot, sized to the boil_milk saucepan
     # (same height, matching inner mouth once the 5 mm wall is accounted for).
@@ -89,9 +98,10 @@ class make_soup(KitchenS_base_task):
         self.range_scale_mult = float(
             self._cfg.get("range_scale_mult", self.RANGE_SCALE_MULT)
         )
-        # Seed-stable stove X (Y fixed). Pot / burners stay glued to the stove.
+        # Seed-stable stove slot (current / top-left / top-right).
         seed = int(kwags.get("seed", 0) or 0)
         self._layout_seed = seed
+        self._range_slot = "current"
         self.range_position_override = self._sample_range_xy(
             self._cfg, np.random.RandomState(seed + 17)
         )
@@ -146,14 +156,23 @@ class make_soup(KitchenS_base_task):
     def _sample_range_xy(
         self, cfg: dict[str, Any], rng: np.random.RandomState
     ) -> list[float]:
-        """Stove may slide on X; Y is held fixed from ``range_xy``."""
-        rel = list(cfg.get("range_xy", list(self.RANGE_REL_XY)))
-        range_y = float(rel[1])
-        if bool(cfg.get("randomize_layout", True)):
-            x_lo, x_hi = cfg.get("range_x_range", list(self.RANGE_X_RANGE))
-            rel[0] = float(rng.uniform(float(x_lo), float(x_hi)))
-        rel[1] = range_y
-        return [float(rel[0]), float(rel[1])]
+        """Pick stove among current / top-left / top-right (seed-stable)."""
+        slots = dict(self.RANGE_SLOTS)
+        # Allow config overrides of the three discrete poses.
+        for name in ("current", "top_left", "top_right"):
+            key = f"range_xy_{name}"
+            if key in cfg and len(cfg[key]) >= 2:
+                slots[name] = (float(cfg[key][0]), float(cfg[key][1]))
+        if not bool(cfg.get("randomize_layout", True)):
+            rel = list(cfg.get("range_xy", list(self.RANGE_REL_XY)))
+            self._range_slot = "current"
+            return [float(rel[0]), float(rel[1])]
+        names = list(cfg.get("range_slots", list(slots.keys())))
+        names = [n for n in names if n in slots] or list(slots.keys())
+        slot = str(rng.choice(names))
+        self._range_slot = slot
+        xy = slots[slot]
+        return [float(xy[0]), float(xy[1])]
 
     @staticmethod
     def _aabb_overlap(c1, h1, c2, h2, margin: float = 0.0) -> bool:
@@ -193,50 +212,69 @@ class make_soup(KitchenS_base_task):
     def _sample_board_xy(
         self, cfg: dict[str, Any], rng: np.random.RandomState
     ) -> tuple[float, float]:
-        """Chopping board on the apron, clear of the cooktop footprint."""
+        """Chopping board on the lower (−Y) apron, clear of the cooktop."""
         hx = float(self.board_half[0]) + float(self.handle_half[1]) * 0.5
         hy = float(self.board_half[1]) + float(self.handle_half[1])
         board_half = np.array([hx, hy], dtype=float)
         range_c, range_h = self._range_blocker()
         blockers = [(range_c, range_h)]
-        # Prefer the same side as the stove so the grasping arm can reach.
         side = 1.0 if float(range_c[0]) >= 0.0 else -1.0
         base_x = float(cfg.get("board_x", float(range_c[0]) + side * 0.02))
         base_y = float(cfg.get("board_y", -0.14))
+        slot = str(getattr(self, "_range_slot", "current"))
 
         if not bool(cfg.get("randomize_layout", True)):
             xy = (base_x, base_y)
             if self._footprint_clear(xy, board_half, blockers):
                 return xy
-            # Nudge toward the robot if the fixed pose clips the stove.
             for y in np.linspace(base_y, -0.22, 8):
                 cand = (base_x, float(y))
                 if self._footprint_clear(cand, board_half, blockers):
                     return cand
             return xy
 
-        for _ in range(100):
-            x = float(
-                np.clip(
-                    range_c[0] + side * rng.uniform(-0.04, 0.10),
-                    -0.28,
-                    0.38,
-                )
-            )
-            y = float(rng.uniform(-0.22, -0.08))
+        # Current stove: board anywhere on the lower half. Corner stoves: keep
+        # the board on the same side so the pour arm can also reach the pot.
+        if slot == "current":
+            x_lo, x_hi = -0.28, 0.32
+        elif slot == "top_left":
+            x_lo, x_hi = -0.28, 0.06
+        else:  # top_right
+            x_lo, x_hi = -0.06, 0.32
+
+        for _ in range(120):
+            x = float(rng.uniform(x_lo, x_hi))
+            y = float(rng.uniform(-0.24, -0.06))
             cand = (x, y)
             if self._footprint_clear(cand, board_half, blockers):
                 return cand
-        # Deterministic fallback in front of the stove.
+        # Deterministic fallback in front of the stove on the free side.
         return (
-            float(np.clip(float(range_c[0]), -0.20, 0.30)),
+            float(np.clip(float(range_c[0]) - side * 0.08, -0.24, 0.28)),
             -0.18,
         )
+
+    def _pick_board_arm(
+        self, board_x: float, rng: np.random.RandomState
+    ) -> ArmTag:
+        """Arm from board X; near x=0 either gripper may be used.
+
+        In the center band, prefer the stove side so the pour arm can still
+        reach the pot (both grippers can grasp a near-center board).
+        """
+        tol = float(self._cfg.get("board_center_x_tol", self.BOARD_CENTER_X_TOL))
+        if abs(float(board_x)) <= tol:
+            # Either gripper can reach the board; pick the stove-side arm so the
+            # pour into the pot stays reachable. Across seeds both arms still
+            # appear via left/right stove slots.
+            range_x = float(np.asarray(getattr(self, "range_xy", (0.0, 0.0)))[0])
+            return ArmTag("right" if range_x >= 0.0 else "left")
+        return ArmTag("right" if float(board_x) > 0.0 else "left")
 
     def _sample_decor_layout(
         self, cfg: dict[str, Any], rng: np.random.RandomState, board_xy
     ) -> dict[str, tuple[float, float]]:
-        """Random non-overlapping plate / wine / glass on the free counter half."""
+        """Random non-overlapping plate / wine / glass on empty apron space."""
         range_c, range_h = self._range_blocker()
         bx = np.asarray(board_xy, dtype=float)
         bh = np.array(
@@ -246,11 +284,15 @@ class make_soup(KitchenS_base_task):
             ],
             dtype=float,
         )
+        pot_c = np.asarray(getattr(self, "pot_xy", range_c), dtype=float)
+        pot_h = np.array(
+            [float(getattr(self, "pot_radius", 0.06)) + 0.02] * 2, dtype=float
+        )
         blockers: list[tuple[np.ndarray, np.ndarray]] = [
             (range_c, range_h),
             (bx, bh),
+            (pot_c, pot_h),
         ]
-        # Decor lives on the opposite side of the stove from the board when possible.
         free_sign = -1.0 if float(range_c[0]) >= 0.0 else 1.0
         defaults = {
             "plate": (
@@ -279,15 +321,10 @@ class make_soup(KitchenS_base_task):
         for name in ("plate", "wine", "glass"):
             half = halves[name]
             placed = False
-            for _ in range(80):
-                x = float(
-                    np.clip(
-                        free_sign * rng.uniform(0.12, 0.42),
-                        -0.45,
-                        0.45,
-                    )
-                )
-                y = float(rng.uniform(-0.20, 0.02))
+            for _ in range(100):
+                # Any empty apron cell — not restricted to one side.
+                x = float(rng.uniform(-0.42, 0.42))
+                y = float(rng.uniform(-0.22, 0.06))
                 cand = np.array([x, y], dtype=float)
                 if self._footprint_clear(cand, half, blockers):
                     out[name] = (x, y)
@@ -379,7 +416,44 @@ class make_soup(KitchenS_base_task):
         bz = 0.74 + self.table_z_bias
         self.table_top = bz
 
-        burner_name = str(cfg.get("burner", self.ACTIVE_BURNER)).strip().lower()
+        rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0)) + 101)
+        # Board first so arm + front-burner choice stay on a reachable side.
+        board_x, board_y = self._sample_board_xy(cfg, rng)
+        self.board_xy = (board_x, board_y)
+        self.arm = self._pick_board_arm(board_x, rng)
+        self.board_arm = self.arm
+
+        burner_cfg = str(cfg.get("burner", self.ACTIVE_BURNER)).strip().lower()
+        if bool(cfg.get("randomize_layout", True)) and not bool(
+            cfg.get("pin_burner", False)
+        ):
+            # Front burners only. Corner stoves use the inner burner (closer to
+            # x=0) so the pour stays in dual-arm reach; current slot matches arm.
+            slot = str(getattr(self, "_range_slot", "current"))
+            front = [
+                b
+                for b in self.FRONT_BURNERS
+                if b in getattr(self, "burner_positions", {})
+            ]
+            if slot == "top_left":
+                preferred = "right_front"  # inner
+            elif slot == "top_right":
+                preferred = "left_front"  # inner
+            else:
+                preferred = (
+                    "left_front" if str(self.arm) == "left" else "right_front"
+                )
+            if preferred in front and rng.rand() < 0.70:
+                burner_name = preferred
+            else:
+                # Still diversify across both front burners some of the time.
+                other = (
+                    "left_front" if preferred == "right_front" else "right_front"
+                )
+                choices = [b for b in (preferred, other) if b in front] or front
+                burner_name = str(rng.choice(choices))
+        else:
+            burner_name = burner_cfg or self.ACTIVE_BURNER
         if burner_name not in self.burner_positions:
             raise ValueError(
                 f"make_soup.burner must be one of {list(self.burner_positions)}, got {burner_name!r}"
@@ -418,19 +492,20 @@ class make_soup(KitchenS_base_task):
         self._set_stove_fire(False)
         self.knob_angle = float(self.KNOB_OFF_ANGLE)
 
-        rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0)) + 101)
-        board_x, board_y = self._sample_board_xy(cfg, rng)
-        self.board_xy = (board_x, board_y)
         self.board = self._spawn_board(board_x, board_y, bz)
         self.add_prohibit_area(self.board, padding=0.04)
 
-        self._spawn_vegetables(board_x, board_y, bz + 2.0 * self.board_half[2])
+        self._spawn_vegetables(board_x, board_y, bz + 2.0 * self.board_half[2], rng)
         self._decor_xy = self._sample_decor_layout(cfg, rng, self.board_xy)
         self._spawn_decor(bz)
-        self.arm = ArmTag("right" if self.knob_xy[0] >= 0 else "left")
+        self.knob_arm = ArmTag(
+            "right" if float(np.asarray(self.knob_xy)[0]) >= 0.0 else "left"
+        )
         self._loaded = True
         print(
-            f"[make_soup] arm={self.arm} range={np.round(self.range_xy, 3)} "
+            f"[make_soup] arm={self.arm} knob_arm={self.knob_arm} "
+            f"slot={getattr(self, '_range_slot', '?')} "
+            f"burner={self.burner_name} range={np.round(self.range_xy, 3)} "
             f"board={np.round(self.board_xy, 3)} pot={np.round(self.pot_xy, 3)} "
             f"decor={ {k: list(np.round(v, 3)) for k, v in self._decor_xy.items()} } "
             f"n_veg={len(self.veggies)}"
@@ -670,25 +745,81 @@ class make_soup(KitchenS_base_task):
         self.decor_glass.set_name("088_wineglass")
         self.add_prohibit_area(self.decor_glass, padding=0.03)
 
-    def _spawn_vegetables(self, bx: float, by: float, board_top: float) -> None:
-        """Colored cubes + a small round tomato resting on the board."""
-        # Two rows near the pour edge (−X). Spacing must exceed the largest
-        # piece pair (tomato + cube = 27 mm) or PhysX depenetration launches
-        # the board off the table during the settle phase.
-        layout = [
-            ("cube_orange", "cube", self.VEG_COLORS["orange"], (-0.065, -0.018)),
-            ("cube_green", "cube", self.VEG_COLORS["green"], (-0.065, 0.018)),
-            ("cube_purple", "cube", self.VEG_COLORS["purple"], (-0.030, -0.018)),
-            ("tomato", "sphere", self.TOMATO_COLOR, (-0.030, 0.018)),
+    def _sample_veg_offsets(
+        self, rng: np.random.RandomState, pour_sign: float = -1.0
+    ) -> list[tuple[str, str, tuple[float, float, float], tuple[float, float]]]:
+        """Non-overlapping produce poses in board-local XY (not a perfect grid).
+
+        ``pour_sign`` is −1 when the pour lip is the board's −X edge (right arm)
+        and +1 when it is the +X edge (left arm). Pieces stay near that lip so
+        the tip lands them in the pot.
+        """
+        hx = float(self.board_half[0])
+        hy = float(self.board_half[1])
+        # Keep clear of the handle on the −Y edge and of the board rim.
+        margin = max(self.cube_half, self.tomato_radius) + 0.006
+        x_lo, x_hi = -hx + margin, hx - margin
+        y_lo, y_hi = -hy + margin + float(self.handle_half[1]) * 0.35, hy - margin
+        # Pour-lip half of the board (with a little scatter into the mid-board).
+        if float(pour_sign) < 0.0:
+            lip_lo, lip_hi = x_lo, 0.35 * x_lo + 0.65 * (0.5 * (x_lo + x_hi))
+        else:
+            lip_lo, lip_hi = 0.35 * x_hi + 0.65 * (0.5 * (x_lo + x_hi)), x_hi
+        specs = [
+            ("cube_orange", "cube", self.VEG_COLORS["orange"], self.cube_half),
+            ("cube_green", "cube", self.VEG_COLORS["green"], self.cube_half),
+            ("cube_purple", "cube", self.VEG_COLORS["purple"], self.cube_half),
+            ("tomato", "sphere", self.TOMATO_COLOR, self.tomato_radius),
         ]
-        jitter = 0.003
+        placed: list[tuple[float, float, float]] = []
+        out = []
+        for name, kind, color, rad in specs:
+            ok = False
+            for _ in range(80):
+                if rng.rand() < 0.80:
+                    dx = float(rng.uniform(lip_lo, lip_hi))
+                else:
+                    dx = float(rng.uniform(x_lo, x_hi))
+                dy = float(rng.uniform(y_lo, y_hi))
+                if all(
+                    float(np.hypot(dx - px, dy - py)) >= (rad + pr + 0.004)
+                    for px, py, pr in placed
+                ):
+                    placed.append((dx, dy, float(rad)))
+                    out.append((name, kind, color, (dx, dy)))
+                    ok = True
+                    break
+            if not ok:
+                # Compact fallback near the pour lip.
+                sx = -1.0 if float(pour_sign) < 0.0 else 1.0
+                fallback = {
+                    "cube_orange": (sx * 0.055, -0.020),
+                    "cube_green": (sx * 0.055, 0.020),
+                    "cube_purple": (sx * 0.022, -0.018),
+                    "tomato": (sx * 0.022, 0.020),
+                }[name]
+                out.append((name, kind, color, fallback))
+                placed.append((fallback[0], fallback[1], float(rad)))
+        return out
+
+    def _spawn_vegetables(
+        self,
+        bx: float,
+        by: float,
+        board_top: float,
+        rng: np.random.RandomState | None = None,
+    ) -> None:
+        """Colored cubes + a small round tomato resting on the board."""
+        if rng is None:
+            rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0)) + 202)
+        # Right arm pours over the board's −X lip; left arm over +X.
+        pour_sign = -1.0 if str(getattr(self, "arm", "right")) == "right" else 1.0
+        layout = self._sample_veg_offsets(rng, pour_sign=pour_sign)
         for name, kind, color, (dx, dy) in layout:
-            jx = float(np.random.uniform(-jitter, jitter))
-            jy = float(np.random.uniform(-jitter, jitter))
             if kind == "cube":
                 h = self.cube_half
                 z = board_top + h + 0.001
-                pose = sapien.Pose([bx + dx + jx, by + dy + jy, z], [1, 0, 0, 0])
+                pose = sapien.Pose([bx + dx, by + dy, z], [1, 0, 0, 0])
                 veg = create_box(
                     self,
                     pose=pose,
@@ -701,7 +832,7 @@ class make_soup(KitchenS_base_task):
             else:
                 r = self.tomato_radius
                 z = board_top + r + 0.001
-                pose = sapien.Pose([bx + dx + jx, by + dy + jy, z], [1, 0, 0, 0])
+                pose = sapien.Pose([bx + dx, by + dy, z], [1, 0, 0, 0])
                 entity = create_sphere(
                     self,
                     pose=pose,
@@ -1594,7 +1725,10 @@ class make_soup(KitchenS_base_task):
 
         # Board goes back on the table — never left on the pot — then stove on.
         self._place_board_on_table()
+        # Knob sits on the stove's local bottom-right; may need the other arm.
+        self.arm = getattr(self, "knob_arm", arm)
         self._turn_knob_on()
+        self.arm = getattr(self, "board_arm", arm)
 
         if self.check_success():
             self.plan_success = True
@@ -1605,7 +1739,7 @@ class make_soup(KitchenS_base_task):
             "{C}": "cooking_range",
             "{D}": "stove_knob",
             "{E}": "vegetables",
-            "{a}": str(arm),
+            "{a}": str(getattr(self, "board_arm", arm)),
         }
         return self.info
 

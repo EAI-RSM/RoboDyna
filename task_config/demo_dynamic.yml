@@ -176,14 +176,15 @@ task_args:
     max_live_steps: 420         # sim-step budget for the contact + roll-out
     arm_side: random            # random | left | right
   catch_cup:
-    # Deep shelf: 2× plant + 021_cup row; one random right-side cup tips/rolls.
-    # Closed gripper presses one face of 266_pillow; PhysX force + damping
-    # slides it under the landing on the table (table hit = fail).
+    # Two-tier deep shelf: cups+plant on upper; kettle/tissue/alarm on lower
+    # (facing robot). One random cup tips/rolls; pillow+arm follow its side.
+    # Cup slots: ≥2 cm X gap, no Y-lane blocking. Roll speed ∈ [base, base*1.5].
     cup_ids: [0, 1, 2, 3, 5]
     plant_scale: 0.96           # 2× usual shelf plant (0.48)
     decor_cup_scale: 0.88       # dynamic companion cups on the shelf
     rolling_cup_scale: 0.82     # the cup that tips / rolls / falls
-    roll_speed: 0.024           # m/s; shelf roll (time for a physical push)
+    roll_speed: 0.024           # m/s; lower bound (upper = roll_speed * 1.5)
+    roll_speed_jitter_frac: 0.50
     tip_duration: 2.20          # s; upright→on-side lean on the shelf
     upright_hold: 0.0           # s; reactive — tip starts immediately
     drop_x_jitter: 0.06         # m; lateral drift of drop-off x vs cup start x
@@ -1076,12 +1077,14 @@ task_args:
     board_scale_mult: 0.091     # +30% cutting board
     microwave_scale_mult: 1.3   # +30% microwave
   make_soup:
-    # KitchenS: no microwave. Stove X / board / decor randomized (Y of stove fixed).
-    # Pot stays on the same burner relative to the stove. Success = all veggies in pot.
+    # KitchenS: no microwave. Stove slot (current/top-left/top-right), board on
+    # lower half, veggies scattered on the board, pot on a random front burner,
+    # decor on empty apron cells. Arm follows board X (center → either).
     scene_id: 0
-    burner: left_front
-    range_xy: [0.18, 0.14]       # Y fixed; X sampled in range_x_range when randomize_layout
-    range_x_range: [-0.10, 0.30]
+    burner: left_front           # fallback when pin_burner / randomize_layout=false
+    pin_burner: false
+    range_xy: [0.18, 0.14]       # fallback when randomize_layout=false
+    range_slots: [current, top_left, top_right]
     range_scale_mult: 1.0
     randomize_layout: true
     randomize_background: true
@@ -1095,6 +1098,7 @@ task_args:
     handle_half: [0.022, 0.024, 0.022]
     board_x: 0.16                # fallback / mean when randomize_layout=false
     board_y: -0.14
+    board_center_x_tol: 0.06     # |board_x| <= tol → either arm
     cube_half: 0.012
     tomato_radius: 0.015
     tilt_hold_dot: 0.82

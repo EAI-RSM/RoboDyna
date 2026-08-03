@@ -41,11 +41,17 @@ class catch_cup(Office_base_task):
     SHELF_THICK = 0.02
     SHELF_Y = 0.26
     SHELF_Z_ABOVE_TABLE = 0.30
+    # Lower shelf tier for table décor (kettle / tissue / alarm).
+    SHELF_Z_LOWER_ABOVE_TABLE = 0.12
 
-    # Rolling cup stays on the reachable right half of the shelf.
+    # Rolling cup may sit on either half of the shelf (arm + pillow follow).
     CUP_X_ABS_MIN = 0.14
     CUP_X_ABS_MAX = 0.30
+    CUP_X_SHELF_MIN = -0.42
+    CUP_X_SHELF_MAX = 0.42
+    CUP_X_GAP_MIN = 0.02  # m; clear gap between cup footprints on X
     DROP_X_JITTER = 0.06
+    ROLL_SPEED_JITTER_FRAC = 0.50  # sample in [roll_speed, roll_speed * (1+frac)]
 
     PILLOW_MODEL = "266_pillow"
     # Uniform asset scale (visual + collision). Half-extents / height below are
@@ -105,6 +111,11 @@ class catch_cup(Office_base_task):
 
     CUP_UPRIGHT_Q = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float64)
     PROP_UPRIGHT_Q = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float64)
+    # Décor yaw so asset fronts face the robot (−world Y).
+    PROP_FACE_ROBOT_Q = np.asarray(
+        qmult(euler2quat(0.0, 0.0, np.pi, axes="sxyz"), PROP_UPRIGHT_Q),
+        dtype=np.float64,
+    )
     # Cushion yawed 90°, so its wide face (0.18 m) takes the push and its short
     # axis (0.14 m) runs along y — that leaves the gripper room behind it.
     PILLOW_Q = np.asarray(
@@ -144,6 +155,7 @@ class catch_cup(Office_base_task):
         self.shelf_cups = []
         self._rolling_slot = None
         self._occ_shelf = []
+        self._occ_shelf_lower = []
         self._occ_table = []
         super().setup_demo(**kwags)
         self._configure_observer_camera()
@@ -211,32 +223,49 @@ class catch_cup(Office_base_task):
             texture_id=self.table_texture,
         )
 
-        shelf_z = table_height + self.SHELF_Z_ABOVE_TABLE
         shelf_y = self.SHELF_Y
         half_x = 0.5 * self.SHELF_WIDTH
         half_y = 0.5 * self.SHELF_DEPTH
         half_z = 0.5 * self.SHELF_THICK
+        upper_z = table_height + self.SHELF_Z_ABOVE_TABLE
+        lower_z = table_height + self.SHELF_Z_LOWER_ABOVE_TABLE
         self.shelf = create_box(
             self.scene,
-            sapien.Pose(p=[0.0, shelf_y, shelf_z]),
+            sapien.Pose(p=[0.0, shelf_y, upper_z]),
             half_size=[half_x, half_y, half_z],
             color=(0.55, 0.42, 0.30),
             name="deep_wall_shelf",
             is_static=True,
         )
+        self.shelf_lower = create_box(
+            self.scene,
+            sapien.Pose(p=[0.0, shelf_y, lower_z]),
+            half_size=[half_x, half_y, half_z],
+            color=(0.50, 0.38, 0.28),
+            name="deep_wall_shelf_lower",
+            is_static=True,
+        )
         for bx in (-0.45, 0.0, 0.45):
             create_box(
                 self.scene,
-                sapien.Pose(p=[bx, shelf_y + half_y - 0.01, shelf_z - 0.06]),
+                sapien.Pose(p=[bx, shelf_y + half_y - 0.01, upper_z - 0.06]),
                 half_size=[0.012, 0.01, 0.06],
                 color=(0.35, 0.35, 0.35),
                 name="shelf_bracket",
                 is_static=True,
             )
+            create_box(
+                self.scene,
+                sapien.Pose(p=[bx, shelf_y + half_y - 0.01, lower_z - 0.04]),
+                half_size=[0.012, 0.01, 0.04],
+                color=(0.35, 0.35, 0.35),
+                name="shelf_bracket_lower",
+                is_static=True,
+            )
 
         self.office_info["furn_x_v"]["shelf"] = [0.0, 0.0, 0.0]
         self.office_info["shelf_area"] = [self.SHELF_WIDTH, self.SHELF_DEPTH]
-        self.office_info["shelf_heights"] = [shelf_z + half_z]
+        self.office_info["shelf_heights"] = [lower_z + half_z, upper_z + half_z]
         self.office_info["shelf_lims"] = [
             -half_x, shelf_y - half_y, half_x, shelf_y + half_y,
         ]
@@ -521,7 +550,7 @@ class catch_cup(Office_base_task):
 
     def _spawn_prop(
         self, modelname, model_id, xy, surface_z, hx, hy,
-        scale_mult=1.0, surface="table",
+        scale_mult=1.0, surface="table", face_robot=False,
     ):
         """Dynamic convex-collider prop seated on ``surface_z``.
 
@@ -529,13 +558,23 @@ class catch_cup(Office_base_task):
         shoves it instead of passing through it.
         """
         cx, cy = float(xy[0]), float(xy[1])
-        occ = self._occ_shelf if surface == "shelf" else self._occ_table
+        if surface == "shelf":
+            occ = self._occ_shelf
+        elif surface == "shelf_lower":
+            occ = self._occ_shelf_lower
+        else:
+            occ = self._occ_table
         if not self._footprint_ok(occ, cx, cy, hx, hy):
             return None
         h = self._prop_height(modelname, int(model_id), scale_mult)
+        q = (
+            self.PROP_FACE_ROBOT_Q.tolist()
+            if face_robot
+            else self.PROP_UPRIGHT_Q.tolist()
+        )
         pose = sapien.Pose(
             [cx, cy, float(surface_z) + 0.5 * h + 0.001],
-            self.PROP_UPRIGHT_Q.tolist(),
+            q,
         )
         try:
             actor = create_actor(
@@ -566,7 +605,11 @@ class catch_cup(Office_base_task):
         half_y = 0.5 * self.SHELF_DEPTH
         shelf_y = self.SHELF_Y
         z_top = self.table_top + self.SHELF_Z_ABOVE_TABLE + 0.5 * self.SHELF_THICK
+        z_lower = (
+            self.table_top + self.SHELF_Z_LOWER_ABOVE_TABLE + 0.5 * self.SHELF_THICK
+        )
         self.shelf_plate_z = float(z_top)
+        self.shelf_lower_z = float(z_lower)
         self.shelf_plate_xlim = (-half_x, half_x)
         self.shelf_plate_ylim = (shelf_y - half_y, shelf_y + half_y)
         self.shelf_lims = [
@@ -670,7 +713,12 @@ class catch_cup(Office_base_task):
     # ------------------------------------------------------------------ actors
     def load_actors(self):
         c = self._cfg
-        self.roll_speed = float(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
+        base_roll = float(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
+        jitter_frac = float(c.get("roll_speed_jitter_frac", self.ROLL_SPEED_JITTER_FRAC))
+        # Current config speed is the lower bound; upper = +50% (default).
+        self.roll_speed = float(
+            np.random.uniform(base_roll, base_roll * (1.0 + max(0.0, jitter_frac)))
+        )
         self.fall_speed_xy = float(c.get("fall_speed_xy", self.FALL_SPEED_XY_DEFAULT))
         # Near-shelf free-fall band (slow PhysX exit, not a long kinematic jump).
         self.land_y_min = float(c.get("land_y_min", 0.00))
@@ -714,15 +762,19 @@ class catch_cup(Office_base_task):
         self.shelf_front_y = float(self.shelf_plate_ylim[0])
         self.shelf_back_y = float(self.shelf_plate_ylim[1])
         self.shelf_z_surf = float(self.shelf_plate_z)
+        self.shelf_lower_surf = float(
+            getattr(self, "shelf_lower_z", self.shelf_z_surf - 0.18)
+        )
 
         self.arm_side = "right"
         self.decor = []
         self.shelf_cups = []
         self._occ_shelf = []
+        self._occ_shelf_lower = []
         self._occ_table = []
         self._rolling_slot = None
 
-        # Plant (2×) + cup row; one right-side cup is randomly chosen to roll.
+        # Plant + randomized cup row on upper shelf; décor on lower shelf.
         self._load_decorations(cup_ids)
         assert self._rolling_slot is not None, "need a rolling cup slot"
 
@@ -744,23 +796,20 @@ class catch_cup(Office_base_task):
 
         cup_x = float(slot_x)
         cup_y = float(slot_y)
-        # Slight back-of-shelf offset so there is a real roll to the lip.
-        y0, y1 = self.shelf_plate_ylim
-        cup_y = float(np.clip(
-            cup_y + float(np.random.uniform(0.0, 0.04)),
-            y0 + 0.55 * self.SHELF_DEPTH,
-            y1 - 0.03,
-        ))
+        # Arm + pillow follow the rolling cup's side of the table.
+        self.arm_side = "right" if cup_x >= 0.0 else "left"
         # Provisional; corrected to the measured AABB once the actor exists.
         cup_z = self.shelf_z_surf + 0.5 * self.cup_height
         self.cup_start = np.array([cup_x, cup_y, cup_z], dtype=np.float64)
         self._reserve(self._occ_shelf, cup_x, cup_y, 0.055, 0.055, pad=0.02)
 
         drop_jitter = float(c.get("drop_x_jitter", self.DROP_X_JITTER))
+        side_min = 0.12 if self.arm_side == "right" else -0.34
+        side_max = 0.34 if self.arm_side == "right" else -0.12
         self.drop_x = float(np.clip(
             cup_x + np.random.uniform(-drop_jitter, drop_jitter),
-            self.CUP_X_ABS_MIN - 0.02,
-            self.CUP_X_ABS_MAX + 0.02,
+            side_min,
+            side_max,
         ))
         # Block out the drop zone so the cushion cannot spawn already under it.
         land_band_mid = 0.5 * (
@@ -773,7 +822,8 @@ class catch_cup(Office_base_task):
 
         pillow_x = float(np.clip(
             self.drop_x + float(np.random.uniform(-0.04, 0.04)),
-            0.14, 0.32,
+            side_min,
+            side_max,
         ))
         # The gripper has to fit behind the rear face while still standing over the
         # tabletop — off the edge the fingertips drop below the surface and hook on
@@ -797,11 +847,15 @@ class catch_cup(Office_base_task):
             ):
                 break
             pillow_y = float(np.random.uniform(y_lo, y_lo + 0.02))
-            pillow_x = float(np.random.uniform(0.14, 0.32))
+            pillow_x = float(np.random.uniform(side_min, side_max))
         self.pillow_start = np.array([pillow_x, pillow_y, pillow_z], dtype=np.float64)
         self._reserve(
             self._occ_table, pillow_x, pillow_y,
             self.pillow_half_xy[0], self.pillow_half_xy[1],
+        )
+        print(
+            f"[catch_cup] arm={self.arm_side} cup_x={cup_x:.3f} drop_x={self.drop_x:.3f} "
+            f"pillow=({pillow_x:.3f},{pillow_y:.3f}) roll_speed={self.roll_speed:.4f}"
         )
 
         cup_pose = sapien.Pose(self.cup_start.tolist(), self._cup_upright_quat().tolist())
@@ -862,50 +916,83 @@ class catch_cup(Office_base_task):
         self._pillow_placed = False
         self._loaded = True
 
-    def _load_decorations(self, cup_ids):
-        """2× plant + cup row (one random right-side cup will roll) + table props."""
-        z_shelf = self.shelf_z_surf
-        y_shelf = float(0.5 * (self.shelf_plate_ylim[0] + self.shelf_plate_ylim[1]))
+    def _sample_cup_slots(self, n_cups, cup_hx=0.050):
+        """Random non-overlapping cup XYs on the upper shelf.
+
+        Constraints: ≥2 cm clear gap on X between footprints, and no cup may
+        sit in front of another on the same X corridor (would block the −Y roll).
+        """
         y0, y1 = self.shelf_plate_ylim
+        x_lo = float(getattr(self, "CUP_X_SHELF_MIN", -0.42))
+        x_hi = float(getattr(self, "CUP_X_SHELF_MAX", 0.42))
+        gap = float(getattr(self, "CUP_X_GAP_MIN", 0.02))
+        min_center_dx = 2.0 * float(cup_hx) + gap
+        # Keep cups toward the back so each has a clear roll lane to the lip.
+        y_back_lo = float(y0 + 0.55 * self.SHELF_DEPTH)
+        y_back_hi = float(y1 - 0.03)
+
+        for _ in range(80):
+            xs = []
+            for _i in range(n_cups):
+                placed = False
+                for _try in range(40):
+                    x = float(np.random.uniform(x_lo, x_hi))
+                    if all(abs(x - ox) >= min_center_dx for ox in xs):
+                        xs.append(x)
+                        placed = True
+                        break
+                if not placed:
+                    break
+            if len(xs) < n_cups:
+                continue
+            xs = sorted(xs)
+            # Small independent Y jitter, but never stack two cups on one X lane
+            # with one clearly in front — keep Y within a narrow back band.
+            ys = [
+                float(np.random.uniform(y_back_lo, y_back_hi)) for _ in range(n_cups)
+            ]
+            return list(zip(xs, ys))
+
+        # Deterministic fallback spanning both halves.
+        xs = np.linspace(-0.28, 0.28, n_cups)
+        y = float(np.clip(0.5 * (y0 + y1), y_back_lo, y_back_hi))
+        return [(float(x), y) for x in xs]
+
+    def _load_decorations(self, cup_ids):
+        """Upper shelf: plant + cup row (one random cup rolls). Lower shelf: décor."""
+        z_shelf = self.shelf_z_surf
+        z_lower = float(getattr(self, "shelf_lower_surf", z_shelf - 0.18))
+        y0, y1 = self.shelf_plate_ylim
+        y_shelf = float(0.5 * (y0 + y1))
 
         self._spawn_prop(
             "120_plant", 0,
-            [-0.46, y_shelf + 0.02], z_shelf,
+            [-0.48, y_shelf + 0.02], z_shelf,
             hx=0.12, hy=0.12, scale_mult=self.plant_scale, surface="shelf",
+            face_robot=True,
         )
 
         n_cups = int(getattr(self, "N_SHELF_CUPS", 4))
         pool = [int(m) for m in (cup_ids or self.CUP_IDS)]
         if len(pool) < n_cups:
             pool = list(self.CUP_IDS)
-        # With a small id pool, allow replace so we always fill the row.
         replace = len(pool) < n_cups
         cup_ids_pick = list(np.random.choice(pool, size=n_cups, replace=replace))
-        # Left décor + two right-side roll candidates (arm reachability). Slots are
-        # spaced wider than a cup+handle (~0.10 m) so dynamic cups spawn touching
-        # nothing and the roller has a clear lane past its neighbours.
-        cup_xs = np.array([-0.20, -0.03, 0.15, 0.30], dtype=np.float64)[:n_cups]
-        if n_cups > 4:
-            cup_xs = np.linspace(-0.20, 0.30, n_cups)
-        cup_y = float(np.clip(y_shelf, y0 + 0.08, y1 - 0.04))
-        candidates = [
-            i for i, mx in enumerate(cup_xs) if float(mx) >= self.CUP_X_ABS_MIN - 0.02
-        ]
-        if not candidates:
-            candidates = [n_cups - 1]
-        roll_i = int(np.random.choice(candidates))
+        slots = self._sample_cup_slots(n_cups, cup_hx=0.050)
+        # Any cup may tip/roll; arm + pillow follow its side.
+        roll_i = int(np.random.randint(0, n_cups))
         self._rolling_slot = (
-            float(cup_xs[roll_i]),
-            cup_y,
+            float(slots[roll_i][0]),
+            float(slots[roll_i][1]),
             int(cup_ids_pick[roll_i]),
         )
 
-        for i, (mid, mx) in enumerate(zip(cup_ids_pick, cup_xs)):
+        for i, (mid, (mx, my)) in enumerate(zip(cup_ids_pick, slots)):
             if i == roll_i:
                 continue  # rolling cup spawned as the dynamic actor in load_actors
             actor = self._spawn_prop(
                 self.CUP_MODEL, int(mid),
-                [float(mx), cup_y], z_shelf,
+                [float(mx), float(my)], z_shelf,
                 hx=0.050, hy=0.050,
                 scale_mult=self.decor_cup_scale,
                 surface="shelf",
@@ -913,21 +1000,39 @@ class catch_cup(Office_base_task):
             if actor is not None:
                 self.shelf_cups.append(actor)
 
-        self._spawn_prop(
-            "091_kettle", int(np.random.choice(self.KETTLE_IDS)),
-            [-0.42, 0.04], self.table_top,
-            hx=0.11, hy=0.11, scale_mult=self.KETTLE_SCALE, surface="table",
-        )
-        self._spawn_prop(
-            "023_tissue-box", int(np.random.choice(self.TISSUE_IDS)),
-            [-0.50, -0.18], self.table_top,
-            hx=0.07, hy=0.055, scale_mult=self.TISSUE_SCALE, surface="table",
-        )
-        self._spawn_prop(
-            "046_alarm-clock", int(np.random.choice(self.ALARM_IDS)),
-            [-0.28, -0.20], self.table_top,
-            hx=0.09, hy=0.07, scale_mult=self.ALARM_SCALE, surface="table",
-        )
+        # Former table props → lower shelf, randomized, facing the robot.
+        lower_specs = [
+            ("091_kettle", self.KETTLE_IDS, 0.11, 0.11, self.KETTLE_SCALE),
+            ("023_tissue-box", self.TISSUE_IDS, 0.07, 0.055, self.TISSUE_SCALE),
+            ("046_alarm-clock", self.ALARM_IDS, 0.09, 0.07, self.ALARM_SCALE),
+        ]
+        for model, id_pool, hx, hy, scale in lower_specs:
+            placed = False
+            for _ in range(60):
+                x = float(np.random.uniform(-0.45, 0.45))
+                y = float(np.random.uniform(y0 + 0.04, y1 - 0.04))
+                actor = self._spawn_prop(
+                    model, int(np.random.choice(id_pool)),
+                    [x, y], z_lower,
+                    hx=hx, hy=hy, scale_mult=scale,
+                    surface="shelf_lower", face_robot=True,
+                )
+                if actor is not None:
+                    placed = True
+                    break
+            if not placed:
+                # Fallback anchors along the lower shelf.
+                fallback = {
+                    "091_kettle": (-0.35, y_shelf),
+                    "023_tissue-box": (0.0, y_shelf),
+                    "046_alarm-clock": (0.32, y_shelf),
+                }[model]
+                self._spawn_prop(
+                    model, int(np.random.choice(id_pool)),
+                    list(fallback), z_lower,
+                    hx=hx, hy=hy, scale_mult=scale,
+                    surface="shelf_lower", face_robot=True,
+                )
 
     # ----------------------------------------------------------- kinematics
     def _release_cup(self):
@@ -1512,6 +1617,8 @@ class catch_cup(Office_base_task):
             "drop_x": float(self.drop_x),
             "landing": list(map(float, self._landing)),
             "cup_id": int(getattr(self, "cup_id", -1)),
+            "arm_side": str(getattr(self, "arm_side", "right")),
+            "roll_speed": float(getattr(self, "roll_speed", self.ROLL_SPEED_DEFAULT)),
             "n_shelf_cups": int(len(getattr(self, "shelf_cups", [])) + 1),
             "plant_scale": float(getattr(self, "plant_scale", self.PLANT_SCALE)),
             "pillow_xy": (

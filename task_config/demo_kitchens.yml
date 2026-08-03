@@ -156,12 +156,13 @@ task_args:
     grasp_tcp_dz: 0.02
     post_catch_lift: 0.08
   make_soup:
-    # KitchenS: no microwave. Stove X / board / decor randomized (Y of stove fixed).
-    # Pot stays on the same burner relative to the stove. Success = all veggies in pot.
+    # KitchenS: no microwave. Stove slot (current/top-left/top-right), board on
+    # lower half, veggies scattered, pot on a front burner matching the arm.
     scene_id: 0
     burner: left_front
-    range_xy: [0.18, 0.14]       # Y fixed; X sampled in range_x_range when randomize_layout
-    range_x_range: [-0.10, 0.30]
+    pin_burner: false
+    range_xy: [0.18, 0.14]
+    range_slots: [current, top_left, top_right]
     range_scale_mult: 1.0
     randomize_layout: true
     randomize_background: true
@@ -175,6 +176,7 @@ task_args:
     handle_half: [0.022, 0.024, 0.022]
     board_x: 0.16                # fallback / mean when randomize_layout=false
     board_y: -0.14
+    board_center_x_tol: 0.06
     cube_half: 0.012
     tomato_radius: 0.015
     tilt_hold_dot: 0.82
@@ -182,7 +184,6 @@ task_args:
     pour_tip_rad: 0.70           # wrist roll for the pour (~40°)
     knob_contact_radius: 0.06
     grasp_tcp_tol: 0.045
-    # Decor defaults (positions randomized opposite the stove when enabled)
     plate_x: -0.18
     plate_y: -0.08
     plate_scale: 0.55
