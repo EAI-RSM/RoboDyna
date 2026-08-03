@@ -1198,12 +1198,12 @@ class cook_meat(Base_Task):
             print(f"[cook_meat] {tag}: plan_success={self.plan_success}", flush=True)
 
     def play_once(self) -> dict[str, Any]:
-        """Run the dynamic or static expert trajectory for one episode."""
-        if self.dual_setup_enabled:
-            # Dual stations need both arms; skip dynamic moving-target path.
-            return self._play_once_static()
-        if self.use_dynamic:
-            return self._play_once_dynamic()
+        """Run the expert trajectory for one episode.
+
+        The steak is always a stationary target (options only add a cook key
+        and/or a second station). Never use the base-task moving-target
+        workflow even when the shared config sets ``use_dynamic: true``.
+        """
         return self._play_once_static()
 
     def _pan_place_target(self, station: dict[str, Any]) -> list[float]:
@@ -1442,63 +1442,8 @@ class cook_meat(Base_Task):
         return self.info
 
     def get_dynamic_motion_config(self) -> dict[str, Any] | None:
-        """Return the base workflow's dynamic-motion configuration when enabled."""
-        if not self.use_dynamic or self.dual_setup_enabled:
-            return None
-        p = self.steak.get_pose().p
-        return {
-            "target_actor": self.steak,
-            "end_position": np.array([p[0], p[1], p[2]]),
-            "table_bounds": (-0.35, 0.35, -0.25, 0.15),
-            "check_z_threshold": 0.03,
-            "check_z_actor": self.steak,
-        }
-
-    def _play_once_dynamic(self) -> dict[str, Any]:
-        """Execute moving-target acquisition followed by the cooking trajectory."""
-        st = self.stations[0]
-        arm_tag = st["arm"]
-        p = st["steak"].get_pose().p
-        self.end_position = np.array([p[0], p[1], p[2]])
-
-        def robot_action_sequence(need_plan_mode: bool = False) -> None:
-            _ = need_plan_mode
-            grasp_result = self.grasp_actor(
-                st["steak"], arm_tag=arm_tag, pre_grasp_dis=0.1
-            )
-            if (
-                not grasp_result
-                or grasp_result[1] is None
-                or len(grasp_result[1]) == 0
-            ):
-                return
-            self.move(grasp_result)
-
-        table_bounds = (-0.35, 0.35, -0.25, 0.15)
-        success, _ = self.execute_dynamic_workflow(
-            target_actor=st["steak"],
-            end_position=self.end_position,
-            robot_action_sequence=robot_action_sequence,
-            table_bounds=table_bounds,
-        )
-        if not success:
-            print("Dynamic trajectory failed, fallback to static")
-            return self._play_once_static()
-
-        for c in st["steak"].actor.get_components():
-            if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
-                try:
-                    c.set_linear_velocity(np.zeros(3))
-                    c.set_angular_velocity(np.zeros(3))
-                    c.set_linear_damping(15.0)
-                    c.set_angular_damping(40.0)
-                except Exception:
-                    pass
-
-        self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.1, move_axis="arm"))
-        self._pan_cook_table()
-        self.info["info"] = self._task_info(arm_tag)
-        return self.info
+        """Cook-meat never uses the shared moving-target workflow."""
+        return None
 
     # ------------------------------------------------------------- success
     def _doneness_in_target_range(self, doneness: float) -> bool:
