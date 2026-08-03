@@ -344,7 +344,7 @@ task_args:
     settle_steps: 100
     physics_max_steps: 2500
     cup_fwd_clearance: 0.025
-  catch_valley_ball:
+  catch_valley_ball_v1:
     ramp_half_width: 0.125
     ramp_thickness: 0.012
     ramp_center_y: 0.08

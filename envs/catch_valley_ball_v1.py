@@ -6,7 +6,7 @@ import sapien.physx
 import transforms3d as t3d
 
 
-class catch_valley_ball(Base_Task):
+class catch_valley_ball_v1(Base_Task):
     """Place a bowl to catch a red ball leaving a down-then-up valley ramp.
 
     The ramp, ball, and robot use the standard Base_Task table/arm setup.  The
@@ -95,7 +95,7 @@ class catch_valley_ball(Base_Task):
     BOWL_MASS_DEFAULT = 0.25
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("catch_valley_ball", {})
+        self._cfg = kwags.get("task_args", {}).get("catch_valley_ball_v1", {})
 
         # The environment object is reused between episodes. load_camera can
         # invoke the per-step hook before the new actors have been constructed.
@@ -145,7 +145,7 @@ class catch_valley_ball(Base_Task):
             return True
         if s in ("0", "false", "no", "off"):
             return False
-        raise ValueError(f"catch_valley_ball expected a boolean, got {value!r}")
+        raise ValueError(f"catch_valley_ball_v1 expected a boolean, got {value!r}")
 
     def _parse_wall_bounce_enabled(self, c) -> bool:
         """Option 1: wall rebound path (preferred) or legacy ``option: 1``."""
@@ -158,7 +158,7 @@ class catch_valley_ball(Base_Task):
                 wall = False
             else:
                 raise ValueError(
-                    "catch_valley_ball option must be 1/wall_bounce_enabled or "
+                    "catch_valley_ball_v1 option must be 1/wall_bounce_enabled or "
                     "2/enable_distractor (or set the booleans directly)"
                 )
         if wall is not None:
@@ -183,7 +183,7 @@ class catch_valley_ball(Base_Task):
                 distractor = False
             else:
                 raise ValueError(
-                    "catch_valley_ball option must be 1/wall_bounce_enabled or "
+                    "catch_valley_ball_v1 option must be 1/wall_bounce_enabled or "
                     "2/enable_distractor (or set the booleans directly)"
                 )
         return self._as_bool(distractor, self.ENABLE_DISTRACTOR_DEFAULT)

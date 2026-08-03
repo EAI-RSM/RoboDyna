@@ -1,10 +1,10 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``catch_valley_ball``.
+"""Interactive viewer for ``catch_valley_ball_v1``.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball.py --control robot
+    /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball_v1.py --control keyboard
+    /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball_v1.py --control robot
 
 Keyboard mode freezes the catcher on Space.
 Robot mode: Space picks up the catcher, Space again drops it in place.
@@ -60,7 +60,7 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
         config = yaml.safe_load(handle)
 
     config.update(
-        task_name="catch_valley_ball",
+        task_name="catch_valley_ball_v1",
         render_freq=1,
         now_ep_num=0,
         seed=seed,
@@ -235,7 +235,7 @@ class RobotBowlController:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive catch_valley_ball viewer")
+    parser = argparse.ArgumentParser(description="Interactive catch_valley_ball_v1 viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
@@ -253,18 +253,18 @@ def main():
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
-    from envs.catch_valley_ball import catch_valley_ball
+    from envs.catch_valley_ball_v1 import catch_valley_ball_v1
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print_mode_controls("catch_valley_ball", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
+    print_mode_controls("catch_valley_ball_v1", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "
             "(key-press sandboxes use joint interpolation)."
         )
 
-    env = catch_valley_ball()
+    env = catch_valley_ball_v1()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     env._interactive_selected_arms = (
         "left" if env.mirrored else "right",

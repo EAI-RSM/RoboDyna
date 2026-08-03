@@ -1,4 +1,4 @@
-catch_valley_ball — expert controller demos
+catch_valley_ball — expert controller demos (push custom catch box)
 
 default  : wall_bounce_enabled=false, enable_distractor=false
            red ball rolls straight to the exit edge (no wall rebound)
@@ -10,19 +10,25 @@ opt1+2   : wall_bounce_enabled=true,  enable_distractor=true
            wall rebound + black distractor (ball–ball bounce on contact)
 
 Success:
-  - red ball ends in the bowl beyond the red line (PhysX flight from ramp exit;
-    no teleport into the bowl), AND
+  - red ball ends in the pushed open box beyond the red line (PhysX flight from
+    ramp exit; no teleport into the box), AND
   - arm never touches the red ball, AND
-  - black distractor (if present) is NOT in the bowl.
+  - black distractor (if present) is NOT in the box.
 
-Failure if distractor is in the bowl or red ball is outside the bowl.
+The catcher is a procedural open box (not a grasped cup). The expert contact-pushes
+it from below the platform's lower Y edge to the landing; the box only moves under
+gripper contact (no end teleport). Ball motion starts concurrently with the push.
 
-Platform length samples ±20% each episode. Layout mirror disabled for these demos
-(right-arm / +x exit). Full controller test: see test_report.json.
+Layout mirror disabled for these demos (right-arm / +x exit).
+Controller smoke (10 seeds each, mirrored=false): see test_report.json
+  default 9/10, opt1 7/10, opt2 6/10, opt1+2 5/10.
 
-Files (side-by-side is the primary deliverable):
-  default_sidebyside.mp4
-  opt1_sidebyside.mp4
-  opt2_sidebyside.mp4
-  opt1+2_sidebyside.mp4
+Files (side-by-side GIF is the README deliverable):
+  default_sidebyside.gif / .mp4
+  opt1_sidebyside.gif / .mp4
+  opt2_sidebyside.gif / .mp4
+  opt1+2_sidebyside.gif / .mp4
 Also: <tag>_head.mp4, <tag>_topdown.mp4
+
+Note: the former cup-place task is archived as catch_valley_ball_v1
+(final_task_demos/catch_valley_ball_v1/).
