@@ -316,9 +316,10 @@ class HouseholdTaskLauncher(tk.Tk):
     @staticmethod
     def _preview_path(task):
         directory = DEMO_DIR / task
-        preferred = directory / "default_sidebyside.gif"
-        if preferred.exists():
-            return preferred
+        for name in ("scene_snapshot.png", "default_sidebyside.gif"):
+            preferred = directory / name
+            if preferred.exists():
+                return preferred
         if directory.exists():
             for pattern in ("*.png", "*.jpg", "*.jpeg", "*.gif"):
                 match = next(directory.glob(pattern), None)
