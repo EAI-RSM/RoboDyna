@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import signal
 import subprocess
@@ -20,16 +21,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = ROOT / "task_config"
 DEMO_DIR = ROOT / "final_task_demos"
+README_PATH = ROOT / "README.md"
 
 TASKS = (
     ("Catch Marbles Trapdoors", "catch_marbles_trapdoors"),
     ("Catch Ramp Ball", "catch_ramp_ball"),
-    ("Catch Rat", "catch_rat"),
+    ("Catch Cuboid", "catch_cuboid"),
     ("Catch Shelf Marble", "catch_shelf_marble"),
     ("Catch Valley Ball", "catch_valley_ball"),
-    ("Catch Valley Ball V1", "catch_valley_ball_v1"),
     ("Stop Valley Ball", "stop_valley_ball"),
     ("Cook Meat", "cook_meat"),
+    ("Cook Meat Timer", "cook_meat_timer"),
     ("Put Cup Belt", "put_cup_belt"),
     ("Dispense Gummy", "dispense_gummy"),
     ("Punch Dual Holes", "punch_dual_holes"),
@@ -70,11 +72,11 @@ SCENARIO_OVERRIDES = {
         "opt2": {"wall_bounce_enabled": False, "enable_distractor": True},
         "opt1+2": {"wall_bounce_enabled": True, "enable_distractor": True},
     },
-    "catch_rat": {
-        "default": {"catch_two_mice": False, "opaque_surface": False},
-        "opt1": {"catch_two_mice": True, "opaque_surface": False},
-        "opt2": {"catch_two_mice": False, "opaque_surface": True},
-        "opt1+2": {"catch_two_mice": True, "opaque_surface": True},
+    "catch_cuboid": {
+        "default": {"catch_two_cuboids": False, "opaque_surface": False},
+        "opt1": {"catch_two_cuboids": True, "opaque_surface": False},
+        "opt2": {"catch_two_cuboids": False, "opaque_surface": True},
+        "opt1+2": {"catch_two_cuboids": True, "opaque_surface": True},
     },
     "catch_shelf_marble": {
         "default": {"reactive_marble": False, "oscillating_shelf_enabled": False},
@@ -88,12 +90,6 @@ SCENARIO_OVERRIDES = {
         "opt2": {"wall_bounce_enabled": False, "enable_distractor": True},
         "opt1+2": {"wall_bounce_enabled": True, "enable_distractor": True},
     },
-    "catch_valley_ball_v1": {
-        "default": {"wall_bounce_enabled": False, "enable_distractor": False},
-        "opt1": {"wall_bounce_enabled": True, "enable_distractor": False},
-        "opt2": {"wall_bounce_enabled": False, "enable_distractor": True},
-        "opt1+2": {"wall_bounce_enabled": True, "enable_distractor": True},
-    },
     "stop_valley_ball": {
         "default": {"wall_bounce_enabled": False, "enable_distractor": False},
         "opt1": {"wall_bounce_enabled": True, "enable_distractor": False},
@@ -101,6 +97,12 @@ SCENARIO_OVERRIDES = {
         "opt1+2": {"wall_bounce_enabled": True, "enable_distractor": True},
     },
     "cook_meat": {
+        "default": {"cook_button_enabled": False, "dual_setup_enabled": False},
+        "opt1": {"cook_button_enabled": True, "dual_setup_enabled": False},
+        "opt2": {"cook_button_enabled": False, "dual_setup_enabled": True},
+        "opt1+2": {"cook_button_enabled": True, "dual_setup_enabled": True},
+    },
+    "cook_meat_timer": {
         "default": {"cook_button_enabled": False, "dual_setup_enabled": False},
         "opt1": {"cook_button_enabled": True, "dual_setup_enabled": False},
         "opt2": {"cook_button_enabled": False, "dual_setup_enabled": True},
@@ -208,6 +210,49 @@ TEXT_PRIMARY = "#f4f8fb"
 TEXT_SECONDARY = "#aebdca"
 RANDOM_SEED_MAX = 500
 
+# Tasks whose README row lives under a different name (or is shared).
+README_TASK_ALIASES = {
+    "cook_meat_timer": "cook_meat",
+}
+
+
+def load_condition_descriptions(readme_path: Path = README_PATH) -> dict[str, dict[str, str]]:
+    """Parse README task-table ``<sub>…</sub>`` blurbs into per-condition text.
+
+    Each task row is:
+      task summary, Default, Opt 1, Opt 2, Opt 1+2
+    """
+    if not readme_path.exists():
+        return {}
+    text = readme_path.read_text(encoding="utf-8")
+    row_re = re.compile(r"^\|\s*\*\*`([a-z0-9_]+)`\*\*.*$", re.MULTILINE)
+    sub_re = re.compile(r"<sub>(.*?)</sub>", re.DOTALL)
+    out: dict[str, dict[str, str]] = {}
+    for match in row_re.finditer(text):
+        task = match.group(1)
+        line_end = text.find("\n", match.start())
+        line = text[match.start() : line_end if line_end >= 0 else None]
+        subs = [re.sub(r"\s+", " ", s).strip() for s in sub_re.findall(line)]
+        if len(subs) < 5:
+            continue
+        out[task] = {
+            "summary": subs[0],
+            "default": subs[1],
+            "opt1": subs[2],
+            "opt2": subs[3],
+            "opt1+2": subs[4],
+        }
+    return out
+
+
+CONDITION_DESCRIPTIONS = load_condition_descriptions()
+
+
+def condition_description(task: str, scenario: str) -> str:
+    """README blurb for ``task`` / ``scenario``, or empty if unavailable."""
+    key = README_TASK_ALIASES.get(task, task)
+    return str(CONDITION_DESCRIPTIONS.get(key, {}).get(scenario, "") or "")
+
 
 def resolve_seed(value: str) -> int:
     """Return a fixed entered seed, or a fresh random seed for a blank value."""
@@ -248,6 +293,8 @@ class RoundedButton(tk.Canvas):
         width,
         height,
         radius=24,
+        on_enter=None,
+        on_leave=None,
     ):
         super().__init__(
             parent,
@@ -266,6 +313,8 @@ class RoundedButton(tk.Canvas):
         self._text = text
         self._font = font
         self._shape = None
+        self._on_enter_cb = on_enter
+        self._on_leave_cb = on_leave
         self.bind("<Configure>", self._redraw)
         self.bind("<Enter>", self._enter)
         self.bind("<Leave>", self._leave)
@@ -303,10 +352,14 @@ class RoundedButton(tk.Canvas):
     def _enter(self, _event):
         if self.button_state == "normal" and self._shape is not None:
             self.itemconfigure(self._shape, fill=self.active_color)
+        if self._on_enter_cb is not None:
+            self._on_enter_cb()
 
     def _leave(self, _event):
         if self.button_state == "normal" and self._shape is not None:
             self.itemconfigure(self._shape, fill=self.normal_color)
+        if self._on_leave_cb is not None:
+            self._on_leave_cb()
 
     def _click(self, _event):
         if self.button_state == "normal":
@@ -354,6 +407,10 @@ class InteractiveTaskLauncher(tk.Tk):
         self.task_buttons: list[list[RoundedButton]] = []
         self._preview_resize_job: str | None = None
         self._preview_width = self.IMAGE_SIZE[0]
+        self._idle_status = (
+            f"{len(TASKS)} tasks available  |  Hover a scenario key for its README description."
+        )
+        self._idle_status_fg = TEXT_SECONDARY
 
         self._build_ui()
         self.after(250, self._poll_child)
@@ -457,9 +514,9 @@ class InteractiveTaskLauncher(tk.Tk):
 
         self.status = tk.Label(
             self,
-            text=f"{len(TASKS)} tasks available  |  Select a scenario below.",
+            text=self._idle_status,
             bg=PAGE_BG,
-            fg=TEXT_SECONDARY,
+            fg=self._idle_status_fg,
             anchor="w",
             font=("Sans", 19),
         )
@@ -476,7 +533,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.page_window = self.canvas.create_window((0, 0), window=self.page, anchor="nw")
         self.page.bind("<Configure>", self._update_scroll_region)
         self.canvas.bind("<Configure>", self._resize_page)
-        self.canvas.bind_all("<MouseWheel>", self._mousewheel)
+        self.canvas.bind_all("<MouseWheel>", self._cuboidwheel)
         self.canvas.bind_all("<Button-4>", lambda _event: self.canvas.yview_scroll(-3, "units"))
         self.canvas.bind_all("<Button-5>", lambda _event: self.canvas.yview_scroll(3, "units"))
 
@@ -517,16 +574,17 @@ class InteractiveTaskLauncher(tk.Tk):
             else:
                 label.configure(image=photo, text="", width=0, height=0)
 
-    def _mousewheel(self, event):
+    def _cuboidwheel(self, event):
         if event.delta:
             self.canvas.yview_scroll(-int(event.delta / 120), "units")
 
     @staticmethod
     def _preview_path(task: str) -> Path | None:
         directory = DEMO_DIR / task
-        preferred = directory / "default_sidebyside.gif"
-        if preferred.exists():
-            return preferred
+        for name in ("scene_snapshot.png", "default_sidebyside.gif"):
+            preferred = directory / name
+            if preferred.exists():
+                return preferred
         if directory.exists():
             patterns = ("default*sidebyside.gif", "*.gif", "*.png", "*.jpg", "*.jpeg")
             for pattern in patterns:
@@ -629,17 +687,47 @@ class InteractiveTaskLauncher(tk.Tk):
                 width=300,
                 height=78,
                 radius=30,
+                on_enter=lambda t=task, s=scenario, l=label: self._show_condition_hint(t, s, l),
+                on_leave=self._clear_condition_hint,
             )
             button.pack(side="left", expand=True, fill="x", padx=6)
             buttons.append(button)
         self.task_buttons.append(buttons)
+
+    def _set_status(self, text: str, fg: str, *, sticky: bool = False):
+        """Update the status bar; ``sticky`` also becomes the post-hover restore text."""
+        self.status.configure(text=text, fg=fg)
+        if sticky:
+            self._idle_status = text
+            self._idle_status_fg = fg
+
+    def _show_condition_hint(self, task: str, scenario: str, label: str):
+        """Show the README condition blurb while the pointer is over a scenario key."""
+        if self.child is not None:
+            return
+        desc = condition_description(task, scenario)
+        scenario_label = SCENARIO_LABELS[scenario]
+        if desc:
+            text = f"{label} · {scenario_label}: {desc}"
+        else:
+            text = f"{label} · {scenario_label}"
+        self.status.configure(text=text, fg="#7fb6dc")
+
+    def _clear_condition_hint(self):
+        if self.child is not None:
+            return
+        self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
 
     def play_or_stop(self, index: int, scenario: str):
         if self.child is not None:
             if self.active_selection == (index, scenario):
                 self._stop_task("Task stopped. Select another scenario when ready.")
             else:
-                self.status.configure(text="Stop the running task before starting another.", fg="#e6a15c")
+                self._set_status(
+                    "Stop the running task before starting another.",
+                    "#e6a15c",
+                    sticky=True,
+                )
             return
         self._start_task(index, scenario)
 
@@ -702,10 +790,14 @@ class InteractiveTaskLauncher(tk.Tk):
         self.seed_entry.configure(state="disabled")
         active_button = self.task_buttons[index][SCENARIOS.index(scenario)]
         active_button.configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
-        self.status.configure(
-            text=f"Running {label} / {SCENARIO_LABELS[scenario]} with seed {seed}. Close its viewer or press Stop.",
-            fg="#70d6a2",
+        desc = condition_description(task, scenario)
+        run_text = (
+            f"Running {label} / {SCENARIO_LABELS[scenario]} with seed {seed}. "
+            "Close its viewer or press Stop."
         )
+        if desc:
+            run_text = f"{run_text}  ({desc})"
+        self._set_status(run_text, "#70d6a2", sticky=True)
 
     def _poll_child(self):
         if self.child is not None:
@@ -717,24 +809,28 @@ class InteractiveTaskLauncher(tk.Tk):
                 self._reset_task_buttons()
                 # Match household_task_gui: 0=SUCCESS, 10=FAILURE, 2=closed early.
                 if code == 0:
-                    self.status.configure(
-                        text="Task result: SUCCESS. Select another scenario below.",
-                        fg="#70d6a2",
+                    self._set_status(
+                        "Task result: SUCCESS. Select another scenario below.",
+                        "#70d6a2",
+                        sticky=True,
                     )
                 elif code == 10:
-                    self.status.configure(
-                        text="Task result: FAILURE. Select another scenario below.",
-                        fg="#e6a15c",
+                    self._set_status(
+                        "Task result: FAILURE. Select another scenario below.",
+                        "#e6a15c",
+                        sticky=True,
                     )
                 elif code == 2:
-                    self.status.configure(
-                        text="Task closed before a result was reached.",
-                        fg=TEXT_SECONDARY,
+                    self._set_status(
+                        "Task closed before a result was reached.",
+                        TEXT_SECONDARY,
+                        sticky=True,
                     )
                 else:
-                    self.status.configure(
-                        text=f"Task result: ERROR (exit status {code}). Check the terminal.",
-                        fg="#e6a15c",
+                    self._set_status(
+                        f"Task result: ERROR (exit status {code}). Check the terminal.",
+                        "#e6a15c",
+                        sticky=True,
                     )
         self.after(250, self._poll_child)
 
@@ -778,7 +874,7 @@ class InteractiveTaskLauncher(tk.Tk):
             self._remove_temporary_config()
             self._reset_task_buttons()
         if status:
-            self.status.configure(text=status, fg="#e6a15c")
+            self._set_status(status, "#e6a15c", sticky=True)
 
     def exit_app(self):
         self._stop_task()
