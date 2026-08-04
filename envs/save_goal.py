@@ -5,21 +5,21 @@ import sapien.physx
 import numpy as np
 
 
-class goalkeeper(Base_Task):
+class save_goal(Base_Task):
     """Keep a moving ball out of the goal by placing a square blocker in time.
 
     A ball travels across the table toward a goal on one side. Layout can be mirrored
     across the table midline (x → −x): default puts the goal/keeper on +x (right gripper);
     ``mirrored: true`` puts them on −x (left gripper). With ``random_mirror: true`` (default)
     the side is chosen per episode when ``mirrored`` is unset.
-    A red deadline line marks the last moment the robot is allowed to reposition the goalkeeper.
+    A red deadline line marks the last moment the robot is allowed to reposition the save_goal.
     A green placement area sits directly in front of the goal. The robot must grasp the square
-    goalkeeper, place it fully inside that green area while the ball is still behind the red line,
+    save_goal, place it fully inside that green area while the ball is still behind the red line,
     then release it before the ball reaches the goal mouth.     A save requires the ball to hit the
     keeper's front face; side grazes do not stop the ball. A soccer-style net bag
     (visual lattice) hangs behind the goal mouth when ``net_enabled`` is true.
 
-    Task options (set in ``task_args.goalkeeper``; independent toggles):
+    Task options (set in ``task_args.save_goal``; independent toggles):
       - Option 1 — field players (bounce): ``players_enabled``
         Spawn ``players_max`` static soccer-player meshes before the red line, outside
         the green zone, and no farther from the goal than
@@ -112,7 +112,7 @@ class goalkeeper(Base_Task):
     NET_COLOR = (0.92, 0.93, 0.95)
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("goalkeeper", {})
+        self._cfg = kwags.get("task_args", {}).get("save_goal", {})
         self._loaded = False
         self._ball_motion_active = False
         self._ball_step = 0
@@ -162,7 +162,7 @@ class goalkeeper(Base_Task):
             return True
         if s in ("0", "false", "no", "off"):
             return False
-        raise ValueError(f"goalkeeper expected a boolean, got {value!r}")
+        raise ValueError(f"save_goal expected a boolean, got {value!r}")
 
     def _parse_players_enabled(self, c) -> bool:
         """Option 1 toggle: ``players_enabled`` (preferred) or legacy ``option: 1``."""
@@ -176,7 +176,7 @@ class goalkeeper(Base_Task):
                 players = False
             else:
                 raise ValueError(
-                    "goalkeeper option must be 1/players_enabled or 2/cover_enabled "
+                    "save_goal option must be 1/players_enabled or 2/cover_enabled "
                     "(or set players_enabled / cover_enabled booleans)"
                 )
         return self._as_bool(players, self.PLAYERS_ENABLED_DEFAULT)
@@ -192,7 +192,7 @@ class goalkeeper(Base_Task):
                 cover = False
             else:
                 raise ValueError(
-                    "goalkeeper option must be 1/players_enabled or 2/cover_enabled "
+                    "save_goal option must be 1/players_enabled or 2/cover_enabled "
                     "(or set players_enabled / cover_enabled booleans)"
                 )
         return self._as_bool(cover, self.COVER_ENABLED_DEFAULT)
@@ -1216,7 +1216,7 @@ class goalkeeper(Base_Task):
             and self.is_left_gripper_open()
             and self.is_right_gripper_open()
         )
-        self.info["goalkeeper"] = {
+        self.info["save_goal"] = {
             "keeper_in_zone": bool(keeper_ok),
             "ball_blocked": bool(self._ball_blocked),
             "ball_crossed_goal": bool(self._ball_crossed_goal),
@@ -1246,7 +1246,7 @@ class goalkeeper(Base_Task):
                 player_positions.append(p.get_pose().p.tolist())
             except Exception:
                 player_positions.append([0.0, 0.0, 0.0])
-        obs["goalkeeper"] = {
+        obs["save_goal"] = {
             "ball_pos": self.ball.get_pose().p.tolist() if getattr(self, "ball", None) is not None else [0.0, 0.0, 0.0],
             "keeper_pos": self.goalkeeper.get_pose().p.tolist() if getattr(self, "goalkeeper", None) is not None else [0.0, 0.0, 0.0],
             "keeper_target": self.goalkeeper_target_pose.p.tolist() if self.goalkeeper_target_pose is not None else [0.0, 0.0, 0.0],

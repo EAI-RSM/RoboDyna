@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Run mouse_object_drop across several seeds and print/save a results report.
+"""Run catch_mouse_object_drop across several seeds and print/save a results report.
 
 Each seed runs in a fresh subprocess so CUDA planner memory is released between
 trials (same GPU is often shared with other jobs).
 
 Usage (robodyna env, headless Vulkan)::
 
-    python -u script/bench_script/eval_mouse_object_drop.py
-    python -u script/bench_script/eval_mouse_object_drop.py --seeds 11,23,37,41,59
+    python -u script/bench_script/eval_catch_mouse_object_drop.py
+    python -u script/bench_script/eval_catch_mouse_object_drop.py --seeds 11,23,37,41,59
 """
 from __future__ import annotations
 
@@ -26,11 +26,11 @@ sys.path.insert(0, "./script/bench_script")
 def _run_worker(seed: int, out_json: Path) -> int:
     """Single-seed worker (invoked via --worker)."""
     import numpy as np
-    from envs.mouse_object_drop import mouse_object_drop
+    from envs.catch_mouse_object_drop import catch_mouse_object_drop
     from record_demo import build_args
 
     args = build_args(
-        "mouse_object_drop", "demo_dynamic",
+        "catch_mouse_object_drop", "demo_dynamic",
         f"/tmp/_pb_eval_seed{seed}", None, [],
     )
     args["render_freq"] = 0
@@ -60,7 +60,7 @@ def _run_worker(seed: int, out_json: Path) -> int:
         "path_len": None,
         "landing": None,
     }
-    task = mouse_object_drop()
+    task = catch_mouse_object_drop()
     try:
         task.setup_demo(now_ep_num=0, seed=int(seed), **args)
         tx = float(task.target_start[0])
@@ -128,7 +128,7 @@ def _spawn_seed(seed: int, out_dir: Path) -> dict:
     env.pop("DISPLAY", None)
     cmd = [
         sys.executable, "-u",
-        "script/bench_script/eval_mouse_object_drop.py",
+        "script/bench_script/eval_catch_mouse_object_drop.py",
         "--worker", str(seed),
         "--worker-out", str(out_json),
     ]
@@ -146,7 +146,7 @@ def _spawn_seed(seed: int, out_dir: Path) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", default="11,23,37,41,59")
-    parser.add_argument("--out", default="tmp_mouse_object_drop/eval")
+    parser.add_argument("--out", default="tmp_catch_mouse_object_drop/eval")
     parser.add_argument("--worker", type=int, default=None)
     parser.add_argument("--worker-out", default=None)
     ns = parser.parse_args()
@@ -171,7 +171,7 @@ def main():
     report_path = out_dir / "report.json"
     report_path.write_text(json.dumps(report, indent=2))
 
-    print("\n======= mouse_object_drop eval =======")
+    print("\n======= catch_mouse_object_drop eval =======")
     print(f"{'seed':>5}  {'ok':>5}  {'target':<12} {'side':<5} {'mouse':<5} {'arm':<5}  note")
     for r in rows:
         note = r.get("error") or (

@@ -129,7 +129,7 @@ task_args:
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
-  whack_a_mole:
+  whack_moles:
     num_moles: 2
     distractor_enabled: false
     num_distractors: 1
@@ -155,7 +155,7 @@ task_args:
     fall_steps: 55
     rim_radius: 0.055
     pour_every: 3
-  cup_curtain_slot:
+  put_cup_belt:
     curtain_freq: 0.5
     curtain_amp: 0.05
     belt_speed: 0.08
@@ -168,7 +168,7 @@ task_args:
     blue_curtain_dynamic_enabled: false  # opt2
     lift_off_only_after_place: false
     post_place_lift_z: 0.10
-  dual_hole_punch:
+  punch_dual_holes:
     # Opt 1 missing_tile_mode | Opt 2 belt_continous_motion (spacing always variable)
     # DEFAULT Opt 2 false = discrete; Opt 1 = alternate 1- vs 2-arm punches
     n_pages: 4
@@ -232,7 +232,7 @@ task_args:
     key_x_left: -0.26
     key_x_right: 0.26
     key_y: -0.13
-  goalkeeper:
+  save_goal:
     ball_speed_min: 0.07
     ball_speed_max: 0.09
     ball_angle_deg_min: -10.0
@@ -260,7 +260,7 @@ task_args:
     belt_speed: 0.06
     theta_max_deg: 30.0
     belt_ride_steps: 600
-  rotating_shape_sorter:
+  drop_ball_hole:
     spin_speed: 1.9
     r_tol: 0.06
     align_window: 0.18
@@ -335,7 +335,7 @@ task_args:
     amp_x: 0.010
     amp_y: 0.025
     amp_z: 0.018
-  quality_control:
+  control_quality:
     # Default: color_mode=alternating, black_frac_max=0 (no distractors)
     # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
     # tile_pause_s = max hold under stamp; miss unstamped red/green → fail
@@ -347,7 +347,7 @@ task_args:
     spacing_max: 0.14
     black_frac_max: 0.0
     tile_pause_s: 2.0
-  packing:
+  pack_fruits:
     n_per_color: 3            # number of each colored fruit (apples + oranges)
     # n_apple: 3              # optional per-color override (falls back to n_per_color)
     # n_orange: 3
@@ -369,10 +369,10 @@ task_args:
     basket_y: 0.0             # table midline (toward belts)
     basket_x: 0.34            # nudged out so the bigger basket clears the belts
     basket_scale: 1.15        # bigger opening — easier drop-in target
-    pick_lift: 0.10           # hover clearance above the basket rim before releasing; bumped from 0.07 to compensate for the single-try move's typical undershoot (see PICK_LIFT comment in envs/packing.py) — do not raise further without re-checking for the ~0.11+ planner-overshoot regression
+    pick_lift: 0.10           # hover clearance above the basket rim before releasing; bumped from 0.07 to compensate for the single-try move's typical undershoot (see PICK_LIFT comment in envs/pack_fruits.py) — do not raise further without re-checking for the ~0.11+ planner-overshoot regression
     pair_stagger_enabled: true  # pair waves ("parallel"/"random" modes): give one fruit a small head start so they don't ride in perfect lockstep
     pair_stagger_y: 0.045      # m; how much of a head start (kept well inside pick-window tolerances)
-    single_wave_any_belt: true  # "random" mode: a single-fruit wave may appear on either belt (not just its color's dedicated one); packing arm/basket stay color-matched
+    single_wave_any_belt: true  # "random" mode: a single-fruit wave may appear on either belt (not just its color's dedicated one); pack_fruits arm/basket stay color-matched
   two_type_sorting_catch:
     num_objects: 4
     fall_steps: 90

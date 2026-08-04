@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot mouse_object_drop recorder for fixed seeds (no infinite retry loop)."""
+"""One-shot catch_mouse_object_drop recorder for fixed seeds (no infinite retry loop)."""
 from __future__ import annotations
 
 import argparse
@@ -22,7 +22,7 @@ from record_demo import (
 
 
 def record_seed(seed: int, config_name: str = "demo_dynamic") -> dict:
-    task_name = "mouse_object_drop"
+    task_name = "catch_mouse_object_drop"
     save_root = os.path.abspath(f"./tmp_{task_name}")
     video_dir = os.path.join(save_root, "video")
     os.makedirs(video_dir, exist_ok=True)
@@ -107,7 +107,7 @@ def record_seed(seed: int, config_name: str = "demo_dynamic") -> dict:
     task.merge_pkl_to_hdf5_video()
     task.close_env()
 
-    final_dir = os.path.abspath("./final_task_demos/mouse_object_drop/eval")
+    final_dir = os.path.abspath("./final_task_demos/catch_mouse_object_drop/eval")
     os.makedirs(final_dir, exist_ok=True)
     for src, name in (
         (out_head, f"seed{seed}_head.mp4"),

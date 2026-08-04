@@ -28,7 +28,7 @@ from pathlib import Path
 from transforms3d.euler import euler2quat
 
 
-class mouse_object_drop(Office_base_task):
+class catch_mouse_object_drop(Office_base_task):
     """Mouse knocks one fragile shelf object; catch it in a pillow-lined basket."""
 
     CUP_IDS = [0, 1, 2, 5, 6, 3]
@@ -140,7 +140,7 @@ class mouse_object_drop(Office_base_task):
     BASKET_HANDLE_COLOR = [0.50, 0.34, 0.22]
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("mouse_object_drop", {})
+        self._cfg = kwags.get("task_args", {}).get("catch_mouse_object_drop", {})
         self._loaded = False
         self.shelf_objects = []
         self.target = None
@@ -1508,7 +1508,7 @@ class mouse_object_drop(Office_base_task):
             contact_point_id=[0, 1],
         )
         if pre_pose is None or grasp_pose is None:
-            raise UnStableError("mouse_object_drop: no basket handle grasp pose")
+            raise UnStableError("catch_mouse_object_drop: no basket handle grasp pose")
 
         self.plan_success = True
         self.move(self.move_to_pose(arm_tag, pre_pose))
@@ -1527,7 +1527,7 @@ class mouse_object_drop(Office_base_task):
 
         bp = np.array(self.basket.get_pose().p, dtype=np.float64)
         if bp[2] - place_z < 0.05:
-            raise UnStableError("mouse_object_drop: basket handle grasp slipped")
+            raise UnStableError("catch_mouse_object_drop: basket handle grasp slipped")
 
         # Carry over the landing (displacements measured on the basket pose).
         self.plan_success = True
@@ -1648,7 +1648,7 @@ class mouse_object_drop(Office_base_task):
 
     def get_obs(self):
         obs = super().get_obs()
-        obs["mouse_object_drop"] = {
+        obs["catch_mouse_object_drop"] = {
             "obj_state": str(self._obj_state),
             "mouse_state": str(self._mouse_state),
             "fell_on_table": bool(self._fell_on_table),

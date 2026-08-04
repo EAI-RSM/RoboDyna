@@ -1,10 +1,10 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``whack_a_mole``.
+"""Interactive viewer for ``whack_moles``.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_whack_a_mole.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_whack_a_mole.py --control robot
+    /path/to/RoboDynaExp/script_exp/interactive_whack_moles.py --control keyboard
+    /path/to/RoboDynaExp/script_exp/interactive_whack_moles.py --control robot
 
 Pick up a side-staged mallet, then jab moles mid-rise. Avoid rabbits (Opt1).
 Success = all moles hit and no rabbit touch.
@@ -68,7 +68,7 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
         config = yaml.safe_load(handle)
 
     config.update(
-        task_name="whack_a_mole",
+        task_name="whack_moles",
         render_freq=1,
         now_ep_num=0,
         seed=seed,
@@ -396,7 +396,7 @@ class RobotMoleController:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive whack_a_mole viewer")
+    parser = argparse.ArgumentParser(description="Interactive whack_moles viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
@@ -414,18 +414,18 @@ def main():
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
-    from envs.whack_a_mole import whack_a_mole
+    from envs.whack_moles import whack_moles
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print_mode_controls("whack_a_mole", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
+    print_mode_controls("whack_moles", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "
             "(key-press sandboxes use joint interpolation)."
         )
 
-    env = whack_a_mole()
+    env = whack_moles()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     print(
         f"moles={env.num_moles}; distractors={env.num_distractors}; "

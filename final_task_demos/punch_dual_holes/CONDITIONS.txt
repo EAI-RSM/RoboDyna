@@ -1,4 +1,4 @@
-dual_hole_punch — expert controller demos
+punch_dual_holes — expert controller demos
 
 default  : missing_tile_mode=false, belt_continous_motion=false
            discrete stop-under-stamp; both arms punch together

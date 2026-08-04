@@ -1,11 +1,11 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``dual_hole_punch``.
+"""Interactive viewer for ``punch_dual_holes``.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_dual_hole_punch.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_dual_hole_punch.py --control robot
-    /path/to/RoboDynaExp/script_exp/interactive_dual_hole_punch.py --control robot --robot-motion interpolate
+    /path/to/RoboDynaExp/script_exp/interactive_punch_dual_holes.py --control keyboard
+    /path/to/RoboDynaExp/script_exp/interactive_punch_dual_holes.py --control robot
+    /path/to/RoboDynaExp/script_exp/interactive_punch_dual_holes.py --control robot --robot-motion interpolate
 
 Keyboard mode calls ``_fire_punch``. Robot mode taps the side button(s) then fires.
 """
@@ -70,7 +70,7 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
         config = yaml.safe_load(handle)
 
     config.update(
-        task_name="dual_hole_punch",
+        task_name="punch_dual_holes",
         render_freq=1,
         now_ep_num=0,
         seed=seed,
@@ -276,7 +276,7 @@ def _start_belts(env):
 def _update_interactive_belt(env):
     """Drive the belt according to the task's configured motion mode.
 
-    ``dual_hole_punch`` uses ``_belt_running`` only as an explicit dwell-loop
+    ``punch_dual_holes`` uses ``_belt_running`` only as an explicit dwell-loop
     override. Keeping it true every frame turns the discrete option into a
     continuously moving belt, which is not the behavior of demo_dynamic.yml.
     """
@@ -319,20 +319,20 @@ def _all_pages_resolved(env):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive dual_hole_punch viewer")
+    parser = argparse.ArgumentParser(description="Interactive punch_dual_holes viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     add_robot_motion_arg(parser)
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
-    from envs.dual_hole_punch import dual_hole_punch
+    from envs.punch_dual_holes import punch_dual_holes
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print_mode_controls("dual_hole_punch", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
+    print_mode_controls("punch_dual_holes", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
-    env = dual_hole_punch()
+    env = punch_dual_holes()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     env.together_close_gripper(save_freq=None)
 

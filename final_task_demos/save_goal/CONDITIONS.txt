@@ -1,4 +1,4 @@
-goalkeeper — expert controller demos
+save_goal — expert controller demos
 
 default  : players_enabled=false, cover_enabled=false
            (direct shot toward a point in the goal mouth)

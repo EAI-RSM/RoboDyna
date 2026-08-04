@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full controller test + tagged demos for goalkeeper.
+"""Full controller test + tagged demos for save_goal.
 
 Conditions (5 episodes each):
   default : players_enabled=false, cover_enabled=false
@@ -22,7 +22,7 @@ Path validity (required every episode — the shot must go through the goal fram
   - with Opt 1, a bounce waypoint exists and the post-bounce target is still on-frame
 
 Demos land in:
-  final_task_demos/goalkeeper/<tag>_sidebyside.mp4
+  final_task_demos/save_goal/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -42,7 +42,7 @@ sys.path.insert(0, "./script/bench_script")
 from script.bench_script.record_demo import build_args, record_demo
 from script.collect_data import class_decorator
 
-TASK = "goalkeeper"
+TASK = "save_goal"
 CONFIG = "demo_dynamic"
 N_PER_CONDITION = 5
 
@@ -65,7 +65,7 @@ CONDITIONS = {
     },
 }
 
-# Prefer literal opt1+2 in filenames (matches quality_control / hit_target).
+# Prefer literal opt1+2 in filenames (matches control_quality / hit_target).
 DEMO_FILE_TAGS = {
     "default": "default",
     "opt1": "opt1",
@@ -120,7 +120,7 @@ def _path_through_goal(env) -> dict:
 
 
 def _criteria_ok(info_gk: dict, path: dict, expect_players: bool, expect_cover: bool) -> dict:
-    """Independent check matching the goalkeeper success contract (+ path validity)."""
+    """Independent check matching the save_goal success contract (+ path validity)."""
     keeper_ok = bool(info_gk.get("keeper_in_zone"))
     blocked = bool(info_gk.get("ball_blocked"))
     late = bool(info_gk.get("late_failure"))
@@ -179,7 +179,7 @@ def _run_episode(task_args_overrides: list[str], seed: int, label: str, conditio
         plan_ok = bool(env.plan_success)
         check_ok = bool(plan_ok and env.check_success())
         info = dict(getattr(env, "info", {}) or {})
-        gk = dict(info.get("goalkeeper", {}) or {})
+        gk = dict(info.get("save_goal", {}) or {})
         crit = _criteria_ok(gk, path, expect_players, expect_cover)
         # Independent criteria must agree with check_success on the save outcome.
         criteria_consistent = bool(crit["save_ok"] == bool(gk.get("ball_blocked") and gk.get("keeper_in_zone")
@@ -195,7 +195,7 @@ def _run_episode(task_args_overrides: list[str], seed: int, label: str, conditio
                 "travel_dir": float(getattr(env, "travel_dir", 0.0)),
                 "ball_speed": float(getattr(env, "ball_speed", 0.0)),
                 "path": path,
-                "goalkeeper": gk,
+                "save_goal": gk,
                 **{f"crit_{k}": v for k, v in crit.items()},
             }
         )

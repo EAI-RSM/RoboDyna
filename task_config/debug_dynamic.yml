@@ -97,7 +97,7 @@ task_args:
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
-  whack_a_mole:
+  whack_moles:
     num_moles: 2
     # Opt 1 — rabbit distractor. CLI: --task-arg distractor_enabled=true  or  --option 1
     distractor_enabled: false
@@ -126,7 +126,7 @@ task_args:
     fall_steps: 55
     rim_radius: 0.055
     pour_every: 3
-  cup_curtain_slot:
+  put_cup_belt:
     curtain_freq: 0.8
     curtain_amp: 0.05
     belt_speed: 0.04
@@ -134,7 +134,7 @@ task_args:
     placement_tol: 0.07
     gap_tol: 0.06
     reach_tol: 0.07
-  dual_hole_punch:
+  punch_dual_holes:
     # Options (independent toggles):
     #   Opt 1 — missing tile (alternate 1-arm vs 2-arm punches) → missing_tile_mode
     #   Opt 2 — continuous belt vs discrete stop-per-tile → belt_continous_motion
@@ -209,7 +209,7 @@ task_args:
     key_x_left: -0.26
     key_x_right: 0.26
     key_y: -0.13
-  goalkeeper:
+  save_goal:
     # Options (independent toggles):
     #   Option 1 — field players (bounce) → players_enabled
     #     CLI: --task-arg players_enabled=true   or   --option 1
@@ -309,7 +309,7 @@ task_args:
     block_belt_clearance: 0.05
     block_y_jitter: 0.05
     random_belt_flip: true
-  rotating_shape_sorter:
+  drop_ball_hole:
     spin_speed: 0.9
     spin_speed_jitter: 0.20     # sample ~ U(0.8, 1.2) × spin_speed
     r_tol: 0.06
@@ -420,7 +420,7 @@ task_args:
     amp_x: 0.010
     amp_y: 0.025
     amp_z: 0.018
-  quality_control:
+  control_quality:
     # Default: color_mode=alternating, black_frac_max=0 (no distractors)
     # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
     # tile_pause_s = max hold under stamp; miss unstamped red/green → fail
@@ -432,7 +432,7 @@ task_args:
     spacing_max: 0.14
     black_frac_max: 0.0
     tile_pause_s: 2.0
-  packing:
+  pack_fruits:
     n_per_color: 3
     spawn_mode: parallel      # single | parallel; next wave after drop or belt-exit
     spawn_delay_s: 2.0        # unused (compat)

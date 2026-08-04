@@ -1,4 +1,4 @@
-whack_a_mole — expert controller demos
+whack_moles — expert controller demos
 
 default  : distractor_enabled=false, relocating_moles=false
            2 moles bob from fixed holes at randomized pop speeds; no rabbit

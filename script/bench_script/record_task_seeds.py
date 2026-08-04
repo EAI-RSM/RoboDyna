@@ -126,7 +126,7 @@ def record_seed(task_name: str, seed: int, config_name: str = "demo_dynamic") ->
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("task", help="Task name, e.g. mouse_object_drop / stop_ball")
+    parser.add_argument("task", help="Task name, e.g. catch_mouse_object_drop / stop_ball")
     parser.add_argument("--seeds", default="0,1,2")
     parser.add_argument("--config", default="demo_dynamic")
     ns = parser.parse_args()

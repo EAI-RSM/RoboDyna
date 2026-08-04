@@ -1,12 +1,12 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive sandbox for ``rotating_shape_sorter``.
+"""Interactive sandbox for ``drop_ball_hole``.
 
 Hold the ball over the drop station; release when the hole aligns underneath.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_rotating_shape_sorter.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_rotating_shape_sorter.py --control robot
+    /path/to/RoboDynaExp/script_exp/interactive_drop_ball_hole.py --control keyboard
+    /path/to/RoboDynaExp/script_exp/interactive_drop_ball_hole.py --control robot
 """
 
 from __future__ import annotations
@@ -194,18 +194,18 @@ def _do_release(env, use_robot: bool):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive rotating_shape_sorter viewer")
+    parser = argparse.ArgumentParser(description="Interactive drop_ball_hole viewer")
     parser.add_argument("--config", default="demo_dynamic")
     parser.add_argument("--seed", type=int, default=0)
     add_robot_motion_arg(parser)
     args = parser.parse_args()
 
-    from envs.rotating_shape_sorter import rotating_shape_sorter
+    from envs.drop_ball_hole import drop_ball_hole
 
     use_robot = args.control == "robot"
-    env = rotating_shape_sorter()
+    env = drop_ball_hole()
     env.setup_demo(**configure_task(
-        "rotating_shape_sorter", args.config, args.seed, use_robot=use_robot,
+        "drop_ball_hole", args.config, args.seed, use_robot=use_robot,
     ))
     env._interactive_selected_arms = (
         "left" if env.ball_side == "left" else "right",
@@ -216,7 +216,7 @@ def main():
     env._interactive_released = False
 
     print_banner(
-        "rotating_shape_sorter — interactive controls",
+        "drop_ball_hole — interactive controls",
         [
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",

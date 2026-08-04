@@ -27,7 +27,7 @@ TASKS = (
     ("Measure Ingredient", "measure_ingredient", "interactive_measure_ingredient.py"),
     ("Make Soup", "make_soup", "interactive_make_soup.py"),
     ("Catch Cup", "catch_cup", "interactive_catch_cup.py"),
-    ("Mouse Object Drop", "mouse_object_drop", "interactive_mouse_obj_drop.py"),
+    ("Catch Mouse Object Drop", "catch_mouse_object_drop", "interactive_catch_mouse_object_drop.py"),
     ("Stop Ball", "stop_ball", "interactive_stop_ball.py"),
     ("Clean Table", "clean_table", "interactive_clean_table.py"),
 )

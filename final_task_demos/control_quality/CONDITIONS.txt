@@ -1,4 +1,4 @@
-quality_control — expert controller demos
+control_quality — expert controller demos
 
 default  : color_mode=alternating, black_frac_max=0.0
            red/green alternate; stamp one tile at a time under punch

@@ -6,7 +6,7 @@ import sapien.render
 import numpy as np
 
 
-class whack_a_mole(Base_Task):
+class whack_moles(Base_Task):
     """Whack-a-mole. A fixed yellow board with a grid of holes spans both arms' reach.
     Default: 2 moles bob out of / back into fixed holes at randomized pop speeds
     (uniform in [0.6, 1.0] × POP_SPEED, with a smooth cosine bob). Each arm picks
@@ -17,7 +17,7 @@ class whack_a_mole(Base_Task):
     (0.10 m vs 0.0825 m) so it cannot plunge into one. Hit moles turn green and
     stay down.
 
-    Task options (independent toggles in ``task_args.whack_a_mole``; combinable):
+    Task options (independent toggles in ``task_args.whack_moles``; combinable):
       - Opt 1 — rabbit distractor: ``distractor_enabled``
         Spawn ``num_distractors`` (default 1) rabbit(s) in other holes. Touching a
         rabbit turns it red and fails the episode.
@@ -151,7 +151,7 @@ class whack_a_mole(Base_Task):
     TABLE_HEIGHT_BIAS_DEFAULT = 0.05
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("whack_a_mole", {})
+        self._cfg = kwags.get("task_args", {}).get("whack_moles", {})
         # init kinematic bookkeeping before base init (may call _update_kinematic_tasks)
         self._global_step = 0
         self.moles = []
@@ -193,7 +193,7 @@ class whack_a_mole(Base_Task):
             return True
         if s in ("0", "false", "no", "off"):
             return False
-        raise ValueError(f"whack_a_mole expected a boolean, got {value!r}")
+        raise ValueError(f"whack_moles expected a boolean, got {value!r}")
 
     def _parse_distractor_enabled(self, c) -> bool:
         """Opt 1: ``distractor_enabled`` (preferred) or legacy ``option: 1``."""
@@ -206,7 +206,7 @@ class whack_a_mole(Base_Task):
                 flag = False
             else:
                 raise ValueError(
-                    "whack_a_mole option must be 1/distractor_enabled or "
+                    "whack_moles option must be 1/distractor_enabled or "
                     "2/relocating_moles (or set distractor_enabled / "
                     "relocating_moles booleans)"
                 )
@@ -223,7 +223,7 @@ class whack_a_mole(Base_Task):
                 flag = False
             else:
                 raise ValueError(
-                    "whack_a_mole option must be 1/distractor_enabled or "
+                    "whack_moles option must be 1/distractor_enabled or "
                     "2/relocating_moles (or set distractor_enabled / "
                     "relocating_moles booleans)"
                 )
@@ -2295,7 +2295,7 @@ class whack_a_mole(Base_Task):
 
     def get_obs(self):
         obs = super().get_obs()
-        obs["whack_a_mole"] = {
+        obs["whack_moles"] = {
             "difficulty": str(getattr(self, "difficulty", "easy")),
             "option": self._option_label(),
             "distractor_enabled": bool(getattr(self, "distractor_enabled", False)),

@@ -6,12 +6,12 @@ import sapien.render
 import numpy as np
 
 
-class quality_control(Base_Task):
+class control_quality(Base_Task):
     """A centered conveyor carries colored tiles past a fixed gantry stamp. Two keys sit
     symmetrically beside the belt — red on the left, green on the right. The arms press the
     key that matches each tile's color so the descending stamp marks it.
 
-    Task options (set in ``task_args.quality_control``; independent toggles):
+    Task options (set in ``task_args.control_quality``; independent toggles):
       - Default — alternating red/green, no black distractors
           ``color_mode: alternating``
           ``black_frac_max: 0.0``
@@ -93,7 +93,7 @@ class quality_control(Base_Task):
     BELT_COLOR = [0.42, 0.42, 0.45]    # lighter belt so black tiles contrast
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("quality_control", {})
+        self._cfg = kwags.get("task_args", {}).get("control_quality", {})
         self._apply_legacy_option()
         self._stamp_ready = False
         self._belt_running = False
@@ -130,7 +130,7 @@ class quality_control(Base_Task):
                 self._cfg["black_frac_max"] = self.BLACK_FRAC_WHEN_OPT2
         else:
             raise ValueError(
-                "quality_control option must be 1/color_mode=random or "
+                "control_quality option must be 1/color_mode=random or "
                 "2/black_frac_max (or set color_mode / black_frac_max directly)"
             )
 
@@ -815,7 +815,7 @@ class quality_control(Base_Task):
 
     def get_obs(self):
         obs = super().get_obs()
-        obs["quality_control"] = {
+        obs["control_quality"] = {
             "n_tiles": int(self.n_tiles),
             "n_black": int(sum(1 for c in self.tile_colors if c == "black")),
             "n_marked": int(sum(1 for m in self.tile_marked if m)),

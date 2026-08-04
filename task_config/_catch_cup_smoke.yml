@@ -368,7 +368,7 @@ task_args:
     place_dy: 0.0             # nudge from the measured bowl center (+y = away from robot)
     board_scale_mult: 0.075 # cutting board size (steak starts and finishes here)
     # plate removed: cooked steak returns to the cutting board
-  cup_curtain_slot:
+  put_cup_belt:
     curtain_freq: 0.5           # curtain sway cycles per sim-second-equivalent (opt2)
     curtain_amp: 0.05           # m; lateral sway amplitude of curtain group
     belt_speed: 0.08            # m/s nominal; each episode samples ±belt_speed_jitter
@@ -422,7 +422,7 @@ task_args:
     dispense_steps: 24          # steps for one dispense animation / drop
     press_hold_steps: 6         # steps holding dispense key
     post_press_dwell: 10        # steps after press before next action
-  dual_hole_punch:
+  punch_dual_holes:
     # Options (independent toggles):
     #   Opt 1 — missing tile (alternate 1-arm vs 2-arm punches) → missing_tile_mode
     #     CLI: --task-arg missing_tile_mode=true   or   --option 1
@@ -443,7 +443,7 @@ task_args:
     belt_continuous_speed_scale: 2.0  # Opt 2: multiply belt_speed when continuous
     square_gap_min: 0.010       # m; variable-spacing min gap
     square_gap_max: 0.030       # m; variable-spacing max gap
-  goalkeeper:
+  save_goal:
     # Options (independent toggles):
     #   Option 1 — field players (bounce) → players_enabled
     #     CLI: --task-arg players_enabled=true   or   --option 1
@@ -605,7 +605,7 @@ task_args:
     post_press_dwell: 10        # steps after release before next action
     bowl_scale_mult: 0.65       # uniform bowl asset scale
     bowl_catch_radius: 0.032    # m; XY catch tolerance around bowl center
-  packing:
+  pack_fruits:
     # Options (independent toggles; Opt 1+2 can both be on):
     #   Opt 1 — random single-or-pair waves  →  spawn_mode: random
     #           (+ pair_stagger_enabled, single_wave_any_belt)
@@ -654,7 +654,7 @@ task_args:
     tree_y: 0.05                # m; toward back wall (wall is at y=1; table ~±0.35)
     basket_x: 0.0               # m; basket start X (then oscillates if Opt 2)
     basket_y: -0.20             # m; clearance so grasp approach clears the rim
-    basket_scale: 1.0           # 076_breadbasket scale (packing uses ~1.15)
+    basket_scale: 1.0           # 076_breadbasket scale (pack_fruits uses ~1.15)
     two_apples_enabled: false   # Opt 1: second spoiled apple (alias: spoiled_apple_enabled)
     basket_move_enabled: false  # Opt 2: ping-pong between tree_x ± apple_hang_dx
     basket_speed_min: 0.08      # Opt 2: m/s lower bound (per-ep Uniform)
@@ -709,7 +709,7 @@ task_args:
     table_half_wid: 0.14        # m; half-width along +Y
     settle_steps: 500           # physics steps after strike
     strike_impulse: 0.55        # impulse magnitude applied on tip–ball contact
-  quality_control:
+  control_quality:
     # Default: color_mode=alternating, black_frac_max=0 (no distractors)
     # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
     # tile_pause_s = max hold under stamp; miss unstamped red/green → fail
@@ -728,7 +728,7 @@ task_args:
     amp_x: 0.010                # m; peg X oscillation amplitude
     amp_y: 0.025                # m; peg Y oscillation amplitude
     amp_z: 0.018                # m; peg Z oscillation amplitude
-  rotating_shape_sorter:
+  drop_ball_hole:
     # cubic = existing box/tray + square rotating cap; cylinder = hollow
     # circular tray + circular rotating cap.
     container_shape: cylinder  # cubic | cylinder
@@ -738,7 +738,7 @@ task_args:
     spin_speed_jitter: 0.20     # sample speed ~ U(spin_speed×0.8, spin_speed×1.2)
     # spin_speed_min / spin_speed_max: optional absolute range (overrides jitter when both set)
     r_tol: 0.06                 # unused; code reads hole_align_tol (default 0.015 m)
-    align_window: 0.18          # unused; no matching key in envs/rotating_shape_sorter.py
+    align_window: 0.18          # unused; no matching key in envs/drop_ball_hole.py
     max_track_steps: 900        # unused; code uses align_search_steps (default 1200)
     ball_color: [0.90, 0.10, 0.10]  # red
     ball_side: random           # random|left|right — either arm operates
@@ -799,7 +799,7 @@ task_args:
     lateral_bias: 0.16          # m; |x| drift toward owning side at landing
     center_rate: 0.25           # fraction of near-center (ambiguous) spawns
     catch_tol: 0.07             # m; bowl XY catch tolerance
-  whack_a_mole:
+  whack_moles:
     num_moles: 2                # default: 2 moles; cosine bob, speed in [60%, 100%] of pop_speed
     # Opt 1 — rabbit distractor (avoid; touching fails). Combinable with Opt 2.
     #   CLI: --task-arg distractor_enabled=true   or   --option 1

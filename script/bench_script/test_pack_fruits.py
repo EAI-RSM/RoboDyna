@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full controller test + tagged demos for packing.
+"""Full controller test + tagged demos for pack_fruits.
 
 Conditions (5 episodes each):
   default : spawn_mode=parallel, distractor_enabled=false
@@ -11,7 +11,7 @@ Success: every real fruit rests in its color-matched basket
   (red/apple → left, yellow/orange → right). Black distractors are ignored.
 
 Demos land in:
-  final_task_demos/packing/<tag>_sidebyside.mp4
+  final_task_demos/pack_fruits/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -31,11 +31,11 @@ sys.path.insert(0, "./script/bench_script")
 from script.bench_script.record_demo import build_args, record_demo
 from script.collect_data import class_decorator
 
-TASK = "packing"
+TASK = "pack_fruits"
 CONFIG = "demo_dynamic"
 N_PER_CONDITION = 5
 
-# Shared knobs for every condition (match demo_dynamic packing section).
+# Shared knobs for every condition (match demo_dynamic pack_fruits section).
 _BASE = {
     "n_per_color": 3,
     "belt_speed_jitter": 0.20,

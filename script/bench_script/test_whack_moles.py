@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full controller test + tagged demos for whack_a_mole.
+"""Full controller test + tagged demos for whack_moles.
 
 Conditions (5 episodes each):
   default : distractor_enabled=false, relocating_moles=false
@@ -16,7 +16,7 @@ Success (expert / check_success):
   - no rabbit distractor hit (distractor_hit must stay false)
 
 Demos land in:
-  final_task_demos/whack_a_mole/<tag>_sidebyside.mp4
+  final_task_demos/whack_moles/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ sys.path.insert(0, "./script/bench_script")
 from script.bench_script.record_demo import build_args, record_demo
 from script.collect_data import class_decorator
 
-TASK = "whack_a_mole"
+TASK = "whack_moles"
 CONFIG = "demo_dynamic"
 N_PER_CONDITION = 5
 

@@ -5,7 +5,7 @@ import sapien.physx
 import numpy as np
 
 
-class cup_curtain_slot(Base_Task):
+class put_cup_belt(Base_Task):
     """Single-arm place-between-yellow-sticks task, with optional blue curtains.
 
     Main goal: place the cup into the moving gap between the two yellow sticks on the belt.
@@ -17,7 +17,7 @@ class cup_curtain_slot(Base_Task):
     Layout is randomly mirrored across the y-axis (x → −x) each episode: right-arm default
     on +x, left-arm mirror on −x. Cup XY pose (and a small yaw) is jittered every episode.
 
-    Config options (task_args.cup_curtain_slot):
+    Config options (task_args.put_cup_belt):
       blue_curtains_enabled / opt1 — spawn blue curtain strips in front of the belt
           (collidable; touching a strip fails the attempt). When enabled, the policy must
           also wait for a curtain gap over the yellow-stick corridor. Strip half-size is
@@ -34,7 +34,7 @@ class cup_curtain_slot(Base_Task):
     to 0 if the cup ever collided with a blue curtain.
     """
 
-    # ---- tunable params (CLASS DEFAULTS; overridable via task_args.cup_curtain_slot) ----
+    # ---- tunable params (CLASS DEFAULTS; overridable via task_args.put_cup_belt) ----
     CURTAIN_FREQ_DEFAULT = 0.8          # curtain oscillation: cycles per (sim-second-equivalent)
     CURTAIN_AMP_DEFAULT = 0.05          # lateral sway amplitude of the curtain group (m)
     CURTAIN_PHASE_DEFAULT = 0.0         # initial phase offset (rad)
@@ -74,7 +74,7 @@ class cup_curtain_slot(Base_Task):
 
     def setup_demo(self, **kwags):
         # capture task-scoped params BEFORE init (kwags not stored on self otherwise)
-        self._cfg = kwags.get("task_args", {}).get("cup_curtain_slot", {})
+        self._cfg = kwags.get("task_args", {}).get("put_cup_belt", {})
         # CRITICAL: the env instance is REUSED across episodes. _init_task_env_ resets the scene
         # and calls _update_kinematic_tasks (via load_camera) BEFORE our load_actors rebuilds the
         # bodies. Invalidate stale kinematic-body handles now so the per-step hook is a no-op until

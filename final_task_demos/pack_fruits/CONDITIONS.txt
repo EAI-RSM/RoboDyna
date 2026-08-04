@@ -1,4 +1,4 @@
-packing — expert controller demos
+pack_fruits — expert controller demos
 
 default  : spawn_mode=parallel, distractor_enabled=false
            always apple+orange pair waves; no black distractors

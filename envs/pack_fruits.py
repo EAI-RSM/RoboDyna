@@ -7,7 +7,7 @@ import numpy as np
 import os
 
 
-class packing(Base_Task):
+class pack_fruits(Base_Task):
     """Pack apples and oranges from two moving belts into breadbaskets.
 
     Two conveyor slabs sit with a gap centered on the table and run toward the
@@ -44,7 +44,7 @@ class packing(Base_Task):
     # of always its color-dedicated one (arm/basket stay color-matched)
     SINGLE_WAVE_ANY_BELT_DEFAULT = False
 
-    # same belt slab dimensions as quality_control
+    # same belt slab dimensions as control_quality
     BELT_HALF_LEN = 0.30
     BELT_HALF_WID = 0.07
     BELT_THICK = 0.012
@@ -99,7 +99,7 @@ class packing(Base_Task):
     TYPE_SIDE = {"apple": "left", "orange": "right"}
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("packing", {})
+        self._cfg = kwags.get("task_args", {}).get("pack_fruits", {})
         # guards: _update_kinematic_tasks runs before load_actors finishes
         self._belt_ready = False
         self._belt_running = False
@@ -289,7 +289,7 @@ class packing(Base_Task):
         self._spawned_mask = [False] * self.n_items
         self._spawned = 0
         self._packed = [False] * self.n_items
-        self._missed = [False] * self.n_items  # rode off belt end without packing
+        self._missed = [False] * self.n_items  # rode off belt end without pack_fruits
         # gripper has reached the drop pose above this fruit's basket
         self._over_basket = [False] * self.n_items
         self._place_counts = {"apple": 0, "orange": 0}
@@ -345,7 +345,7 @@ class packing(Base_Task):
 
         # ---- distractor fruits: same mesh/scale as real fruit but recolored
         # brown, pre-staged off-table like self.items above. Tracked in their
-        # OWN lists (never self.items/_item_*) so no packing/grasp/success
+        # OWN lists (never self.items/_item_*) so no pack_fruits/grasp/success
         # code path (which only ever iterates self.items) can see them.
         self.n_distractor_slots = int(self.n_items) if self.distractor_enabled else 0
         self.distractors = []
@@ -622,7 +622,7 @@ class packing(Base_Task):
         if bool(os.environ.get("PACKING_DEBUG")):
             gap_note = (f"gap_to_nearest={min(abs(y0 - y) for y in active_ys):.4f}"
                         if active_ys else "no active real fruit on belt")
-            print(f"[packing]  distractor_{slot} spawn side={side} y0={y0:.4f} "
+            print(f"[pack_fruits]  distractor_{slot} spawn side={side} y0={y0:.4f} "
                   f"min_gap_req={min_gap:.4f} {gap_note}", flush=True)
 
     def _maybe_spawn_distractor(self):
@@ -647,7 +647,7 @@ class packing(Base_Task):
             self._distractor_y[s] -= speed
             if self._distractor_y[s] < self.BELT_Y_NEAR:
                 if bool(os.environ.get("PACKING_DEBUG")):
-                    print(f"[packing]  distractor_{s} left belt — despawn", flush=True)
+                    print(f"[pack_fruits]  distractor_{s} left belt — despawn", flush=True)
                 self._hide_distractor(s)
                 continue
             self._distractor_roll[s] += speed / max(self.fruit_r, 1e-4)
@@ -665,7 +665,7 @@ class packing(Base_Task):
         self._grasping_idxs.discard(idx)
         self._hide(idx)
         if bool(os.environ.get("PACKING_DEBUG")):
-            print(f"[packing]  {self.item_types[idx]}_{idx} left belt — despawn",
+            print(f"[pack_fruits]  {self.item_types[idx]}_{idx} left belt — despawn",
                   flush=True)
 
     def _maybe_spawn(self):
@@ -695,7 +695,7 @@ class packing(Base_Task):
             # single automatically if only one color remains outstanding)
             want_pair = bool(np.random.rand() < 0.5)
             if bool(os.environ.get("PACKING_DEBUG")):
-                print(f"[packing]  random spawn wave: "
+                print(f"[pack_fruits]  random spawn wave: "
                       f"{'pair' if want_pair else 'single'}", flush=True)
             if want_pair:
                 self._spawn_wave_pair()
@@ -708,7 +708,7 @@ class packing(Base_Task):
                         old_side = self.item_sides[i]
                         self.item_sides[i] = str(np.random.choice(["left", "right"]))
                         if bool(os.environ.get("PACKING_DEBUG")) and self.item_sides[i] != old_side:
-                            print(f"[packing]  single wave belt override: "
+                            print(f"[pack_fruits]  single wave belt override: "
                                   f"{self.item_types[i]}_{i} {old_side} -> {self.item_sides[i]}",
                                   flush=True)
                     self._spawn(i)
@@ -834,7 +834,7 @@ class packing(Base_Task):
                 if prev is not None:
                     jump = float(np.linalg.norm(newp - prev))
                     if jump > 0.008:  # > 8mm in one physics step is not a smooth glide
-                        print(f"[packing]  JERK fruit_{i} step={self._step_ctr} "
+                        print(f"[pack_fruits]  JERK fruit_{i} step={self._step_ctr} "
                               f"jump={jump:.4f} prev={prev.round(4)} new={newp.round(4)}",
                               flush=True)
                 if not hasattr(self, "_dbg_last_fruit_p"):
@@ -852,7 +852,7 @@ class packing(Base_Task):
         """Un-weld so the fruit can drop into the basket under gravity."""
         if bool(os.environ.get("PACKING_DEBUG")):
             p = np.array(self.items[idx].get_pose().p, dtype=float)
-            print(f"[packing]  RELEASE fruit_{idx} step={self._step_ctr} p={p.round(4)}", flush=True)
+            print(f"[pack_fruits]  RELEASE fruit_{idx} step={self._step_ctr} p={p.round(4)}", flush=True)
         self._welded[idx] = False
         rigid = self._item_comps[idx]
         if rigid is not None:
@@ -889,7 +889,7 @@ class packing(Base_Task):
                 self._take_picture()
             self._pic_ctr += 1
 
-    # ------------------------------------------------------------- packing
+    # ------------------------------------------------------------- pack_fruits
     def _xy_inside_basket(self, xy, ftype, margin=0.0):
         """True when a world XY sits inside a basket's rectangular mouth."""
         c = self.basket_centers[ftype]
@@ -990,7 +990,7 @@ class packing(Base_Task):
                 return False
             if y < self.pick_y_end:
                 if dbg:
-                    print(f"[packing]  fruit passed station y={y:.3f}", flush=True)
+                    print(f"[pack_fruits]  fruit passed station y={y:.3f}", flush=True)
                 return False
             if y <= self.pick_station_y + arrive_lead:
                 return True
@@ -1072,7 +1072,7 @@ class packing(Base_Task):
                 pass
         self._weld_fruit_to_ee(idx, arm)
         if dbg:
-            print(f"[packing]  attach {self.item_types[idx]}_{idx} at "
+            print(f"[pack_fruits]  attach {self.item_types[idx]}_{idx} at "
                   f"{arm_name} tcp={np.round(tcp, 3)}", flush=True)
 
     def _close_on_attached(self, *arm_idx_pairs):
@@ -1120,7 +1120,7 @@ class packing(Base_Task):
             grasp_pose = self._plan_final_grasp(idx, arm)
             if grasp_pose is None:
                 if dbg:
-                    print("[packing]  no final grasp pose", flush=True)
+                    print("[pack_fruits]  no final grasp pose", flush=True)
                 return False
             self.plan_success = True
             self.move(self.move_to_pose(arm, grasp_pose))
@@ -1129,7 +1129,7 @@ class packing(Base_Task):
                 self._snap_fruit_into_gripper(idx, arm)
                 return True
         if dbg:
-            print("[packing]  reach finished but not close enough to attach",
+            print("[pack_fruits]  reach finished but not close enough to attach",
                   flush=True)
         return False
 
@@ -1177,7 +1177,7 @@ class packing(Base_Task):
         if pairs:
             self._close_on_attached(*pairs)
         if dbg:
-            print(f"[packing]  pair reach done gotL={got_l} gotR={got_r}", flush=True)
+            print(f"[pack_fruits]  pair reach done gotL={got_l} gotR={got_r}", flush=True)
         return got_l, got_r
 
     def _settle_after_drop(self, idx, target_xy, resend_on_miss=True):
@@ -1194,7 +1194,7 @@ class packing(Base_Task):
         if self._fruit_in_basket(idx):
             self._mark_packed(idx)
             if dbg:
-                print(f"[packing]  dropped in basket "
+                print(f"[pack_fruits]  dropped in basket "
                       f"p={np.round(fruit.get_pose().p, 3)}", flush=True)
             return
         if not resend_on_miss:
@@ -1206,13 +1206,13 @@ class packing(Base_Task):
             )
             self._mark_packed(idx, freeze=bool(landed))
             if dbg:
-                print(f"[packing]  mis-packed {self.item_types[idx]}_{idx} "
+                print(f"[pack_fruits]  mis-packed {self.item_types[idx]}_{idx} "
                       f"p={np.round(fruit.get_pose().p, 3)} "
                       f"in_target_basket={bool(landed)}", flush=True)
             return
         p = np.array(fruit.get_pose().p, dtype=float)
         if dbg:
-            print(f"[packing]  miss p={np.round(p, 3)} — resend", flush=True)
+            print(f"[pack_fruits]  miss p={np.round(p, 3)} — resend", flush=True)
         rigid = self._item_comps[idx]
         if rigid is not None:
             rigid.set_kinematic(True)
@@ -1244,7 +1244,7 @@ class packing(Base_Task):
         pre_pose = self._plan_station_pre(idx, arm)
         if pre_pose is None:
             if dbg:
-                print("[packing]  no pre-grasp pose at station", flush=True)
+                print("[pack_fruits]  no pre-grasp pose at station", flush=True)
             return False
 
         self.plan_success = True
@@ -1252,12 +1252,12 @@ class packing(Base_Task):
         self.plan_success = True
         if ok is False:
             if dbg:
-                print("[packing]  failed to reach station hover", flush=True)
+                print("[pack_fruits]  failed to reach station hover", flush=True)
             return False
 
         if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
             if dbg:
-                print(f"[packing]  missed while approaching station "
+                print(f"[pack_fruits]  missed while approaching station "
                       f"y={self._item_y[idx]}", flush=True)
             return False
 
@@ -1346,7 +1346,7 @@ class packing(Base_Task):
                 rel = f"steps[{step_range[0]-phase_start}:{step_range[1]-phase_start}]/{phase_len}"
             else:
                 rel = "steps=?"
-            print(f"[packing]  BASKET-CONTACT [{tag}] links={sorted(hits)} min_sep={sep_str} {rel}", flush=True)
+            print(f"[pack_fruits]  BASKET-CONTACT [{tag}] links={sorted(hits)} min_sep={sep_str} {rel}", flush=True)
         self._contact_hits_pending = set()
         self._contact_min_sep_pending = None
         self._contact_step_range_pending = None
@@ -1444,7 +1444,7 @@ class packing(Base_Task):
         q_goal = self._ik_arm_joints_for_ee(arm, raised)
         if q_goal is None:
             if dbg:
-                print("[packing]  raise IK failed — falling back to displacement", flush=True)
+                print("[pack_fruits]  raise IK failed — falling back to displacement", flush=True)
             self.plan_success = True
             self.move(self.move_by_displacement(arm, z=float(lift_z), move_axis="world"))
             self.plan_success = True
@@ -1457,7 +1457,7 @@ class packing(Base_Task):
                 dtype=float,
             )
             fp1 = np.array(self.items[idx].get_pose().p, dtype=float)
-            print(f"[packing]  raise +Z asked={lift_z:.3f} "
+            print(f"[pack_fruits]  raise +Z asked={lift_z:.3f} "
                   f"ee_dz={ee1[2]-ee0[2]:.3f} fruit_dz={fp1[2]-fp0[2]:.3f} "
                   f"fruit_z={fp1[2]:.3f}", flush=True)
 
@@ -1483,7 +1483,7 @@ class packing(Base_Task):
             gap_xy = self._fruit_xy_gap(idx, target_xy)
             if dbg:
                 fp = np.array(self.items[idx].get_pose().p, dtype=float)
-                print(f"[packing]  slide try={_try} fp={fp.round(4)} "
+                print(f"[pack_fruits]  slide try={_try} fp={fp.round(4)} "
                       f"gap_xy={gap_xy:.4f} hover_z={hover_z:.3f}", flush=True)
             if gap_xy < tol:
                 return True
@@ -1509,7 +1509,7 @@ class packing(Base_Task):
         reached = self._slide_xy_to_target(idx, arm, target_xy, tries=tries, tol=tol)
         if dbg:
             fp = np.array(self.items[idx].get_pose().p, dtype=float)
-            print(f"[packing]  slide residual_xy="
+            print(f"[pack_fruits]  slide residual_xy="
                   f"{self._fruit_xy_gap(idx, target_xy):.4f} "
                   f"fruit_z={fp[2]:.3f} basket_top="
                   f"{self.basket_top_z[self.item_types[idx]]:.3f}", flush=True)
@@ -1535,7 +1535,7 @@ class packing(Base_Task):
     def _abort_drop_to_belt(self, idx, arm):
         """Send an undroppable fruit back for another lap instead of the table."""
         if bool(os.environ.get("PACKING_DEBUG")):
-            print(f"[packing]  drop aborted for fruit_{idx} "
+            print(f"[pack_fruits]  drop aborted for fruit_{idx} "
                   f"p={np.round(self.items[idx].get_pose().p, 3)} — back to belt",
                   flush=True)
         self._release_fruit(idx)
@@ -1596,14 +1596,14 @@ class packing(Base_Task):
                 return
 
             if dbg:
-                print(f"[packing] pack {ftype}_{idx} belt={belt_side} arm={arm_side} "
+                print(f"[pack_fruits] pack {ftype}_{idx} belt={belt_side} arm={arm_side} "
                       f"stream_y={self._item_y[idx]:.3f} "
                       f"pose={np.round(fruit.get_pose().p, 3)}", flush=True)
 
             # grasp uses the fruit's belt for geometry; arm is color-matched
             if not self._intercept_and_grasp(idx, arm, belt_side):
                 if dbg:
-                    print("[packing]  grasp failed — fruit stays on belt", flush=True)
+                    print("[pack_fruits]  grasp failed — fruit stays on belt", flush=True)
                 self.plan_success = True
                 try:
                     self.move(self.back_to_origin(arm))
@@ -1613,7 +1613,7 @@ class packing(Base_Task):
                 return
 
             if dbg:
-                print(f"[packing]  welded; ee={np.round(self._ee_pos(arm_side), 3)} "
+                print(f"[pack_fruits]  welded; ee={np.round(self._ee_pos(arm_side), 3)} "
                       f"fruit={np.round(fruit.get_pose().p, 3)}", flush=True)
 
             self._carry_and_drop(idx, arm, target_xy)
@@ -1633,7 +1633,7 @@ class packing(Base_Task):
         self._grasping_idxs.update({idx_l, idx_r})
         try:
             if dbg:
-                print(f"[packing] pack_pair L={self.item_types[idx_l]}_{idx_l} "
+                print(f"[pack_fruits] pack_pair L={self.item_types[idx_l]}_{idx_l} "
                       f"R={self.item_types[idx_r]}_{idx_r}", flush=True)
 
             self.plan_success = True
@@ -1644,7 +1644,7 @@ class packing(Base_Task):
             pre_r = self._plan_station_pre(idx_r, right)
             if pre_l is None or pre_r is None:
                 if dbg:
-                    print("[packing]  pair: missing pre-grasp — fallback single",
+                    print("[pack_fruits]  pair: missing pre-grasp — fallback single",
                           flush=True)
                 self._grasping_idxs.discard(idx_l)
                 self._grasping_idxs.discard(idx_r)
@@ -1660,7 +1660,7 @@ class packing(Base_Task):
             self.plan_success = True
             if ok is False:
                 if dbg:
-                    print("[packing]  pair: hover failed — fallback single", flush=True)
+                    print("[pack_fruits]  pair: hover failed — fallback single", flush=True)
                 self._grasping_idxs.discard(idx_l)
                 self._grasping_idxs.discard(idx_r)
                 self._pack_item(idx_l)
@@ -1669,7 +1669,7 @@ class packing(Base_Task):
 
             if not self._wait_pair_at_station(idx_l, idx_r):
                 if dbg:
-                    print("[packing]  pair: wait at station failed — fallback",
+                    print("[pack_fruits]  pair: wait at station failed — fallback",
                           flush=True)
                 self._grasping_idxs.discard(idx_l)
                 self._grasping_idxs.discard(idx_r)
@@ -1683,7 +1683,7 @@ class packing(Base_Task):
 
             if not ok_l and not ok_r:
                 if dbg:
-                    print("[packing]  pair: neither close enough — fallback",
+                    print("[pack_fruits]  pair: neither close enough — fallback",
                           flush=True)
                 self._grasping_idxs.discard(idx_l)
                 self._grasping_idxs.discard(idx_r)
@@ -1695,7 +1695,7 @@ class packing(Base_Task):
 
             if ok_l and not ok_r:
                 if dbg:
-                    print("[packing]  pair: only left attached", flush=True)
+                    print("[pack_fruits]  pair: only left attached", flush=True)
                 # the other fruit is still time-critical on the belt — try it
                 # first; the attached one is welded and safe to carry after
                 self._grasping_idxs.discard(idx_r)
@@ -1708,7 +1708,7 @@ class packing(Base_Task):
                 return
             if ok_r and not ok_l:
                 if dbg:
-                    print("[packing]  pair: only right attached", flush=True)
+                    print("[pack_fruits]  pair: only right attached", flush=True)
                 self._grasping_idxs.discard(idx_l)
                 if self._item_y[idx_l] is not None:
                     self._pack_item(idx_l)
@@ -1719,7 +1719,7 @@ class packing(Base_Task):
                 return
 
             if dbg:
-                print("[packing]  pair: both attached", flush=True)
+                print("[pack_fruits]  pair: both attached", flush=True)
 
             # 1) raise both grippers +Z in place (IK-driven, not trajopt)
             self._raise_along_z(idx_l, left, lift_z=self.pick_lift)
@@ -1736,7 +1736,7 @@ class packing(Base_Task):
                 gl = float(np.hypot(tgt_l[0] - fp_l[0], tgt_l[1] - fp_l[1]))
                 gr = float(np.hypot(tgt_r[0] - fp_r[0], tgt_r[1] - fp_r[1]))
                 if dbg:
-                    print(f"[packing]  pair slide try={_try} gap_l={gl:.4f} gap_r={gr:.4f}", flush=True)
+                    print(f"[pack_fruits]  pair slide try={_try} gap_l={gl:.4f} gap_r={gr:.4f}", flush=True)
                 if gl < 0.03 and gr < 0.03:
                     break
                 self.plan_success = True
@@ -1749,7 +1749,7 @@ class packing(Base_Task):
             if dbg:
                 fp_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
                 fp_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
-                print(f"[packing]  pair slide residual_xy "
+                print(f"[pack_fruits]  pair slide residual_xy "
                       f"l={np.hypot(target_l[0] - fp_l[0], target_l[1] - fp_l[1]):.4f} "
                       f"r={np.hypot(target_r[0] - fp_r[0], target_r[1] - fp_r[1]):.4f} "
                       f"fruit_z l={fp_l[2]:.3f} r={fp_r[2]:.3f}", flush=True)
@@ -1809,7 +1809,7 @@ class packing(Base_Task):
         (``pair_stagger_enabled``) still get carried together instead of
         the head-started fruit being solo-packed the instant it alone
         becomes ready. Falls back to the plain "both already ready"
-        pairing, then to solo packing.
+        pairing, then to solo pack_fruits.
         """
         left_i, right_i = ready["left"], ready["right"]
         if self.spawn_mode in ("parallel", "random"):
@@ -1872,11 +1872,11 @@ class packing(Base_Task):
             self.plan_success = True
 
         if dbg:
-            print(f"[packing] done plan={self.plan_success} mode={self.spawn_mode} "
+            print(f"[pack_fruits] done plan={self.plan_success} mode={self.spawn_mode} "
                   f"types={self.item_types} sides={self.item_sides}", flush=True)
             for i in range(self.n_items):
                 p = self.items[i].get_pose().p
-                print(f"[packing]  {self.item_types[i]}_{i} p={np.round(p, 3)} "
+                print(f"[pack_fruits]  {self.item_types[i]}_{i} p={np.round(p, 3)} "
                       f"in={self._fruit_in_basket(i)} packed={self._packed[i]} "
                       f"missed={self._missed[i]}",
                       flush=True)
@@ -1895,7 +1895,7 @@ class packing(Base_Task):
     def get_obs(self):
         obs = super().get_obs()
         in_ok = [bool(self._fruit_in_basket(i)) for i in range(self.n_items)]
-        obs["packing"] = {
+        obs["pack_fruits"] = {
             "n_items": int(self.n_items),
             "n_apple": int(self.n_apple),
             "n_orange": int(self.n_orange),

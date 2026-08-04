@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full controller test + tagged demos for dual_hole_punch.
+"""Full controller test + tagged demos for punch_dual_holes.
 
 Conditions (5 episodes each):
   default : discrete stop-under-stamp, no missing tile  (both arms together)
@@ -10,7 +10,7 @@ Conditions (5 episodes each):
 Success: every present tile is punched (missing slots skipped); no empty-slot press.
 
 Demos land in:
-  final_task_demos/dual_hole_punch/<tag>_sidebyside.mp4
+  final_task_demos/punch_dual_holes/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ sys.path.insert(0, "./script/bench_script")
 from script.bench_script.record_demo import build_args, record_demo
 from script.collect_data import class_decorator
 
-TASK = "dual_hole_punch"
+TASK = "punch_dual_holes"
 CONFIG = "demo_dynamic"
 N_PER_CONDITION = 5
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record all goalkeeper condition demos into final_task_demos/goalkeeper/."""
+"""Record all save_goal condition demos into final_task_demos/save_goal/."""
 from __future__ import annotations
 
 import os
@@ -11,7 +11,7 @@ sys.path.insert(0, "./script/bench_script")
 
 from script.bench_script.record_demo import record_demo
 
-OUT = os.path.abspath("./final_task_demos/goalkeeper")
+OUT = os.path.abspath("./final_task_demos/save_goal")
 CONDS = {
     "default": ["players_enabled=false", "cover_enabled=false"],
     "opt1": ["players_enabled=true", "cover_enabled=false"],
@@ -26,7 +26,7 @@ def main() -> int:
     for tag, overrides in CONDS.items():
         print(f"\n=== recording {tag} ===", flush=True)
         info = record_demo(
-            "goalkeeper",
+            "save_goal",
             config_name="demo_dynamic",
             task_arg_overrides=overrides,
             tag=tag,
@@ -40,7 +40,7 @@ def main() -> int:
 
     with open(os.path.join(OUT, "CONDITIONS.txt"), "w", encoding="utf-8") as f:
         f.write(
-            "goalkeeper — expert controller demos (post no-teleport fix)\n\n"
+            "save_goal — expert controller demos (post no-teleport fix)\n\n"
             "default  : players_enabled=false, cover_enabled=false\n"
             "opt1     : players_enabled=true,  cover_enabled=false\n"
             "opt2     : players_enabled=false, cover_enabled=true\n"

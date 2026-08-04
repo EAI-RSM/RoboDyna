@@ -28,7 +28,7 @@ preview, falling back to `default_sidebyside.gif`.
 | **`measure_ingredient`** | <img src="../final_task_demos/measure_ingredient/default_sidebyside.gif" width="320"/> |
 | **`make_soup`** | <img src="../final_task_demos/make_soup/default_sidebyside.gif" width="320"/> |
 | **`catch_cup`** | <img src="../final_task_demos/catch_cup/default_sidebyside.gif" width="320"/> |
-| **`mouse_object_drop`** | <img src="../final_task_demos/mouse_object_drop/default_sidebyside.gif" width="320"/> |
+| **`catch_mouse_object_drop`** | <img src="../final_task_demos/catch_mouse_object_drop/default_sidebyside.gif" width="320"/> |
 | **`stop_ball`** | <img src="../final_task_demos/stop_ball/default_sidebyside.gif" width="320"/> |
 | **`clean_table`** | <img src="../final_task_demos/clean_table/default_sidebyside.gif" width="320"/> |
 

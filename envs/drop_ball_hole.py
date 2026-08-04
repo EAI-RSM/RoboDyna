@@ -7,7 +7,7 @@ import numpy as np
 import transforms3d as t3d
 
 
-class rotating_shape_sorter(Base_Task):
+class drop_ball_hole(Base_Task):
     """Pick a ball and drop it through a rotating corner hole into the box below.
 
     The cap spins deterministically every physics step so plan and render passes stay in lock-step.
@@ -24,7 +24,7 @@ class rotating_shape_sorter(Base_Task):
         cannot fall through and may get stuck seated in the opening.
     """
 
-    # ----- tunable params (CLASS DEFAULTS; overridable via task_args.rotating_shape_sorter) -----
+    # ----- tunable params (CLASS DEFAULTS; overridable via task_args.drop_ball_hole) -----
     SPIN_SPEED_DEFAULT = 0.9          # cap angular speed baseline (rad / sim-step-unit)
     SPIN_SPEED_JITTER_DEFAULT = 0.20  # sample speed in [1±jitter] * spin_speed
     CAP_HOLE_RADIUS_DEFAULT = 0.03    # radius of the circular opening at the cap center
@@ -65,7 +65,7 @@ class rotating_shape_sorter(Base_Task):
     DUMMY_HOLE_NEST_DEPTH_DEFAULT = 0.35   # fraction of ball_radius to sink when stuck in dummy hole
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("rotating_shape_sorter", {})
+        self._cfg = kwags.get("task_args", {}).get("drop_ball_hole", {})
         self._cap_step = 0
         self._cap_angle = 0.0
         self._cap_tracking = False

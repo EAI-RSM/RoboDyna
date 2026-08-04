@@ -37,7 +37,7 @@ class pick_ripe_apple(Base_Task):
     Hang X:   outer bound = branch tip; sample Uniform(0, APPLE_X_JITTER=2cm)
               inward toward trunk/bark for BOTH stem and apple together:
                 hang_x = tip - apple_side * U(0, jitter)
-    Basket:   076_breadbasket in front; BASKET_Q = packing upright then +90° Z.
+    Basket:   076_breadbasket in front; BASKET_Q = pack_fruits upright then +90° Z.
     Do NOT revisit Rx±90° hang quats, tip-only X, or dual boards/bowls.
     ========================================================================
     FROZEN CONTROL / GRASPING — DO NOT CHANGE (user-locked)
@@ -285,7 +285,7 @@ class pick_ripe_apple(Base_Task):
             self._spoiled_rigid = None
             self._spoiled_shapes = []
 
-        # ---- basket (same asset as packing) in front of the tree ----
+        # ---- basket (same asset as pack_fruits) in front of the tree ----
         # Start at center; Opt 2 oscillates between branch-tip X bounds.
         self.basket_id = int(np.random.choice([0, 1, 2, 3, 4]))
         self.basket = create_actor(

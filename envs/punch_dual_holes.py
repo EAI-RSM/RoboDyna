@@ -8,7 +8,7 @@ import sapien.render
 import numpy as np
 
 
-class dual_hole_punch(Base_Task):
+class punch_dual_holes(Base_Task):
     """Dual hole-punch on two independent belts, serviced simultaneously by both arms.
 
     Two parallel belts (LEFT belt entirely in the left zone, RIGHT belt entirely in the
@@ -17,7 +17,7 @@ class dual_hole_punch(Base_Task):
     line together. Each arm presses only its side's button; the gantry punch heads
     descend on their own — they are not held by the grippers.
 
-    Options (task_args.dual_hole_punch) — each is an independent toggle:
+    Options (task_args.punch_dual_holes) — each is an independent toggle:
       Opt 1 — missing tile     → missing_tile_mode
           false / "none"          = every slot has a tile (default); both arms always
                                     punch together at each stop
@@ -88,7 +88,7 @@ class dual_hole_punch(Base_Task):
 
     def setup_demo(self, **kwags):
         # capture task-scoped params from the (general) config's task_args block
-        self._cfg = kwags.get("task_args", {}).get("dual_hole_punch", {})
+        self._cfg = kwags.get("task_args", {}).get("punch_dual_holes", {})
         self._apply_legacy_option()
         super()._init_task_env_(**kwags)
 
@@ -115,7 +115,7 @@ class dual_hole_punch(Base_Task):
         }.get(legacy if not isinstance(legacy, str) else legacy.strip().lower())
         if key is None:
             raise ValueError(
-                "dual_hole_punch option must be 1/missing_tile_mode or "
+                "punch_dual_holes option must be 1/missing_tile_mode or "
                 "2/belt_continous_motion (or set the named booleans directly)"
             )
         if key == "missing_tile_mode" and "missing_tile_mode" not in self._cfg:

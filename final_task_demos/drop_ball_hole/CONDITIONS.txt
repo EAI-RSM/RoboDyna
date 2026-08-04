@@ -1,4 +1,4 @@
-rotating_shape_sorter — expert controller demos (success = ball through target hole into box)
+drop_ball_hole — expert controller demos (success = ball through target hole into box)
 
 default  : stick_to_surface=false, add_dummy_hole=false  (single target hole, regular surface)
 opt1     : stick_to_surface=true,  add_dummy_hole=false  (sticky surface, target hole only)

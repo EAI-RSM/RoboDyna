@@ -36,7 +36,7 @@ clear_cache_freq: 5
 collect_data: true
 eval_video_log: true
 task_args:
-  dual_hole_punch:
+  punch_dual_holes:
     # Opt 1 missing_tile_mode | Opt 2 belt_continous_motion (spacing always variable)
     # DEFAULT Opt 2 false = discrete; Opt 1 = alternate 1- vs 2-arm punches
     n_pages: 4

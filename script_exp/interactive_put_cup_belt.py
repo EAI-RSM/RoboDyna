@@ -1,11 +1,11 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``cup_curtain_slot``.
+"""Interactive viewer for ``put_cup_belt``.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_cup_curtain_slot.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_cup_curtain_slot.py --control robot
-    /path/to/RoboDynaExp/script_exp/interactive_cup_curtain_slot.py --control robot --robot-motion planner
+    /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control keyboard
+    /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control robot
+    /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control robot --robot-motion planner
 
 Keyboard mode moves the cup in X/Y/Z. Robot mode grasps the cup on the first
 Space press, moves it with the controls, then releases it at its current pose
@@ -80,7 +80,7 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
         config = yaml.safe_load(handle)
 
     config.update(
-        task_name="cup_curtain_slot",
+        task_name="put_cup_belt",
         render_freq=1,
         now_ep_num=0,
         seed=seed,
@@ -446,7 +446,7 @@ class RobotCupController:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive cup_curtain_slot viewer")
+    parser = argparse.ArgumentParser(description="Interactive put_cup_belt viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
@@ -464,18 +464,18 @@ def main():
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
-    from envs.cup_curtain_slot import cup_curtain_slot
+    from envs.put_cup_belt import put_cup_belt
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print_mode_controls("cup_curtain_slot", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
+    print_mode_controls("put_cup_belt", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.control == "robot" and args.robot_motion == "interpolate":
         print(
             "X/Y/Z nudges and the post-release lift use short joint interpolations "
             "with orientation-constrained IK endpoints."
         )
 
-    env = cup_curtain_slot()
+    env = put_cup_belt()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     env._interactive_selected_arms = (
         "left" if env.mirrored else "right",

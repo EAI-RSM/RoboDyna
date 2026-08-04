@@ -1,10 +1,10 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``quality_control``.
+"""Interactive viewer for ``control_quality``.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_quality_control.py
-    /path/to/RoboDynaExp/script_exp/interactive_quality_control.py --control robot
+    /path/to/RoboDynaExp/script_exp/interactive_control_quality.py
+    /path/to/RoboDynaExp/script_exp/interactive_control_quality.py --control robot
 
 Use Left/Right Arrow to make the matching arm tap the red/green key. Skip black
 tiles (do not press).
@@ -67,7 +67,7 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
         config = yaml.safe_load(handle)
 
     config.update(
-        task_name="quality_control",
+        task_name="control_quality",
         render_freq=1,
         now_ep_num=0,
         seed=seed,
@@ -268,7 +268,7 @@ def _episode_done(env):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive quality_control viewer")
+    parser = argparse.ArgumentParser(description="Interactive control_quality viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
@@ -280,13 +280,13 @@ def main():
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
-    from envs.quality_control import quality_control
+    from envs.control_quality import control_quality
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print_mode_controls("quality_control", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
+    print_mode_controls("control_quality", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
-    env = quality_control()
+    env = control_quality()
     # Arrow presses always animate physical arms, so planner support is required in
     # both launcher modes.
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))

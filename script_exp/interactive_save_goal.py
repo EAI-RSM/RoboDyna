@@ -1,10 +1,10 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``goalkeeper``.
+"""Interactive viewer for ``save_goal``.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_goalkeeper.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_goalkeeper.py --control robot
+    /path/to/RoboDynaExp/script_exp/interactive_save_goal.py --control keyboard
+    /path/to/RoboDynaExp/script_exp/interactive_save_goal.py --control robot
 
 Place the square keeper in the green zone before the red line, then release so
 its front face can stop the ball.
@@ -69,7 +69,7 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
         config = yaml.safe_load(handle)
 
     config.update(
-        task_name="goalkeeper",
+        task_name="save_goal",
         render_freq=1,
         now_ep_num=0,
         seed=seed,
@@ -270,7 +270,7 @@ class RobotKeeperController:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive goalkeeper viewer")
+    parser = argparse.ArgumentParser(description="Interactive save_goal viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
@@ -288,18 +288,18 @@ def main():
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
-    from envs.goalkeeper import goalkeeper
+    from envs.save_goal import save_goal
     from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print_mode_controls("goalkeeper", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
+    print_mode_controls("save_goal", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     if args.robot_motion == "interpolate":
         print(
             "Note: --robot-motion interpolate uses planner motions for this teleop task "
             "(key-press sandboxes use joint interpolation)."
         )
 
-    env = goalkeeper()
+    env = save_goal()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     env._interactive_selected_arms = (
         "left" if env.mirrored else "right",

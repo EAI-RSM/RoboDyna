@@ -5,7 +5,7 @@ blocks_ranking_size: 1200
 click_alarmclock: 400
 click_bell: 400
 dump_bin_bigbin: 600
-goalkeeper: 450
+save_goal: 450
 grab_roller: 400
 handover_block: 800
 handover_mic: 600
@@ -49,7 +49,17 @@ stack_bowls_three: 1200
 stack_bowls_two: 900
 stamp_seal: 400
 turn_switch: 400
-fill_coffee_jar: 800
+# Household tasks: ~1 minute wall-clock cutoff (also enforced in Base_Task).
+boil_milk: 1200
+catch_cup: 1200
+clean_table: 1200
+cook_food: 1200
+fill_coffee_jar: 1200
+make_soup: 1200
+make_soup_test: 1200
 measure_ingredient: 1200
+catch_mouse_object_drop: 1200
 pour_beer: 1200
-trap_bug: 1500
+serve_dinner: 1200
+stop_ball: 1200
+trap_bug: 1200

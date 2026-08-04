@@ -51,7 +51,7 @@ PROFILES = {
     "measure_ingredient": ("envs.measure_ingredient", "measure_ingredient", "demo_dynamic", "jar"),
     "make_soup": ("envs.make_soup", "make_soup", "demo_dynamic", "board"),
     "catch_cup": ("envs.catch_cup", "catch_cup", "demo_dynamic", "pillow"),
-    "mouse_object_drop": ("envs.mouse_object_drop", "mouse_object_drop", "demo_dynamic", "basket"),
+    "catch_mouse_object_drop": ("envs.catch_mouse_object_drop", "catch_mouse_object_drop", "demo_dynamic", "basket"),
     "stop_ball": ("envs.stop_ball", "stop_ball", "demo_dynamic", None),
     "clean_table": ("envs.clean_table", "clean_table", "demo_dynamic", "sponge"),
 }
@@ -878,7 +878,7 @@ class HouseholdController:
                 e._start_bug()
             elif self.task == "catch_cup":
                 e._release_cup()
-            elif self.task == "mouse_object_drop":
+            elif self.task == "catch_mouse_object_drop":
                 # Release all shelf objects to PhysX and let the mouse finish the
                 # shove (do not leave it waiting forever at the stand-off).
                 e._activate_target()
@@ -898,7 +898,7 @@ class HouseholdController:
     def after_step(self):
         """Post-physics hooks (release arming, catch/miss latch, trap freeze)."""
         env = self.env
-        if self.task == "mouse_object_drop":
+        if self.task == "catch_mouse_object_drop":
             # Catch/miss is evaluated before scene.step inside
             # _update_kinematic_tasks; re-check after the step so a table
             # landing latches immediately for terminal failure.
@@ -971,7 +971,7 @@ def _terminal_failure(env, task):
     elif task == "catch_cup":
         if bool(getattr(env, "_fell_on_table", False)) or getattr(env, "_cup_state", "") == "fallen":
             return "cup fell on the table"
-    elif task == "mouse_object_drop":
+    elif task == "catch_mouse_object_drop":
         # Live re-check: tipped landings used to miss pose-based contact, so
         # latch failure from the AABB table test before reading the flags.
         try:

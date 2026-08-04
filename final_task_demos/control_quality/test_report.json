@@ -1,5 +1,5 @@
 {
-  "task": "quality_control",
+  "task": "control_quality",
   "n_per_condition": 5,
   "summary": {
     "default": {
@@ -623,9 +623,9 @@
   },
   "success_criterion": "all red/green correctly stamped; black outliers skipped; miss or black stamp \u2192 fail",
   "demos": {
-    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/quality_control/default_sidebyside.mp4",
-    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/quality_control/opt1_sidebyside.mp4",
-    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/quality_control/opt2_sidebyside.mp4",
-    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/quality_control/opt1+2_sidebyside.mp4"
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/control_quality/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/control_quality/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/control_quality/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/control_quality/opt1+2_sidebyside.mp4"
   }
 }

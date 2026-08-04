@@ -1,13 +1,13 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive sandbox for ``packing``.
+"""Interactive sandbox for ``pack_fruits``.
 
 Dual belts: pack apples into the left basket and oranges into the right.
 Opt2 black distractors are never packed.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_packing.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_packing.py --control robot
+    /path/to/RoboDynaExp/script_exp/interactive_pack_fruits.py --control keyboard
+    /path/to/RoboDynaExp/script_exp/interactive_pack_fruits.py --control robot
 """
 
 from __future__ import annotations
@@ -157,21 +157,21 @@ def _robot_pack(env, picks):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive packing viewer")
+    parser = argparse.ArgumentParser(description="Interactive pack_fruits viewer")
     parser.add_argument("--config", default="demo_dynamic")
     parser.add_argument("--seed", type=int, default=0)
     add_robot_motion_arg(parser)
     args = parser.parse_args()
 
-    from envs.packing import packing
+    from envs.pack_fruits import pack_fruits
 
     use_robot = args.control == "robot"
-    env = packing()
-    env.setup_demo(**configure_task("packing", args.config, args.seed, use_robot=use_robot))
+    env = pack_fruits()
+    env.setup_demo(**configure_task("pack_fruits", args.config, args.seed, use_robot=use_robot))
     env._belt_running = True
 
     print_banner(
-        "packing — interactive controls",
+        "pack_fruits — interactive controls",
         [
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",

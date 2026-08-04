@@ -36,7 +36,7 @@ clear_cache_freq: 5
 collect_data: true
 eval_video_log: true
 task_args:
-  quality_control:
+  control_quality:
     # Default: color_mode=alternating, black_frac_max=0 (no distractors)
     # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
     # tile_pause_s = max hold under stamp; miss unstamped red/green → fail

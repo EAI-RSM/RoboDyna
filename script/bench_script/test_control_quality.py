@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full controller test + tagged demos for quality_control.
+"""Full controller test + tagged demos for control_quality.
 
 Conditions (5 episodes each):
   default : color_mode=alternating, black_frac_max=0.0
@@ -11,7 +11,7 @@ Success: every red/green tile correctly stamped; every black outlier skipped
 (no key press). Missed red/green or stamped black → failure.
 
 Demos land in:
-  final_task_demos/quality_control/<tag>_sidebyside.mp4
+  final_task_demos/control_quality/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ sys.path.insert(0, "./script/bench_script")
 from script.bench_script.record_demo import build_args, record_demo
 from script.collect_data import class_decorator
 
-TASK = "quality_control"
+TASK = "control_quality"
 CONFIG = "demo_dynamic"
 N_PER_CONDITION = 5
 

@@ -19,7 +19,7 @@ HOUSEHOLD_TASKS = (
     "trap_bug",
     "catch_rolling_cup",
     "catch_cup",
-    "mouse_object_drop",
+    "catch_mouse_object_drop",
     "stop_ball",
     "clean_table",
     "empty_bag",

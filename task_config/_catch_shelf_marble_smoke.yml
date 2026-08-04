@@ -88,7 +88,7 @@ task_args:
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
-  whack_a_mole:
+  whack_moles:
     num_moles: 2
     distractor_enabled: false
     num_distractors: 1
@@ -114,7 +114,7 @@ task_args:
     fall_steps: 55
     rim_radius: 0.055
     pour_every: 3
-  cup_curtain_slot:
+  put_cup_belt:
     curtain_freq: 0.8
     curtain_amp: 0.05
     belt_speed: 0.04
@@ -122,7 +122,7 @@ task_args:
     placement_tol: 0.07
     gap_tol: 0.06
     reach_tol: 0.07
-  dual_hole_punch:
+  punch_dual_holes:
     # Opt 1 missing_tile_mode | Opt 2 belt_continous_motion (spacing always variable)
     # DEFAULT Opt 2 false = discrete; Opt 1 = alternate 1- vs 2-arm punches
     n_pages: 4
@@ -189,7 +189,7 @@ task_args:
     key_x_left: -0.26
     key_x_right: 0.26
     key_y: -0.13
-  goalkeeper:
+  save_goal:
     ball_speed_min: 0.07
     ball_speed_max: 0.09
     ball_angle_deg_min: -10.0
@@ -217,7 +217,7 @@ task_args:
     belt_speed: 0.06
     theta_max_deg: 30.0
     belt_ride_steps: 600
-  rotating_shape_sorter:
+  drop_ball_hole:
     spin_speed: 0.9
     r_tol: 0.06
     align_window: 0.18
@@ -286,7 +286,7 @@ task_args:
     amp_x: 0.010
     amp_y: 0.025
     amp_z: 0.018
-  quality_control:
+  control_quality:
     # Default: color_mode=alternating, black_frac_max=0 (no distractors)
     # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
     # tile_pause_s = max hold under stamp; miss unstamped red/green → fail
@@ -298,7 +298,7 @@ task_args:
     spacing_max: 0.14
     black_frac_max: 0.0
     tile_pause_s: 2.0
-  packing:
+  pack_fruits:
     n_per_color: 3
     spawn_mode: parallel      # single | parallel; next wave after drop or belt-exit
     spawn_delay_s: 2.0        # unused (compat)
