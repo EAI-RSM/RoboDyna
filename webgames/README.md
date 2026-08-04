@@ -26,7 +26,7 @@ version below.
 | `catch_ramp_ball` | predict | Read the launch arc, park the cup at the landing |
 | `catch_rat` | grab | Grab rats the instant they surface, before they retract |
 | `catch_shelf_marble` | slide-catch | Track a marble down zig-zag shelves; catch it in the bowl |
-| `catch_valley_ball` | place | Place the cup past the line for the **red** ball; let the **black decoy** fall |
+| `catch_valley_ball` | push | **Shove** the open box (momentum, not teleport) past the safety line to catch the **red** ball; keep the **black distractor** out |
 | `stop_valley_ball` | block | Hold the bat in the **red** ball's flight; keep clear of the decoy |
 | `catch_marbles_trapdoors` | react | Open the trapdoor whose **colour matches** the rolling marble |
 | `quality_control` | react | Stamp reds & greens in the zone; **never stamp a black reject** |

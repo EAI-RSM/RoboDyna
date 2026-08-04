@@ -1109,27 +1109,40 @@
   //  GAME 13 — catch_valley_ball  (PLACE CUP · decoy)
   // ==========================================================================
   function makeValleyCatch(){
-    const groundY=VH-58,lineX=470,cupW=88,lipX=340,lipY=250;
-    let ball=null,cup=VW*0.72,running=false,caught=0,shots=0,phase='gap',gapT=0.6,msg='',msgT=0;
+    // Box-push variant (aras promoted box-push; cup-place is now catch_valley_ball_v1):
+    // the catcher is a dynamic open box shoved across the table — momentum, not teleport.
+    const groundY=VH-58,lineX=470,boxW=104,boxH=30,lipX=340,lipY=250;
+    const boxCol='#48add1';
+    let ball=null,bx=VW*0.72,bvx=0,ptr=null,running=false,caught=0,shots=0,phase='gap',gapT=0.6,msg='',msgT=0;
+    const boxL=()=>bx-boxW/2, past=()=>boxL()>lineX;
     function launch(){ shots++; ball={x:70,y:150,vx:0,vy:0,t:0,v:20,black:Math.random()<0.35}; phase='roll'; }
-    function start(){running=true;caught=0;shots=0;phase='gap';gapT=0.5;ball=null;hideOverlay();}
+    function start(){running=true;caught=0;shots=0;phase='gap';gapT=0.5;ball=null;bx=VW*0.72;bvx=0;ptr=null;hideOverlay();}
     function flash(m){msg=m;msgT=0.7;}
     function resolve(){ball=null;phase='gap';gapT=0.6;}
     return{
-      intro(){showOverlay('CATCH_VALLEY_BALL','A ball rolls through the curved valley and flies off past the '+
-        '<b style="color:'+C.red+'">red line</b>. Park the cup beyond the line to catch the <b style="color:'+C.red+
-        '">red</b> ball — let the <b>black</b> decoy fall.','','Start',start);},
-      move(p){cup=Math.max(lineX+cupW/2,Math.min(VW-cupW/2,p.x));},
-      key(k){if(k==='arrowleft')cup=Math.max(lineX+cupW/2,cup-28);if(k==='arrowright')cup=Math.min(VW-cupW/2,cup+28);},
+      intro(){showOverlay('CATCH_VALLEY_BALL','A ball rolls through the valley and flies off past the '+
+        '<b style="color:'+C.red+'">red safety line</b>. <b>Shove</b> the open box — it slides with momentum, so mind the '+
+        'overshoot — past the line and under the <b style="color:'+C.red+'">red</b> ball. Keep the <b>black</b> distractor out.',
+        '','Start',start);},
+      down(p){ptr=p.x;},
+      move(p){ptr=p.x;},
+      up(){ptr=null;},
+      key(k){ if(k==='arrowleft')bvx-=260; if(k==='arrowright')bvx+=260; },
       update(dt){ if(msgT>0)msgT-=dt; if(!running)return;
+        // push physics: pointer shoves toward the cursor, keys add impulse, friction coasts
+        if(ptr!=null) bvx += Math.max(-260,Math.min(260,ptr-bx))*7*dt;
+        bvx *= Math.max(0,1-3.4*dt); bvx=Math.max(-560,Math.min(560,bvx)); bx+=bvx*dt;
+        if(bx<90){bx=90;bvx=0;} if(bx>VW-boxW/2){bx=VW-boxW/2;bvx=0;}
         if(phase==='gap'){gapT-=dt;if(gapT<=0){if(shots>=10){end();return;}launch();}return;}
         if(!ball)return; const b=ball;
         if(phase==='roll'){ b.v+=480*dt; b.t+=b.v*dt*0.01; const t=Math.min(1,b.t);
           b.x=70+(lipX-70)*t; b.y=150+(Math.sin(t*Math.PI)*-40)+(lipY-150)*t;
           if(t>=1){ b.vx=190+b.v*0.5; b.vy=-270; phase='fly'; } return; }
-        if(phase==='fly'){ const py=b.y; b.vy+=820*dt; b.x+=b.vx*dt; b.y+=b.vy*dt; const cupY=groundY-16;
-          if(b.vy>0&&py<cupY&&b.y>=cupY&&Math.abs(b.x-cup)<cupW/2){
-            if(b.black){sfx.bad();flash('DECOY!');}else{caught++;sfx.good();flash('CAUGHT');} resolve();return; }
+        if(phase==='fly'){ const py=b.y; b.vy+=820*dt; b.x+=b.vx*dt; b.y+=b.vy*dt; const rim=groundY-boxH;
+          if(b.vy>0&&py<rim&&b.y>=rim&&Math.abs(b.x-bx)<boxW/2-6){
+            if(!past()){sfx.bad();flash('BEHIND THE LINE');}
+            else if(b.black){sfx.bad();flash('DISTRACTOR IN BOX');}
+            else{caught++;sfx.good();flash('CAUGHT');} resolve();return; }
           if(b.y>groundY+24||b.x>VW-8){ if(b.black){sfx.good();flash('LET IT GO');}else{sfx.bad();flash('MISSED');} resolve();return; }
         }
       },
@@ -1141,19 +1154,23 @@
         ctx.beginPath();ctx.moveTo(70,150);ctx.quadraticCurveTo(200,300,lipX,lipY);ctx.stroke();ctx.lineCap='butt';
         ctx.strokeStyle=C.red;ctx.lineWidth=3;ctx.setLineDash([7,6]);
         ctx.beginPath();ctx.moveTo(lineX,180);ctx.lineTo(lineX,groundY);ctx.stroke();ctx.setLineDash([]);
-        txt('CATCH BEYOND',lineX+8,196,11,C.red,'left',700);
+        txt('SAFETY LINE',lineX+8,196,11,C.red,'left',700);
         if(ball){ctx.fillStyle=ball.black?'#1a1f26':C.red;disc(ball.x,ball.y,13);ctx.fill();
           ctx.strokeStyle=ball.black?'#3a4450':'#7a1f18';ctx.lineWidth=2;disc(ball.x,ball.y,13);ctx.stroke();}
-        ctx.strokeStyle=C.amber;ctx.lineWidth=5;
-        ctx.beginPath();ctx.moveTo(cup-cupW/2,groundY-30);ctx.lineTo(cup-cupW/2+8,groundY-2);
-        ctx.lineTo(cup+cupW/2-8,groundY-2);ctx.lineTo(cup+cupW/2,groundY-30);ctx.stroke();
+        // open box (floor + two walls) shoved across the table; edge greens when safely past the line
+        const ok=past();
+        ctx.fillStyle=boxCol;
+        rr(bx-boxW/2,groundY-9,boxW,9,2);ctx.fill();
+        rr(bx-boxW/2,groundY-boxH,7,boxH,2);ctx.fill();
+        rr(bx+boxW/2-7,groundY-boxH,7,boxH,2);ctx.fill();
+        ctx.strokeStyle=ok?C.green:C.red;ctx.lineWidth=2;ctx.strokeRect(bx-boxW/2,groundY-boxH,boxW,boxH);
         if(msgT>0){ctx.globalAlpha=Math.min(1,msgT*2);
           txt(msg,VW/2,120,24,(msg==='CAUGHT'||msg==='LET IT GO')?C.green:C.red,'center',800);ctx.globalAlpha=1;}
-        setHUD([{k:'Ball',v:Math.min(shots,10)+'/10'},{k:'Caught',v:caught}]);
+        setHUD([{k:'Ball',v:Math.min(shots,10)+'/10'},{k:'Caught',v:caught},{k:'Box',v:ok?'past':'behind',warn:!ok}]);
       }
     };
     function end(){running=false;const win=caught>=6;(win?sfx.win:sfx.lose)();
-      showOverlay('DONE','Caught <b style="color:'+C.green+'">'+caught+'</b> red balls.',win?'win':(caught>=4?'':'lose'),'Again',start);}
+      showOverlay('DONE','Caught <b style="color:'+C.green+'">'+caught+'</b> red balls with the box.',win?'win':(caught>=4?'':'lose'),'Again',start);}
   }
 
   // ==========================================================================
@@ -1858,7 +1875,7 @@
     clean:'<svg viewBox="0 0 120 78" width="100%" height="100%"><ellipse cx="40" cy="46" rx="30" ry="17" fill="rgba(90,150,210,.5)"/><rect x="56" y="22" width="34" height="26" rx="5" fill="#ffb238"/><rect x="56" y="22" width="34" height="11" rx="5" fill="#ffd488"/><rect x="98" y="28" width="8" height="28" rx="2" fill="#1c2731"/></svg>',
     rat:'<svg viewBox="0 0 120 78" width="100%" height="100%"><ellipse cx="30" cy="58" rx="16" ry="7" fill="#05090c"/><ellipse cx="60" cy="58" rx="16" ry="7" fill="#05090c"/><ellipse cx="90" cy="58" rx="16" ry="7" fill="#05090c"/><ellipse cx="60" cy="46" rx="13" ry="14" fill="#8a97a1"/><circle cx="53" cy="34" r="5" fill="#8a97a1"/><circle cx="67" cy="34" r="5" fill="#8a97a1"/><circle cx="56" cy="44" r="2" fill="#05090c"/><circle cx="64" cy="44" r="2" fill="#05090c"/><circle cx="60" cy="50" r="2.5" fill="#ff5a4d"/></svg>',
     shelfm:'<svg viewBox="0 0 120 78" width="100%" height="100%"><rect x="16" y="18" width="52" height="6" rx="3" fill="#3a4756" transform="rotate(8 42 21)"/><rect x="52" y="38" width="52" height="6" rx="3" fill="#3a4756" transform="rotate(-8 78 41)"/><circle cx="30" cy="15" r="7" fill="#ffb238"/><path d="M44 60 a18 10 0 0 0 36 0" fill="none" stroke="#7fa6c4" stroke-width="3"/></svg>',
-    valley:'<svg viewBox="0 0 120 78" width="100%" height="100%"><path d="M8 20 Q40 70 72 28" fill="none" stroke="#7fa6c4" stroke-width="3"/><line x1="80" y1="10" x2="80" y2="68" stroke="#ff5a4d" stroke-width="2" stroke-dasharray="4 4"/><circle cx="66" cy="30" r="6" fill="#ff5a4d"/><path d="M92 44 h20 l-3 20 h-14 z" fill="none" stroke="#cdd9e1" stroke-width="3"/></svg>',
+    valley:'<svg viewBox="0 0 120 78" width="100%" height="100%"><path d="M8 20 Q40 70 72 28" fill="none" stroke="#7fa6c4" stroke-width="3"/><line x1="80" y1="10" x2="80" y2="68" stroke="#ff5a4d" stroke-width="2" stroke-dasharray="4 4"/><circle cx="66" cy="30" r="6" fill="#ff5a4d"/><rect x="90" y="60" width="26" height="5" fill="#48add1"/><rect x="90" y="46" width="4" height="16" fill="#48add1"/><rect x="112" y="46" width="4" height="16" fill="#48add1"/></svg>',
     stopbat:'<svg viewBox="0 0 120 78" width="100%" height="100%"><path d="M8 22 Q40 70 72 30" fill="none" stroke="#7fa6c4" stroke-width="3"/><circle cx="66" cy="32" r="6" fill="#ff5a4d"/><rect x="86" y="20" width="10" height="44" rx="5" fill="#ffb238"/></svg>',
     trapdoors:'<svg viewBox="0 0 120 78" width="100%" height="100%"><circle cx="30" cy="20" r="7" fill="#ffb238"/><rect x="12" y="40" width="22" height="26" rx="3" fill="#ff5a4d"/><rect x="36" y="40" width="22" height="26" rx="3" fill="#46d17a"/><rect x="60" y="40" width="22" height="26" rx="3" fill="#7fa6c4"/><rect x="84" y="40" width="22" height="26" rx="3" fill="#ffb238"/></svg>',
     qc:'<svg viewBox="0 0 120 78" width="100%" height="100%"><rect x="8" y="46" width="104" height="14" rx="3" fill="#161f2a" stroke="#26333f"/><rect x="26" y="34" width="18" height="18" rx="3" fill="#ff5a4d"/><rect x="52" y="34" width="18" height="18" rx="3" fill="#46d17a"/><rect x="78" y="34" width="18" height="18" rx="3" fill="#243039"/><rect x="52" y="10" width="18" height="16" rx="2" fill="#ffb238"/><rect x="58" y="24" width="6" height="8" fill="#7a5a1e"/></svg>',
@@ -1910,9 +1927,9 @@
     {id:'catch_shelf_marble',arche:'CATCH',tag:'Slide',emb:EMB.shelfm,make:makeShelfMarble,
      desc:'Track the marble down the zig-zag shelves; catch it in the bowl.',
      controls:'<span><kbd>←</kbd><kbd>→</kbd> or <kbd>drag</kbd> to slide the bowl</span>'},
-    {id:'catch_valley_ball',arche:'PLACE',tag:'Predict',emb:EMB.valley,make:makeValleyCatch,
-     desc:'Place the cup past the line for the red ball — let the black decoy fall.',
-     controls:'<span><kbd>Move</kbd> or <kbd>←</kbd><kbd>→</kbd> to place the cup beyond the line</span>'},
+    {id:'catch_valley_ball',arche:'PUSH',tag:'Push',emb:EMB.valley,make:makeValleyCatch,
+     desc:'Shove the open box — it slides with momentum — past the line to catch the red ball; keep the black distractor out.',
+     controls:'<span><kbd>Move</kbd> to shove · <kbd>←</kbd><kbd>→</kbd> to nudge the box past the line</span>'},
     {id:'stop_valley_ball',arche:'BLOCK',tag:'Reflex',emb:EMB.stopbat,make:makeStopBall,
      desc:'Swing the bat into the red ball’s flight — keep clear of the black decoy.',
      controls:'<span><kbd>Move mouse</kbd> to hold the bat in the flight path</span>'},
