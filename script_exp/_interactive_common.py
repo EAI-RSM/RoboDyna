@@ -737,19 +737,19 @@ class UniversalRobotControls:
     Z / X tip the gripper about world +Y (left / right) for pour-style motions.
     """
 
-    # Interactive teleop rates (m/s). Kept snappy for sandbox pushing/pressing;
-    # MAX_LEAD / MAX_JOINT_SPEED must scale with these or the caps choke motion.
-    XY_SPEED = 0.36
-    Z_SPEED = 0.28
+    # Interactive teleop rates (m/s). 20% slower than the prior snappy sandbox
+    # rates; MAX_LEAD / MAX_JOINT_SPEED scale with them or the caps choke motion.
+    XY_SPEED = 0.288
+    Z_SPEED = 0.224
     # World-Y tip rate for Z/X (rad/s) — enough to dump a board without feeling twitchy.
-    ROLL_SPEED = 1.6
+    ROLL_SPEED = 1.28
     MAX_DT = 0.05
     # How far the commanded pose may run ahead of the achieved pose, so a
     # blocked or joint-limited arm cannot accumulate an unrecoverable lead.
-    MAX_LEAD = 0.055
+    MAX_LEAD = 0.044
     # Near a singularity a millimetre of Cartesian travel costs radians of
     # joint travel; slew at this cap instead of whipping the arm.
-    MAX_JOINT_SPEED = 5.0
+    MAX_JOINT_SPEED = 4.0
 
     def __init__(self, env):
         self.env = env
