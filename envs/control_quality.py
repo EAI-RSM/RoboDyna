@@ -242,6 +242,9 @@ class control_quality(Base_Task):
 
         self.keys = {}
         self.key_bases = {}
+        self._key_home = {}
+        self._key_top_z = {}
+        self._reactive_buttons = None
         base_hz = float(self.KEY_BASE_HALF[2])
         cap_hz = float(self.KEY_HALF[2])
         for color, sign in (("red", -1.0), ("green", 1.0)):
@@ -256,9 +259,10 @@ class control_quality(Base_Task):
                 name=f"key_base_{color}",
                 is_static=True,
             )
+            key_home = sapien.Pose([kx, self.KEY_Y, cap_z], [1, 0, 0, 0])
             key = create_box(
                 scene=self,
-                pose=sapien.Pose([kx, self.KEY_Y, cap_z], [1, 0, 0, 0]),
+                pose=key_home,
                 half_size=list(self.KEY_HALF),
                 color=self.KEY_COLORS[color],
                 name=f"key_{color}",
@@ -266,6 +270,8 @@ class control_quality(Base_Task):
             )
             self.key_bases[color] = base
             self.keys[color] = key
+            self._key_home[color] = key_home
+            self._key_top_z[color] = float(cap_z + cap_hz)
             self.add_prohibit_area(base, padding=0.05)
             self.add_prohibit_area(key, padding=0.05)
 
@@ -328,6 +334,15 @@ class control_quality(Base_Task):
 
         self.add_prohibit_area(self.belt, padding=0.02)
         self._stamp_ready = True
+        colors = [c for c in ("red", "green") if c in self.keys]
+        self._reactive_buttons = ReactivePushButtons(
+            self,
+            actors=[self.keys[c] for c in colors],
+            home_poses=[self._key_home[c] for c in colors],
+            max_depth=float(self.KEY_HALF[2]),
+            ids=colors,
+        )
+        self._reactive_buttons.set_tops_z([self._key_top_z[c] for c in colors])
 
     def _sample_tile_colors(self, n):
         """Sample red/green (per color_mode), then randomly blacken up to black_frac_max.
@@ -598,8 +613,23 @@ class control_quality(Base_Task):
                 self._recolor_stamp(None)
                 self.stamp_key_color = None
 
+    def _update_reactive_buttons(self):
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
+            return
+        triggered = bank.update()
+        interactive = bool(
+            getattr(self, "_interactive_universal_controls", False)
+            or getattr(self, "_interactive_robot_mode", False)
+        )
+        if not interactive:
+            return
+        for color in triggered:
+            self._press_key(color)
+
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
+        self._update_reactive_buttons()
         if not getattr(self, "_stamp_ready", False):
             return
         if getattr(self, "_belt_running", False):

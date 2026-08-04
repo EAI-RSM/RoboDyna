@@ -414,3 +414,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())

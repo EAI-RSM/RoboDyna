@@ -105,6 +105,7 @@ class dispense_gummy(Base_Task):
         self._dispense_key_latched = False
         self._belt_key_depression = {"left": 0.0, "right": 0.0}
         self._dispense_key_depression = 0.0
+        self._reactive_buttons = None
         # Interactive latch: None | "left" | "right"; dispense pulse via _expert_dispense.
         self._expert_belt_hold = None
         self._expert_dispense = False
@@ -281,97 +282,67 @@ class dispense_gummy(Base_Task):
         self._bowl_station_idx = int(np.clip(self._bowl_station_idx + direction, 0, last_idx))
         self._bowl_target_x = float(self.bowl_stations[self._bowl_station_idx])
 
-    def _detect_belt_key_presses(self):
-        if not self.belt_key_xy or not hasattr(self, "robot"):
+    def _update_reactive_keys(self):
+        """One spring-key update for dispense + belt keys (fill_coffee style)."""
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
             return
-        try:
-            ee = np.asarray(self.robot.get_right_ee_pose()[:3], dtype=np.float64)
-        except Exception:
-            return
-        for side, (key_x, key_y) in self.belt_key_xy.items():
-            pressed = bool(
-                abs(ee[0] - key_x) <= self.belt_key_press_xy
-                and abs(ee[1] - key_y) <= self.belt_key_press_xy
-                and ee[2] <= self.belt_key_top_z + self.belt_key_press_dz
-            )
+        expert = getattr(self, "_expert_belt_hold", None)
+        for side in ("left", "right"):
+            bank.set_forced(side, expert == side)
+        if getattr(self, "_expert_dispense", False):
+            bank.set_forced("dispense", True)
+            self._expert_dispense = False
+        else:
+            bank.set_forced("dispense", False)
+
+        triggered = set(bank.update())
+
+        if "dispense" in triggered:
+            self._request_dispense()
+        self._dispense_key_latched = bool(bank.is_held("dispense"))
+        self._dispense_key_depression = float(
+            bank.visual_depth[bank.resolve_index("dispense")]
+        )
+
+        for side in ("left", "right"):
+            pressed = bool(bank.is_held(side))
             self._belt_key_pressed[side] = pressed
+            self._belt_key_depression[side] = float(
+                bank.visual_depth[bank.resolve_index(side)]
+            )
             if self.belt_continuous_motion:
-                # Continuous: pressed state drives velocity every step (no edge latch).
                 self._belt_key_latched[side] = pressed
             else:
-                if pressed and not self._belt_key_latched[side]:
+                if side in triggered or (
+                    expert == side
+                    and not self._belt_key_latched.get(f"_expert_{side}", False)
+                ):
                     self._request_bowl_station(-1 if side == "left" else 1)
                 self._belt_key_latched[side] = pressed
-        expert = getattr(self, "_expert_belt_hold", None)
-        if expert in ("left", "right"):
-            self._belt_key_pressed[expert] = True
-            if self.belt_continuous_motion:
-                self._belt_key_latched[expert] = True
-            else:
-                # Discrete hop: edge once per expert latch transition (script clears hold).
-                if not self._belt_key_latched.get(f"_expert_{expert}", False):
-                    self._request_bowl_station(-1 if expert == "left" else 1)
-                    self._belt_key_latched[f"_expert_{expert}"] = True
-        else:
+                if expert == side:
+                    self._belt_key_latched[f"_expert_{side}"] = True
+        if expert not in ("left", "right"):
             self._belt_key_latched["_expert_left"] = False
             self._belt_key_latched["_expert_right"] = False
 
-    def _detect_dispense_key_press(self):
-        if getattr(self, "dispense_key", None) is None or not hasattr(self, "robot"):
-            return
-        try:
-            ee = np.asarray(self.robot.get_left_ee_pose()[:3], dtype=np.float64)
-        except Exception:
-            return
-        pressed = bool(
-            abs(ee[0] - self.key_x) <= self.belt_key_press_xy
-            and abs(ee[1] - self.key_y) <= self.belt_key_press_xy
-            and ee[2] <= self.dispense_key_top_z + self.belt_key_press_dz
-        )
-        if getattr(self, "_expert_dispense", False):
-            pressed = True
-            self._expert_dispense = False
-        if pressed and not self._dispense_key_latched:
-            self._request_dispense()
-        self._dispense_key_latched = pressed
+    def _detect_belt_key_presses(self):
+        # Kept for call-site compatibility; real work is in `_update_reactive_keys`.
+        pass
 
-    def _spring_key(self, actor, depression, pressed, rest_xyz):
-        target = self.key_travel if pressed else 0.0
-        delta = float(np.clip(target - depression, -self.key_spring_step, self.key_spring_step))
-        depression = float(np.clip(depression + delta, 0.0, self.key_travel))
-        pose = actor.get_pose()
-        self._set_entity_pose(
-            actor,
-            sapien.Pose([rest_xyz[0], rest_xyz[1], rest_xyz[2] - depression], pose.q),
-        )
-        return depression
+    def _detect_dispense_key_press(self):
+        pass
 
     def _animate_keys(self):
-        if getattr(self, "dispense_key", None) is not None:
-            self._dispense_key_depression = self._spring_key(
-                self.dispense_key,
-                self._dispense_key_depression,
-                self._dispense_key_latched,
-                self.dispense_key_rest_xyz,
-            )
-        for side, key in self.belt_keys.items():
-            pressed = (
-                self._belt_key_pressed[side]
-                if self.belt_continuous_motion
-                else self._belt_key_latched[side]
-            )
-            self._belt_key_depression[side] = self._spring_key(
-                key,
-                self._belt_key_depression[side],
-                pressed,
-                self.belt_key_rest_xyz[side],
-            )
+        # Keycaps posed by ReactivePushButtons; sync arrow decals to belt-key depth.
+        for side in ("left", "right"):
+            depth = float(self._belt_key_depression.get(side, 0.0))
             for arrow, rest_xyz in self.belt_key_arrows.get(side, []):
                 pose = arrow.get_pose()
                 self._set_entity_pose(
                     arrow,
                     sapien.Pose(
-                        [rest_xyz[0], rest_xyz[1], rest_xyz[2] - self._belt_key_depression[side]],
+                        [rest_xyz[0], rest_xyz[1], rest_xyz[2] - depth],
                         pose.q,
                     ),
                 )
@@ -999,6 +970,28 @@ class dispense_gummy(Base_Task):
             )
             self.add_prohibit_area(self.belt_keys[side], padding=0.04)
 
+        self._reactive_buttons = ReactivePushButtons(
+            self,
+            actors=[
+                self.dispense_key,
+                self.belt_keys["left"],
+                self.belt_keys["right"],
+            ],
+            home_poses=[
+                sapien.Pose(self.dispense_key_rest_xyz, [1, 0, 0, 0]),
+                sapien.Pose(self.belt_key_rest_xyz["left"]),
+                sapien.Pose(self.belt_key_rest_xyz["right"]),
+            ],
+            max_depth=float(self.key_half[2]),
+            ids=["dispense", "left", "right"],
+            xy_tol=float(self.belt_key_press_xy),
+        )
+        self._reactive_buttons.set_tops_z([
+            self.dispense_key_top_z,
+            self.belt_key_top_z,
+            self.belt_key_top_z,
+        ])
+
         for side in self._tube_order:
             for depth, color in enumerate(self._tube_stack_colors[side]):
                 actor = create_sphere(
@@ -1026,8 +1019,7 @@ class dispense_gummy(Base_Task):
         super()._update_kinematic_tasks()
         if self.bowl is None:
             return
-        self._detect_belt_key_presses()
-        self._detect_dispense_key_press()
+        self._update_reactive_keys()
         self._animate_keys()
         self._advance_bowl_on_belt()
         self._update_caught_balls()

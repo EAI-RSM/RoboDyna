@@ -161,17 +161,40 @@ def release_dynamic(rigid):
         pass
 
 
+# Last interactive result for GUI exit codes (household_task_gui convention):
+#   0 = SUCCESS, 10 = FAILURE, 2 = closed before a result.
+_LAST_TASK_RESULT: bool | None = None
+
+
+def task_result_exit_code(ok: bool | None = None) -> int:
+    """Map SUCCESS / FAILURE / no-result to launcher exit codes."""
+    if ok is None:
+        ok = _LAST_TASK_RESULT
+    if ok is True:
+        return 0
+    if ok is False:
+        return 10
+    return 2
+
+
 def report_task_result(env, detail: str | None = None) -> bool:
-    """Print ``Task complete: SUCCESS|FAILURE`` from ``check_success``; return success."""
+    """Print ``Task complete: SUCCESS|FAILURE`` from ``check_success``; return success.
+
+    Also stores the result for ``task_result_exit_code()`` so ``interactive_task_gui``
+    can show SUCCESS/FAILURE like ``household_task_gui``.
+    """
+    global _LAST_TASK_RESULT
     try:
         ok = bool(env.check_success())
     except Exception as exc:
         print(f"Task complete: FAILURE (check_success error: {exc})")
+        _LAST_TASK_RESULT = False
         return False
     if detail is None and not ok:
         detail = getattr(env, "_last_fail_reason", None) or None
     status = "SUCCESS" if ok else "FAILURE"
     print(f"Task complete: {status}" + (f" ({detail})" if detail else ""))
+    _LAST_TASK_RESULT = bool(ok)
     return ok
 
 
@@ -713,10 +736,13 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     """Standard interactive loop: callback → kinematics → step → render.
 
     ``is_done(step)`` may return ``True`` / ``False``, or ``(done, detail)``.
-    When done, prints SUCCESS/FAILURE via ``report_task_result`` and exits.
+    When done, prints SUCCESS/FAILURE via ``report_task_result`` and returns that
+    bool (or ``None`` if the viewer closed without a result).
     ``should_stop`` remains a raw break (no auto print) for backward compatibility.
     Starts top-down; press V to toggle top-down ↔ head_camera.
     """
+    global _LAST_TASK_RESULT
+    _LAST_TASK_RESULT = None
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
@@ -763,6 +789,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
                 time.sleep(remaining)
     finally:
         env.close_env()
+    return _LAST_TASK_RESULT
 
 
 # ---------------------------------------------------------------------------

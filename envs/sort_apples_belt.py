@@ -318,7 +318,9 @@ class sort_apples_belt(Base_Task):
         self._button_xy = {"left": (-self.BUTTON_DX, btn_y), "right": (self.BUTTON_DX, btn_y)}
         self._button_top_z = self._z0 + 0.06
         self.buttons = {}
+        self._button_home = {}
         self._button_held = {"left": False, "right": False}
+        self._reactive_buttons = None
         for side, (bx, by) in self._button_xy.items():
             create_box(
                 self.scene, sapien.Pose([bx, by, self._z0 + 0.015]),
@@ -326,11 +328,22 @@ class sort_apples_belt(Base_Task):
                 is_static=True, name=f"button_base_{side}",
             )
             btn_color = self.RED if self._side_color[side] == self.COLOR_RED else self.GREEN
+            home = sapien.Pose([bx, by, self._z0 + 0.045])
+            self._button_home[side] = home
             self.buttons[side] = create_box(
-                self.scene, sapien.Pose([bx, by, self._z0 + 0.045]),
+                self.scene, home,
                 half_size=[0.022, 0.022, 0.015], color=btn_color,
                 is_static=True, name=f"button_{side}",
             )
+        self._reactive_buttons = ReactivePushButtons(
+            self,
+            actors=[self.buttons[s] for s in ("left", "right")],
+            home_poses=[self._button_home[s] for s in ("left", "right")],
+            max_depth=0.015,
+            ids=["left", "right"],
+            xy_tol=float(self.PRESS_XY),
+        )
+        self._reactive_buttons.set_tops_z([self._button_top_z, self._button_top_z])
 
         # ---- receptacles at the fork (062_plasticbox) ----
         self.basket_id = int(np.random.choice(self.BASKET_INSTANCE_IDS))
@@ -1073,29 +1086,30 @@ class sort_apples_belt(Base_Task):
 
         Expert hold (`_expert_hold`) reinforces the commanded mode while the
         scripted policy is actively pressing; it must be cleared *before* the
-        arms lift. Release (no expert latch, no proximity) always returns the
+        arms lift. Release (no expert latch, no press) always returns the
         plank to horizontal — never a free-running open/tilt animation.
         """
-        if not hasattr(self, "robot"):
-            return
-        pressed = {"left": False, "right": False}
-        for side, get_ee in (("left", self.robot.get_left_ee_pose),
-                             ("right", self.robot.get_right_ee_pose)):
-            try:
-                ee = np.array(get_ee()[:3], dtype=float)
-            except Exception:
-                continue
-            bx, by = self._button_xy[side]
-            if (abs(ee[0] - bx) < self.PRESS_XY and abs(ee[1] - by) < self.PRESS_XY
-                    and ee[2] < self._button_top_z + self.PRESS_DZ_ACTIVE):
-                pressed[side] = True
-
+        bank = getattr(self, "_reactive_buttons", None)
         expert = getattr(self, "_expert_hold", None)
-        awaiting = getattr(self, "_awaiting_dump_press", False)
-        # Interactive robot mode uses Space to click; ignore bare proximity so a
-        # brush against a button cannot divert without an intentional press.
-        if bool(getattr(self, "_interactive_space_click", False)):
+        if bank is not None:
+            if expert == "dump":
+                bank.set_forced("left", True)
+                bank.set_forced("right", True)
+            elif expert in ("left", "right"):
+                bank.set_forced(expert, True)
+                bank.set_forced("left" if expert == "right" else "right", False)
+            else:
+                bank.set_forced("left", False)
+                bank.set_forced("right", False)
+            bank.update()
+            pressed = {
+                "left": bool(bank.is_held("left")),
+                "right": bool(bank.is_held("right")),
+            }
+        else:
             pressed = {"left": False, "right": False}
+
+        awaiting = getattr(self, "_awaiting_dump_press", False)
 
         if expert == "dump" or (expert is None and pressed["left"] and pressed["right"]
                                 and self.rotten_enabled and not awaiting):

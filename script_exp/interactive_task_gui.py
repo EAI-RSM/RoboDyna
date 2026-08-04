@@ -715,11 +715,25 @@ class InteractiveTaskLauncher(tk.Tk):
                 self.active_selection = None
                 self._remove_temporary_config()
                 self._reset_task_buttons()
+                # Match household_task_gui: 0=SUCCESS, 10=FAILURE, 2=closed early.
                 if code == 0:
-                    self.status.configure(text="Task finished. Select another scenario below.", fg="#70d6a2")
+                    self.status.configure(
+                        text="Task result: SUCCESS. Select another scenario below.",
+                        fg="#70d6a2",
+                    )
+                elif code == 10:
+                    self.status.configure(
+                        text="Task result: FAILURE. Select another scenario below.",
+                        fg="#e6a15c",
+                    )
+                elif code == 2:
+                    self.status.configure(
+                        text="Task closed before a result was reached.",
+                        fg=TEXT_SECONDARY,
+                    )
                 else:
                     self.status.configure(
-                        text=f"Task exited with status {code}. Check the terminal for details.",
+                        text=f"Task result: ERROR (exit status {code}). Check the terminal.",
                         fg="#e6a15c",
                     )
         self.after(250, self._poll_child)

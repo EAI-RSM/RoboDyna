@@ -5,10 +5,10 @@ Run from any directory:
 
     /path/to/RoboDynaExp/script_exp/interactive_marble_shelf_maze.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_marble_shelf_maze.py --control robot
-    /path/to/RoboDynaExp/script_exp/interactive_marble_shelf_maze.py --control robot --robot-motion interpolate
 
 Keyboard mode tilts the active shelf via ``_press_tilt_direct`` (no arm).
-Robot mode taps the matching side button then tilts. Sandbox only.
+Robot mode: select an arm, move over the shelf button, lower with Q to press.
+Queued tilts run via ``consume_pending_tilt``. Space is unused. Sandbox only.
 """
 
 import argparse
@@ -27,18 +27,18 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    edge_pressed,
+    UniversalRobotControls,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
     print_mode_controls,
-    require_selected_arms,
 )
 
 
 CONTROLS_KEYBOARD = """
   Left Arrow       →  tilt active shelf LEFT  (red / left button)
   Right Arrow      →  tilt active shelf RIGHT (right button)
+  Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
 
   One press tilts the current shelf, rolls the marble off, and
   waits for the fall/settle before accepting another press.
@@ -50,14 +50,14 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Space            →  press the selected arm's shelf button
+  Select left (1) or right (2) arm, move over the matching shelf button,
+  then lower with Q to press (E to raise). Space is unused.
 
   One press tilts the current shelf, rolls the marble off, and
   waits for the fall/settle before accepting another press.
   Hint: correct_dir for each shelf is printed at startup.
 
-  Matching arm taps the side button, then tilts.
-  --robot-motion planner|interpolate
+  Gripper-Z depresses the key; reactive edge queues a tilt.
   V                 toggle view: top-down ↔ head_camera
   Close the viewer window to quit.
 """
@@ -270,13 +270,15 @@ def main():
 
     from envs import CONFIGS_PATH
     from envs.marble_shelf_maze import marble_shelf_maze
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("marble_shelf_maze", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = marble_shelf_maze()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_robot_mode = True
+    # Raster viewer: pour_beer-style plain-alpha shelves/panes (transmission is invisible here).
+    env._plain_glass = True
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
     env._bowl_armed = bool(getattr(env, "osc_bowl_enabled", False))
     env.plan_success = True
@@ -285,57 +287,40 @@ def main():
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
 
     dirs = list(getattr(env, "correct_dir", []) or [])
     print(f"Shelves={env.n_shelves}. Suggested directions top→bottom: {dirs}")
-    motion = f", robot-motion={args.robot_motion}" if args.control == "robot" else ""
     print(
-        f"Control={args.control}{motion}. "
-        + ("Select an arm and press Space to tilt." if args.control == "robot"
-           else "Tap Left or Right Arrow to tilt.")
+        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
+        "Space is unused."
     )
+    if args.control == "keyboard":
+        print("Keyboard arrows still call _press_tilt_direct as a sandbox shortcut.")
 
     edges = EdgeDirection()
-    robot_controller = None
-    keys_prev: dict = {}
-    if args.control == "robot":
-        robot_controller = RobotShelfKeyController(env, ArmTag, viewer)
 
     try:
         while not viewer.closed:
             views.update(viewer.window)
             frame_start = time.perf_counter()
-            if args.control == "robot":
-                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-                if viewer.window.key_down("space"):
-                    if len(selected) != 1 and edge_pressed(viewer.window, "space", keys_prev):
-                        require_selected_arms(env, exactly_one=True)
-                    requested = selected[0] if len(selected) == 1 else None
-                else:
-                    requested = None
-                direction = requested if requested is not None and requested != edges.prev else None
-                edges.prev = requested
-            else:
+            if args.control == "keyboard":
                 direction = edges.edge(viewer.window)
-            mode = str(getattr(env, "_ball_mode", ""))
-            can_tilt = (
-                direction is not None
-                and env.active_shelf_idx >= 0
-                and mode not in ("sliding", "falling", "missed", "done")
-                and (robot_controller is None or not robot_controller.busy)
-            )
-            if can_tilt:
-                idx = env.active_shelf_idx
-                if args.control == "keyboard":
+                mode = str(getattr(env, "_ball_mode", ""))
+                can_tilt = (
+                    direction is not None
+                    and env.active_shelf_idx >= 0
+                    and mode not in ("sliding", "falling", "missed", "done")
+                )
+                if can_tilt:
+                    idx = env.active_shelf_idx
                     print(f"Tilting shelf {idx} {direction} (keyboard)...")
                     ok = _with_live_viewer(env, viewer, lambda: env._press_tilt_direct(direction))
                     print(f"Tilt done. ball_mode={env._ball_mode} ok={ok}")
-                elif robot_controller is not None:
-                    print(f"Robot tapping {direction} button for shelf {idx}...")
-                    robot_controller.tap(direction)
-            if robot_controller is not None:
-                robot_controller.update()
             env._update_kinematic_tasks()
+            if hasattr(env, "consume_pending_tilt") and getattr(env, "_pending_tilt_dir", None):
+                _with_live_viewer(env, viewer, env.consume_pending_tilt)
             env.scene.step()
             env.scene.update_render()
             viewer.render()
@@ -349,12 +334,11 @@ def main():
             if remaining > 0:
                 time.sleep(remaining)
     finally:
-        try:
-            if robot_controller is not None:
-                robot_controller.release()
-        finally:
-            env.close_env()
+        env.close_env()
 
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())

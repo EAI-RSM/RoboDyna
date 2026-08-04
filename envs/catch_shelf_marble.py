@@ -37,7 +37,8 @@ class catch_shelf_marble(Base_Task):
     identical marble path and the same `target_catch_x` the expert policy aims for.
 
     Options (independent toggles; CLI via ``--task-arg`` or legacy ``--option``):
-      - Default — marble pauses on the top shelf until a bowl key is pressed.
+      - Default — marble pauses on the top shelf until a bowl key press edge (gripper or
+        keyboard). Holding slides the bowl; the marble is released once on that first press.
       - Option 1 — ``reactive_marble``: marble starts moving/falling from episode start
         (released at ``play_once``, not on key-press). Uses ``reactive_roll_speed`` so the arm
         can still catch up. CLI: ``--task-arg reactive_marble=true`` or ``--option 1``.
@@ -118,8 +119,13 @@ class catch_shelf_marble(Base_Task):
     KEY_PRESS_DEPTH_DEFAULT = 0.055
     KEY_PRESS_XY_DEFAULT = 0.045
     KEY_PRESS_DZ_DEFAULT = 0.17
-    KEY_TRAVEL_DEFAULT = 0.008
-    KEY_SPRING_STEP_DEFAULT = 0.0015
+    # Max keycap travel as a fraction of key half-height (keeps the top above the base rim).
+    KEY_TRAVEL_FRAC_DEFAULT = 0.85
+    KEY_SPRING_STEP_DEFAULT = 0.0007
+    # Thin hollow bezel under each key (not a solid cube the keycap can sink into).
+    KEY_BASE_WALL_T = 0.006
+    KEY_BASE_HALF_Z = 0.004
+    KEY_BASE_MARGIN = 0.008
     KEY_X_LEFT_DEFAULT = -0.26
     KEY_X_RIGHT_DEFAULT = 0.26
     KEY_Y_DEFAULT = -0.13
@@ -174,8 +180,10 @@ class catch_shelf_marble(Base_Task):
         self.key_rest_xyz = {}
         self.key_arrows = {}
         self.keys = {}
+        self._key_home = {}
         self._key_pressed = {"left": False, "right": False}
         self._key_depression = {"left": 0.0, "right": 0.0}
+        self._reactive_buttons = None
         # Interactive / scripted latch: None | "left" | "right" (ORed into EE detect).
         self._expert_hold = None
         self._bowl_force_stop = False
@@ -281,8 +289,43 @@ class catch_shelf_marble(Base_Task):
             parts.append("option 2")
         return ", ".join(parts) if parts else "baseline"
 
+    def _use_viewer_glass(self) -> bool:
+        """Interactive SAPIEN viewer cannot composite transmission glass — use plain alpha."""
+        if bool(getattr(self, "_plain_glass", False)):
+            return True
+        if bool(self._cfg.get("plain_glass", False)):
+            return True
+        return bool(
+            getattr(self, "_interactive_robot_mode", False)
+            or getattr(self, "_interactive_universal_controls", False)
+        )
+
     def _make_glass_material(self):
-        """catch_rat-style window glass: very light blue hue + 80% transmission."""
+        """Shelf glass: transmission for demo cameras; pour_beer-style alpha for interactive."""
+        if self._use_viewer_glass():
+            # pour_beer-style plain alpha, but stronger light-blue + ~30% less transparent
+            # than the initial 0.28 alpha (0.28 → ~0.50) so shelves read clearly in the viewer.
+            glass = sapien.render.RenderMaterial(
+                base_color=[0.72, 0.88, 0.98, 0.50]
+            )
+            try:
+                glass.set_transmission(0.0)
+                glass.set_transmission_roughness(1.0)
+                glass.set_roughness(0.10)
+                glass.set_metallic(0.0)
+            except Exception:
+                try:
+                    glass.roughness = 0.10
+                    glass.metallic = 0.0
+                except Exception:
+                    pass
+            try:
+                glass.set_ior(1.0)
+            except Exception:
+                pass
+            return glass
+
+        # Expert / demo recording: catch_rat-style light-blue + 80% transmission.
         glass = sapien.render.RenderMaterial(base_color=[*self.SHELF_COLOR, 1.0])
         glass.set_transmission(float(self.SHELF_TRANSMISSION))
         glass.set_transmission_roughness(float(self.SHELF_TRANSMISSION_ROUGHNESS))
@@ -627,7 +670,12 @@ class catch_shelf_marble(Base_Task):
         self.key_press_depth = float(c.get("key_press_depth", self.KEY_PRESS_DEPTH_DEFAULT))
         self.key_press_xy = float(c.get("key_press_xy", self.KEY_PRESS_XY_DEFAULT))
         self.key_press_dz = float(c.get("key_press_dz", self.KEY_PRESS_DZ_DEFAULT))
-        self.key_travel = float(c.get("key_travel", self.KEY_TRAVEL_DEFAULT))
+        travel_frac = float(c.get("key_travel_frac", self.KEY_TRAVEL_FRAC_DEFAULT))
+        # Prefer explicit key_travel when set; otherwise scale with keycap height.
+        if c.get("key_travel", None) is not None:
+            self.key_travel = float(c.get("key_travel"))
+        else:
+            self.key_travel = float(self.key_half[2]) * float(np.clip(travel_frac, 0.2, 1.0))
         self.key_spring_step = float(c.get("key_spring_step", self.KEY_SPRING_STEP_DEFAULT))
         self.key_x_left = float(c.get("key_x_left", self.KEY_X_LEFT_DEFAULT))
         self.key_x_right = float(c.get("key_x_right", self.KEY_X_RIGHT_DEFAULT))
@@ -798,30 +846,69 @@ class catch_shelf_marble(Base_Task):
             "left": (self.key_x_left, self.key_y),
             "right": (self.key_x_right, self.key_y),
         }
-        self.key_top_z = self.table_top + 2.0 * self.key_half[2]
+        # Key sits on the table inside a hollow bezel; travel is a fraction of key height so the
+        # colored top stays above the rim at full press (never disappears into a solid base cube).
+        self.key_top_z = self.table_top + 2.0 * float(self.key_half[2])
         key_colors = {"left": self.LEFT_KEY_COLOR, "right": self.RIGHT_KEY_COLOR}
         for side, (kx, ky) in self.key_xy.items():
-            create_box(
-                self,
-                pose=sapien.Pose([kx, ky, self.table_top + 0.010]),
-                half_size=[0.040, 0.034, 0.010],
-                color=self.KEY_BASE_COLOR,
-                is_static=True,
-                name=f"action_key_base_{side}",
-            )
-            self.key_rest_xyz[side] = [kx, ky, self.table_top + self.key_half[2]]
+            self._add_key_base_border(side, kx, ky)
+            self.key_rest_xyz[side] = [kx, ky, self.table_top + float(self.key_half[2])]
+            home = sapien.Pose(self.key_rest_xyz[side])
             self.keys[side] = create_box(
                 self,
-                pose=sapien.Pose(self.key_rest_xyz[side]),
+                pose=home,
                 half_size=self.key_half,
                 color=key_colors[side],
                 is_static=True,
                 name=f"action_key_{side}",
             )
-            self.key_arrows[side] = self._draw_arrow(side, kx, ky, self.key_top_z + 0.0015)
+            world_home = self.keys[side].get_pose()
+            self._key_home[side] = world_home
+            # Pass table-frame Z; create_visual_box adds table_z_bias itself.
+            self.key_arrows[side] = self._draw_arrow(
+                side, kx, ky, self.table_top + 2.0 * float(self.key_half[2]) + 0.0015
+            )
             self.add_prohibit_area(self.keys[side], padding=0.04)
 
+        max_depth = float(min(self.key_travel, float(self.key_half[2])))
+        self._reactive_buttons = ReactivePushButtons(
+            self,
+            actors=[self.keys[s] for s in ("left", "right")],
+            home_poses=[self._key_home[s] for s in ("left", "right")],
+            max_depth=max_depth,
+            ids=["left", "right"],
+            xy_tol=float(self.key_press_xy),
+            visual_step=float(self.key_spring_step),
+        )
+        self._reactive_buttons.set_tops_z([
+            float(self._key_home[s].p[2]) + float(self.key_half[2]) for s in ("left", "right")
+        ])
+        self.key_top_z = float(self._key_home["left"].p[2]) + float(self.key_half[2])
         self._loaded = True
+
+    def _add_key_base_border(self, side, kx, ky):
+        """Hollow dark bezel around the keycap (four walls, open center)."""
+        hx = float(self.key_half[0]) + float(self.KEY_BASE_MARGIN)
+        hy = float(self.key_half[1]) + float(self.KEY_BASE_MARGIN)
+        hz = float(self.KEY_BASE_HALF_Z)
+        wt = float(self.KEY_BASE_WALL_T)
+        z = float(self.table_top) + hz
+        color = list(self.KEY_BASE_COLOR)
+        walls = [
+            ("x_pos", [kx + hx - 0.5 * wt, ky, z], [0.5 * wt, hy, hz]),
+            ("x_neg", [kx - hx + 0.5 * wt, ky, z], [0.5 * wt, hy, hz]),
+            ("y_pos", [kx, ky + hy - 0.5 * wt, z], [hx - wt, 0.5 * wt, hz]),
+            ("y_neg", [kx, ky - hy + 0.5 * wt, z], [hx - wt, 0.5 * wt, hz]),
+        ]
+        for name, pos, half in walls:
+            create_box(
+                self,
+                pose=sapien.Pose(list(pos)),
+                half_size=list(half),
+                color=color,
+                is_static=True,
+                name=f"action_key_base_{side}_{name}",
+            )
 
     def _draw_arrow(self, side, key_x, key_y, z):
         # Author one left-pointing arrow, then rigidly rotate it 180 degrees for the right key, so
@@ -847,11 +934,15 @@ class catch_shelf_marble(Base_Task):
                 color=color,
                 name=f"{side}_key_arrow_{name}",
             )
-            arrows.append((arrow, [x, y, z]))
+            # Snapshot world pose after create_visual_box (table_z_bias applied).
+            wp = arrow.get_pose()
+            arrows.append((arrow, [float(wp.p[0]), float(wp.p[1]), float(wp.p[2])]))
         return arrows
 
     # --------------------------------------------------------------- marble
     def _release_marble(self):
+        if self._marble_state != "parked":
+            return
         self._marble_state = "descending"
         self._marble_result = None
         self._leg_idx = 0
@@ -927,55 +1018,41 @@ class catch_shelf_marble(Base_Task):
 
     # ------------------------------------------------------------------ keys
     def _detect_action_keys(self):
-        if not hasattr(self, "robot"):
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
             return
-        try:
-            left_ee = np.asarray(self.robot.get_left_ee_pose()[:3], dtype=np.float64)
-            right_ee = np.asarray(self.robot.get_right_ee_pose()[:3], dtype=np.float64)
-        except Exception:
-            return
-        for side, ee in (("left", left_ee), ("right", right_ee)):
-            kx, ky = self.key_xy[side]
-            pressed = bool(
-                abs(ee[0] - kx) <= self.key_press_xy
-                and abs(ee[1] - ky) <= self.key_press_xy
-                and ee[2] <= self.key_top_z + self.key_press_dz
-            )
-            if _CSM_DEBUG and pressed != self._key_pressed.get(side, False):
-                print(
-                    f"[CSM] {side} key pressed={pressed} ee={ee.round(3)} "
-                    f"key_xy=({kx:.3f},{ky:.3f}) key_top_z={self.key_top_z:.3f} "
-                    f"dz_thresh={self.key_press_dz:.3f}",
-                    flush=True,
-                )
-            self._key_pressed[side] = pressed
         expert = getattr(self, "_expert_hold", None)
-        if expert == "left":
-            self._key_pressed["left"] = True
-        elif expert == "right":
-            self._key_pressed["right"] = True
-
-    def _spring_key(self, actor, depression, pressed, rest_xyz):
-        target = self.key_travel if pressed else 0.0
-        delta = float(np.clip(target - depression, -self.key_spring_step, self.key_spring_step))
-        depression = float(np.clip(depression + delta, 0.0, self.key_travel))
-        pose = actor.get_pose()
-        self._set_entity_pose(
-            actor, sapien.Pose([rest_xyz[0], rest_xyz[1], rest_xyz[2] - depression], pose.q)
-        )
-        return depression
+        for side in ("left", "right"):
+            bank.set_forced(side, expert == side)
+        triggered = bank.update()
+        for side in ("left", "right"):
+            pressed = bool(bank.is_held(side))
+            if _CSM_DEBUG and pressed != self._key_pressed.get(side, False):
+                print(f"[CSM] {side} key pressed={pressed}", flush=True)
+            self._key_pressed[side] = pressed
+            self._key_depression[side] = float(bank.visual_depth[bank.resolve_index(side)])
+        # Default mode: marble stays parked until a bowl key is pressed.  Reactive mode releases
+        # at play_once start instead.  Press edge (not hold) starts the descent — works for both
+        # gripper teleop and keyboard latch (``_expert_hold``).
+        if (
+            not bool(getattr(self, "reactive_marble", False))
+            and self._marble_state == "parked"
+            and triggered
+        ):
+            if _CSM_DEBUG:
+                print(f"[CSM] key press edge {triggered} → release marble", flush=True)
+            self._release_marble()
 
     def _animate_keys(self):
-        for side, key in self.keys.items():
-            self._key_depression[side] = self._spring_key(
-                key, self._key_depression[side], self._key_pressed[side], self.key_rest_xyz[side]
-            )
+        # Keycaps are posed by ReactivePushButtons; keep arrow decals in sync.
+        for side in ("left", "right"):
+            depth = float(self._key_depression.get(side, 0.0))
             for arrow, rest_xyz in self.key_arrows.get(side, []):
                 pose = arrow.get_pose()
                 self._set_entity_pose(
                     arrow,
                     sapien.Pose(
-                        [rest_xyz[0], rest_xyz[1], rest_xyz[2] - self._key_depression[side]], pose.q
+                        [rest_xyz[0], rest_xyz[1], rest_xyz[2] - depth], pose.q
                     ),
                 )
 

@@ -5,9 +5,10 @@ Run from any directory:
 
     /path/to/RoboDynaExp/script_exp/interactive_punch_dual_holes.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_punch_dual_holes.py --control robot
-    /path/to/RoboDynaExp/script_exp/interactive_punch_dual_holes.py --control robot --robot-motion interpolate
 
-Keyboard mode calls ``_fire_punch``. Robot mode taps the side button(s) then fires.
+Keyboard mode calls ``_fire_punch`` via arrows. Robot mode: select an arm, move
+over the key, lower with Q to press (ReactivePushButtons fires the punch).
+Space is unused.
 """
 
 import argparse
@@ -26,12 +27,11 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    edge_pressed,
+    UniversalRobotControls,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
     print_mode_controls,
-    require_selected_arms,
 )
 
 
@@ -39,6 +39,7 @@ CONTROLS_KEYBOARD = """
   Left Arrow        punch LEFT belt
   Right Arrow       punch RIGHT belt
   Up Arrow          punch BOTH belts
+  Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
   Counts only when half the stamp head is on the card; otherwise missed
   V                 toggle view: front ↔ top-down
   Escape             quit
@@ -47,13 +48,13 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Space             punch with selected arm(s)
+  Select an arm (1/2/3), move over the matching side key, lower with Q to press
+  (E to raise). Space is unused.
   Counts only when half the stamp head is on the card; otherwise missed
   V                 toggle view: front ↔ top-down
   Escape             quit
 ------------------------------------------------------------
-  Arms tap the side buttons, then fire punch.
-  --robot-motion planner|interpolate
+  Gripper-Z depresses the key; ReactivePushButtons fires the punch.
 """
 
 
@@ -327,66 +328,49 @@ def main():
 
     from envs import CONFIGS_PATH
     from envs.punch_dual_holes import punch_dual_holes
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("punch_dual_holes", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = punch_dual_holes()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_robot_mode = True
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
 
-    robot_controller = None
-    if args.control == "robot":
-        robot_controller = RobotPunchController(env, ArmTag, args.robot_motion)
     # Match the main task: approach the buttons while belts are inactive, then
     # begin continuous motion or the first discrete run-to-stop.
     _start_belts(env)
 
     edge = EdgeSides()
-    keys_prev: dict = {}
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
     # Start in the same front/head-camera view normally reached with V.
     if getattr(views, "_head", None) is not None:
         views.mode = "head"
         views.apply(announce=False)
 
-    if args.control == "robot":
-        print(
-            f"Robot mode ready (motion={args.robot_motion}). "
-            "Select arms with 1/2/3 and press Space to punch."
-        )
-    else:
-        print("Keyboard mode ready. Tap Left/Right/Up Arrow when a card is under the stamp.")
+    print(
+        "Control=robot teleop. Select an arm (1/2/3), move over a key, lower with Q to press. "
+        "Space is unused."
+    )
+    if args.control == "keyboard":
+        print("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")
 
     try:
         while not viewer.closed:
             views.update(viewer.window)
             frame_start = time.perf_counter()
-            if args.control == "robot":
-                if viewer.window.key_down("space"):
-                    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-                    if not selected and edge_pressed(viewer.window, "space", keys_prev):
-                        require_selected_arms(env, exactly_one=False)
-                    sides = selected
-                else:
-                    sides = ()
-            else:
-                sides = _requested_sides(viewer.window)
-            fired = edge.poll(sides)
             if args.control == "keyboard":
+                fired = edge.poll(_requested_sides(viewer.window))
                 for side in fired:
                     env._fire_punch(side)
                 if fired:
                     print(f"Punch fired: {', '.join(fired)}")
-            elif robot_controller is not None:
-                if fired:
-                    robot_controller.request(fired)
-                robot_controller.update()
 
             _update_interactive_belt(env)
             # Mark pages that slid past the stamp without a punch.
@@ -417,12 +401,11 @@ def main():
             if remaining > 0:
                 time.sleep(remaining)
     finally:
-        try:
-            if robot_controller is not None:
-                robot_controller.release()
-        finally:
-            env.close_env()
+        env.close_env()
 
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())

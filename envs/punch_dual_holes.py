@@ -318,6 +318,9 @@ class punch_dual_holes(Base_Task):
         self.punch_head = {}
         self.button = {}
         self.button_base = {}
+        self._button_home = {}
+        self._button_top_z = {}
+        self._reactive_buttons = None
         self.pages = {}           # side -> list[Actor]
         self.page_target_x = {}   # side -> list[float]  (target punch x for each page)
         self.page_start_x = {}    # side -> list[float]
@@ -411,9 +414,10 @@ class punch_dual_holes(Base_Task):
                 name=f"button_base_{side}",
                 is_static=True,
             )
+            button_home = sapien.Pose([button_x, button_y, cap_z], [1, 0, 0, 0])
             button = create_box(
                 self,
-                pose=sapien.Pose([button_x, button_y, cap_z], [1, 0, 0, 0]),
+                pose=button_home,
                 half_size=self.BUTTON_HALF,
                 color=self.RIGHT_BUTTON_COLOR if sign > 0 else self.LEFT_BUTTON_COLOR,
                 name=f"button_{side}",
@@ -421,6 +425,8 @@ class punch_dual_holes(Base_Task):
             )
             self.button_base[side] = button_base
             self.button[side] = button
+            self._button_home[side] = button_home
+            self._button_top_z[side] = float(cap_z + cap_hz)
 
             # cards queue on the OUTER side of the punch head and march inward toward it. Page 0
             # is nearest the head (arrives first); each higher-index page uses the configured
@@ -474,6 +480,37 @@ class punch_dual_holes(Base_Task):
         self._belt_pic_ctr = 0
         # which page index (if any) is currently under each punch head
         self._under_head = {"left": None, "right": None}
+        self._init_reactive_buttons()
+
+    def _init_reactive_buttons(self):
+        sides = [s for s in ("left", "right") if s in self.button]
+        if not sides:
+            self._reactive_buttons = None
+            return
+        self._reactive_buttons = ReactivePushButtons(
+            self,
+            actors=[self.button[s] for s in sides],
+            home_poses=[self._button_home[s] for s in sides],
+            max_depth=float(self.BUTTON_HALF[2]),
+            ids=sides,
+        )
+        self._reactive_buttons.set_tops_z([self._button_top_z[s] for s in sides])
+
+    def _update_reactive_buttons(self):
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
+            return
+        # Always animate keycaps; only auto-fire punches in interactive teleop
+        # (expert demos call ``_fire_punch`` explicitly after the ready window).
+        triggered = bank.update()
+        interactive = bool(
+            getattr(self, "_interactive_universal_controls", False)
+            or getattr(self, "_interactive_robot_mode", False)
+        )
+        if not interactive:
+            return
+        for side in triggered:
+            self._fire_punch(side)
 
     # --------------------------------------------------- belt kinematics
     @staticmethod
@@ -567,6 +604,7 @@ class punch_dual_holes(Base_Task):
     def _update_kinematic_tasks(self):
         # base hook (drives any DOMINO dynamic objects); runs EVERY physics step
         super()._update_kinematic_tasks()
+        self._update_reactive_buttons()
         if not getattr(self, "_belt_active", False):
             return
         # In continuous mode the belt advances on every physics step once active, independent

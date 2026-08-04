@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_control_quality.py
     /path/to/RoboDynaExp/script_exp/interactive_control_quality.py --control robot
 
-Use Left/Right Arrow to make the matching arm tap the red/green key. Skip black
-tiles (do not press).
+Select an arm, move over the red/green key, lower with Q to press. Skip black
+tiles (do not press). Space is unused.
 """
 
 import argparse
@@ -26,17 +26,17 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    edge_pressed,
+    UniversalRobotControls,
     make_viewer_view_toggle,
     report_task_result,
     print_mode_controls,
-    require_selected_arms,
 )
 
 
 CONTROLS_KEYBOARD = """
   Left Arrow     stamp RED   (left arm)
   Right Arrow    stamp GREEN (right arm)
+  Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
   Skip BLACK tiles — do not press while they are under the stamp
   V                 toggle view: top-down ↔ head_camera
   Escape             quit
@@ -45,12 +45,13 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Space          stamp using the selected arm(s)
+  Select an arm (1/2), move over the matching colored key, lower with Q to press
+  (E to raise). Space is unused.
   Skip BLACK tiles — do not press while they are under the stamp
   V                 toggle view: top-down ↔ head_camera
   Escape             quit
 ------------------------------------------------------------
-  Arrows physically tap the matching colored key.
+  Gripper-Z depresses the key; ReactivePushButtons triggers the stamp.
 """
 
 
@@ -287,49 +288,47 @@ def main():
     print_mode_controls("control_quality", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = control_quality()
-    # Arrow presses always animate physical arms, so planner support is required in
-    # both launcher modes.
+    env._interactive_robot_mode = True
+    # Arrow presses / gripper teleop need planner support.
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
     env.enable_interactive_tile_pause()
     # Keep the belt frozen while arms move to the key hover poses. Starting it
     # earlier burns the first tile's pause window before the operator can act.
 
-    stamp_controller = KeyboardStampController(env, ArmTag)
-    arrow_presses = ArrowPresses()
+    stamp_controller = None
+    arrow_presses = None
+    if args.control == "keyboard":
+        stamp_controller = KeyboardStampController(env, ArmTag)
+        arrow_presses = ArrowPresses()
     last_under = None
-    keys_prev: dict = {}
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    # Robot mode highlights the default arm inside UniversalRobotControls here.
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
     # Start the first tile's approach/pause clock only once that is visible.
     _start_belt(env)
     last_frame_start = time.perf_counter()
     simulation_credit = 0.0
 
-    print("Press Left for red or Right for green when the matching tile is under the stamp.")
+    print(
+        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
+        "Space is unused."
+    )
     print(f"Tile colors: {env.tile_colors}")
-    if args.control == "robot":
-        selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ("left",))
-        print(f"Belt started after arm highlight ({'+'.join(selected)}).")
-    else:
-        print("Belt started after stamp arms reached the keys.")
+    if args.control == "keyboard":
+        print("Keyboard arrows still animate key taps as a sandbox shortcut.")
 
     try:
         while not viewer.closed:
             views.update(viewer.window)
             frame_start = time.perf_counter()
-            if args.control == "robot":
-                if edge_pressed(viewer.window, "space", keys_prev):
-                    selected = require_selected_arms(env, exactly_one=False)
-                    for side in selected:
-                        stamp_controller.tap("red" if side == "left" else "green")
-            else:
+            if stamp_controller is not None and arrow_presses is not None:
                 arrow_presses.update(viewer.window, stamp_controller)
-            stamp_controller.update()
+                stamp_controller.update()
 
             last_under = _finalize_departed_tiles(env, last_under)
             under = env._tile_under_stamp(require_unhandled=True)
@@ -368,10 +367,14 @@ def main():
                 time.sleep(remaining)
     finally:
         try:
-            stamp_controller.release()
+            if stamp_controller is not None:
+                stamp_controller.release()
         finally:
             env.close_env()
 
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())
