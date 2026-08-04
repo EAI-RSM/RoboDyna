@@ -262,7 +262,9 @@
       <div><strong><kbd>Arrows</kbd> XY movement</strong><span>Move the selected arm in world X and Y.</span></div>
       <div><strong><kbd>E</kbd> / <kbd>Q</kbd> Z movement</strong><span>Raise or lower the selected arm.</span></div>
       <div><strong><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> Arms</strong><span>Select the left arm, right arm, or both arms.</span></div>
-      <div><strong><kbd>V</kbd> / <kbd>Esc</kbd></strong><span>Toggle the view or close the viewer.</span></div>
+      <div><strong><kbd>V</kbd></strong><span>Toggle top-down ↔ head camera.</span></div>
+      <div><strong><kbd>G</kbd></strong><span>Gripper / wrist view (cycles left/right when both arms are active).</span></div>
+      <div><strong><kbd>Esc</kbd></strong><span>Close the viewer.</span></div>
     </section>
 
     <section class="tasks" id="tasks">
@@ -287,13 +289,13 @@
       </article>
 
       <article class="task">
-        <span class="task-index">03 / CATCHING</span><h2>Catch Rat</h2>
-        <p>Position the selected gripper above a hole and close it while the rat is rising.</p>
-        <code class="command">python script_exp/interactive_catch_rat.py --control robot</code>
+        <span class="task-index">03 / CATCHING</span><h2>Catch Cuboid</h2>
+        <p>Position the selected gripper above a hole and close it while the cuboid is rising.</p>
+        <code class="command">python script_exp/interactive_catch_cuboid.py --control robot</code>
         <dl class="controls">
-          <dt><kbd>Space</kbd></dt><dd>Approach if needed, then close the gripper.</dd>
+          <dt><kbd>Space</kbd></dt><dd>Close the gripper and lift on a successful catch.</dd>
         </dl>
-        <div class="note">Success: hold the rat in the gripper; dual mode requires both rats.</div>
+        <div class="note">Success: hold the cuboid in the gripper; dual mode requires both cuboids.</div>
       </article>
 
       <article class="task">
@@ -319,10 +321,10 @@
         <p>Move steak between board and pan, then physically hold the appropriate cook button until done.</p>
         <code class="command">python script_exp/interactive_cook_meat.py --control robot</code>
         <dl class="controls">
-          <dt><kbd>G</kbd></dt><dd>Robot toggles steak from board to pan, then back.</dd>
-          <dt><kbd>Space</kbd></dt><dd>Hold to cook with the selected arm or arms.</dd>
+          <dt><kbd>Space</kbd></dt><dd>Robot toggles steak from board to pan, then back.</dd>
+          <dt><kbd>Q</kbd> / <kbd>E</kbd></dt><dd>Lower / raise gripper over the cook key to press.</dd>
         </dl>
-        <div class="note">Cooking advances only while the steak is on its pan and the button is held.</div>
+        <div class="note">Cooking advances only while the steak is on its pan and the cook key is depressed (gripper-Z).</div>
       </article>
 
       <article class="task">

@@ -7,8 +7,9 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat.py --control robot
 
 Respects ``cook_button_enabled`` from the selected config. When enabled, cooking
-advances when a gripper lowers onto the cook key (ReactivePushButtons). Space is
-unused — no ``_expert_key_held`` latching from the interactive script.
+advances when a gripper lowers onto the cook key (ReactivePushButtons). Space
+toggles steak board ↔ pan transfer — no ``_expert_key_held`` latching from the
+interactive script.
 """
 
 import argparse
@@ -39,25 +40,27 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Space is unused. Select an arm, move over the cook key, lower with Q to press.
-  G                →  toggle steak(s): board ↔ pan
+  Select an arm, move over the cook key, lower with Q to press.
+  Space            →  toggle steak(s): board ↔ pan
   P                →  snap steak(s) onto pan(s)
   B                →  snap steak(s) back to board(s)
 
   Cooking advances only while the steak is on the pan and the key is depressed.
   Gripper-Z / ReactivePushButtons drives cooking (no Space latch).
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
 CONTROLS_ROBOT = """
   Select an arm (1/2/3), move over the cook key, lower with Q to press
-  (E to raise). Space is unused.
-  G                →  robot toggles steak(s): board → pan, then pan → board
+  (E to raise).
+  Space            →  robot toggles steak(s): board → pan, then pan → board
 
   Cooking advances only while the steak is on the pan and the key is depressed.
   Gripper-Z / ReactivePushButtons drives cooking (no Space latch).
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
@@ -351,12 +354,12 @@ def _toggle_steak_transfer(env, *, robot: bool):
 
 
 class KeyboardState:
-    """P/B/G helpers only — cooking is gripper-Z (no Space/Q/E latch)."""
+    """P/B/Space helpers only — cooking is gripper-Z (no Space cook latch)."""
 
     def __init__(self):
         self.prev_p = False
         self.prev_b = False
-        self.prev_g = False
+        self.prev_space = False
 
     def update(self, env, window):
         _clear_cook_latches(env)
@@ -369,10 +372,10 @@ class KeyboardState:
         if b and not self.prev_b:
             _snap_steaks_to_boards(env)
         self.prev_b = b
-        g = window.key_down("g")
-        if g and not self.prev_g:
+        space = window.key_down("space")
+        if space and not self.prev_space:
             _toggle_steak_transfer(env, robot=False)
-        self.prev_g = g
+        self.prev_space = space
 
 
 def _station_cook_finished(env, st):
@@ -600,7 +603,8 @@ def main():
     n = len(env.stations)
     print(
         f"Cook-button sandbox ready ({n} station(s)). "
-        "Select an arm, move over the cook key, lower with Q to press. Space is unused."
+        "Select an arm, move over the cook key, lower with Q to press. "
+        "Space toggles steak board ↔ pan."
     )
 
     last_status = None
@@ -610,7 +614,7 @@ def main():
             frame_start = time.perf_counter()
             if args.control == "keyboard":
                 keyboard.update(env, viewer.window)
-            elif viewer.window.key_press("g"):
+            elif viewer.window.key_press("space"):
                 _toggle_steak_transfer(env, robot=True)
             env._update_kinematic_tasks()
             env.scene.step()

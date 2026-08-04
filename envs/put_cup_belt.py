@@ -708,6 +708,28 @@ class put_cup_belt(Base_Task):
         margin = float(self.moving_component_half_size[0]) + 0.005
         return bool((lo + margin) < cup_x < (hi - margin))
 
+    def _cup_held(self):
+        """True while the cup is still attached to the hand (gripper or teleop hold).
+
+        Gripper-open is not required for release: loss of finger contact (slip-off)
+        counts as detached. Interactive keyboard hold keeps the cup kinematic until
+        Space, which is treated as still held.
+        """
+        if getattr(self, "cup", None) is None:
+            return False
+        for comp in self.cup.actor.get_components():
+            if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
+                try:
+                    if bool(comp.kinematic):
+                        return True
+                except Exception:
+                    pass
+                break
+        try:
+            return len(self.get_gripper_actor_contact_position(self.cup.get_name())) > 0
+        except Exception:
+            return False
+
     def _center_offset(self):
         """Distance from cup to the yellow gap, with a looser y band on the belt plate."""
         cup_p = np.array(self.cup.get_functional_point(0, "pose").p[:2])
@@ -728,11 +750,14 @@ class put_cup_belt(Base_Task):
 
     # ------------------------------------------------------------- success
     def check_success(self):
-        """Success = cup seated between the yellow tools; never touched a curtain if present."""
+        """Success = cup detached from the hand and seated between the yellow tools.
+
+        Detachment is finger-contact / teleop-hold loss (slip-off counts); the gripper
+        does not need to open. Landing elsewhere after detach is failure.
+        """
         if self._curtain_hit:
             return False
-        if self._deposit_step is None:
-            return False
+        held = bool(self._cup_held())
         cup_p = self.cup.get_functional_point(0, "pose").p
         z_ok = (self.slot_z - 0.04) < float(cup_p[2]) < (self.slot_z + 0.12)
         # On / above the belt plate in y.
@@ -744,9 +769,13 @@ class put_cup_belt(Base_Task):
             print(
                 f"[CCS] check: cup_xyz={np.round(np.array(cup_p),3).tolist()} "
                 f"slot_x={self.slot_x():.3f} between={between} y_ok={y_ok} z_ok={z_ok} "
-                f"hit={self._curtain_hit} score={self.placement_score():.2f}",
+                f"held={held} hit={self._curtain_hit} "
+                f"score={self.placement_score():.2f}",
                 flush=True,
             )
+        # Still pinched / teleop-held: do not score a place yet.
+        if held:
+            return False
         return bool(z_ok and y_ok and between and (not self._curtain_hit))
 
     # ------------------------------------------------------------- obs

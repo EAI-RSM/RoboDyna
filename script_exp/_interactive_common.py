@@ -72,14 +72,55 @@ def configure_task(task_name: str, config_name: str, seed: int, use_robot: bool,
     return config
 
 
+_VIEW_HELP_G = "G — gripper / wrist view (cycles L/R when both arms active)"
+_VIEW_HELP_V = "V — toggle view: top-down ↔ head_camera"
+
+
+def _ensure_view_help_lines(lines: list[str]) -> list[str]:
+    """Append V/G camera help once if a banner omitted them."""
+    out = list(lines)
+    has_v = any(
+        "toggle view" in line.lower()
+        or line.strip().startswith("V —")
+        or line.strip().startswith("V:")
+        or line.strip().startswith("V ")
+        for line in lines
+    )
+    has_g = any(
+        "gripper view" in line.lower()
+        or "gripper / wrist" in line.lower()
+        or line.strip().startswith("G —")
+        or line.strip().startswith("G:")
+        or line.strip().startswith("G ")
+        for line in lines
+    )
+    if not has_v:
+        out.append(_VIEW_HELP_V)
+    if not has_g:
+        # Place G next to an existing V line when possible.
+        for i, line in enumerate(out):
+            if (
+                "toggle view" in line.lower()
+                or line.strip().startswith("V —")
+                or line.strip().startswith("V:")
+                or line.strip().startswith("V ")
+            ):
+                out.insert(i + 1, _VIEW_HELP_G)
+                break
+        else:
+            out.append(_VIEW_HELP_G)
+    return out
+
+
 def print_banner(title: str, lines: list[str]):
+    lines = list(lines)
     if any("Mode: robot" in line for line in lines):
-        lines = list(lines)
         insert_at = 1 if lines else 0
         lines[insert_at:insert_at] = [
             "Arrows — move selected arm(s) in XY | E/Q — move in Z",
             "1 / 2 / 3 — select left / right / both arms",
         ]
+    lines = _ensure_view_help_lines(lines)
     width = max(len(title), *(len(line) for line in lines), 40)
     bar = "=" * (width + 4)
     print(bar)
@@ -216,6 +257,49 @@ def resolve_head_camera(env=None, viewer=None):
     return None
 
 
+def resolve_wrist_camera_link(env, side: str):
+    """Return the robot wrist/camera link for ``left`` or ``right``, if any."""
+    robot = getattr(env, "robot", None) if env is not None else None
+    if robot is None or side not in ("left", "right"):
+        return None
+    return getattr(robot, f"{side}_camera", None)
+
+
+def resolve_wrist_render_camera(env, side: str):
+    """Return the sapien wrist render camera when ``collect_wrist_camera`` is on."""
+    cams = getattr(env, "cameras", None) if env is not None else None
+    if cams is None or not bool(getattr(cams, "collect_wrist_camera", False)):
+        return None
+    if side not in ("left", "right"):
+        return None
+    return getattr(cams, f"{side}_camera", None)
+
+
+def active_gripper_sides(env) -> tuple[str, ...]:
+    """Sides whose gripper views G may show.
+
+    Uses ``env._interactive_selected_arms`` when set (1/2/3 selection, or a
+    task's single-arm default). Otherwise both sides that have a wrist camera
+    link. Missing links are dropped so single-arm / no-wrist setups degrade.
+    """
+    available = []
+    for side in ("right", "left"):
+        if resolve_wrist_camera_link(env, side) is not None:
+            available.append(side)
+    if not available:
+        return ()
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+    selected = tuple(s for s in selected if s in ("left", "right"))
+    if not selected:
+        # Prefer right-then-left ordering for dual-arm cycling.
+        return tuple(s for s in ("right", "left") if s in available)
+    ordered = []
+    for side in ("right", "left"):
+        if side in selected and side in available:
+            ordered.append(side)
+    return tuple(ordered)
+
+
 # Nadir viewer: +X camera offset shifts the table left in the frame.
 _TOPDOWN_VIEW_X_OFFSET = 0.08
 
@@ -233,10 +317,10 @@ def default_topdown_xyz(env=None) -> tuple[float, float, float]:
 
 
 class ViewerViewToggle:
-    """Press V to switch the interactive viewer between top-down and head cam.
+    """V toggles top-down ↔ head; G switches to / cycles gripper wrist views.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
-    (``_handle_focused_camera`` commented out), so we copy the head camera
+    (``_handle_focused_camera`` commented out), so we copy the active camera
     pose onto the free-fly viewer each frame instead.
     """
 
@@ -248,10 +332,15 @@ class ViewerViewToggle:
     DEFAULT_TOPDOWN_FOVY = float(np.deg2rad(65.0))
     # Fallback only: when available, the selected head camera's own fovy is used.
     DEFAULT_HEAD_FOVY = float(np.pi / 2.0)
+    # D435-ish wrist fallback when collect_wrist_camera is off.
+    DEFAULT_GRIPPER_FOVY = float(np.deg2rad(42.0))
+    _SCENE_MODES = ("topdown", "head")
+    _GRIPPER_MODES = ("right_gripper", "left_gripper")
 
     def __init__(
         self,
         viewer,
+        env=None,
         head_camera=None,
         topdown_xyz=None,
         topdown_rpy=None,
@@ -261,12 +350,16 @@ class ViewerViewToggle:
         robot_controls=None,
     ):
         self.viewer = viewer
+        self.env = env
         self._prev_v = False
+        self._prev_g = False
         self.mode = "topdown"  # always start overhead; V switches to head_camera
+        self._scene_mode = "topdown"
         self._head = head_camera
         self.robot_controls = robot_controls
+        self._warned_missing_gripper = False
         if self._head is None:
-            self._head = resolve_head_camera(viewer=viewer)
+            self._head = resolve_head_camera(env, viewer)
         if self._head is None and warn_missing_head:
             print("Warning: head_camera not found; V toggle will stay on top-down.")
 
@@ -330,15 +423,18 @@ class ViewerViewToggle:
             except Exception:
                 pass
 
-    def _head_fovy(self) -> float:
-        """Use the render camera's lens so head view keeps its intended framing."""
+    def _camera_fovy(self, camera, default: float) -> float:
         try:
-            fovy = float(self._head.fovy)
+            fovy = float(camera.fovy)
             if np.isfinite(fovy) and fovy > 0.0:
                 return fovy
         except Exception:
             pass
-        return self.DEFAULT_HEAD_FOVY
+        return float(default)
+
+    def _head_fovy(self) -> float:
+        """Use the render camera's lens so head view keeps its intended framing."""
+        return self._camera_fovy(self._head, self.DEFAULT_HEAD_FOVY)
 
     def _set_viewer_pose(self, pose):
         """Snap free-fly camera to ``pose`` and keep the FPS controller in sync."""
@@ -351,7 +447,60 @@ class ViewerViewToggle:
         if cw is not None and hasattr(cw, "_sync_fps_camera_controller"):
             cw._sync_fps_camera_controller()
 
+    def _scene_cycle_modes(self) -> list[str]:
+        """Usual V targets: top-down ↔ head_camera (unchanged from prior behavior)."""
+        modes = ["topdown"]
+        if self._head is not None:
+            modes.append("head")
+        return modes
+
+    def _gripper_side(self) -> str | None:
+        if self.mode == "right_gripper":
+            return "right"
+        if self.mode == "left_gripper":
+            return "left"
+        return None
+
+    def _wrist_pose(self, side: str):
+        """Current wrist camera pose, syncing the render camera when available."""
+        link = resolve_wrist_camera_link(self.env, side)
+        if link is None:
+            return None
+        try:
+            pose = link.get_pose() if hasattr(link, "get_pose") else link.global_pose
+        except Exception:
+            return None
+        render_cam = resolve_wrist_render_camera(self.env, side)
+        if render_cam is not None:
+            try:
+                render_cam.entity.set_pose(pose)
+            except Exception:
+                pass
+            try:
+                return render_cam.global_pose
+            except Exception:
+                return pose
+        return pose
+
+    def _gripper_fovy(self, side: str) -> float:
+        render_cam = resolve_wrist_render_camera(self.env, side)
+        if render_cam is not None:
+            return self._camera_fovy(render_cam, self.DEFAULT_GRIPPER_FOVY)
+        return self.DEFAULT_GRIPPER_FOVY
+
     def apply(self, announce=True):
+        side = self._gripper_side()
+        if side is not None:
+            pose = self._wrist_pose(side)
+            if pose is None:
+                if announce:
+                    print(f"View: {side} gripper unavailable; staying put.")
+                return
+            self._set_fovy(self._gripper_fovy(side))
+            self._set_viewer_pose(pose)
+            if announce:
+                print(f"View: {side} gripper")
+            return
         if self.mode == "head" and self._head is not None:
             self._set_fovy(self._head_fovy())
             self._set_viewer_pose(self._head.global_pose)
@@ -362,6 +511,7 @@ class ViewerViewToggle:
             self.viewer.focus_camera(None)
         except Exception:
             pass
+        self.mode = "topdown"
         self._set_fovy(self._topdown_fovy)
         if self._topdown_pose is not None:
             self._set_viewer_pose(self._topdown_pose)
@@ -373,38 +523,88 @@ class ViewerViewToggle:
         if announce:
             print("View: top-down")
 
-    def _v_pressed(self, window) -> bool:
-        down = bool(window.key_down("v"))
-        edge = down and not self._prev_v
-        self._prev_v = down
+    def _edge_key(self, window, key: str, prev_attr: str) -> bool:
+        down = bool(window.key_down(key))
+        edge = down and not getattr(self, prev_attr)
+        setattr(self, prev_attr, down)
         if edge:
             return True
         try:
-            return bool(window.key_press("v"))
+            return bool(window.key_press(key))
         except Exception:
             return False
+
+    def _v_pressed(self, window) -> bool:
+        return self._edge_key(window, "v", "_prev_v")
+
+    def _g_pressed(self, window) -> bool:
+        return self._edge_key(window, "g", "_prev_g")
+
+    def _cycle_scene_view(self):
+        """Top-down ↔ head_camera; from a gripper view, return to that cycle."""
+        modes = self._scene_cycle_modes()
+        if self.mode in self._GRIPPER_MODES:
+            self.mode = self._scene_mode if self._scene_mode in modes else modes[0]
+            self.apply(announce=True)
+            return
+        if self.mode not in modes:
+            self.mode = modes[0]
+            self._scene_mode = self.mode
+            self.apply(announce=True)
+            return
+        if len(modes) == 1:
+            if self.mode == "topdown" and self._head is None:
+                print("head_camera not available; staying on top-down.")
+            return
+        idx = modes.index(self.mode)
+        self.mode = modes[(idx + 1) % len(modes)]
+        self._scene_mode = self.mode
+        self.apply(announce=True)
+
+    def _activate_gripper_view(self):
+        sides = active_gripper_sides(self.env)
+        if not sides:
+            if not self._warned_missing_gripper:
+                print("No gripper/wrist camera available; G does nothing.")
+                self._warned_missing_gripper = True
+            return
+        if self.mode in self._SCENE_MODES:
+            self._scene_mode = self.mode
+        if len(sides) == 1:
+            self.mode = f"{sides[0]}_gripper"
+            self.apply(announce=True)
+            return
+        # Dual active: cycle right ↔ left (start on right when entering).
+        current = self._gripper_side()
+        if current in sides:
+            idx = sides.index(current)
+            self.mode = f"{sides[(idx + 1) % len(sides)]}_gripper"
+        else:
+            self.mode = f"{sides[0]}_gripper"
+        self.apply(announce=True)
 
     def update(self, window):
         if self.robot_controls is not None:
             self.robot_controls.update(window)
+        if self._g_pressed(window):
+            self._activate_gripper_view()
+            return
         if self._v_pressed(window):
-            if self.mode == "topdown":
-                if self._head is None:
-                    print("head_camera not available; staying on top-down.")
-                else:
-                    self.mode = "head"
-                    self.apply(announce=True)
-            else:
-                self.mode = "topdown"
-                self.apply(announce=True)
+            self._cycle_scene_view()
             return
         # Keep the fixed framing. WASD move_speed is zeroed at init; re-apply
         # still covers any leftover free-fly nudges (mouse drag, scroll).
         if self.mode == "topdown":
             self.apply(announce=False)
-        # Keep head view locked to the moving head_camera.
-        if self.mode == "head" and self._head is not None:
+        # Keep head / gripper views locked to the moving cameras.
+        elif self.mode == "head" and self._head is not None:
             self._set_viewer_pose(self._head.global_pose)
+        else:
+            side = self._gripper_side()
+            if side is not None:
+                pose = self._wrist_pose(side)
+                if pose is not None:
+                    self._set_viewer_pose(pose)
 
 
 def make_viewer_view_toggle(
@@ -415,7 +615,7 @@ def make_viewer_view_toggle(
     capture_current_as_topdown: bool = False,
     **kwargs,
 ) -> ViewerViewToggle:
-    """Build a V-key top-down ↔ head_camera toggle for an interactive env.
+    """Build V (top-down ↔ head) + G (gripper) view switching for an interactive env.
 
     Always starts on a zoomed, table-centered top-down view.
     Pass ``topdown_xyz`` / ``topdown_rpy`` only to override that framing.
@@ -447,6 +647,7 @@ def make_viewer_view_toggle(
         robot_controls = UniversalRobotControls(env)
     return ViewerViewToggle(
         viewer,
+        env=env,
         head_camera=resolve_head_camera(env, viewer),
         topdown_xyz=topdown_xyz,
         topdown_rpy=topdown_rpy,
@@ -741,7 +942,8 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     When done, prints SUCCESS/FAILURE via ``report_task_result`` and returns that
     bool (or ``None`` if the viewer closed without a result).
     ``should_stop`` remains a raw break (no auto print) for backward compatibility.
-    Starts top-down; press V to toggle top-down ↔ head_camera.
+    Starts top-down; press V to toggle top-down ↔ head_camera;
+    press G for gripper/wrist view(s).
     """
     global _LAST_TASK_RESULT
     _LAST_TASK_RESULT = None
@@ -830,6 +1032,30 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
             "  1 / 2 / 3         select left / right / both arms\n"
             + body
         )
+    lines = body.splitlines()
+    # Inject G help next to V without duplicating when scripts already document it.
+    if not any(
+        ("gripper" in ln.lower() and ln.strip().startswith("G"))
+        or ln.strip().startswith("G ")
+        or ln.strip().startswith("G:")
+        or "G                 " in ln
+        or "G: " in ln
+        for ln in lines
+    ):
+        inserted = False
+        for i, ln in enumerate(lines):
+            if "toggle view" in ln.lower() or ln.strip().startswith("V ") or ln.strip().startswith("V:") or "V                 " in ln:
+                indent = ln[: len(ln) - len(ln.lstrip(" "))]
+                lines.insert(
+                    i + 1,
+                    f"{indent}G                 gripper view (cycle L/R when both arms active)",
+                )
+                inserted = True
+                break
+        if not inserted:
+            lines.append("  V                 toggle view: top-down ↔ head_camera")
+            lines.append("  G                 gripper view (cycle L/R when both arms active)")
+        body = "\n".join(lines)
     bar = "=" * 60
     print(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
 

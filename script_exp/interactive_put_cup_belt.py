@@ -9,7 +9,8 @@ Run from any directory:
 
 Keyboard mode moves the cup in X/Y/Z. Robot mode grasps the cup on the first
 Space press, moves it with the controls, then releases it at its current pose
-on the second Space press.
+on the second Space press. If the cup slips off the gripper, landing pose is
+still scored (gripper open is not required).
 """
 
 import argparse
@@ -52,17 +53,19 @@ CONTROLS_KEYBOARD = """
   Q / E             raise/lower cup (world Z)
   Space             release cup at its current position
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
-  Success: cup seated between yellow sticks; no curtain touch
+  Success: cup lands between yellow sticks after release/slip; no curtain touch
 """
 
 CONTROLS_ROBOT = """
   Space             first press: grasp; second press: release at current pose
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
-  Success: cup seated between yellow sticks; no curtain touch
+  Success: cup lands between yellow sticks after release/slip; no curtain touch
   --robot-motion planner|interpolate
 """
 
@@ -243,6 +246,11 @@ class RobotCupController:
         self.placed = False
         self.busy = False
         self._space = EdgeKey()
+        # Require sustained loss of finger contact before treating a drop as a slip
+        # (avoids one-frame PhysX contact flicker right after grasp).
+        self._hold_contact_seen = False
+        self._no_contact_steps = 0
+        self._slip_no_contact_steps = 8
 
     def _drive_qpos(self):
         joints = (
@@ -400,6 +408,8 @@ class RobotCupController:
             self.env.move(self.env.move_by_displacement(self.arm, z=half))
             self.env.move(self.env.move_by_displacement(self.arm, z=self.env.lift_z - half))
             self.holding = True
+            self._hold_contact_seen = bool(self.env._cup_held())
+            self._no_contact_steps = 0
             self.env._attempt_active = True
             print(
                 f"Grasped cup with {self.arm}. Use arrows for X/Y, E/Q for Z; "
@@ -436,6 +446,30 @@ class RobotCupController:
     def update(self, window):
         if self.busy:
             return
+        # Slip-off: sustained loss of finger contact (gripper need not open).
+        if self.holding and not self.placed:
+            if self.env._cup_held():
+                self._hold_contact_seen = True
+                self._no_contact_steps = 0
+            else:
+                self._no_contact_steps += 1
+                # After a real pinch, a short no-contact streak means slip; if grasp
+                # never registered contact, wait longer before giving up.
+                limit = (
+                    self._slip_no_contact_steps
+                    if self._hold_contact_seen
+                    else self._slip_no_contact_steps * 4
+                )
+                if self._no_contact_steps >= limit:
+                    p = np.asarray(self.env.cup.get_pose().p, dtype=float)
+                    _mark_deposit(self.env)
+                    self.holding = False
+                    self.placed = True
+                    print(
+                        f"Cup slipped from gripper at ({p[0]:.3f}, {p[1]:.3f}, "
+                        f"{p[2]:.3f}); evaluating landing…"
+                    )
+                    return
         if self._space.poll(window.key_down("space")):
             if not self.holding and not self.placed:
                 self.grasp()
@@ -515,7 +549,7 @@ def main():
             if getattr(controller, "placed", False):
                 if placed_since is None:
                     placed_since = time.perf_counter()
-                    print("Cup released; settling…")
+                    print("Cup detached; settling…")
                 elif time.perf_counter() - placed_since >= 2.0:
                     hit = bool(getattr(env, "_curtain_hit", False))
                     detail = f"score={env.placement_score():.2f}"

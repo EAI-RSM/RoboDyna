@@ -48,6 +48,7 @@ the same controls as the interactive examples in `script_exp`:
                            Q/E move selected arm(s) in Z
 --control keyboard:        Space and arrows move the task prop directly
 V                          top-down ↔ head-camera view
+G                          gripper / wrist view (cycle L/R when both arms active)
 F                          task-specific action (knob, dispenser, release, dab)
 Escape                     quit
 ```
