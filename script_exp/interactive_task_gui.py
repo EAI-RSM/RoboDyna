@@ -211,9 +211,7 @@ TEXT_SECONDARY = "#aebdca"
 RANDOM_SEED_MAX = 500
 
 # Tasks whose README row lives under a different name (or is shared).
-README_TASK_ALIASES = {
-    "cook_meat_timer": "cook_meat",
-}
+README_TASK_ALIASES: dict[str, str] = {}
 
 
 def load_condition_descriptions(readme_path: Path = README_PATH) -> dict[str, dict[str, str]]:

@@ -21,23 +21,22 @@ import sapien.render
 import transforms3d as t3d
 
 from .cook_meat import cook_meat
+from .utils.create_actor import create_visual_box
 
 
 class cook_meat_timer(cook_meat):
     """``cook_meat`` with a per-station pie timer visual."""
 
-    # Thin standing disc (cylinder default axis is +X; rotate to +Z).
-    VERTICAL_CYL_Q: ClassVar[list[float]] = [0.70710678, 0.0, 0.70710678, 0.0]
-    TIMER_RADIUS_DEFAULT: ClassVar[float] = 0.045
-    TIMER_HALF_H: ClassVar[float] = 0.003
-    TIMER_N_SECTIONS: ClassVar[int] = 36
-    TIMER_RIM_WIDTH: ClassVar[float] = 0.008
-    # Offset from board center: slightly +y (away from robot), outer lateral.
-    TIMER_OFF_X: ClassVar[float] = 0.00
-    TIMER_OFF_Y: ClassVar[float] = 0.12
-    TIMER_Z_LIFT: ClassVar[float] = 0.004  # above table top
+    TIMER_RADIUS_DEFAULT: ClassVar[float] = 0.040
+    TIMER_HALF_H: ClassVar[float] = 0.0025
+    TIMER_N_SECTIONS: ClassVar[int] = 24
+    TIMER_RIM_WIDTH: ClassVar[float] = 0.007
+    # Outer-lateral of the pan, slightly toward +y (board) — clear of bowl/key.
+    TIMER_OFF_X: ClassVar[float] = 0.18
+    TIMER_OFF_Y: ClassVar[float] = 0.06
+    TIMER_Z_LIFT: ClassVar[float] = 0.006  # above table top (table-frame)
 
-    COLOR_DISC: ClassVar[list[float]] = [1.00, 1.00, 1.00]
+    COLOR_DISC: ClassVar[list[float]] = [0.96, 0.96, 0.96]
     COLOR_GREEN: ClassVar[list[float]] = [0.20, 0.78, 0.28]
     COLOR_GREEN_RIM: ClassVar[list[float]] = [0.08, 0.48, 0.14]
     COLOR_YELLOW: ClassVar[list[float]] = [0.95, 0.82, 0.12]
@@ -66,19 +65,14 @@ class cook_meat_timer(cook_meat):
         self.timer_n_sections = int(
             self._cook_cfg.get("timer_n_sections", self.TIMER_N_SECTIONS)
         )
-        self.timer_n_sections = max(8, self.timer_n_sections)
+        self.timer_n_sections = max(8, min(48, self.timer_n_sections))
         for st in self.stations:
             self._spawn_station_pie_timer(st)
             self._update_station_pie_timer(st)
 
     # ---------------------------------------------------------------- pie timer
     def _timer_phase_and_fill(self, doneness: float) -> tuple[str, float]:
-        """Map doneness → (phase, fill fraction in [0, 1]).
-
-        green fills 0→1 as doneness approaches the lower success bound; at the
-        lower bound the pie is full green. Past that it resets and fills yellow
-        until the upper bound, then stays full red.
-        """
+        """Map doneness → (phase, fill fraction in [0, 1])."""
         low, high = map(float, self.target_doneness_range)
         d = float(np.clip(doneness, 0.0, 1.0))
         if d <= 0.0:
@@ -98,81 +92,111 @@ class cook_meat_timer(cook_meat):
             return list(self.COLOR_RED), list(self.COLOR_RED_RIM)
         return list(self.COLOR_DISC), list(self.COLOR_DISC)
 
+    def _hidden_pose(self) -> sapien.Pose:
+        """Park unused wedge parts below the table (fire-ring pattern)."""
+        return sapien.Pose([0.0, 0.0, -1.0], [1, 0, 0, 0])
+
     def _spawn_station_pie_timer(self, station: dict[str, Any]) -> None:
-        """Build one static actor: white disc + N fill wedges + N rim arcs."""
-        world_bias = float(self.table_z_bias)
+        """Build a white disc + N fill/rim wedges via visual-only boxes."""
+        # create_visual_box(self, ...) adds table_z_bias — pass table-frame Z.
+        table_z = 0.74
         side = float(station.get("side", 1.0))
         lat = 1.0 if side > 0 else -1.0
-        board_xy = station.get("board_xy", station["board"].get_pose().p[:2])
-        cx = float(board_xy[0]) + lat * float(self.TIMER_OFF_X)
-        cy = float(board_xy[1]) + float(self.TIMER_OFF_Y)
-        cx = float(np.clip(cx, -0.38, 0.38))
-        cy = float(np.clip(cy, -0.20, 0.38))
+        pan_xy = np.asarray(station["skillet"].get_pose().p[:2], dtype=float)
+        cx = float(pan_xy[0] + lat * self.TIMER_OFF_X)
+        cy = float(pan_xy[1] + self.TIMER_OFF_Y)
+        cx = float(np.clip(cx, -0.40, 0.40))
+        cy = float(np.clip(cy, -0.22, 0.30))
+
         radius = float(self.timer_radius)
         n = int(self.timer_n_sections)
         half_h = float(self.TIMER_HALF_H)
         rim_w = float(self.TIMER_RIM_WIDTH)
-        # World Z (builder pose is absolute; do not double-apply table_z_bias).
-        cz = float(0.74 + world_bias + self.TIMER_Z_LIFT + half_h)
-
-        builder = self.scene.create_actor_builder()
-        builder.set_physx_body_type("static")
-        disc_mat = sapien.render.RenderMaterial(
-            base_color=[*self.COLOR_DISC, 1.0]
-        )
-        builder.add_cylinder_visual(
-            pose=sapien.Pose([0.0, 0.0, 0.0], self.VERTICAL_CYL_Q),
-            radius=radius,
-            half_length=half_h,
-            material=disc_mat,
-        )
-
-        # Local Z above disc; sections are relative to the actor origin.
-        fill_z = half_h + 0.0015
+        disc_z = float(table_z + self.TIMER_Z_LIFT + half_h)
+        fill_z = disc_z + half_h + 0.001
         rim_z = fill_z + 0.0005
-        d_theta = 2.0 * np.pi / n
-        outer_fill = max(0.01, radius - rim_w)
-        r_mid = 0.5 * outer_fill
-        r_rim = radius - 0.5 * rim_w
-        tang_fill = max(0.0025, r_mid * d_theta * 0.58)
-        tang_rim = max(0.0025, r_rim * d_theta * 0.58)
-        fill_half = [r_mid, tang_fill, half_h * 0.55]
-        rim_half = [0.5 * rim_w, tang_rim, half_h * 0.65]
-        fill_mats: list[Any] = []
-        rim_mats: list[Any] = []
 
+        d_theta = 2.0 * np.pi / n
+        # White base disc ≈ ring of radial boxes (avoids cylinder wash-out).
+        base_shapes: list[Any] = []
+        base_r_mid = 0.5 * radius
+        base_tang = max(0.0025, base_r_mid * d_theta * 0.62)
+        base_half = [base_r_mid, base_tang, half_h]
         for i in range(n):
-            # Clockwise from 12 o'clock (+Y): θ = π/2 − (i+0.5)·Δθ.
             theta = 0.5 * np.pi - (i + 0.5) * d_theta
             c, s = float(np.cos(theta)), float(np.sin(theta))
             q = t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], theta).tolist()
-            fmat = sapien.render.RenderMaterial(
-                base_color=[*self.COLOR_DISC, 1.0]
+            part = create_visual_box(
+                self,
+                sapien.Pose([cx + base_r_mid * c, cy + base_r_mid * s, disc_z], q),
+                half_size=base_half,
+                color=tuple(self.COLOR_DISC),
+                name=f"pie_timer_base_{station['tag']}_{i}",
             )
-            rmat = sapien.render.RenderMaterial(
-                base_color=[*self.COLOR_DISC, 1.0]
-            )
-            fill_mats.append(fmat)
-            rim_mats.append(rmat)
-            builder.add_box_visual(
-                pose=sapien.Pose([r_mid * c, r_mid * s, fill_z], q),
-                half_size=fill_half,
-                material=fmat,
-            )
-            builder.add_box_visual(
-                pose=sapien.Pose([r_rim * c, r_rim * s, rim_z], q),
-                half_size=rim_half,
-                material=rmat,
-            )
+            for comp in part.get_components():
+                if isinstance(comp, sapien.render.RenderBodyComponent):
+                    base_shapes.extend(list(comp.render_shapes))
 
-        builder.set_initial_pose(sapien.Pose([cx, cy, cz], [1, 0, 0, 0]))
-        actor = builder.build(name=f"pie_timer_{station['tag']}")
+        outer_fill = max(0.008, radius - rim_w)
+        r_mid = 0.5 * outer_fill
+        r_rim = radius - 0.5 * rim_w
+        tang_fill = max(0.0025, r_mid * d_theta * 0.60)
+        tang_rim = max(0.0025, r_rim * d_theta * 0.60)
+        fill_half = [r_mid, tang_fill, half_h * 0.70]
+        rim_half = [0.5 * rim_w, tang_rim, half_h * 0.85]
+
+        fill_parts: list[Any] = []
+        rim_parts: list[Any] = []
+        fill_homes: list[sapien.Pose] = []
+        rim_homes: list[sapien.Pose] = []
+        fill_shapes: list[Any] = []
+        rim_shapes: list[Any] = []
+
+        for i in range(n):
+            theta = 0.5 * np.pi - (i + 0.5) * d_theta
+            c, s = float(np.cos(theta)), float(np.sin(theta))
+            q = t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], theta).tolist()
+            f_home = sapien.Pose(
+                [cx + r_mid * c, cy + r_mid * s, fill_z], q
+            )
+            r_home = sapien.Pose(
+                [cx + r_rim * c, cy + r_rim * s, rim_z], q
+            )
+            # Start hidden; _update lights the active wedge count.
+            fill = create_visual_box(
+                self,
+                self._hidden_pose(),
+                half_size=fill_half,
+                color=tuple(self.COLOR_GREEN),
+                name=f"pie_timer_fill_{station['tag']}_{i}",
+            )
+            rim = create_visual_box(
+                self,
+                self._hidden_pose(),
+                half_size=rim_half,
+                color=tuple(self.COLOR_GREEN_RIM),
+                name=f"pie_timer_rim_{station['tag']}_{i}",
+            )
+            fill_parts.append(fill)
+            rim_parts.append(rim)
+            fill_homes.append(f_home)
+            rim_homes.append(r_home)
+            for comp in fill.get_components():
+                if isinstance(comp, sapien.render.RenderBodyComponent):
+                    fill_shapes.extend(list(comp.render_shapes))
+            for comp in rim.get_components():
+                if isinstance(comp, sapien.render.RenderBodyComponent):
+                    rim_shapes.extend(list(comp.render_shapes))
 
         station["pie_timer"] = {
-            "center": (cx, cy, cz),
-            "actor": actor,
-            "fill_mats": fill_mats,
-            "rim_mats": rim_mats,
+            "center": (cx, cy, disc_z + float(self.table_z_bias)),
+            "base_shapes": base_shapes,
+            "fill_parts": fill_parts,
+            "rim_parts": rim_parts,
+            "fill_homes": fill_homes,
+            "rim_homes": rim_homes,
+            "fill_shapes": fill_shapes,
+            "rim_shapes": rim_shapes,
             "n": n,
             "phase": "empty",
             "fill": 0.0,
@@ -180,35 +204,40 @@ class cook_meat_timer(cook_meat):
         }
 
     @staticmethod
-    def _set_mat_color(mat: Any, rgb: list[float]) -> None:
-        try:
-            mat.set_base_color(list(rgb)[:3] + [1.0])
-        except Exception:
-            pass
+    def _set_shapes_color(shapes: list[Any], rgb: list[float]) -> None:
+        color = list(rgb)[:3] + [1.0]
+        for shape in shapes:
+            try:
+                shape.material.set_base_color(color)
+            except Exception:
+                pass
 
     def _update_station_pie_timer(self, station: dict[str, Any]) -> None:
-        """Recolor pie sections from the station's current doneness."""
+        """Show / recolor pie sections from the station's current doneness."""
         timer = station.get("pie_timer")
         if not timer:
             return
         phase, fill = self._timer_phase_and_fill(float(station.get("doneness", 0.0)))
         n = int(timer["n"])
         n_lit = 0 if phase == "empty" else int(np.clip(int(np.round(fill * n)), 0, n))
-        # Skip no-op updates (render pass calls this every cook tick).
-        if (
-            timer.get("phase") == phase
-            and int(timer.get("n_lit", -1)) == n_lit
-        ):
+        if timer.get("phase") == phase and int(timer.get("n_lit", -1)) == n_lit:
             timer["fill"] = float(fill)
             return
+
         fill_rgb, rim_rgb = self._phase_colors(phase)
-        white = list(self.COLOR_DISC)
-        fill_mats = timer["fill_mats"]
-        rim_mats = timer["rim_mats"]
+        hidden = self._hidden_pose()
         for i in range(n):
             on = i < n_lit
-            self._set_mat_color(fill_mats[i], fill_rgb if on else white)
-            self._set_mat_color(rim_mats[i], rim_rgb if on else white)
+            fill_parts = timer["fill_parts"]
+            rim_parts = timer["rim_parts"]
+            if on:
+                fill_parts[i].set_pose(timer["fill_homes"][i])
+                rim_parts[i].set_pose(timer["rim_homes"][i])
+                self._set_shapes_color([timer["fill_shapes"][i]], fill_rgb)
+                self._set_shapes_color([timer["rim_shapes"][i]], rim_rgb)
+            else:
+                fill_parts[i].set_pose(hidden)
+                rim_parts[i].set_pose(hidden)
         timer["phase"] = phase
         timer["fill"] = float(fill)
         timer["n_lit"] = int(n_lit)
