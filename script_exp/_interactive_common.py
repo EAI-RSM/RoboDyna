@@ -12,6 +12,51 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# ANSI colors for interactive CLI (TTY only; respect NO_COLOR / FORCE_COLOR).
+_ANSI_BLUE = "\033[34m"
+_ANSI_GREEN = "\033[32m"
+_ANSI_RED = "\033[31m"
+_ANSI_RESET = "\033[0m"
+
+
+def _stdout_supports_color() -> bool:
+    """Color when stdout is a TTY, unless ``NO_COLOR`` is set.
+
+    ``FORCE_COLOR`` (any value other than empty / ``0``) forces color even when
+    not a TTY — useful for CI demos / piped capture.
+    """
+    if os.environ.get("NO_COLOR"):
+        return False
+    force = os.environ.get("FORCE_COLOR")
+    if force not in (None, "", "0"):
+        return True
+    return hasattr(sys.stdout, "isatty") and bool(sys.stdout.isatty())
+
+
+def colorize(text: str, ansi_code: str) -> str:
+    """Wrap ``text`` in ANSI color when stdout is a color-capable TTY."""
+    if not text or not _stdout_supports_color():
+        return text
+    return f"{ansi_code}{text}{_ANSI_RESET}"
+
+
+def print_instructions(*args, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """Print controls / how-to text in blue."""
+    msg = sep.join(str(a) for a in args)
+    print(colorize(msg, _ANSI_BLUE), end=end, flush=flush)
+
+
+def print_success(*args, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """Print a success / SUCCESS result line in green."""
+    msg = sep.join(str(a) for a in args)
+    print(colorize(msg, _ANSI_GREEN), end=end, flush=flush)
+
+
+def print_failure(*args, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """Print a failure / FAILURE result line in red."""
+    msg = sep.join(str(a) for a in args)
+    print(colorize(msg, _ANSI_RED), end=end, flush=flush)
+
 
 def bootstrap_repo():
     """chdir to repo root and put it on ``sys.path`` (any caller cwd)."""
@@ -123,12 +168,8 @@ def print_banner(title: str, lines: list[str]):
     lines = _ensure_view_help_lines(lines)
     width = max(len(title), *(len(line) for line in lines), 40)
     bar = "=" * (width + 4)
-    print(bar)
-    print(f"  {title}")
-    print(bar)
-    for line in lines:
-        print(f"  {line}")
-    print(bar)
+    block = "\n".join([bar, f"  {title}", bar, *[f"  {line}" for line in lines], bar])
+    print_instructions(block)
 
 
 def edge_pressed(window, key: str, prev: dict) -> bool:
@@ -228,13 +269,17 @@ def report_task_result(env, detail: str | None = None) -> bool:
     try:
         ok = bool(env.check_success())
     except Exception as exc:
-        print(f"Task complete: FAILURE (check_success error: {exc})")
+        print_failure(f"Task complete: FAILURE (check_success error: {exc})")
         _LAST_TASK_RESULT = False
         return False
     if detail is None and not ok:
         detail = getattr(env, "_last_fail_reason", None) or None
     status = "SUCCESS" if ok else "FAILURE"
-    print(f"Task complete: {status}" + (f" ({detail})" if detail else ""))
+    msg = f"Task complete: {status}" + (f" ({detail})" if detail else "")
+    if ok:
+        print_success(msg)
+    else:
+        print_failure(msg)
     _LAST_TASK_RESULT = bool(ok)
     return ok
 
@@ -316,8 +361,55 @@ def default_topdown_xyz(env=None) -> tuple[float, float, float]:
     return (bx + _TOPDOWN_VIEW_X_OFFSET, by, 1.68)
 
 
+def gripper_width(env, side: str) -> float:
+    """Normalized gripper opening in ``[0, 1]`` (1 = open, 0 = closed)."""
+    robot = getattr(env, "robot", None)
+    if robot is None:
+        return 0.0
+    if side == "left":
+        return float(robot.get_left_gripper_val())
+    return float(robot.get_right_gripper_val())
+
+
+def toggle_selected_grippers(env, *, fallback=("left", "right"), threshold: float = 0.5) -> bool:
+    """Edge-action helper: open ↔ close the highlighted gripper(s).
+
+    Uses the current 1/2/3 selection when present; otherwise ``fallback``.
+    Per selected arm: width ``> threshold`` → close (0), else open (1).
+    Applies via ``robot.set_gripper`` (non-blocking) so teleop stays responsive.
+    """
+    robot = getattr(env, "robot", None)
+    if robot is None or not hasattr(robot, "set_gripper"):
+        print("No gripper available to open/close.")
+        return False
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+    if not selected:
+        if bool(getattr(env, "_interactive_universal_controls", False)):
+            print("Select an arm first: 1 (left), 2 (right), or 3 (both).")
+            return False
+        selected = tuple(fallback)
+    actions = []
+    for side in selected:
+        if side not in ("left", "right"):
+            continue
+        width = gripper_width(env, side)
+        target = 0.0 if width > float(threshold) else 1.0
+        try:
+            robot.set_gripper(target, side, gripper_eps=0.0)
+        except Exception as exc:
+            print(f"Gripper toggle failed ({side}): {exc}")
+            continue
+        actions.append(f"{side}={'open' if target > 0.5 else 'closed'}")
+    if not actions:
+        return False
+    print("Gripper: " + ", ".join(actions))
+    return True
+
+
 class ViewerViewToggle:
     """V toggles top-down ↔ head; G switches to / cycles gripper wrist views.
+
+    F (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
     (``_handle_focused_camera`` commented out), so we copy the active camera
@@ -353,6 +445,7 @@ class ViewerViewToggle:
         self.env = env
         self._prev_v = False
         self._prev_g = False
+        self._prev_f = False
         self.mode = "topdown"  # always start overhead; V switches to head_camera
         self._scene_mode = "topdown"
         self._head = head_camera
@@ -540,6 +633,9 @@ class ViewerViewToggle:
     def _g_pressed(self, window) -> bool:
         return self._edge_key(window, "g", "_prev_g")
 
+    def _f_pressed(self, window) -> bool:
+        return self._edge_key(window, "f", "_prev_f")
+
     def _cycle_scene_view(self):
         """Top-down ↔ head_camera; from a gripper view, return to that cycle."""
         modes = self._scene_cycle_modes()
@@ -586,6 +682,9 @@ class ViewerViewToggle:
     def update(self, window):
         if self.robot_controls is not None:
             self.robot_controls.update(window)
+        # F: open/close selected gripper(s). Independent of Space grasp helpers.
+        if self._f_pressed(window) and self.env is not None:
+            toggle_selected_grippers(self.env)
         if self._g_pressed(window):
             self._activate_gripper_view()
             return
@@ -735,6 +834,8 @@ class UniversalRobotControls:
     unseeded and returns elbow/wrist flips that are unusable for teleop.
 
     Z / X tip the gripper about world +Y (left / right) for pour-style motions.
+    F (open/close selected gripper) is handled by ``ViewerViewToggle`` so it
+    also works when teleop is not attached.
     """
 
     # Interactive teleop rates (m/s). 20% slower than the prior snappy sandbox
@@ -1021,27 +1122,38 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
     return parser
 
 
+def _line_documents_key(lines: list[str], key: str) -> bool:
+    """True when a control banner line already documents ``key`` as a binding."""
+    key = key.strip().upper()
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith(f"{key} ") or s.startswith(f"{key}:") or s.startswith(f"{key}\t"):
+            return True
+        if f"{key}                 " in ln or f"{key}: " in ln:
+            return True
+        # Compact banners: "V: camera | G: gripper | F: open/close | Escape"
+        if f"{key}:" in s or f"| {key}:" in s or f"|{key}:" in s:
+            return True
+    return False
+
+
 def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str) -> None:
     """Print only the help block for the selected ``--control`` mode."""
     body = (robot if mode == "robot" else keyboard).strip("\n")
     if mode == "robot":
-        body = (
+        # Shared teleop keys; skip F here when the task banner already lists it.
+        shared = (
             "  Arrow keys        move selected arm(s) in world XY\n"
             "  E / Q             raise / lower selected arm(s)\n"
             "  Z / X             tip gripper left / right (world Y)\n"
             "  1 / 2 / 3         select left / right / both arms\n"
-            + body
         )
+        if not _line_documents_key(body.splitlines(), "F"):
+            shared += "  F                 open / close selected gripper(s)\n"
+        body = shared + body
     lines = body.splitlines()
     # Inject G help next to V without duplicating when scripts already document it.
-    if not any(
-        ("gripper" in ln.lower() and ln.strip().startswith("G"))
-        or ln.strip().startswith("G ")
-        or ln.strip().startswith("G:")
-        or "G                 " in ln
-        or "G: " in ln
-        for ln in lines
-    ):
+    if not _line_documents_key(lines, "G"):
         inserted = False
         for i, ln in enumerate(lines):
             if "toggle view" in ln.lower() or ln.strip().startswith("V ") or ln.strip().startswith("V:") or "V                 " in ln:
@@ -1055,9 +1167,29 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
         if not inserted:
             lines.append("  V                 toggle view: top-down ↔ head_camera")
             lines.append("  G                 gripper view (cycle L/R when both arms active)")
-        body = "\n".join(lines)
+    # Inject F (gripper open/close) when missing (keyboard banners, or custom text).
+    if not _line_documents_key(lines, "F"):
+        inserted = False
+        for i, ln in enumerate(lines):
+            if (
+                _line_documents_key([ln], "G")
+                or "toggle view" in ln.lower()
+                or ln.strip().startswith("V ")
+                or ln.strip().startswith("V:")
+                or "V                 " in ln
+            ):
+                indent = ln[: len(ln) - len(ln.lstrip(" "))]
+                lines.insert(
+                    i + 1,
+                    f"{indent}F                 open / close selected gripper(s)",
+                )
+                inserted = True
+                break
+        if not inserted:
+            lines.append("  F                 open / close selected gripper(s)")
+    body = "\n".join(lines)
     bar = "=" * 60
-    print(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
+    print_instructions(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
 
 
 def default_arms_for_mode(mode):

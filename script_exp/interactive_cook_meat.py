@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    print_instructions,
     UniversalRobotControls,
     action_failed,
     make_viewer_view_toggle,
@@ -601,7 +602,7 @@ def main():
         views.robot_controls = UniversalRobotControls(env)
 
     n = len(env.stations)
-    print(
+    print_instructions(
         f"Cook-button sandbox ready ({n} station(s)). "
         "Select an arm, move over the cook key, lower with Q to press. "
         "Space toggles steak board ↔ pan."

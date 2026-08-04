@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    print_instructions,
     UniversalRobotControls,
     make_viewer_view_toggle,
     add_robot_motion_arg,
@@ -42,6 +43,7 @@ CONTROLS_KEYBOARD = """
   Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
   Counts only when half the stamp head is on the card; otherwise missed
   V                 toggle view: front ↔ top-down
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Punches via direct _fire_punch (no arm motion).
@@ -52,6 +54,7 @@ CONTROLS_ROBOT = """
   (E to raise). Space is unused.
   Counts only when half the stamp head is on the card; otherwise missed
   V                 toggle view: front ↔ top-down
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Gripper-Z depresses the key; ReactivePushButtons fires the punch.
@@ -176,15 +179,7 @@ class RobotPunchController:
 
     def prepare(self):
         """Execute the task's real hover routine, then cache a 5 cm press."""
-        self.env.plan_success = True
-        self.env._last_plan_fail = None
-        self.env.move(
-            self.env._hover_button("left"),
-            self.env._hover_button("right"),
-        )
-        if not self.env.plan_success:
-            detail = getattr(self.env, "_last_plan_fail", None) or "unknown planner failure"
-            raise RuntimeError(f"Could not prepare punch-button hovers: {detail}")
+        _move_arms_to_ready(self.env)
 
         for side in ("left", "right"):
             hover = self._drive_qpos(side)
@@ -266,12 +261,34 @@ class RobotPunchController:
         self._phase = {"left": "idle", "right": "idle"}
 
 
+def _move_arms_to_ready(env):
+    """Hover both grippers above their buttons while belts stay inactive.
+
+    Mirrors ``punch_dual_holes.play_once`` / ``_hover_button``: grasp the button
+    top-down contact at ``pre_grasp_dis=grasp_dis=0.09`` so the closed gripper
+    parks above the keycap without pressing. Belts remain off because
+    ``_belt_active`` is still False and ``advance_belts=False``.
+    """
+    env.plan_success = True
+    env._last_plan_fail = None
+    env._move_with_belt_motion(
+        env._hover_button("left"),
+        env._hover_button("right"),
+        advance_belts=False,
+    )
+    if not env.plan_success:
+        detail = getattr(env, "_last_plan_fail", None) or "unknown planner failure"
+        raise RuntimeError(f"Could not reach punch-button ready pose: {detail}")
+    print("Arms ready above the punch buttons.")
+
+
 def _start_belts(env):
     env._belt_active = True
     # Continuous mode advances from the task's mode flag.  Discrete mode is
     # started by _update_interactive_belt below and pauses at each punch stop.
     env._belt_running = bool(getattr(env, "belt_continous_motion", False))
     env._interactive_discrete_stop_started = None
+    print("Belts started.")
 
 
 def _update_interactive_belt(env):
@@ -337,8 +354,8 @@ def main():
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
 
-    # Match the main task: approach the buttons while belts are inactive, then
-    # begin continuous motion or the first discrete run-to-stop.
+    # Match play_once: approach buttons with belts inactive, then start motion.
+    _move_arms_to_ready(env)
     _start_belts(env)
 
     edge = EdgeSides()
@@ -354,12 +371,12 @@ def main():
         views.mode = "head"
         views.apply(announce=False)
 
-    print(
-        "Control=robot teleop. Select an arm (1/2/3), move over a key, lower with Q to press. "
-        "Space is unused."
+    print_instructions(
+        "Arms start above the buttons; belts begin after that ready pose. "
+        "Select an arm (1/2/3), move over a key, lower with Q to press. Space is unused."
     )
     if args.control == "keyboard":
-        print("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")
+        print_instructions("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")
 
     try:
         while not viewer.closed:

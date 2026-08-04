@@ -30,6 +30,7 @@ from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     add_robot_motion_arg,
     make_viewer_view_toggle,
+    print_instructions,
     print_mode_controls,
     report_task_result,
 )
@@ -41,6 +42,7 @@ CONTROLS_KEYBOARD = """
   The keycap springs back when you raise the gripper.
 
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
@@ -52,6 +54,7 @@ CONTROLS_ROBOT = """
   Door opens when the keycap is pushed down past its trigger depth.
 
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
@@ -144,7 +147,7 @@ def main():
     if views.robot_controls is None:
         views.robot_controls = UniversalRobotControls(env)
 
-    print(
+    print_instructions(
         "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
         "Door stays open briefly then closes; release the key fully to press again. "
         "Space is unused."

@@ -5,8 +5,8 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Space: hold/release vegetable board | arrows/Q/E: move it\n  F once: turn on burner | F while holding: move board over pot\n  Hold Z: tip left | Hold X: tip right (releases vegetables when steep)\n  V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  Space: grasp/release board | F: turn burner on (then carry board over pot)\n  Hold Z / X: tip gripper left / right to pour vegetables into the pot\n  V: top-down/head camera | Escape: quit\n"""
+KEYBOARD = """\n  Space: hold/release vegetable board | arrows/Q/E: move it\n  C once: turn on burner | C while holding: move board over pot\n  Hold Z: tip left | Hold X: tip right (releases vegetables when steep)\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+ROBOT = """\n  Space: grasp/release board | C: turn burner on (then carry board over pot)\n  Hold Z / X: tip gripper left / right to pour vegetables into the pot\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
 
 if __name__ == "__main__":
     a = make_parser("make_soup", __doc__)

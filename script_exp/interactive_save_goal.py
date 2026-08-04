@@ -38,6 +38,7 @@ CONTROLS_KEYBOARD = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
   Space             deploy / freeze keeper in place
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Success: keeper in green zone, front-face save, grippers open
@@ -48,6 +49,7 @@ CONTROLS_ROBOT = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
   Space             grasp, then release
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Success: keeper in green zone, front-face save, grippers open

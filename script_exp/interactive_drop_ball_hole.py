@@ -20,6 +20,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
+    print_instructions,
     action_failed,
     add_robot_motion_arg,
     bootstrap_repo,
@@ -225,12 +226,13 @@ def main():
             "Arrows — move the held ball in XY",
             "E / Q — move the held ball up / down",
             "V — toggle view: top-down ↔ head_camera",
+            "G — gripper view (cycle L/R when both arms active)",
             "Esc — close the viewer window to quit",
             "Watch the spinning platform; release only when the hole passes under.",
             "--robot-motion planner|interpolate",
         ],
     )
-    print("Press Space to pick up the ball, then position it over the moving hole.")
+    print_instructions("Press Space to pick up the ball, then position it over the moving hole.")
 
     keys_prev: dict = {}
     post_release = 0

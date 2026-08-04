@@ -215,6 +215,7 @@ def main():
             "Space — (1) grasp immediately   (2) drop when over the basket",
             "Arrows — move the held apple/arm in world XY over the basket",
             "V — toggle view: top-down ↔ head_camera",
+            "G — gripper view (cycle L/R when both arms active)",
             "Esc — close the viewer window to quit",
             "Grasp / hang / clear geometry is FROZEN — Space only triggers existing motions.",
             "Success needs BOTH: grasp inside the ripeness window AND apple in the basket.",

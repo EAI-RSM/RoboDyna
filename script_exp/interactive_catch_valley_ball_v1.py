@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 from _interactive_common import (  # noqa: E402
     action_failed,
     make_viewer_view_toggle,
+    print_instructions,
     print_mode_controls,
     report_task_result,
     resolve_action_arm,
@@ -37,6 +38,7 @@ from _interactive_common import (  # noqa: E402
 CONTROLS_KEYBOARD = """
   Space             freeze/place catcher at current XY
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
   Success: red ball in catcher, catcher fully past red line
@@ -45,6 +47,7 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Space             first press picks up the catcher; second drops it
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
   Flow: Space to pick up → move with arrows / E/Q → Space to drop
@@ -292,9 +295,9 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     if args.control == "robot":
-        print("Space picks up the catcher; Space again drops it.")
+        print_instructions("Space picks up the catcher; Space again drops it.")
     else:
-        print("Space places the catcher at its current XY.")
+        print_instructions("Space places the catcher at its current XY.")
 
     settle_after = None
     try:

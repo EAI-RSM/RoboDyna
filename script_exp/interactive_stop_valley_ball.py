@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    print_instructions,
     action_failed,
     make_viewer_view_toggle,
     print_mode_controls,
@@ -39,6 +40,7 @@ CONTROLS_KEYBOARD = """
   Arrow keys        move bat in world XY
   E / Q             raise / lower bat height
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Flow: Space → use arrows/E/Q to aim
@@ -51,6 +53,7 @@ CONTROLS_ROBOT = """
   Arrow keys        move the held bat in world XY
   E / Q             raise / lower the held bat
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Flow: Space → use arrows/E/Q to aim
@@ -387,7 +390,7 @@ def main():
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
 
-    print("Press Space to grasp the bat; arrows move XY and E/Q move height.")
+    print_instructions("Press Space to grasp the bat; arrows move XY and E/Q move height.")
 
     settle_after = None
     try:

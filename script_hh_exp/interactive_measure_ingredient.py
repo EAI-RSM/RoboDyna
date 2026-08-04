@@ -1,12 +1,12 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive household task: measure_ingredient."""
 try:
-    from ._interactive_common import make_parser, run_task
+    from ._interactive_common import make_parser, print_instructions, run_task
 except ImportError:
-    from _interactive_common import make_parser, run_task
+    from _interactive_common import make_parser, print_instructions, run_task
 
-KEYBOARD = """\n  Lower gripper onto the red key to latch oil ON/OFF\n  Space: hold/release jar | arrows/Q/E: move it\n  V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  Select an arm, move above the red key, lower with Q to press (latches ON/OFF)\n  Key stays down while oil flows; press again to turn off and raise the key\n  Space: side-grasp / release jar (release ends the episode; success = fill + on scale)\n  V: top-down/head camera | Escape: quit\n"""
+KEYBOARD = """\n  Lower gripper onto the red key to latch oil ON/OFF\n  Space: hold/release jar | arrows/Q/E: move it\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+ROBOT = """\n  Select an arm, move above the red key, lower with Q to press (latches ON/OFF)\n  Key stays down while oil flows; press again to turn off and raise the key\n  Space: side-grasp / release jar (release ends the episode; success = fill + on scale)\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
 
 
 def _post_setup(env):
@@ -19,7 +19,7 @@ def _post_setup(env):
     # Expert pour_rate is tuned for fast sim idle-steps; interactive runs one
     # step per viewer frame, so bump rate so the jar visibly fills (~8–12s).
     env.pour_rate = max(float(getattr(env, "pour_rate", 0.0)), 0.00085)
-    print(
+    print_instructions(
         f"[measure_ingredient] interactive pour_rate={env.pour_rate:.6g} "
         f"(Z-press red key; Space grasps jar)"
     )

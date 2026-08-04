@@ -38,6 +38,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     make_viewer_view_toggle,
+    print_instructions,
     report_task_result,
 )
 
@@ -475,25 +476,31 @@ def main():
         print("Two-view mode ready: overhead interaction view + perspective view.")
     if args.control == "mouse":
         viewer.register_click_handler(_button_click_handler(env))
-        print("Top-down sort-apples sandbox ready. Click red/green to toggle the plank direction.")
+        print_instructions(
+            "Top-down sort-apples sandbox ready. Click red/green to toggle the plank direction."
+        )
     elif args.control == "robot":
-        print(
+        print_instructions(
             "Robot mode ready (gripper-Z).\n"
             "  1 / 2 / 3           — select left / right / both grippers\n"
             "  Arrow keys          — move selected gripper in world XY\n"
             "  E / Q               — raise / lower selected gripper\n"
             "  Lower with Q onto a button to divert (both = dump)\n"
             "  Space is unused\n"
+            "  F                   — open / close selected gripper(s)\n"
             "  V                   — toggle top-down / head_camera\n"
+            "  G                   — gripper view (cycle L/R when both arms active)\n"
             "  Esc                 — quit"
         )
     else:
-        print(
+        print_instructions(
             "Top-down sort-apples sandbox ready (direct diverter control).\n"
             "  Left / Right Arrow  — hold to divert left / right\n"
             "  Down Arrow          — hold both (dump)\n"
             "  Space is unused\n"
+            "  F                   — open / close selected gripper(s)\n"
             "  V                   — toggle top-down / head_camera\n"
+            "  G                   — gripper view (cycle L/R when both arms active)\n"
             "  release             — plank returns to rest"
         )
 

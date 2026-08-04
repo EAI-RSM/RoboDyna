@@ -5,8 +5,8 @@ try:
 except ImportError:  # direct ``python script_hh_exp/...py`` execution
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Bug starts running as soon as the viewer is ready\n  Space: hold/release the transparent trap\n  Arrows: move held trap in XY | Q/E: move it in Z\n  V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  Bug starts running as soon as the viewer is ready\n  Space: grasp/release trap\n  V: top-down/head camera | Escape: quit\n"""
+KEYBOARD = """\n  Bug starts running as soon as the viewer is ready\n  Space: hold/release the transparent trap\n  Arrows: move held trap in XY | Q/E: move it in Z\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+ROBOT = """\n  Bug starts running as soon as the viewer is ready\n  Space: grasp/release trap\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
 
 if __name__ == "__main__":
     a = make_parser("trap_bug", __doc__)

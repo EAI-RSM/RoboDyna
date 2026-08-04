@@ -40,6 +40,7 @@ CONTROLS_KEYBOARD = """
   1 .. N            select mole index directly
   Space             jab selected mole (cube press)
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
   Success: all moles hit (green), no rabbit touched
@@ -48,6 +49,7 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Space             pick selected side's mallet, then strike and return to hover
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
   Success: all moles hit (green), no rabbit touched

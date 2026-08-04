@@ -19,6 +19,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
+    print_instructions,
     action_failed,
     add_robot_motion_arg,
     arrow_nudge_xy,
@@ -170,6 +171,7 @@ def main():
             "Space  — (1) pick + lift above the belt  (2) match + release",
             "Arrows — nudge hold XY before release",
             "V — toggle view: top-down ↔ head_camera",
+            "G — gripper view (cycle L/R when both arms active)",
             "Esc — close the viewer window to quit",
             "Release too late (past the red line) or into the blocker → failure.",
             "--robot-motion planner|interpolate",
@@ -188,7 +190,7 @@ def main():
     env._released = False
     env._belt_active = False
     env._release_delay_left = 0
-    print(
+    print_instructions(
         f"Selected {selected_arm} arm. Press Space to pick the block and lift it over the belt."
         if use_robot else "Press Space to lift the block into the virtual hold over the belt."
     )

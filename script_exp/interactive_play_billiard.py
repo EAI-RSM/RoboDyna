@@ -41,6 +41,7 @@ CONTROLS_KEYBOARD = """
   Up / Down         slide tip along aim (approach / retreat)
   Space             fire strike impulse along aim
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Success: red ball in an allowed pocket; no distractor sink
@@ -50,6 +51,7 @@ CONTROLS_ROBOT = """
   R / T             rotate gripper clockwise / counter-clockwise
   Space             pick up cue, then strike in the cue's current direction
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Success: red ball in an allowed pocket; no distractor sink

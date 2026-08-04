@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    print_instructions,
     UniversalRobotControls,
     make_viewer_view_toggle,
     report_task_result,
@@ -39,6 +40,7 @@ CONTROLS_KEYBOARD = """
   Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
   Skip BLACK tiles — do not press while they are under the stamp
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Each press smoothly moves the matching arm: hover → press → lift.
@@ -49,6 +51,7 @@ CONTROLS_ROBOT = """
   (E to raise). Space is unused.
   Skip BLACK tiles — do not press while they are under the stamp
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape             quit
 ------------------------------------------------------------
   Gripper-Z depresses the key; ReactivePushButtons triggers the stamp.
@@ -314,13 +317,13 @@ def main():
     last_frame_start = time.perf_counter()
     simulation_credit = 0.0
 
-    print(
+    print_instructions(
         "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
         "Space is unused."
     )
     print(f"Tile colors: {env.tile_colors}")
     if args.control == "keyboard":
-        print("Keyboard arrows still animate key taps as a sandbox shortcut.")
+        print_instructions("Keyboard arrows still animate key taps as a sandbox shortcut.")
 
     try:
         while not viewer.closed:

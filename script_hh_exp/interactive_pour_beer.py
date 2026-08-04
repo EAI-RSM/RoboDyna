@@ -1,12 +1,12 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive household task: pour_beer."""
 try:
-    from ._interactive_common import make_parser, run_task
+    from ._interactive_common import make_parser, print_instructions, run_task
 except ImportError:
-    from _interactive_common import make_parser, run_task
+    from _interactive_common import make_parser, print_instructions, run_task
 
-KEYBOARD = """\n  Space/F: press/release the tap lever (spring returns when released)\n  Stream thickness and fill rate follow how far the handle is turned\n  V: top-down/head camera | Escape: quit\n"""
-ROBOT = """\n  Space/F: push the knob with the gripper (spring lever); release to snap shut\n  Hold the handle open — fill rate + stream thickness scale with how far it turns\n  Arm teleop matches other tasks (arrows/Q/E); use arm 2 (right) for the tap\n  V: top-down/head camera | Escape: quit\n"""
+KEYBOARD = """\n  Open the tap with robot arm teleop (--control robot); no keyboard lever shortcut\n  Stream thickness and fill rate follow how far the handle is turned\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+ROBOT = """\n  Push the tap lever with the gripper (spring returns when released)\n  Hold the handle open — fill rate + stream thickness scale with how far it turns\n  Arm teleop: arrows/Q/E; use arm 2 (right) for the tap\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
 
 
 def _post_setup(env):
@@ -18,9 +18,9 @@ def _post_setup(env):
     # per viewer frame, so bump rate so partial teleop pushes fill promptly.
     base = float(getattr(env, "FLOW_RATE_SCALE", 1.55))
     env.flow_rate_scale = max(float(getattr(env, "flow_rate_scale", base)), base * 1.35)
-    print(
+    print_instructions(
         f"[pour_beer] interactive flow_rate_scale={env.flow_rate_scale:.3g} "
-        f"(hollow mug shell; Space/F drives lever)"
+        f"(hollow mug shell; open lever with arm teleop)"
     )
 
 

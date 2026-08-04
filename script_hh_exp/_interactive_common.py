@@ -4,8 +4,9 @@ The household environments deliberately keep their normal physics and success
 checks.  This module only adds the same viewer/arm teleoperation used by
 ``script_exp``: arrows move the selected end-effector in XY, Q/E move it in Z,
 Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
-Space grasps/releases the task's primary prop and F invokes a task-specific
-control (turn a knob, press a dispenser, release a moving object, ...).
+F opens/closes the selected gripper(s) (shared ``ViewerViewToggle`` handler).
+Space grasps/releases the task's primary prop and C invokes a task-specific
+control where needed (cook_food / make_soup burner and pour sequence).
 """
 from __future__ import annotations
 
@@ -35,7 +36,10 @@ from script_exp._interactive_common import (  # noqa: E402
     flash_gripper_failure,
     gripper_failure_feedback,
     make_viewer_view_toggle,
+    print_failure,
+    print_instructions,
     print_mode_controls,
+    print_success,
     report_task_result,
     require_selected_arms,
     resolve_action_arm,
@@ -121,7 +125,7 @@ class HouseholdController:
         self.actor = getattr(env, actor_attr, None) if actor_attr else None
         self.holding = False
         self.space = _Edge()
-        self.f = _Edge()
+        self.c = _Edge()
         self._fill_space_started_at = None
         self._fill_space_was_down = False
         self._fill_press_state = None
@@ -188,15 +192,6 @@ class HouseholdController:
                 e._set_stove(want)
             elif t == "fill_coffee_jar":
                 self._fill_coffee_press(1)
-            elif t == "pour_beer":
-                # Keyboard (no arm): hold a virtual press or release for spring return.
-                if e._lever_open_frac() > 0.05:
-                    e._lever_held = False
-                    e._apply_lever_pose(0.0)
-                    print("[pour_beer] lever released (spring closed)")
-                else:
-                    e._apply_lever_pose(0.70 * float(e.lever_open_rad))
-                    print("[pour_beer] lever pressed open (keyboard proxy)")
             elif t == "cook_food":
                 angle = (
                     -float(getattr(e, "cook_intensity", 1.0))
@@ -204,7 +199,7 @@ class HouseholdController:
                 )
                 e._set_knob_angle(0.0 if bool(e.stove_on) else angle)
             elif t == "measure_ingredient":
-                # No F/keyboard proxy — oil key is pressed by lowering the gripper.
+                # No C/keyboard proxy — oil key is pressed by lowering the gripper.
                 print(
                     "[measure_ingredient] press the red key with the gripper (Z); "
                     "Space grasps/releases the jar"
@@ -213,25 +208,13 @@ class HouseholdController:
                 if not bool(e.stove_on):
                     e._set_knob_joint_angle(e.KNOB_ON_ANGLE, hard=True)
                     e._set_stove(True)
-                    print("[make_soup] burner on; hold/move the board, then press F to place it over the pot")
+                    print("[make_soup] burner on; hold/move the board, then press C to place it over the pot")
                 elif self.holding:
                     target = [float(e.pot_xy[0]), float(e.pot_xy[1]), float(e.pot_rim_z + 0.12)]
                     e._set_entity_pose(e.board, sapien.Pose(target, [1, 0, 0, 0]))
                     self.board_over_pot = True
                     e._pour_armed = True
                     print("[make_soup] board is over the pot; hold Z/X to tip and pour")
-            elif t == "clean_table":
-                if not bool(e.cup_tipped):
-                    e._animate_tip()
-                else:
-                    # Instant clear for spots the pad is already pressing.
-                    prev = int(getattr(e, "spot_clear_dwell", 6))
-                    e.spot_clear_dwell = 1
-                    try:
-                        cleared = e._try_clear_spots_under_sponge()
-                    finally:
-                        e.spot_clear_dwell = prev
-                    print(f"[clean_table] cleared {cleared} spot(s) under the sponge")
         except Exception as exc:
             print(f"[{t}] action unavailable: {exc}")
 
@@ -420,25 +403,10 @@ class HouseholdController:
                 e._press_dispenser(arm, force_level=4)
                 if not bool(getattr(e, "plan_success", True)):
                     action_failed(e, (str(arm),), detail="dispenser press failed")
-            elif t == "pour_beer":
-                arm = _arm_tag(e)
-                if arm is None:
-                    return
-                if not self.holding:
-                    self.holding = bool(e._grasp_lever(arm))
-                    if not self.holding:
-                        action_failed(e, (str(arm),), detail="could not grasp lever")
-                elif e._lever_open_frac() < 0.10:
-                    e._sweep_lever_to(arm, 0.70, n_steps=8, stop_on_foam=True)
-                    if not bool(getattr(e, "plan_success", True)):
-                        action_failed(e, (str(arm),), detail="lever sweep failed")
-                else:
-                    e._release_lever(arm)
-                    self.holding = False
             elif t == "cook_food":
                 self._turn_cook_food_knob()
             elif t == "measure_ingredient":
-                # No F assist — oil key is pressed by lowering the closed gripper.
+                # No C assist — oil key is pressed by lowering the closed gripper.
                 print(
                     "[measure_ingredient] lower the closed gripper onto the red key; "
                     "Space grasps/releases the jar"
@@ -450,13 +418,6 @@ class HouseholdController:
                     # Manual pour: arm teleop Z/X tips the gripper; do not auto-dump.
                     e._pour_armed = True
                     print("[make_soup] pour armed — hold Z (left) / X (right) to tip the gripper")
-            elif t == "clean_table":
-                if not bool(e.cup_tipped):
-                    e._animate_tip()
-                else:
-                    spot = e._next_dirty_spot()
-                    if spot is not None:
-                        e._dab_spot(spot)
         except Exception as exc:
             if arm is not None:
                 action_failed(e, (str(arm),), detail=f"action unavailable: {exc}")
@@ -467,7 +428,7 @@ class HouseholdController:
         """Instant interactive knob/fire update (no planner reach).
 
         Matches the snappy script_exp control feel: teleop stays on UniversalRobotControls;
-        Space/F only flips task state instead of running a multi-second expert path.
+        Space/C only flips task state instead of running a multi-second expert path.
         """
         e = self.env
         # Drop debounce caches so the snap is applied even if the joint was near
@@ -591,8 +552,8 @@ class HouseholdController:
             self._keyboard_action()
 
     def _grasp_or_release(self):
+        # pour_beer: no Space shortcut — open the lever with arm teleop / contact.
         if self.task == "pour_beer":
-            self._task_action()
             return
         if self.task in ("boil_milk", "fill_coffee_jar"):
             self._task_action()
@@ -777,7 +738,7 @@ class HouseholdController:
             action_failed(e, (str(arm),), detail=f"gripper toggle unavailable: {exc}")
 
     def _grasp_or_release_measure_jar(self):
-        """Space: grasp/release the oil jar. Oil key is Z-press only (no F)."""
+        """Space: grasp/release the oil jar. Oil key is Z-press only (no C)."""
         e = self.env
         if not self.robot:
             if self.actor is None:
@@ -833,12 +794,9 @@ class HouseholdController:
             self._fill_space_was_down = space_down
         elif self.space.poll(space_down):
             self._grasp_or_release()
-        # No F for measure_ingredient — oil key is physical Z-press only.
-        if self.f.poll(window.key_down("f")) and self.task not in (
-            "boil_milk",
-            "fill_coffee_jar",
-            "measure_ingredient",
-        ):
+        # C = cook_food burner toggle / make_soup burner + board-over-pot.
+        # F = global gripper open/close (ViewerViewToggle); not a task action.
+        if self.task in ("cook_food", "make_soup") and self.c.poll(window.key_down("c")):
             self._task_action()
         # measure_ingredient: oil key = lower closed gripper onto red key;
         # Space = grasp/release jar for the scale step.
@@ -1065,15 +1023,15 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                 try:
                     succeeded = bool(env.check_success())
                 except Exception as exc:
-                    print(f"[{task}] success check failed: {exc}")
+                    print_failure(f"[{task}] success check failed: {exc}")
                     succeeded = False
                 failure = None if succeeded else _terminal_failure(env, task)
                 if succeeded:
-                    print(f"[{task}] terminal result: SUCCESS")
+                    print_success(f"[{task}] terminal result: SUCCESS")
                     terminal_result = True
                     terminal_started_at = time.perf_counter()
                 if failure is not None:
-                    print(f"[{task}] terminal result: FAILURE ({failure})")
+                    print_failure(f"[{task}] terminal result: FAILURE ({failure})")
                     terminal_result = False
                     terminal_started_at = time.perf_counter()
             remaining = float(env.scene.get_timestep()) - (

@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    print_instructions,
     UniversalRobotControls,
     make_viewer_view_toggle,
     add_robot_motion_arg,
@@ -46,6 +47,7 @@ CONTROLS_KEYBOARD = """
 
   Forces belt-key latches directly (no arm). Dispense via gripper-Z in robot mode.
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
@@ -61,6 +63,7 @@ CONTROLS_ROBOT = """
 
   Gripper-Z / ReactivePushButtons drives keys (no Space latch).
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
@@ -140,6 +143,10 @@ def _episode_done(env):
     if not left and not right and not getattr(env, "_active_drops", None):
         return True, "tubes empty"
     return False, None
+
+
+# Max TCP→key XY distance (m) to count as "over" a key (button half is ~2 cm).
+_KEY_XY_TOL = 0.055
 
 
 def _tcp_xy(env, side: str) -> np.ndarray:
@@ -420,12 +427,12 @@ def main():
 
     mode = "continuous" if getattr(env, "belt_continuous_motion", False) else "discrete"
     print(f"Belt mode: {mode}.")
-    print(
+    print_instructions(
         "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
         "Space is unused."
     )
     if args.control == "keyboard":
-        print("Keyboard arrows still latch belt motion as a sandbox shortcut.")
+        print_instructions("Keyboard arrows still latch belt motion as a sandbox shortcut.")
 
     try:
         while not viewer.closed:

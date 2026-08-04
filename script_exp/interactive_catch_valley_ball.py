@@ -41,6 +41,7 @@ CONTROLS_KEYBOARD = """
   Arrows / E/Q    nudge selected arm
   Space           close/open gripper for pushing
   V               toggle view: top-down ↔ head_camera
+  G               gripper view (cycle L/R when both arms active)
   Escape          quit
 ------------------------------------------------------------
   Success: red ball in box, box fully past red line
@@ -54,6 +55,7 @@ CONTROLS_ROBOT = """
   Arrows / E/Q    nudge selected arm
   Space           close/open gripper for pushing
   V               toggle view: top-down ↔ head_camera
+  G               gripper view (cycle L/R when both arms active)
   Escape          quit
 ------------------------------------------------------------
   Success: red ball in box, box fully past red line

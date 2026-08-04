@@ -179,6 +179,7 @@ def main():
             "Space — arm approaches while the belt keeps moving, then grasps and "
             "drops into that arm's basket in one shot",
             "V — toggle view: top-down ↔ head_camera",
+            "G — gripper view (cycle L/R when both arms active)",
             "Esc — close the viewer window to quit",
             "Pick apples with 1 and oranges with 2 — the wrong arm mis-packs "
             "into its own basket and fails the episode.",

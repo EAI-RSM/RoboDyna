@@ -19,6 +19,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
+    print_instructions,
     action_failed,
     add_robot_motion_arg,
     arrow_nudge_xy,
@@ -201,6 +202,7 @@ def main():
             "Space  — first press picks up the ball; second press releases it",
             "Arrows — nudge the held ball in XY (robot supports smooth interpolation)",
             "V — toggle view: top-down ↔ head_camera",
+            "G — gripper view (cycle L/R when both arms active)",
             "Esc — close the viewer window to quit",
             "The ball starts untouched; press Space to pick it up.",
             "--robot-motion planner|interpolate",
@@ -209,7 +211,7 @@ def main():
     env._interactive_holding = False
     env._interactive_released = False
     env._ball_released = False
-    print("Ball ready. Press Space to pick it up.")
+    print_instructions("Ball ready. Press Space to pick it up.")
 
     keys_prev: dict = {}
     post_release = 0

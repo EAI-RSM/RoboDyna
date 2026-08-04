@@ -42,6 +42,7 @@ CONTROLS_KEYBOARD = """
   Q / E             raise/lower dart tip (world Z)
   Space             thrust tip at yellow center
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
   Success: tip sticks in yellow center; never hit a blocker
@@ -50,6 +51,7 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Space             grasp dart, then jab / thrust
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
   Success: tip sticks in yellow center; never hit a blocker
