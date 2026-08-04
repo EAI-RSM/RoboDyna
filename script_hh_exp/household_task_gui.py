@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import signal
 import subprocess
@@ -17,6 +18,7 @@ from PIL import Image, ImageTk
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEMO_DIR = ROOT / "final_task_demos"
+README_PATH = ROOT / "README.md"
 
 TASKS = (
     ("Trap Bug", "trap_bug", "interactive_trap_bug.py"),
@@ -39,7 +41,46 @@ CARD_BG = "#202c38"
 CARD_BORDER = "#405367"
 TEXT_PRIMARY = "#f4f8fb"
 TEXT_SECONDARY = "#aebdca"
+HINT_FG = "#7fb6dc"
 RANDOM_SEED_MAX = 500
+
+# README row name → GUI task name (when they diverge).
+README_TASK_ALIASES = {
+    "catch_mouse_object_drop": "catch_cuboid_object_drop",
+}
+
+
+def load_task_descriptions(readme_path: Path = README_PATH) -> dict[str, str]:
+    """Parse README household-task ``<sub>…</sub>`` blurbs into task → description."""
+    if not readme_path.exists():
+        return {}
+    text = readme_path.read_text(encoding="utf-8")
+    # Prefer the Household Tasks section when present.
+    section = text
+    marker = "## Household Tasks"
+    if marker in text:
+        section = text.split(marker, 1)[1]
+    row_re = re.compile(r"^\|\s*\*\*`([a-z0-9_]+)`\*\*.*$", re.MULTILINE)
+    sub_re = re.compile(r"<sub>(.*?)</sub>", re.DOTALL)
+    out: dict[str, str] = {}
+    for match in row_re.finditer(section):
+        task = match.group(1)
+        line_end = section.find("\n", match.start())
+        line = section[match.start() : line_end if line_end >= 0 else None]
+        subs = [re.sub(r"\s+", " ", s).strip() for s in sub_re.findall(line)]
+        if not subs:
+            continue
+        out[task] = subs[0]
+    return out
+
+
+TASK_DESCRIPTIONS = load_task_descriptions()
+
+
+def task_description(task: str) -> str:
+    """README blurb for ``task``, or empty if unavailable."""
+    key = README_TASK_ALIASES.get(task, task)
+    return str(TASK_DESCRIPTIONS.get(key, "") or "")
 
 
 def resolve_seed(value: str) -> int:
@@ -71,6 +112,8 @@ class RoundedButton(tk.Canvas):
         width,
         height,
         radius=28,
+        on_enter=None,
+        on_leave=None,
     ):
         super().__init__(
             parent,
@@ -90,6 +133,8 @@ class RoundedButton(tk.Canvas):
         self._label = None
         self._text = text
         self._font = font
+        self._on_enter_cb = on_enter
+        self._on_leave_cb = on_leave
         self.bind("<Configure>", self._redraw)
         self.bind("<Enter>", self._enter)
         self.bind("<Leave>", self._leave)
@@ -125,12 +170,16 @@ class RoundedButton(tk.Canvas):
         )
 
     def _enter(self, _event):
-        if self.button_state == "normal":
+        if self.button_state == "normal" and self._shape is not None:
             self.itemconfigure(self._shape, fill=self.active_color)
+        if self._on_enter_cb is not None:
+            self._on_enter_cb()
 
     def _leave(self, _event):
-        if self.button_state == "normal":
+        if self.button_state == "normal" and self._shape is not None:
             self.itemconfigure(self._shape, fill=self.normal_color)
+        if self._on_leave_cb is not None:
+            self._on_leave_cb()
 
     def _click(self, _event):
         if self.button_state == "normal":
@@ -170,6 +219,8 @@ class HouseholdTaskLauncher(tk.Tk):
         self.active_index: int | None = None
         self.preview_photos: list[ImageTk.PhotoImage | None] = []
         self.task_buttons: list[RoundedButton] = []
+        self._idle_status = f"{len(TASKS)} scenarios available  |  Select a task and press Play."
+        self._idle_status_fg = TEXT_SECONDARY
 
         self._build_ui()
         self.after(250, self._poll_child)
@@ -275,9 +326,9 @@ class HouseholdTaskLauncher(tk.Tk):
 
         self.status = tk.Label(
             self,
-            text=f"{len(TASKS)} scenarios available  |  Select a task and press Play.",
+            text=self._idle_status,
             bg=PAGE_BG,
-            fg=TEXT_SECONDARY,
+            fg=self._idle_status_fg,
             anchor="w",
             font=("Sans", 21),
         )
@@ -389,8 +440,14 @@ class HouseholdTaskLauncher(tk.Tk):
             fg="#aab2bd",
             width=self.IMAGE_SIZE[0],
             height=self.IMAGE_SIZE[1],
+            cursor="hand2",
         )
         image_label.pack()
+        image_label.bind(
+            "<Enter>",
+            lambda _e, t=task, l=label: self._show_task_hint(t, l),
+        )
+        image_label.bind("<Leave>", lambda _e: self._clear_task_hint())
 
         # The action is deliberately over the lower edge of the screenshot,
         # so every task has its own obvious launch control in front of it.
@@ -404,16 +461,42 @@ class HouseholdTaskLauncher(tk.Tk):
             width=270,
             height=106,
             radius=38,
+            on_enter=lambda t=task, l=label: self._show_task_hint(t, l),
+            on_leave=self._clear_task_hint,
         )
         button.place(relx=0.5, rely=0.98, anchor="s")
         self.task_buttons.append(button)
+
+    def _set_status(self, text: str, fg: str, *, sticky: bool = False):
+        """Update the status bar; ``sticky`` also becomes the post-hover restore text."""
+        self.status.configure(text=text, fg=fg)
+        if sticky:
+            self._idle_status = text
+            self._idle_status_fg = fg
+
+    def _show_task_hint(self, task: str, label: str):
+        """Show the README task blurb while the pointer is over preview / Play."""
+        if self.child is not None:
+            return
+        desc = task_description(task)
+        text = f"{label}: {desc}" if desc else label
+        self.status.configure(text=text, fg=HINT_FG)
+
+    def _clear_task_hint(self):
+        if self.child is not None:
+            return
+        self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
 
     def play_or_stop(self, index):
         if self.child is not None:
             if self.active_index == index:
                 self._stop_task("Task stopped. Select another task when ready.")
             else:
-                self.status.configure(text="Stop the running task before starting another.", fg="#e6a15c")
+                self._set_status(
+                    "Stop the running task before starting another.",
+                    "#e6a15c",
+                    sticky=True,
+                )
             return
         self._start_task(index)
 
@@ -449,9 +532,10 @@ class HouseholdTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.task_buttons[index].configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
-        self.status.configure(
-            text=f"Running {label} with seed {seed}. Close its viewer or press Stop to return.",
-            fg="#70d6a2",
+        self._set_status(
+            f"Running {label} with seed {seed}. Close its viewer or press Stop to return.",
+            "#70d6a2",
+            sticky=True,
         )
 
     def _poll_child(self):
@@ -459,17 +543,32 @@ class HouseholdTaskLauncher(tk.Tk):
             code = self.child.poll()
             if code is not None:
                 self.child = None
-                index = self.active_index
                 self.active_index = None
                 self._reset_task_buttons()
                 if code == 0:
-                    self.status.configure(text="Task result: SUCCESS. Select another task below.", fg="#70d6a2")
+                    self._set_status(
+                        "Task result: SUCCESS. Select another task below.",
+                        "#70d6a2",
+                        sticky=True,
+                    )
                 elif code == 10:
-                    self.status.configure(text="Task result: FAILURE. Select another task below.", fg="#e6a15c")
+                    self._set_status(
+                        "Task result: FAILURE. Select another task below.",
+                        "#e6a15c",
+                        sticky=True,
+                    )
                 elif code == 2:
-                    self.status.configure(text="Task closed before a result was reached.", fg=TEXT_SECONDARY)
+                    self._set_status(
+                        "Task closed before a result was reached.",
+                        TEXT_SECONDARY,
+                        sticky=True,
+                    )
                 else:
-                    self.status.configure(text=f"Task result: ERROR (exit status {code}). Check the terminal.", fg="#e6a15c")
+                    self._set_status(
+                        f"Task result: ERROR (exit status {code}). Check the terminal.",
+                        "#e6a15c",
+                        sticky=True,
+                    )
         self.after(250, self._poll_child)
 
     def _reset_task_buttons(self):
@@ -495,7 +594,7 @@ class HouseholdTaskLauncher(tk.Tk):
             self.active_index = None
             self._reset_task_buttons()
         if status:
-            self.status.configure(text=status, fg="#e6a15c")
+            self._set_status(status, "#e6a15c", sticky=True)
 
     def exit_app(self):
         self._stop_task()

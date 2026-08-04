@@ -401,9 +401,10 @@ class InteractiveTaskLauncher(tk.Tk):
         self.child: subprocess.Popen | None = None
         self.active_selection: tuple[int, str] | None = None
         self.temporary_config: Path | None = None
-        self.preview_sources: list[Image.Image | None] = []
-        self.preview_photos: list[ImageTk.PhotoImage | None] = []
-        self.preview_labels: list[tk.Label] = []
+        # Per task: one source/photo/label per scenario (Default / Opt1 / Opt2 / Opt1+2).
+        self.preview_sources: list[list[Image.Image | None]] = []
+        self.preview_photos: list[list[ImageTk.PhotoImage | None]] = []
+        self.preview_labels: list[list[tk.Label]] = []
         self.task_buttons: list[list[RoundedButton]] = []
         self._preview_resize_job: str | None = None
         self._preview_width = self.IMAGE_SIZE[0]
@@ -557,35 +558,58 @@ class InteractiveTaskLauncher(tk.Tk):
             80, lambda width=preview_width: self._apply_preview_width(width)
         )
 
+    def _cell_preview_width(self, total_width: int) -> int:
+        """Width of one of the four scenario preview columns."""
+        gap = 6 * 2 * len(SCENARIOS)  # padx=6 on each side of each column
+        return max(160, (total_width - gap) // len(SCENARIOS))
+
     def _apply_preview_width(self, width: int):
         self._preview_resize_job = None
         self._preview_width = width
-        for index, source in enumerate(self.preview_sources):
-            photo = self._render_preview(source, width)
-            self.preview_photos[index] = photo
-            label = self.preview_labels[index]
-            if photo is None:
-                label.configure(
-                    image="",
-                    text="No preview available",
-                    width=width // 12,
-                    height=max(6, (width * 3) // (8 * 18)),
-                )
-            else:
-                label.configure(image=photo, text="", width=0, height=0)
+        cell_width = self._cell_preview_width(width)
+        for task_index, sources in enumerate(self.preview_sources):
+            photos: list[ImageTk.PhotoImage | None] = []
+            for scen_index, source in enumerate(sources):
+                photo = self._render_preview(source, cell_width)
+                photos.append(photo)
+                label = self.preview_labels[task_index][scen_index]
+                if photo is None:
+                    label.configure(
+                        image="",
+                        text="No preview",
+                        width=max(8, cell_width // 10),
+                        height=max(4, (cell_width * 3) // (8 * 16)),
+                    )
+                else:
+                    label.configure(image=photo, text="", width=0, height=0)
+            self.preview_photos[task_index] = photos
 
     def _cuboidwheel(self, event):
         if event.delta:
             self.canvas.yview_scroll(-int(event.delta / 120), "units")
 
     @staticmethod
-    def _preview_path(task: str) -> Path | None:
+    def _preview_path(task: str, scenario: str = "default") -> Path | None:
         directory = DEMO_DIR / task
-        for name in ("scene_snapshot.png", "default_sidebyside.gif"):
+        names = (
+            f"scene_snapshot_{scenario}.png",
+            "scene_snapshot.png" if scenario == "default" else None,
+            "default_sidebyside.gif" if scenario == "default" else None,
+            f"{scenario}_sidebyside.gif",
+            f"*{scenario}*sidebyside.gif",
+        )
+        for name in names:
+            if not name:
+                continue
+            if "*" in name:
+                match = next(directory.glob(name), None) if directory.exists() else None
+                if match is not None:
+                    return match
+                continue
             preferred = directory / name
             if preferred.exists():
                 return preferred
-        if directory.exists():
+        if scenario == "default" and directory.exists():
             patterns = ("default*sidebyside.gif", "*.gif", "*.png", "*.jpg", "*.jpeg")
             for pattern in patterns:
                 match = next(directory.glob(pattern), None)
@@ -593,8 +617,11 @@ class InteractiveTaskLauncher(tk.Tk):
                     return match
         return None
 
-    def _load_preview_source(self, task: str) -> Image.Image | None:
-        path = self._preview_path(task)
+    def _load_preview_source(self, task: str, scenario: str = "default") -> Image.Image | None:
+        path = self._preview_path(task, scenario)
+        if path is None and scenario != "default":
+            # Fall back to the default still so the grid stays populated.
+            path = self._preview_path(task, "default")
         if path is None:
             return None
         try:
@@ -607,7 +634,7 @@ class InteractiveTaskLauncher(tk.Tk):
     def _render_preview(self, source: Image.Image | None, width: int) -> ImageTk.PhotoImage | None:
         if source is None:
             return None
-        # Fill the card width at the image's native aspect ratio (no letterbox).
+        # Fill the column width at the image's native aspect ratio (no letterbox).
         aspect = source.width / max(source.height, 1)
         height = max(1, int(round(width / aspect)))
         image = source.resize((width, height), Image.Resampling.LANCZOS)
@@ -649,49 +676,59 @@ class InteractiveTaskLauncher(tk.Tk):
             font=("Sans", 12, "bold"),
         ).pack(side="right")
 
-        preview_holder = tk.Frame(card, bg=CARD_BG)
-        preview_holder.pack(fill="x", padx=self.PREVIEW_SIDE_PAD)
-        source = self._load_preview_source(task)
-        photo = self._render_preview(source, self._preview_width)
-        self.preview_sources.append(source)
-        self.preview_photos.append(photo)
-        preview_label = tk.Label(
-            preview_holder,
-            image=photo,
-            text="No preview available" if photo is None else "",
-            bg=CARD_BG,
-            fg=TEXT_SECONDARY,
-            font=("Sans", 16),
-            bd=0,
-            highlightthickness=0,
-        )
-        if photo is None:
-            preview_label.configure(
-                width=self._preview_width // 12,
-                height=max(6, (self._preview_width * 3) // (8 * 18)),
-            )
-        preview_label.pack(fill="x")
-        self.preview_labels.append(preview_label)
-
-        action_row = tk.Frame(card, bg=CARD_BG)
-        action_row.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(12, 16))
-        buttons = []
+        # Four columns: screenshot on top, matching scenario key underneath.
+        grid = tk.Frame(card, bg=CARD_BG)
+        grid.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(0, 16))
+        cell_width = self._cell_preview_width(self._preview_width)
+        sources: list[Image.Image | None] = []
+        photos: list[ImageTk.PhotoImage | None] = []
+        labels: list[tk.Label] = []
+        buttons: list[RoundedButton] = []
         for scenario in SCENARIOS:
+            col = tk.Frame(grid, bg=CARD_BG)
+            col.pack(side="left", expand=True, fill="both", padx=6)
+
+            source = self._load_preview_source(task, scenario)
+            photo = self._render_preview(source, cell_width)
+            sources.append(source)
+            photos.append(photo)
+            preview_label = tk.Label(
+                col,
+                image=photo,
+                text="No preview" if photo is None else "",
+                bg=CARD_BG,
+                fg=TEXT_SECONDARY,
+                font=("Sans", 12),
+                bd=0,
+                highlightthickness=0,
+            )
+            if photo is None:
+                preview_label.configure(
+                    width=max(8, cell_width // 10),
+                    height=max(4, (cell_width * 3) // (8 * 16)),
+                )
+            preview_label.pack(fill="x", pady=(0, 8))
+            labels.append(preview_label)
+
             button = RoundedButton(
-                action_row,
+                col,
                 text=SCENARIO_LABELS[scenario],
                 command=lambda i=index, s=scenario: self.play_or_stop(i, s),
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
-                font=("Sans", 18, "bold"),
-                width=300,
-                height=78,
-                radius=30,
+                font=("Sans", 16, "bold"),
+                width=220,
+                height=70,
+                radius=26,
                 on_enter=lambda t=task, s=scenario, l=label: self._show_condition_hint(t, s, l),
                 on_leave=self._clear_condition_hint,
             )
-            button.pack(side="left", expand=True, fill="x", padx=6)
+            button.pack(fill="x")
             buttons.append(button)
+
+        self.preview_sources.append(sources)
+        self.preview_photos.append(photos)
+        self.preview_labels.append(labels)
         self.task_buttons.append(buttons)
 
     def _set_status(self, text: str, fg: str, *, sticky: bool = False):
