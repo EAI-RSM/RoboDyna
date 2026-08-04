@@ -62,6 +62,15 @@ task_args:
     target_doneness: 0.5
     board_scale_mult: 0.07    # cutting board size (steak starts and finishes here)
     # plate removed: cooked steak returns to the cutting board
+  cook_meat_timer:
+    cook_steps: 1000
+    cook_speed_jitter: 0.20
+    cook_button_enabled: false
+    dual_setup_enabled: false
+    target_doneness_range: [0.45, 0.55]
+    board_scale_mult: 0.07
+    timer_radius: 0.045
+    timer_n_sections: 36
   assemble_markers_cylinder:
     side_cyl_radius: 0.018
     side_cyl_half_len: 0.10
