@@ -1,0 +1,26 @@
+{
+  "contact_points": [
+    {
+      "id": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "description": "Mid-body side grasps",
+      "usage": "Grasp bottle."
+    }
+  ],
+  "functional_points": [
+    {
+      "id": 0,
+      "description": "Mouth / pour tip",
+      "usage": "Align over cup when pouring."
+    },
+    {
+      "id": 1,
+      "description": "Bottom",
+      "usage": "Set down on table."
+    }
+  ]
+}

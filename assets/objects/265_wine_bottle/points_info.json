@@ -1,0 +1,36 @@
+{
+  "contact_points": [
+    {
+      "id": 0,
+      "description": "Mid-body side grasp",
+      "usage": "grasp"
+    },
+    {
+      "id": 1,
+      "description": "Mid-body side grasp",
+      "usage": "grasp"
+    },
+    {
+      "id": 2,
+      "description": "Mid-body side grasp",
+      "usage": "grasp"
+    },
+    {
+      "id": 3,
+      "description": "Mid-body side grasp",
+      "usage": "grasp"
+    }
+  ],
+  "functional_points": [
+    {
+      "id": 0,
+      "description": "Bottle mouth",
+      "usage": "pour"
+    },
+    {
+      "id": 1,
+      "description": "Bottle bottom",
+      "usage": "place"
+    }
+  ]
+}

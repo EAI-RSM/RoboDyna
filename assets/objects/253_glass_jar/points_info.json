@@ -1,0 +1,15 @@
+{
+  "fill_markers": {
+    "fractions": [
+      0.25,
+      0.5,
+      0.75,
+      1.0
+    ],
+    "inner_radius": 0.035,
+    "outer_radius": 0.039,
+    "height": 0.125,
+    "bottom_thickness": 0.005,
+    "fillable_height": 0.12
+  }
+}
