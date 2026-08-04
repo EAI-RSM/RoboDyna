@@ -92,6 +92,14 @@ class catch_valley_ball(catch_valley_ball_v1):
         self._prepare_push_box()
         # Eval / expert both run the ball immediately (no frozen hold at spawn).
         self._start_ball_motion(expert_demo=False)
+        # Interactive teleop: hand the box to PhysX after settle (catch_cup pillow pattern).
+        # The box then moves only under gripper contact — no keyboard teleport.
+        if bool(
+            getattr(self, "_interactive_robot_mode", False)
+            or getattr(self, "_interactive_universal_controls", False)
+        ):
+            self._enable_box_physics()
+            self._push_active = True
 
     def load_actors(self):
         # Parent spawns a temporary mesh catcher only to sample start XY; force a

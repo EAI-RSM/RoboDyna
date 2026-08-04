@@ -1,13 +1,13 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``catch_valley_ball`` (push custom catch box).
+"""Interactive viewer for ``catch_valley_ball`` (PhysX push catch box).
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball.py --control robot
 
-Keyboard / robot sandbox: arrows nudge the box on the table; Space freezes it
-past the red line. The scripted expert uses a closed-gripper contact push.
+The catch box is an ordinary dynamic body (same mechanism as ``catch_cup``'s
+pillow): it only moves when the closed gripper shoves it. There is no keyboard
+teleport of the box.
 """
 
 import argparse
@@ -16,7 +16,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,25 +24,38 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    UniversalRobotControls,
+    add_robot_motion_arg,
+    make_viewer_view_toggle,
+    print_mode_controls,
+    report_task_result,
+)
 
 
 CONTROLS_KEYBOARD = """
-  Arrows            slide custom catch box on the table
-  Space             freeze box at current XY (must clear red line)
-  V                 toggle view: top-down ↔ head_camera
-  Escape            quit
+  Prefer --control robot. Keyboard arrows drive the arm (not the box).
+  The box is PhysX-dynamic — shove it with the closed gripper.
+
+  1 / 2 / 3       select left / right / both arms
+  Arrows / E/Q    nudge selected arm
+  Space           close/open gripper for pushing
+  V               toggle view: top-down ↔ head_camera
+  Escape          quit
 ------------------------------------------------------------
   Success: red ball in box, box fully past red line
 """
 
 CONTROLS_ROBOT = """
-  Arrows / E/Q      nudge selected arm (teleop)
-  Space             freeze the box at its current table pose
-  V                 toggle view: top-down ↔ head_camera
-  Escape            quit
+  The catch box is PhysX-dynamic (catch_cup pillow pattern) — it moves only
+  under gripper contact. No box teleport.
+
+  1 / 2 / 3       select left / right / both arms
+  Arrows / E/Q    nudge selected arm
+  Space           close/open gripper for pushing
+  V               toggle view: top-down ↔ head_camera
+  Escape          quit
 ------------------------------------------------------------
-  Expert policy pushes the box with a closed gripper (see play_once).
   Success: red ball in box, box fully past red line
 """
 
@@ -53,7 +65,7 @@ def _embodiment_config(robot_file):
         return yaml.safe_load(handle)
 
 
-def _configure_task(config_name: str, seed: int, use_robot: bool = False):
+def _configure_task(config_name: str, seed: int, use_robot: bool = True):
     config_path = REPO_ROOT / "task_config" / f"{config_name}.yml"
     if not config_path.exists():
         raise SystemExit(f"Config not found: {config_path}")
@@ -88,74 +100,55 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
     return config
 
 
-def _target_xy(env):
-    landing = np.asarray(env.landing, dtype=float)
-    return float(env._catch_target_x(landing[0])), float(landing[1])
-
-
-def _nudge_from_keys(window, step=0.008):
-    dx = dy = 0.0
-    if window.key_down("left"):
-        dx -= step
-    if window.key_down("right"):
-        dx += step
-    if window.key_down("up"):
-        dy += step
-    if window.key_down("down"):
-        dy -= step
-    return dx, dy
-
-
 class EdgeKey:
     def __init__(self):
         self._prev = False
 
-    def poll(self, down):
+    def poll(self, down: bool) -> bool:
         edge = bool(down) and not self._prev
         self._prev = bool(down)
         return edge
 
 
-class KeyboardBoxController:
+class PushGripToggle:
+    """Space closes/opens the selected gripper for a physical shove (no weld)."""
+
     def __init__(self, env):
         self.env = env
-        self.placed = False
+        self.closed = True
         self._space = EdgeKey()
 
     def update(self, window):
-        if not self.placed:
-            dx, dy = _nudge_from_keys(window)
-            if dx or dy:
-                p = np.asarray(self.env.bowl.get_pose().p, dtype=float)
-                x = float(self.env._catch_target_x(p[0] + dx))
-                y = float(np.clip(p[1] + dy, -0.50, 0.25))
-                self.env._freeze_box(self.env._box_pose_at([x, y]))
-        if self._space.poll(window.key_down("space")):
-            p = np.asarray(self.env.bowl.get_pose().p, dtype=float)
-            x = float(self.env._catch_target_x(p[0]))
-            y = float(np.clip(p[1], -0.50, 0.25))
-            self.env._freeze_box(self.env._box_pose_at([x, y]))
-            self.env._bowl_ready = True
-            self.placed = True
-            print(f"Box frozen at ({x:.3f}, {y:.3f}) past red line.")
+        if not self._space.poll(window.key_down("space")):
+            return
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
+        if not selected:
+            print("[catch_valley_ball] select an arm with 1/2/3 before toggling the gripper")
+            return
+        from envs.utils.action import ArmTag
+
+        self.env.plan_success = True
+        try:
+            if self.closed:
+                for side in selected:
+                    self.env.move(self.env.open_gripper(ArmTag(side)))
+                self.closed = False
+                print("[catch_valley_ball] gripper opened")
+            else:
+                for side in selected:
+                    self.env.move(self.env.close_gripper(ArmTag(side)))
+                self.closed = True
+                print("[catch_valley_ball] gripper closed — shove the box with contact")
+        except Exception as exc:
+            print(f"[catch_valley_ball] gripper toggle failed: {exc}")
+        self.env.plan_success = True
 
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive catch_valley_ball viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
-    parser.add_argument(
-        "--control",
-        choices=("keyboard", "robot"),
-        default="keyboard",
-        help="Interaction method (default: keyboard nudge)",
-    )
-    parser.add_argument(
-        "--robot-motion",
-        choices=("planner", "interpolate"),
-        default="planner",
-        help="Unused for keyboard nudge; kept for GUI compatibility",
-    )
+    add_robot_motion_arg(parser, robot_motion_default="interpolate")
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
@@ -170,27 +163,46 @@ def main():
     )
 
     env = catch_valley_ball()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=False))
-    env._interactive_selected_arms = ("left" if env.mirrored else "right",)
-    x, y = _target_xy(env)
+    env._interactive_robot_mode = True
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
+
+    # Same as catch_cup pillow: after settle, hand the box to PhysX. Block any
+    # freeze/teleport helpers while the interactive push session is active.
+    env._enable_box_physics()
+    env._push_active = True
+    env._bowl_ready = False
+
+    catcher = "left" if env.mirrored else "right"
+    env._interactive_selected_arms = (catcher,)
+    env.together_close_gripper(save_freq=None)
+
+    landing = env.landing
     print(
-        f"Predicted catch target ≈ ({x:.3f}, {y:.3f}); red_line_x={env.red_line_x:.3f}; "
-        f"mirrored={env.mirrored}; catcher={env.catcher_model}/base{env.bowl_id}."
+        f"Catch arm={catcher}; predicted landing ≈ "
+        f"({float(landing[0]):.3f}, {float(landing[1]):.3f}); "
+        f"red_line_x={env.red_line_x:.3f}; mirrored={env.mirrored}. "
+        f"Shove the box with the closed gripper (PhysX)."
     )
 
-    controller = KeyboardBoxController(env)
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
+    grip = PushGripToggle(env)
 
-    print("Arrows nudge the box; Space freezes it past the red line.")
     settle_after = None
     try:
         while not viewer.closed:
             views.update(viewer.window)
             frame_start = time.perf_counter()
-            controller.update(viewer.window)
+            grip.update(viewer.window)
+
+            # Keep the box dynamic every frame (in case settle helpers re-freeze).
+            if not bool(getattr(env, "_push_active", False)):
+                env._enable_box_physics()
+                env._push_active = True
 
             env._update_kinematic_tasks()
             env.scene.step()
