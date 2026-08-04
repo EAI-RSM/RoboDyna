@@ -331,21 +331,29 @@ class RoundedButton(tk.Canvas):
 
 
 class InteractiveTaskLauncher(tk.Tk):
-    IMAGE_SIZE = (1280, 720)
+    # Side-by-side demos are 8:3 (e.g. 960x360). Size previews to fill a
+    # typical window width while keeping that aspect — avoids letterbox bars.
+    IMAGE_SIZE = (1400, 525)
+    CARD_PAD = 8
+    PREVIEW_SIDE_PAD = 28
 
     def __init__(self):
         super().__init__()
         self.title("Interactive Tasks")
-        self.geometry("1440x950")
-        self.minsize(980, 700)
+        self.geometry("1600x1000")
+        self.minsize(1100, 760)
         self.configure(bg=PAGE_BG)
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
 
         self.child: subprocess.Popen | None = None
         self.active_selection: tuple[int, str] | None = None
         self.temporary_config: Path | None = None
+        self.preview_sources: list[Image.Image | None] = []
         self.preview_photos: list[ImageTk.PhotoImage | None] = []
+        self.preview_labels: list[tk.Label] = []
         self.task_buttons: list[list[RoundedButton]] = []
+        self._preview_resize_job: str | None = None
+        self._preview_width = self.IMAGE_SIZE[0]
 
         self._build_ui()
         self.after(250, self._poll_child)
@@ -458,7 +466,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.status.pack(fill="x", padx=34, pady=(2, 12))
 
         outer = tk.Frame(self, bg=PAGE_BG)
-        outer.pack(fill="both", expand=True, padx=22, pady=(0, 22))
+        outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.canvas = tk.Canvas(outer, bg=PAGE_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(outer, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=scrollbar.set)
@@ -479,7 +487,35 @@ class InteractiveTaskLauncher(tk.Tk):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _resize_page(self, event):
-        self.canvas.itemconfigure(self.page_window, width=max(event.width, 900))
+        page_width = max(event.width, 900)
+        self.canvas.itemconfigure(self.page_window, width=page_width)
+        preview_width = max(
+            720, page_width - 2 * (self.CARD_PAD + self.PREVIEW_SIDE_PAD)
+        )
+        if abs(preview_width - self._preview_width) < 8:
+            return
+        if self._preview_resize_job is not None:
+            self.after_cancel(self._preview_resize_job)
+        self._preview_resize_job = self.after(
+            80, lambda width=preview_width: self._apply_preview_width(width)
+        )
+
+    def _apply_preview_width(self, width: int):
+        self._preview_resize_job = None
+        self._preview_width = width
+        for index, source in enumerate(self.preview_sources):
+            photo = self._render_preview(source, width)
+            self.preview_photos[index] = photo
+            label = self.preview_labels[index]
+            if photo is None:
+                label.configure(
+                    image="",
+                    text="No preview available",
+                    width=width // 12,
+                    height=max(6, (width * 3) // (8 * 18)),
+                )
+            else:
+                label.configure(image=photo, text="", width=0, height=0)
 
     def _mousewheel(self, event):
         if event.delta:
@@ -499,24 +535,25 @@ class InteractiveTaskLauncher(tk.Tk):
                     return match
         return None
 
-    def _load_preview(self, task: str):
+    def _load_preview_source(self, task: str) -> Image.Image | None:
         path = self._preview_path(task)
         if path is None:
             return None
         try:
             with Image.open(path) as source:
                 source.seek(0)
-                image = source.convert("RGB")
-            image.thumbnail(self.IMAGE_SIZE, Image.Resampling.LANCZOS)
-            background = Image.new("RGB", self.IMAGE_SIZE, "#080a0d")
-            offset = (
-                (self.IMAGE_SIZE[0] - image.width) // 2,
-                (self.IMAGE_SIZE[1] - image.height) // 2,
-            )
-            background.paste(image, offset)
-            return ImageTk.PhotoImage(background)
+                return source.convert("RGB")
         except Exception:
             return None
+
+    def _render_preview(self, source: Image.Image | None, width: int) -> ImageTk.PhotoImage | None:
+        if source is None:
+            return None
+        # Fill the card width at the image's native aspect ratio (no letterbox).
+        aspect = source.width / max(source.height, 1)
+        height = max(1, int(round(width / aspect)))
+        image = source.resize((width, height), Image.Resampling.LANCZOS)
+        return ImageTk.PhotoImage(image)
 
     def _add_task_card(self, index: int, label: str, task: str):
         card = tk.Frame(
@@ -525,10 +562,10 @@ class InteractiveTaskLauncher(tk.Tk):
             highlightbackground=CARD_BORDER,
             highlightthickness=2,
         )
-        card.pack(fill="x", padx=14, pady=16)
+        card.pack(fill="x", padx=self.CARD_PAD, pady=12)
 
         card_header = tk.Frame(card, bg=CARD_BG)
-        card_header.pack(fill="x", padx=20, pady=(16, 10))
+        card_header.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(14, 8))
         tk.Label(
             card_header,
             text=f"{index + 1:02d}",
@@ -554,22 +591,32 @@ class InteractiveTaskLauncher(tk.Tk):
             font=("Sans", 12, "bold"),
         ).pack(side="right")
 
-        preview_holder = tk.Frame(card, bg="#080a0d")
-        preview_holder.pack(padx=20)
-        photo = self._load_preview(task)
+        preview_holder = tk.Frame(card, bg=CARD_BG)
+        preview_holder.pack(fill="x", padx=self.PREVIEW_SIDE_PAD)
+        source = self._load_preview_source(task)
+        photo = self._render_preview(source, self._preview_width)
+        self.preview_sources.append(source)
         self.preview_photos.append(photo)
-        tk.Label(
+        preview_label = tk.Label(
             preview_holder,
             image=photo,
             text="No preview available" if photo is None else "",
-            bg="#080a0d",
-            fg="#aab2bd",
-            width=self.IMAGE_SIZE[0],
-            height=self.IMAGE_SIZE[1],
-        ).pack()
+            bg=CARD_BG,
+            fg=TEXT_SECONDARY,
+            font=("Sans", 16),
+            bd=0,
+            highlightthickness=0,
+        )
+        if photo is None:
+            preview_label.configure(
+                width=self._preview_width // 12,
+                height=max(6, (self._preview_width * 3) // (8 * 18)),
+            )
+        preview_label.pack(fill="x")
+        self.preview_labels.append(preview_label)
 
         action_row = tk.Frame(card, bg=CARD_BG)
-        action_row.pack(padx=20, pady=(14, 20))
+        action_row.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(12, 16))
         buttons = []
         for scenario in SCENARIOS:
             button = RoundedButton(
@@ -579,11 +626,11 @@ class InteractiveTaskLauncher(tk.Tk):
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
                 font=("Sans", 18, "bold"),
-                width=260,
-                height=82,
+                width=300,
+                height=78,
                 radius=30,
             )
-            button.pack(side="left", padx=8)
+            button.pack(side="left", expand=True, fill="x", padx=6)
             buttons.append(button)
         self.task_buttons.append(buttons)
 
