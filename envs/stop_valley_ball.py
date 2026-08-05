@@ -1,4 +1,4 @@
-from .catch_valley_ball import catch_valley_ball
+from .catch_valley_ball_v1 import catch_valley_ball_v1
 from .utils import *
 import numpy as np
 import sapien
@@ -6,10 +6,10 @@ import sapien.physx
 import transforms3d as t3d
 
 
-class stop_valley_ball(catch_valley_ball):
+class stop_valley_ball(catch_valley_ball_v1):
     """Hold a small ping-pong bat in the air to stop a red ball leaving the valley ramp.
 
-    Same curved valley / launch setup as ``catch_valley_ball``, but the expert grasps a
+    Same curved valley / launch setup as ``catch_valley_ball_v1``, but the expert grasps a
     ping-pong bat (circular head + handle) from a facing-ramp holder and holds it
     mid-flight so the ball hits the red circular head. Success is ball–head contact;
     handle contact does not count, and the ball landing on the table before a head
@@ -24,7 +24,7 @@ class stop_valley_ball(catch_valley_ball):
         the bat.
     """
 
-    # Wider track (+30% y) and faster ball than catch_valley_ball.
+    # Wider track (+30% y) and faster ball than catch_valley_ball_v1.
     RAMP_HALF_WIDTH_DEFAULT = 0.1625  # 0.125 * 1.3
     INITIAL_FORWARD_SPEED_DEFAULT = 0.22  # was 0.15
     LAUNCH_SPEED_DEFAULT = 0.80  # was 0.55
@@ -49,7 +49,7 @@ class stop_valley_ball(catch_valley_ball):
     BAT_NAME = "pingpong_bat"
 
     def setup_demo(self, **kwags):
-        # Parent stores catch_valley_ball cfg; replace with this task's block.
+        # Uses stop_valley_ball task_args (not the catch parent block).
         self._cfg = kwags.get("task_args", {}).get("stop_valley_ball", {})
         self._loaded = False
         self._ball_phase = None
@@ -71,7 +71,7 @@ class stop_valley_ball(catch_valley_ball):
         self.bat_holder_parts = []
         self.intercept = None
         # Skip parent's post-init ball start; call Base_Task init via grandparent path.
-        # catch_valley_ball.setup_demo starts ball motion — we need our cfg first, so
+        # catch_valley_ball_v1.setup_demo starts ball motion — we need our cfg first, so
         # invoke _init_task_env_ directly then start motion.
         from ._base_task import Base_Task
 

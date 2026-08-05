@@ -1,0 +1,631 @@
+{
+  "task": "control_quality",
+  "n_per_condition": 5,
+  "summary": {
+    "default": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5
+    },
+    "opt1": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5
+    },
+    "opt2": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5
+    },
+    "opt1+2": {
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5
+    }
+  },
+  "conditions": {
+    "default": {
+      "episodes": [
+        {
+          "seed": 1000,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "red",
+            "green",
+            "red",
+            "green",
+            "red",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 1001,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "green",
+            "red",
+            "green",
+            "red",
+            "green",
+            "red"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 1002,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "green",
+            "red",
+            "green",
+            "red",
+            "green",
+            "red"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 1003,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "red",
+            "green",
+            "red",
+            "green",
+            "red",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 1004,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "red",
+            "green",
+            "red",
+            "green",
+            "red",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        }
+      ],
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5
+    },
+    "opt1": {
+      "episodes": [
+        {
+          "seed": 2000,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "red",
+            "green",
+            "red",
+            "green",
+            "red",
+            "red"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 2001,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "red",
+            "red",
+            "green",
+            "green",
+            "green",
+            "red"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 2002,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "green",
+            "red",
+            "green",
+            "red",
+            "green",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 2003,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "green",
+            "green",
+            "red",
+            "green",
+            "green",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 2004,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.0,
+          "tile_colors": [
+            "red",
+            "red",
+            "green",
+            "green",
+            "green",
+            "red"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        }
+      ],
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5
+    },
+    "opt2": {
+      "episodes": [
+        {
+          "seed": 3000,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "black",
+            "red",
+            "green",
+            "red",
+            "green",
+            "black"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 3001,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "red",
+            "green",
+            "red",
+            "black",
+            "red",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 3002,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "black",
+            "green",
+            "black",
+            "green",
+            "red",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 3003,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "black",
+            "black",
+            "green",
+            "red",
+            "green",
+            "red"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 3004,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "alternating",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "red",
+            "black",
+            "red",
+            "green",
+            "black",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        }
+      ],
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5
+    },
+    "opt1+2": {
+      "episodes": [
+        {
+          "seed": 4000,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "red",
+            "black",
+            "red",
+            "black",
+            "green",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 4001,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "black",
+            "green",
+            "red",
+            "black",
+            "green",
+            "red"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 4002,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "green",
+            "black",
+            "red",
+            "green",
+            "green",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 4003,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "black",
+            "green",
+            "green",
+            "black",
+            "red",
+            "green"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        },
+        {
+          "seed": 4004,
+          "plan_success": true,
+          "check_success": true,
+          "criteria_ok": true,
+          "shape_ok": true,
+          "criteria_consistent": true,
+          "color_mode": "random",
+          "black_frac_max": 0.5,
+          "tile_colors": [
+            "green",
+            "green",
+            "green",
+            "black",
+            "red",
+            "red"
+          ],
+          "tile_missed": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "black_press": false,
+          "success": true
+        }
+      ],
+      "successes": 5,
+      "attempts": 5,
+      "rate": 1.0,
+      "criteria_consistent": 5
+    }
+  },
+  "success_criterion": "all red/green correctly stamped; black outliers skipped; miss or black stamp \u2192 fail",
+  "demos": {
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/control_quality/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/control_quality/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/control_quality/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/control_quality/opt1+2_sidebyside.mp4"
+  }
+}

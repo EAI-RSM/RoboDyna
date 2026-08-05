@@ -194,8 +194,44 @@ class marble_shelf_maze(Base_Task):
             parts.append("option 2")
         return ", ".join(parts) if parts else "baseline"
 
+    def _use_viewer_glass(self) -> bool:
+        """Interactive SAPIEN viewer cannot composite transmission glass — use plain alpha."""
+        if bool(getattr(self, "_plain_glass", False)):
+            return True
+        cfg = getattr(self, "_cfg", {}) or {}
+        if bool(cfg.get("plain_glass", False)):
+            return True
+        return bool(
+            getattr(self, "_interactive_robot_mode", False)
+            or getattr(self, "_interactive_universal_controls", False)
+        )
+
     def _make_glass_material(self):
-        """Exact replica of catch_shelf_marble glass: light-blue hue + 80% transmission."""
+        """Shelf glass: transmission for demo cameras; pour_beer-style alpha for interactive."""
+        if self._use_viewer_glass():
+            # pour_beer-style plain alpha, but stronger light-blue + ~30% less transparent
+            # than the initial 0.28 alpha (0.28 → ~0.50) so shelves read clearly in the viewer.
+            glass = sapien.render.RenderMaterial(
+                base_color=[0.72, 0.88, 0.98, 0.50]
+            )
+            try:
+                glass.set_transmission(0.0)
+                glass.set_transmission_roughness(1.0)
+                glass.set_roughness(0.10)
+                glass.set_metallic(0.0)
+            except Exception:
+                try:
+                    glass.roughness = 0.10
+                    glass.metallic = 0.0
+                except Exception:
+                    pass
+            try:
+                glass.set_ior(1.0)
+            except Exception:
+                pass
+            return glass
+
+        # Expert / demo recording: catch_shelf_marble / catch_rat transmission glass.
         glass = sapien.render.RenderMaterial(base_color=[*self.SHELF_COLOR, 1.0])
         glass.set_transmission(float(self.SHELF_TRANSMISSION))
         glass.set_transmission_roughness(float(self.SHELF_TRANSMISSION_ROUGHNESS))
@@ -402,20 +438,30 @@ class marble_shelf_maze(Base_Task):
         glass_top_z = top_z + self.shelf_half_thick + 0.05
         glass_half_h = (glass_top_z - glass_bottom_z) / 2.0
         glass_cz = (glass_top_z + glass_bottom_z) / 2.0
-        # Both sheets are drawn as thin rectangular frames (four edges only, no filled center) so
-        # the camera can see straight through into the maze from either side -- true render
-        # transparency (RenderMaterial transmission/alpha) isn't respected by this renderer, so
-        # "glass" has to be conveyed geometrically (an open frame) rather than via a translucent
-        # material.
+        # Demo cameras: open frames (transmission panes vanish in the raster path historically).
+        # Interactive viewer: pour_beer-style plain-alpha panes so the glass walls are visible.
         glass_thick = 0.004
         near_dy = -self.glass_gap / 2.0 - glass_thick / 2.0
         far_dy = self.glass_gap / 2.0 + glass_thick / 2.0
         for side, dy in (("near", near_dy), ("far", far_dy)):
-            self._build_glass_frame(
-                [glass_cx, self.maze_y + dy, glass_cz],
-                half_w=glass_half_w, half_h=glass_half_h, half_thick=glass_thick / 2.0,
-                bar_half=0.006, side=side,
-            )
+            center = [glass_cx, self.maze_y + dy, glass_cz]
+            if self._use_viewer_glass():
+                self._build_glass_pane(
+                    center,
+                    half_w=glass_half_w,
+                    half_h=glass_half_h,
+                    half_thick=glass_thick / 2.0,
+                    side=side,
+                )
+            else:
+                self._build_glass_frame(
+                    center,
+                    half_w=glass_half_w,
+                    half_h=glass_half_h,
+                    half_thick=glass_thick / 2.0,
+                    bar_half=0.006,
+                    side=side,
+                )
 
         # ---- marble: starts frozen (kinematic, no gravity) at the centre of the top shelf ----
         ball_z0 = self.shelf_z[0] + self.shelf_half_thick + self.ball_radius + 0.001
@@ -459,18 +505,26 @@ class marble_shelf_maze(Base_Task):
 
         # ---- two buttons in the near zone, one per side/arm ----
         self.buttons = []
+        button_homes = []
+        button_tops = []
+        button_ids = []
         for bx in self.button_x:
             bz = self.table_z + self.button_half[2]
             is_right = bx > 0
+            direction = "right" if is_right else "left"
+            home = sapien.Pose([bx, self.button_y, bz])
             btn = create_box(
                 self.scene,
-                pose=sapien.Pose([bx, self.button_y, bz]),
+                pose=home,
                 half_size=list(self.button_half),
                 color=[0.75, 0.20, 0.20] if bx < 0 else [0.20, 0.55, 0.75],
                 is_static=True,
-                name=f"shelf_button_{'left' if bx < 0 else 'right'}",
+                name=f"shelf_button_{direction}",
             )
             self.buttons.append(btn)
+            button_homes.append(home)
+            button_tops.append(bz + float(self.button_half[2]))
+            button_ids.append(direction)
             self.add_prohibit_area(btn, padding=0.03)
             # Decal on the button's top face: a curved arrow spelling out which way the active
             # shelf will tilt if this button is pressed (clockwise for right, counter-clockwise
@@ -482,6 +536,15 @@ class marble_shelf_maze(Base_Task):
                 color=[0.96, 0.96, 0.96],
             )
         self.left_button, self.right_button = self.buttons
+        self._pending_tilt_dir = None
+        self._reactive_buttons = ReactivePushButtons(
+            self,
+            actors=self.buttons,
+            home_poses=button_homes,
+            max_depth=float(self.button_half[2]),
+            ids=button_ids,
+        )
+        self._reactive_buttons.set_tops_z(button_tops)
 
         # ---- bowl: Default = static under a random bottom-shelf edge; Opt 2 = kinematic
         # oscillation across the full maze x-span (left↔right) so the last drop must be timed ----
@@ -527,6 +590,21 @@ class marble_shelf_maze(Base_Task):
         self._loaded = True
 
     GLASS_COLOR = [0.80, 0.90, 0.93]
+
+    def _build_glass_pane(self, center_xyz, half_w, half_h, half_thick, side):
+        """Filled translucent pane for the interactive viewer (pour_beer plain-alpha glass)."""
+        entity = sapien.Entity()
+        entity.set_name(f"glass_sheet_{side}")
+        entity.set_pose(sapien.Pose(list(center_xyz)))
+        render = sapien.render.RenderBodyComponent()
+        render.attach(
+            sapien.render.RenderShapeBox(
+                [float(half_w), float(half_thick), float(half_h)],
+                self._make_glass_material(),
+            )
+        )
+        entity.add_component(render)
+        self.scene.add_entity(entity)
 
     def _build_glass_frame(self, center_xyz, half_w, half_h, half_thick, bar_half, side):
         """A visual-only (no collision) rectangular frame -- four thin edge bars, open in the
@@ -922,10 +1000,34 @@ class marble_shelf_maze(Base_Task):
         self.bowl_side = "right"
         return "right"
 
+    def _update_reactive_buttons(self):
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
+            return
+        triggered = bank.update()
+        interactive = bool(
+            getattr(self, "_interactive_universal_controls", False)
+            or getattr(self, "_interactive_robot_mode", False)
+        )
+        if not interactive:
+            return
+        for direction in triggered:
+            # Queue for interactive loop (tilt settle is blocking).
+            self._pending_tilt_dir = str(direction)
+
+    def consume_pending_tilt(self) -> bool:
+        """Run a queued gripper-triggered tilt (interactive sandbox)."""
+        direction = getattr(self, "_pending_tilt_dir", None)
+        self._pending_tilt_dir = None
+        if not direction:
+            return False
+        return bool(self._press_tilt_direct(direction))
+
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
             return
+        self._update_reactive_buttons()
         self._advance_shelf_tilts()
         self._animate_oscillating_bowl()
         # Catch Opt-1 roll-offs / table hits from the *previous* step so the next control

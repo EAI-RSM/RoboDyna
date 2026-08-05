@@ -5,11 +5,10 @@ Run from any directory:
 
     /path/to/RoboDynaExp/script_exp/interactive_dispense_gummy.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_dispense_gummy.py --control robot
-    /path/to/RoboDynaExp/script_exp/interactive_dispense_gummy.py --control robot --robot-motion interpolate
 
-Keyboard mode forces belt-key / dispense latches. Robot mode: teleop arms
-manually, then Space to press the key under the selected arm (left → red
-dispense key; right → left/right belt keys). Sandbox only — not data collection.
+Keyboard mode forces belt-key latches via arrows. Robot mode: select an arm,
+move over a key, lower with Q to press (left → red dispense; right → belt keys).
+Space is unused. Sandbox only — not data collection.
 """
 
 import argparse
@@ -28,47 +27,45 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    arm_ik,
+    print_instructions,
+    UniversalRobotControls,
     make_viewer_view_toggle,
     add_robot_motion_arg,
-    edge_pressed,
     report_task_result,
     print_mode_controls,
-    selected_robot_arms,
 )
 
 
 CONTROLS_KEYBOARD = """
   Left Arrow       →  move bowl LEFT  (right-arm belt key)
   Right Arrow      →  move bowl RIGHT (right-arm belt key)
-  Space            →  dispense (left-arm key)
+  Space is unused. Prefer --control robot: select arm, move over key, lower with Q
+  (left arm → red dispense; right arm → belt keys).
 
   Continuous belt (Opt 2): hold an arrow key to slide.
   Discrete belt (default): tap an arrow key to hop one station.
 
-  Forces key presses / dispense request directly (no arm).
+  Forces belt-key latches directly (no arm). Dispense via gripper-Z in robot mode.
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
 CONTROLS_ROBOT = """
-  Space            →  press the key under the selected arm
+  Select left (1) or right (2) arm, move over a key, lower with Q to press
+  (E to raise). Space is unused.
 
-  Select left (1) or right (2) arm, then:
-    Left arm  — hover over the red dispense key, Space to press
-    Right arm — hover over a left/right belt key, Space to click
+    Left arm  — hover over the red dispense key, lower with Q
+    Right arm — hover over a left/right belt key, lower with Q
 
-  Continuous belt (Opt 2): hold Space on a belt key to slide.
-  Discrete belt (default): tap Space to hop one station.
+  Continuous belt (Opt 2): hold the gripper down on a belt key to slide.
+  Discrete belt (default): press edge hops one station.
 
-  Arms physically press the keys (manual teleop; no auto Z/C taps).
-  --robot-motion planner|interpolate
+  Gripper-Z / ReactivePushButtons drives keys (no Space latch).
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
-
-# Max TCP→key XY distance (m) to count as "over" a key (button half is ~2 cm).
-_KEY_XY_TOL = 0.055
 
 
 def _embodiment_config(robot_file):
@@ -148,6 +145,10 @@ def _episode_done(env):
     return False, None
 
 
+# Max TCP→key XY distance (m) to count as "over" a key (button half is ~2 cm).
+_KEY_XY_TOL = 0.055
+
+
 def _tcp_xy(env, side: str) -> np.ndarray:
     getter = env.robot.get_left_tcp_pose if side == "left" else env.robot.get_right_tcp_pose
     return np.asarray(getter()[:2], dtype=np.float64)
@@ -182,16 +183,11 @@ def _nearest_key_for_arm(env, side: str, max_dist: float = _KEY_XY_TOL):
 
 
 class KeyboardState:
-    def __init__(self):
-        self.prev_space = False
+    """Arrow latches for belt only — dispense is gripper-Z (no Space)."""
 
     def update(self, env, window):
         env._expert_belt_hold = _belt_side(window)
         env._bowl_force_stop = False
-        space = window.key_down("space")
-        if space and not self.prev_space:
-            env._expert_dispense = True
-        self.prev_space = space
 
 
 class SmoothGummyPressController:
@@ -412,27 +408,31 @@ def main():
     print_mode_controls("dispense_gummy", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = dispense_gummy()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    # Always enable arm teleop: presses are gripper-Z only (no Space).
+    env._interactive_robot_mode = True
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
     env._expert_belt_hold = None
     env._expert_dispense = False
     env._bowl_force_stop = False
 
     keyboard = KeyboardState() if args.control == "keyboard" else None
-    robot = SmoothGummyPressController(env) if args.control == "robot" else None
-    keys_prev = {}
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
 
     mode = "continuous" if getattr(env, "belt_continuous_motion", False) else "discrete"
-    print(
-        f"Belt mode: {mode}. Control={args.control}. robot-motion={args.robot_motion}."
+    print(f"Belt mode: {mode}.")
+    print_instructions(
+        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
+        "Space is unused."
     )
-    if args.control == "robot":
-        print("Select an arm (1/2), hover over a key, press Space.")
+    if args.control == "keyboard":
+        print_instructions("Keyboard arrows still latch belt motion as a sandbox shortcut.")
 
     try:
         while not viewer.closed:
@@ -440,31 +440,6 @@ def main():
             frame_start = time.perf_counter()
             if keyboard is not None:
                 keyboard.update(env, viewer.window)
-            elif robot is not None:
-                space_down = bool(viewer.window.key_down("space"))
-                robot.set_space_held(space_down)
-                if edge_pressed(viewer.window, "space", keys_prev):
-                    selected = selected_robot_arms(env, fallback=())
-                    if len(selected) != 1:
-                        print("Select one arm first: 1 (left) or 2 (right).")
-                    else:
-                        side = selected[0]
-                        key = _nearest_key_for_arm(env, side)
-                        if key is None:
-                            if side == "left":
-                                print("Move the left arm over the red dispense key first.")
-                            else:
-                                print("Move the right arm over a left/right belt key first.")
-                        else:
-                            hold = bool(robot.continuous and key in ("left", "right"))
-                            label = (
-                                "red dispense"
-                                if key == "dispense"
-                                else f"belt {key}"
-                            )
-                            print(f"Robot pressing {label} key with {side} arm...")
-                            robot.request(key, hold_while_space=hold)
-                robot.update()
             env._update_kinematic_tasks()
             env.scene.step()
             env.scene.update_render()
@@ -479,12 +454,11 @@ def main():
             if remaining > 0:
                 time.sleep(remaining)
     finally:
-        try:
-            if robot is not None:
-                robot.release()
-        finally:
-            env.close_env()
+        env.close_env()
 
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())

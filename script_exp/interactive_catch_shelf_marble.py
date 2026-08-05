@@ -5,10 +5,10 @@ Run from any directory:
 
     /path/to/RoboDynaExp/script_exp/interactive_catch_shelf_marble.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_catch_shelf_marble.py --control robot
-    /path/to/RoboDynaExp/script_exp/interactive_catch_shelf_marble.py --control robot --robot-motion interpolate
 
-Keyboard mode latches bowl keys directly. Robot mode presses keys with the
-matching arm. Sandbox only — not data collection.
+Keyboard mode latches bowl keys directly via arrows. Robot mode: select an arm,
+move over the bowl key, lower with Q to press (gripper-Z / ReactivePushButtons).
+Space is unused. Sandbox only — not data collection.
 """
 
 import argparse
@@ -17,7 +17,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -27,9 +26,10 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    print_instructions,
+    UniversalRobotControls,
     make_viewer_view_toggle,
     add_robot_motion_arg,
-    make_button_controller,
     report_task_result,
     print_mode_controls,
 )
@@ -39,19 +39,22 @@ CONTROLS_KEYBOARD = """
   Hold Left Arrow   →  slide bowl LEFT
   Hold Right Arrow  →  slide bowl RIGHT
   First key press also releases the marble (default mode).
+  Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
 
   Keys latch the bowl motion directly (no arm motion).
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
 CONTROLS_ROBOT = """
-  Hold Space        →  press selected arm's bowl key
+  Select left (1) or right (2) arm, move over the matching bowl key,
+  then lower with Q to press (E to raise). Space is unused.
   First key press also releases the marble (default mode).
 
-  Matching arm presses the bowl key.
-  --robot-motion planner|interpolate
+  Gripper-Z held_mask drives the bowl; no Space latch.
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
@@ -115,32 +118,6 @@ def _update_keyboard(env, window):
         env._release_marble()
 
 
-def _set_latch(env, mode):
-    env._expert_hold = mode
-    env._bowl_force_stop = False
-    if getattr(env, "_marble_state", None) == "parked":
-        env._release_marble()
-
-
-def _clear_latch(env):
-    env._expert_hold = None
-
-
-def _make_robot_controller(env, arm_tag, robot_motion):
-    return make_button_controller(
-        env,
-        arm_tag,
-        robot_motion,
-        get_button=lambda e, side: e.keys[side],
-        get_top_z=lambda e, _side: e.key_top_z,
-        set_latch=_set_latch,
-        clear_latch=_clear_latch,
-        hold=True,
-        active_dz=float(getattr(env, "key_press_dz", 0.17)),
-        sides=("left", "right"),
-    )
-
-
 def main():
     parser = argparse.ArgumentParser(description="Interactive catch_shelf_marble viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
@@ -150,33 +127,34 @@ def main():
 
     from envs import CONFIGS_PATH
     from envs.catch_shelf_marble import catch_shelf_marble
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("catch_shelf_marble", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = catch_shelf_marble()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    # Always enable arm teleop: presses are gripper-Z only (no Space).
+    env._interactive_robot_mode = True
+    # Raster viewer: pour_beer-style plain-alpha shelves (transmission is invisible here).
+    env._plain_glass = True
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
     env._osc_armed = True
     env._bowl_force_stop = False
     env._expert_hold = None
 
-    robot_controller = None
-    if args.control == "robot":
-        robot_controller = _make_robot_controller(env, ArmTag, args.robot_motion)
-
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
 
-    motion = f", robot-motion={args.robot_motion}" if args.control == "robot" else ""
-    print(
-        f"Control={args.control}{motion}. "
-        + ("Select an arm and hold Space." if args.control == "robot"
-           else "Hold Left/Right arrows.")
+    print_instructions(
+        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
+        "Space is unused."
     )
+    if args.control == "keyboard":
+        print_instructions("Keyboard arrows still latch bowl motion as a sandbox shortcut.")
 
     try:
         while not viewer.closed:
@@ -184,12 +162,6 @@ def main():
             frame_start = time.perf_counter()
             if args.control == "keyboard":
                 _update_keyboard(env, viewer.window)
-            elif robot_controller is not None:
-                selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-                mode = None
-                if viewer.window.key_down("space"):
-                    mode = "dump" if len(selected) == 2 else (selected[0] if selected else None)
-                robot_controller.update(mode)
             env._update_kinematic_tasks()
             env.scene.step()
             env.scene.update_render()
@@ -205,12 +177,11 @@ def main():
             if remaining > 0:
                 time.sleep(remaining)
     finally:
-        try:
-            if robot_controller is not None:
-                robot_controller.release()
-        finally:
-            env.close_env()
+        env.close_env()
 
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())

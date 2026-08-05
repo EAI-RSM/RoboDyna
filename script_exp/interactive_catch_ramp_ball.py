@@ -25,12 +25,20 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
-from _interactive_common import make_viewer_view_toggle, report_task_result, print_mode_controls  # noqa: E402
+from _interactive_common import (  # noqa: E402
+    action_failed,
+    make_viewer_view_toggle,
+    print_instructions,
+    print_mode_controls,
+    report_task_result,
+    resolve_action_arm,
+)
 
 
 CONTROLS_KEYBOARD = """
   Space             freeze/place cup at current XY
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
   Flow: nudge with arrows → Space to place
@@ -40,6 +48,7 @@ CONTROLS_KEYBOARD = """
 CONTROLS_ROBOT = """
   Space             first press picks up the cup; second drops it
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Escape            quit
 ------------------------------------------------------------
   Flow: Space to pick up → move with arrows / E/Q → Space to drop
@@ -177,22 +186,21 @@ class RobotCupController:
         self._space = EdgeKey()
 
     def _choose_arm(self):
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()))
-        if selected:
-            return self.ArmTag(selected[0])
-        x, _ = _aim_xy(self.env)
-        return self.ArmTag("right" if float(x) > 0 else "left")
+        return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
 
     def grasp(self):
         self.busy = True
         self.arm = self._choose_arm()
+        if self.arm is None:
+            self.busy = False
+            return
         self.env.move(self.env.grasp_actor(self.env.cup, arm_tag=self.arm, pre_grasp_dis=0.08))
         if self.env.plan_success:
             self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
             self.holding = True
             print(f"Picked up cup with {self.arm} arm. Move, then Space to drop.")
         else:
-            print("Grasp failed; planner disabled further robot actions.")
+            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def drop(self):
@@ -271,9 +279,9 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     if args.control == "robot":
-        print("Space picks up the cup; Space again drops it.")
+        print_instructions("Space picks up the cup; Space again drops it.")
     else:
-        print("Arrows nudge the cup; Space places it.")
+        print_instructions("Arrows nudge the cup; Space places it.")
 
     settle_after = None
     try:
@@ -307,3 +315,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())

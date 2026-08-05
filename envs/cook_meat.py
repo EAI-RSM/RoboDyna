@@ -19,6 +19,7 @@ from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils.action import ArmTag
 from .utils.create_actor import UnStableError, create_actor, create_box
 from .utils.rand_create_actor import rand_pose
+from .utils.reactive_button import ReactivePushButtons
 
 import transforms3d as t3d
 
@@ -58,7 +59,7 @@ class cook_meat(Base_Task):
     TARGET_DONENESS_RANGE_JITTER_DEFAULT: ClassVar[float] = 0.0
     # Legacy fallback when target_doneness_range is absent.
     COOK_DONENESS_TOL_DEFAULT: ClassVar[float] = 0.08
-    # Colored keycap + thin black base (marble / dual_hole_punch styling).
+    # Colored keycap + thin black base (marble / punch_dual_holes styling).
     KEY_HALF: ClassVar[tuple[float, float, float]] = (0.020, 0.020, 0.014)
     KEY_BASE_HALF: ClassVar[tuple[float, float, float]] = (0.032, 0.032, 0.005)
     KEY_BASE_COLOR: ClassVar[tuple[float, float, float]] = (0.08, 0.08, 0.08)
@@ -302,14 +303,14 @@ class cook_meat(Base_Task):
 
     # ------------------------------------------------------ head-camera view
     # The front video the episodes are rendered from is "head_camera" (ur5-wsg static_camera_list,
-    # assets/embodiments/ur5-wsg/config.yml:29-40): a D435 (task_config/_camera_config.yml -> fovy 37
-    # deg, 320x240) mounted at position [-0.032,-0.45,1.35] looking forward [0,0.6,-0.8] (pitched
-    # down ~53 deg) with left [-1,0,0]. So the visible patch of the table is a trapezoid; an object
-    # spawned too far to the side / too near the front edge would render partly out of frame. These
-    # constants + the projection below let us REJECT any spawn whose footprint leaves the image.
+    # assets/embodiments/ur5-wsg/config.yml): a D435 (task_config/_camera_config.yml -> fovy 37
+    # deg, 320x240) at [0.0,-0.50,2.0] looking forward [0,0.45,-1.0] with left [-1,0,0]. So the
+    # visible patch of the table is a trapezoid; an object spawned too far to the side / too near
+    # the front edge would render partly out of frame. These constants + the projection below let
+    # us REJECT any spawn whose footprint leaves the image.
     # (random_head_camera_dis is 0 in both demo_dynamic and debug_dynamic, so the pose is exact.)
-    _CAM_POS: ClassVar[np.ndarray] = np.array([-0.032, -0.45, 1.35])
-    _CAM_FWD: ClassVar[np.ndarray] = np.array([0.0, 0.6, -0.8])
+    _CAM_POS: ClassVar[np.ndarray] = np.array([0.0, -0.50, 2.0])
+    _CAM_FWD: ClassVar[np.ndarray] = np.array([0.0, 0.45, -1.0])
     _CAM_LEFT: ClassVar[np.ndarray] = np.array([-1.0, 0.0, 0.0])
     _CAM_FOVY_DEG: ClassVar[float] = 37.0
     _CAM_W: ClassVar[int] = 320
@@ -697,6 +698,7 @@ class cook_meat(Base_Task):
         # so it stays clear of the board (+y) and does not overlap the bowl.
         cook_key = None
         cook_key_base = None
+        key_home_pose = None
         key_xy = None
         key_top_z = None
         key_aabb: AABB | None = None
@@ -766,9 +768,10 @@ class cook_meat(Base_Task):
                 name=f"cook_key_base_{tag}",
                 is_static=True,
             )
+            key_home = sapien.Pose([key_x, key_y, cap_z], [1, 0, 0, 0])
             cook_key = create_box(
                 self,
-                pose=sapien.Pose([key_x, key_y, cap_z], [1, 0, 0, 0]),
+                pose=key_home,
                 half_size=list(self.KEY_HALF),
                 color=list(self.KEY_COLOR),
                 name=f"cook_key_{tag}",
@@ -776,6 +779,7 @@ class cook_meat(Base_Task):
             )
             key_xy = (key_x, key_y)
             key_top_z = float(bz + 2.0 * base_hz + 2.0 * cap_hz)
+            key_home_pose = key_home
             avoid.append(self._expand_aabb(key_aabb, key_gap))
             self.add_prohibit_area(cook_key_base, padding=0.02)
             self.add_prohibit_area(cook_key, padding=0.02)
@@ -806,6 +810,7 @@ class cook_meat(Base_Task):
             "cook_key_base": cook_key_base,
             "key_xy": key_xy,
             "key_top_z": key_top_z,
+            "key_home_pose": key_home_pose if cook_key is not None else None,
             "steak_shapes": steak_shapes,
             "doneness": 0.0,
             "max_doneness": 0.0,
@@ -932,6 +937,34 @@ class cook_meat(Base_Task):
         self._cooking_active = False
         # Legacy alias used by older unit tests / success helpers.
         self.plate = primary["board"]
+        self._init_reactive_cook_keys()
+
+    def _init_reactive_cook_keys(self) -> None:
+        """Spring-back cook keys (gripper-Z), fill_coffee style."""
+        self._reactive_buttons = None
+        if not self.use_cook_button:
+            return
+        actors, homes, tops, ids = [], [], [], []
+        for st in self.stations:
+            key = st.get("cook_key")
+            home = st.get("key_home_pose")
+            if key is None or home is None:
+                continue
+            actors.append(key)
+            homes.append(home)
+            tops.append(float(st["key_top_z"]))
+            ids.append(str(st["tag"]))
+        if not actors:
+            return
+        self._reactive_buttons = ReactivePushButtons(
+            self,
+            actors=actors,
+            home_poses=homes,
+            max_depth=float(self.KEY_HALF[2]),
+            ids=ids,
+            xy_tol=float(self.key_press_xy),
+        )
+        self._reactive_buttons.set_tops_z(tops)
 
     # -------------------------------------------------------- cooking state
     def _set_station_meat_color(self, station: dict[str, Any], doneness: float) -> None:
@@ -1005,31 +1038,18 @@ class cook_meat(Base_Task):
         station["cook_phase_done"] = True
 
     def _button_is_pressed_station(self, station: dict[str, Any]) -> bool:
-        """True when the matching arm's EE is pressing this station's cook key."""
+        """True when this station's cook key is held down (gripper-Z or expert latch)."""
         if not self.use_cook_button or station.get("cook_key") is None:
-            return False
-        key_xy = station.get("key_xy")
-        key_top_z = station.get("key_top_z")
-        if key_xy is None or key_top_z is None or not hasattr(self, "robot"):
             return False
         if bool(station.get("_expert_key_held")):
             return True
-        arm = station["arm"]
-        get_ee = (
-            self.robot.get_left_ee_pose
-            if arm == "left"
-            else self.robot.get_right_ee_pose
-        )
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
+            return False
         try:
-            ee = np.asarray(get_ee()[:3], dtype=float)
+            return bool(bank.is_held(str(station["tag"])))
         except Exception:
             return False
-        bx, by = key_xy
-        return (
-            abs(float(ee[0]) - bx) < self.key_press_xy
-            and abs(float(ee[1]) - by) < self.key_press_xy
-            and float(ee[2]) < float(key_top_z) + self.key_press_dz
-        )
 
     def _button_is_pressed(self) -> bool:
         """True if any station's cook key is pressed (obs / tests)."""
@@ -1050,12 +1070,23 @@ class cook_meat(Base_Task):
         )
         self._set_station_meat_color(station, station["doneness"])
 
+    def _update_reactive_cook_keys(self) -> None:
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
+            return
+        for st in getattr(self, "stations", None) or []:
+            tag = str(st.get("tag", ""))
+            if tag:
+                bank.set_forced(tag, bool(st.get("_expert_key_held")))
+        bank.update()
+
     def _update_kinematic_tasks(self) -> None:
         """Advance base dynamics and per-station cooking state by one step."""
         super()._update_kinematic_tasks()
         stations = getattr(self, "stations", None) or []
         if not stations:
             return
+        self._update_reactive_cook_keys()
         for st in stations:
             # Latch cook freeze only when THIS steak is actually held (not on approach).
             if (
@@ -1198,12 +1229,12 @@ class cook_meat(Base_Task):
             print(f"[cook_meat] {tag}: plan_success={self.plan_success}", flush=True)
 
     def play_once(self) -> dict[str, Any]:
-        """Run the dynamic or static expert trajectory for one episode."""
-        if self.dual_setup_enabled:
-            # Dual stations need both arms; skip dynamic moving-target path.
-            return self._play_once_static()
-        if self.use_dynamic:
-            return self._play_once_dynamic()
+        """Run the expert trajectory for one episode.
+
+        The steak is always a stationary target (options only add a cook key
+        and/or a second station). Never use the base-task moving-target
+        workflow even when the shared config sets ``use_dynamic: true``.
+        """
         return self._play_once_static()
 
     def _pan_place_target(self, station: dict[str, Any]) -> list[float]:
@@ -1442,63 +1473,8 @@ class cook_meat(Base_Task):
         return self.info
 
     def get_dynamic_motion_config(self) -> dict[str, Any] | None:
-        """Return the base workflow's dynamic-motion configuration when enabled."""
-        if not self.use_dynamic or self.dual_setup_enabled:
-            return None
-        p = self.steak.get_pose().p
-        return {
-            "target_actor": self.steak,
-            "end_position": np.array([p[0], p[1], p[2]]),
-            "table_bounds": (-0.35, 0.35, -0.25, 0.15),
-            "check_z_threshold": 0.03,
-            "check_z_actor": self.steak,
-        }
-
-    def _play_once_dynamic(self) -> dict[str, Any]:
-        """Execute moving-target acquisition followed by the cooking trajectory."""
-        st = self.stations[0]
-        arm_tag = st["arm"]
-        p = st["steak"].get_pose().p
-        self.end_position = np.array([p[0], p[1], p[2]])
-
-        def robot_action_sequence(need_plan_mode: bool = False) -> None:
-            _ = need_plan_mode
-            grasp_result = self.grasp_actor(
-                st["steak"], arm_tag=arm_tag, pre_grasp_dis=0.1
-            )
-            if (
-                not grasp_result
-                or grasp_result[1] is None
-                or len(grasp_result[1]) == 0
-            ):
-                return
-            self.move(grasp_result)
-
-        table_bounds = (-0.35, 0.35, -0.25, 0.15)
-        success, _ = self.execute_dynamic_workflow(
-            target_actor=st["steak"],
-            end_position=self.end_position,
-            robot_action_sequence=robot_action_sequence,
-            table_bounds=table_bounds,
-        )
-        if not success:
-            print("Dynamic trajectory failed, fallback to static")
-            return self._play_once_static()
-
-        for c in st["steak"].actor.get_components():
-            if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
-                try:
-                    c.set_linear_velocity(np.zeros(3))
-                    c.set_angular_velocity(np.zeros(3))
-                    c.set_linear_damping(15.0)
-                    c.set_angular_damping(40.0)
-                except Exception:
-                    pass
-
-        self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.1, move_axis="arm"))
-        self._pan_cook_table()
-        self.info["info"] = self._task_info(arm_tag)
-        return self.info
+        """Cook-meat never uses the shared moving-target workflow."""
+        return None
 
     # ------------------------------------------------------------- success
     def _doneness_in_target_range(self, doneness: float) -> bool:

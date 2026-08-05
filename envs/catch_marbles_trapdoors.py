@@ -46,6 +46,11 @@ class catch_marbles_trapdoors(Base_Task):
     POST_PRESS_DWELL_DEFAULT = 10
     FINAL_DWELL_STEPS_DEFAULT = 80
     SHUFFLE_COLORS_DEFAULT = True
+    # Reactive key — same spring proxy as fill_coffee_jar (FORCE_* defaults).
+    BUTTON_TOUCH_XY_TOL = 0.055
+    BUTTON_VISUAL_STEP = 0.0007
+    BUTTON_FORCE_ENGAGE_SLACK = 0.05
+    BUTTON_EE_TO_TCP = 0.12
 
     BOX_Y_DEFAULT = -0.02
     BOX_HALF_W_DEFAULT = 0.30
@@ -114,6 +119,7 @@ class catch_marbles_trapdoors(Base_Task):
         self.button_color_names = []
         self.target_button_idx = -1
         self._buttons_held = set()
+        self._reactive_buttons = None
         self._mutex_violation = False
         self.shuffle_colors = bool(self.SHUFFLE_COLORS_DEFAULT)
         self.key_base_half = list(self.KEY_BASE_HALF_DEFAULT)
@@ -253,11 +259,14 @@ class catch_marbles_trapdoors(Base_Task):
 
         self.buttons = []
         self.button_bases = []
+        button_homes = []
+        button_tops = []
         for i, bx in enumerate(self.button_x[:self.n_buttons]):
             base_hz = float(self.key_base_half[2])
             cap_hz = float(self.button_half[2])
             base_z = self.table_z + base_hz
             cap_z = self.table_z + 2.0 * base_hz + cap_hz
+            home = sapien.Pose([bx, self.button_y, cap_z])
             base = create_box(
                 self,
                 pose=sapien.Pose([bx, self.button_y, base_z]),
@@ -268,7 +277,7 @@ class catch_marbles_trapdoors(Base_Task):
             )
             btn = create_box(
                 self,
-                pose=sapien.Pose([bx, self.button_y, cap_z]),
+                pose=home,
                 half_size=list(self.button_half),
                 color=self.button_colors[i],
                 is_static=True,
@@ -276,6 +285,23 @@ class catch_marbles_trapdoors(Base_Task):
             )
             self.button_bases.append(base)
             self.buttons.append(btn)
+            # World pose after create_box (includes table_z_bias) — spring math
+            # and set_pose must share this frame (see fill_coffee_jar / ReactivePushButtons).
+            world_home = btn.get_pose()
+            button_homes.append(world_home)
+            button_tops.append(float(world_home.p[2]) + cap_hz)
+
+        self._reactive_buttons = ReactivePushButtons(
+            self,
+            actors=self.buttons,
+            home_poses=button_homes,
+            max_depth=float(self.button_half[2]),
+            xy_tol=float(self.BUTTON_TOUCH_XY_TOL),
+            visual_step=float(self.BUTTON_VISUAL_STEP),
+            force_engage_slack=float(self.BUTTON_FORCE_ENGAGE_SLACK),
+            ee_to_tcp=float(self.BUTTON_EE_TO_TCP),
+        )
+        self._reactive_buttons.set_tops_z(button_tops)
 
         self._button_pressed = [False] * self.n_buttons
         self._door_open = [False] * self.n_buttons
@@ -614,6 +640,43 @@ class catch_marbles_trapdoors(Base_Task):
             z_hi = float(self._lower_box_floor_z + 2.0 * self.ball_radius)
         return z_lo, z_hi
 
+    def _marble_velocity(self, rigid):
+        if rigid is None:
+            return None
+        try:
+            return np.array(rigid.get_linear_velocity(), dtype=np.float64)
+        except Exception:
+            return None
+
+    def _marble_settled_in_lower_box(self, marble, rigid=None):
+        """True only when the marble has fallen into and come to rest in the lower box.
+
+        Rejects:
+          - still on / above the upper floor lane
+          - mid-air transit through the trapdoor volume (eval can otherwise early-exit)
+          - high residual speed after a bounce that may still clear back upstairs
+        """
+        if marble is None:
+            return False
+        p = np.array(marble.get_pose().p, dtype=np.float64)
+        in_x = abs(p[0] - self.box_center[0]) <= (self.box_half_w - self.box_wall_t)
+        in_y = abs(p[1] - self.box_center[1]) <= (self.box_half_d - self.box_wall_t)
+        if not (in_x and in_y):
+            return False
+        z_lo, z_hi_volume = self._lower_box_z_bounds()
+        floor_contact_z = float(self._lower_box_floor_z + self.ball_radius)
+        # Must be near the lower floor surface, not merely anywhere in the catch volume.
+        near_floor = abs(float(p[2]) - floor_contact_z) <= max(0.015, 2.0 * self.ball_radius)
+        in_volume = z_lo <= float(p[2]) <= z_hi_volume
+        # Hard ceiling: never count a marble that is still at/above the upper floor plane.
+        below_upper = float(p[2]) <= float(self._upper_box_floor_z - self.ball_radius - 0.002)
+        if not (near_floor and in_volume and below_upper):
+            return False
+        vel = self._marble_velocity(rigid)
+        if vel is not None and float(np.linalg.norm(vel)) > 0.35:
+            return False
+        return True
+
     def _ball_in_upper_box(self):
         return self._marble_in_box(
             self.ball,
@@ -622,10 +685,11 @@ class catch_marbles_trapdoors(Base_Task):
         )
 
     def _ball_in_lower_box(self):
-        z_lo, z_hi = self._lower_box_z_bounds()
-        return self._marble_in_box(self.ball, z_lo, z_hi)
+        """Target catch: settled on the lower floor (not mid-fall / not still upstairs)."""
+        return self._marble_settled_in_lower_box(self.ball, self._ball_rigid)
 
     def _distractor_in_lower_box(self):
+        # Any presence in the lower volume counts as a distractor failure (including mid-fall).
         z_lo, z_hi = self._lower_box_z_bounds()
         return self._marble_in_box(self.distractor, z_lo, z_hi)
 
@@ -786,16 +850,25 @@ class catch_marbles_trapdoors(Base_Task):
                 next_ball_x = float(np.clip(next_ball_x, self._ball_x_min, self._ball_x_max))
                 next_dist_x = float(np.clip(next_dist_x, self._ball_x_min, self._ball_x_max))
 
+        # Only commit a drop when the marble is near the floor. Releasing at bounce apex
+        # with horizontal speed lets it clear the opening even though the door is open.
+        drop_z_slack = max(0.003, 0.35 * abs(self.ball_bounce_height))
+
         if next_ball_x is not None:
             self._ball_phase += abs(self.ball_bounce_freq) * dt
             next_z = float(self._ball_z_base + abs(self.ball_bounce_height) * abs(np.sin(self._ball_phase)))
             next_pose = sapien.Pose([next_ball_x, self._ball_y, next_z], ball_pose.q)
             dropped = False
+            near_floor = next_z <= (self._ball_z_base + drop_z_slack)
             for idx, is_open in enumerate(self._door_open):
                 if not is_open or self._door_angle_deg[idx] < 15.0:
                     continue
                 x0, x1 = self._door_x_bounds[idx]
-                if x0 <= next_ball_x <= x1 and abs(self._ball_y - self.box_y) <= self._door_half_y:
+                if (
+                    near_floor
+                    and x0 <= next_ball_x <= x1
+                    and abs(self._ball_y - self.box_y) <= self._door_half_y
+                ):
                     self._set_marble_pose(self.ball, self._ball_rigid, next_pose)
                     self._release_marble("ball", idx)
                     dropped = True
@@ -810,11 +883,16 @@ class catch_marbles_trapdoors(Base_Task):
             )
             next_pose = sapien.Pose([next_dist_x, self._distractor_y, next_z], dist_pose.q)
             dropped = False
+            near_floor = next_z <= (self._distractor_z_base + drop_z_slack)
             for idx, is_open in enumerate(self._door_open):
                 if not is_open or self._door_angle_deg[idx] < 15.0:
                     continue
                 x0, x1 = self._door_x_bounds[idx]
-                if x0 <= next_dist_x <= x1 and abs(self._distractor_y - self.box_y) <= self._door_half_y:
+                if (
+                    near_floor
+                    and x0 <= next_dist_x <= x1
+                    and abs(self._distractor_y - self.box_y) <= self._door_half_y
+                ):
                     self._set_marble_pose(self.distractor, self._distractor_rigid, next_pose)
                     self._release_marble("distractor", idx)
                     dropped = True
@@ -834,8 +912,43 @@ class catch_marbles_trapdoors(Base_Task):
             cand = float(self._ball_y - sign * sep)
         return float(np.clip(cand, self.box_y - y_lim, self.box_y + y_lim))
 
+    def _update_reactive_buttons(self):
+        """Depress keycaps under the gripper; open the matching door on press edge.
+
+        Holding a key does **not** keep the door open — each door uses
+        ``door_open_duration_sec`` then auto-closes.  A new open requires a
+        full key release (spring back) and then another press edge.
+        """
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
+            return
+        triggered = bank.update()
+        interactive = bool(
+            getattr(self, "_interactive_universal_controls", False)
+            or getattr(self, "_interactive_robot_mode", False)
+        )
+        # Always animate keycaps; auto-open doors only in interactive teleop
+        # (expert demos call ``_open_door_direct`` after the timed press).
+        if interactive:
+            for idx in triggered:
+                opened = self._open_door_direct(int(idx))
+                if opened:
+                    color = (
+                        self.button_color_names[idx]
+                        if 0 <= idx < len(self.button_color_names)
+                        else "?"
+                    )
+                    print(
+                        f"[catch_marbles_trapdoors] pressed button {idx} ({color}); "
+                        f"door open ≤ {self.door_open_duration_sec:.2f}s "
+                        f"(release key fully to press again)"
+                    )
+        # Mirror held set from visual state so release clears the latch.
+        self._buttons_held = {i for i, on in enumerate(bank.held_mask()) if on}
+
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
+        self._update_reactive_buttons()
         if len(self._buttons_held) > 1:
             self._mutex_violation = True
         self._advance_doors()
@@ -970,12 +1083,16 @@ class catch_marbles_trapdoors(Base_Task):
         return False
 
     def _open_door_direct(self, btn_idx: int) -> bool:
-        """Open trapdoor ``btn_idx`` without arm motion (keyboard / sandbox latch)."""
+        """Open trapdoor ``btn_idx`` for ``door_open_duration_sec`` (press edge).
+
+        Holding the key does not extend the open window.  Another open needs a
+        fresh press edge after the key has fully sprung back (enforced by
+        ``ReactivePushButtons``).  While the door is already open, a new edge
+        restarts the timer; ``door_open_once`` still locks after the first open.
+        """
         if btn_idx < 0 or btn_idx >= self.n_buttons:
             return False
         if self._door_locked_closed[btn_idx]:
-            return False
-        if self._door_open[btn_idx] and self._door_angle_deg[btn_idx] > 5.0:
             return False
         if self.door_open_once and self._button_pressed[btn_idx]:
             return False
@@ -985,6 +1102,7 @@ class catch_marbles_trapdoors(Base_Task):
         self._door_open_with_ball_over[btn_idx] = (
             self._door_open_with_ball_over[btn_idx] or opened_on_time
         )
+        # Fresh edge → fresh open window (hold does not keep refreshing this).
         self._door_open_time_left[btn_idx] = max(0.0, float(self.door_open_duration_sec))
         self._door_target_angle_deg[btn_idx] = self.door_open_angle_deg
         return True
@@ -1066,14 +1184,18 @@ class catch_marbles_trapdoors(Base_Task):
 
     # ----------------------------------------------------------- metric/obs
     def check_success(self):
-        """Success iff the target marble is caught inside the lower box.
+        """Success iff the target marble fell through the matching door and rests below.
 
         Required:
-          - target went through the matching-color trapdoor
-          - target rests inside the lower catch box
+          - target was released through the matching-color trapdoor
+          - target has settled on the lower-box floor (near floor Z, low speed)
+
+        Opening the matching door under the marble is NOT enough — an airborne bounce
+        over an open door must not count until the marble actually drops in and settles.
+        ``target_opened_when_ball_over`` is logged for diagnostics only.
 
         Failures:
-          - target still on the upper surface / never dropped
+          - target still on the upper surface / never dropped / sailed over the opening
           - target went through a differently colored trapdoor
           - distractor (if present) went through any trapdoor into the lower box
         """
@@ -1131,6 +1253,8 @@ class catch_marbles_trapdoors(Base_Task):
         self.info["distractor_collide"] = bool(self.distractor_collide)
         self.info["mutex_violation"] = bool(self._mutex_violation)
 
+        # Deliberately ignore opened_when_ball_over / target_door_opened here: door timing
+        # alone must not succeed if the marble never settles in the lower box.
         return bool(
             target_valid
             and ball_dropped

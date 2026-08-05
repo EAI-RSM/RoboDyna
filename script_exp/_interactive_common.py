@@ -12,6 +12,51 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# ANSI colors for interactive CLI (TTY only; respect NO_COLOR / FORCE_COLOR).
+_ANSI_BLUE = "\033[34m"
+_ANSI_GREEN = "\033[32m"
+_ANSI_RED = "\033[31m"
+_ANSI_RESET = "\033[0m"
+
+
+def _stdout_supports_color() -> bool:
+    """Color when stdout is a TTY, unless ``NO_COLOR`` is set.
+
+    ``FORCE_COLOR`` (any value other than empty / ``0``) forces color even when
+    not a TTY — useful for CI demos / piped capture.
+    """
+    if os.environ.get("NO_COLOR"):
+        return False
+    force = os.environ.get("FORCE_COLOR")
+    if force not in (None, "", "0"):
+        return True
+    return hasattr(sys.stdout, "isatty") and bool(sys.stdout.isatty())
+
+
+def colorize(text: str, ansi_code: str) -> str:
+    """Wrap ``text`` in ANSI color when stdout is a color-capable TTY."""
+    if not text or not _stdout_supports_color():
+        return text
+    return f"{ansi_code}{text}{_ANSI_RESET}"
+
+
+def print_instructions(*args, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """Print controls / how-to text in blue."""
+    msg = sep.join(str(a) for a in args)
+    print(colorize(msg, _ANSI_BLUE), end=end, flush=flush)
+
+
+def print_success(*args, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """Print a success / SUCCESS result line in green."""
+    msg = sep.join(str(a) for a in args)
+    print(colorize(msg, _ANSI_GREEN), end=end, flush=flush)
+
+
+def print_failure(*args, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """Print a failure / FAILURE result line in red."""
+    msg = sep.join(str(a) for a in args)
+    print(colorize(msg, _ANSI_RED), end=end, flush=flush)
+
 
 def bootstrap_repo():
     """chdir to repo root and put it on ``sys.path`` (any caller cwd)."""
@@ -72,22 +117,59 @@ def configure_task(task_name: str, config_name: str, seed: int, use_robot: bool,
     return config
 
 
+_VIEW_HELP_G = "G — gripper / wrist view (cycles L/R when both arms active)"
+_VIEW_HELP_V = "V — toggle view: top-down ↔ head_camera"
+
+
+def _ensure_view_help_lines(lines: list[str]) -> list[str]:
+    """Append V/G camera help once if a banner omitted them."""
+    out = list(lines)
+    has_v = any(
+        "toggle view" in line.lower()
+        or line.strip().startswith("V —")
+        or line.strip().startswith("V:")
+        or line.strip().startswith("V ")
+        for line in lines
+    )
+    has_g = any(
+        "gripper view" in line.lower()
+        or "gripper / wrist" in line.lower()
+        or line.strip().startswith("G —")
+        or line.strip().startswith("G:")
+        or line.strip().startswith("G ")
+        for line in lines
+    )
+    if not has_v:
+        out.append(_VIEW_HELP_V)
+    if not has_g:
+        # Place G next to an existing V line when possible.
+        for i, line in enumerate(out):
+            if (
+                "toggle view" in line.lower()
+                or line.strip().startswith("V —")
+                or line.strip().startswith("V:")
+                or line.strip().startswith("V ")
+            ):
+                out.insert(i + 1, _VIEW_HELP_G)
+                break
+        else:
+            out.append(_VIEW_HELP_G)
+    return out
+
+
 def print_banner(title: str, lines: list[str]):
+    lines = list(lines)
     if any("Mode: robot" in line for line in lines):
-        lines = list(lines)
         insert_at = 1 if lines else 0
         lines[insert_at:insert_at] = [
             "Arrows — move selected arm(s) in XY | E/Q — move in Z",
             "1 / 2 / 3 — select left / right / both arms",
         ]
+    lines = _ensure_view_help_lines(lines)
     width = max(len(title), *(len(line) for line in lines), 40)
     bar = "=" * (width + 4)
-    print(bar)
-    print(f"  {title}")
-    print(bar)
-    for line in lines:
-        print(f"  {line}")
-    print(bar)
+    block = "\n".join([bar, f"  {title}", bar, *[f"  {line}" for line in lines], bar])
+    print_instructions(block)
 
 
 def edge_pressed(window, key: str, prev: dict) -> bool:
@@ -161,17 +243,44 @@ def release_dynamic(rigid):
         pass
 
 
+# Last interactive result for GUI exit codes (household_task_gui convention):
+#   0 = SUCCESS, 10 = FAILURE, 2 = closed before a result.
+_LAST_TASK_RESULT: bool | None = None
+
+
+def task_result_exit_code(ok: bool | None = None) -> int:
+    """Map SUCCESS / FAILURE / no-result to launcher exit codes."""
+    if ok is None:
+        ok = _LAST_TASK_RESULT
+    if ok is True:
+        return 0
+    if ok is False:
+        return 10
+    return 2
+
+
 def report_task_result(env, detail: str | None = None) -> bool:
-    """Print ``Task complete: SUCCESS|FAILURE`` from ``check_success``; return success."""
+    """Print ``Task complete: SUCCESS|FAILURE`` from ``check_success``; return success.
+
+    Also stores the result for ``task_result_exit_code()`` so ``interactive_task_gui``
+    can show SUCCESS/FAILURE like ``household_task_gui``.
+    """
+    global _LAST_TASK_RESULT
     try:
         ok = bool(env.check_success())
     except Exception as exc:
-        print(f"Task complete: FAILURE (check_success error: {exc})")
+        print_failure(f"Task complete: FAILURE (check_success error: {exc})")
+        _LAST_TASK_RESULT = False
         return False
     if detail is None and not ok:
         detail = getattr(env, "_last_fail_reason", None) or None
     status = "SUCCESS" if ok else "FAILURE"
-    print(f"Task complete: {status}" + (f" ({detail})" if detail else ""))
+    msg = f"Task complete: {status}" + (f" ({detail})" if detail else "")
+    if ok:
+        print_success(msg)
+    else:
+        print_failure(msg)
+    _LAST_TASK_RESULT = bool(ok)
     return ok
 
 
@@ -193,6 +302,49 @@ def resolve_head_camera(env=None, viewer=None):
     return None
 
 
+def resolve_wrist_camera_link(env, side: str):
+    """Return the robot wrist/camera link for ``left`` or ``right``, if any."""
+    robot = getattr(env, "robot", None) if env is not None else None
+    if robot is None or side not in ("left", "right"):
+        return None
+    return getattr(robot, f"{side}_camera", None)
+
+
+def resolve_wrist_render_camera(env, side: str):
+    """Return the sapien wrist render camera when ``collect_wrist_camera`` is on."""
+    cams = getattr(env, "cameras", None) if env is not None else None
+    if cams is None or not bool(getattr(cams, "collect_wrist_camera", False)):
+        return None
+    if side not in ("left", "right"):
+        return None
+    return getattr(cams, f"{side}_camera", None)
+
+
+def active_gripper_sides(env) -> tuple[str, ...]:
+    """Sides whose gripper views G may show.
+
+    Uses ``env._interactive_selected_arms`` when set (1/2/3 selection, or a
+    task's single-arm default). Otherwise both sides that have a wrist camera
+    link. Missing links are dropped so single-arm / no-wrist setups degrade.
+    """
+    available = []
+    for side in ("right", "left"):
+        if resolve_wrist_camera_link(env, side) is not None:
+            available.append(side)
+    if not available:
+        return ()
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+    selected = tuple(s for s in selected if s in ("left", "right"))
+    if not selected:
+        # Prefer right-then-left ordering for dual-arm cycling.
+        return tuple(s for s in ("right", "left") if s in available)
+    ordered = []
+    for side in ("right", "left"):
+        if side in selected and side in available:
+            ordered.append(side)
+    return tuple(ordered)
+
+
 # Nadir viewer: +X camera offset shifts the table left in the frame.
 _TOPDOWN_VIEW_X_OFFSET = 0.08
 
@@ -209,11 +361,58 @@ def default_topdown_xyz(env=None) -> tuple[float, float, float]:
     return (bx + _TOPDOWN_VIEW_X_OFFSET, by, 1.68)
 
 
+def gripper_width(env, side: str) -> float:
+    """Normalized gripper opening in ``[0, 1]`` (1 = open, 0 = closed)."""
+    robot = getattr(env, "robot", None)
+    if robot is None:
+        return 0.0
+    if side == "left":
+        return float(robot.get_left_gripper_val())
+    return float(robot.get_right_gripper_val())
+
+
+def toggle_selected_grippers(env, *, fallback=("left", "right"), threshold: float = 0.5) -> bool:
+    """Edge-action helper: open ↔ close the highlighted gripper(s).
+
+    Uses the current 1/2/3 selection when present; otherwise ``fallback``.
+    Per selected arm: width ``> threshold`` → close (0), else open (1).
+    Applies via ``robot.set_gripper`` (non-blocking) so teleop stays responsive.
+    """
+    robot = getattr(env, "robot", None)
+    if robot is None or not hasattr(robot, "set_gripper"):
+        print("No gripper available to open/close.")
+        return False
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+    if not selected:
+        if bool(getattr(env, "_interactive_universal_controls", False)):
+            print("Select an arm first: 1 (left), 2 (right), or 3 (both).")
+            return False
+        selected = tuple(fallback)
+    actions = []
+    for side in selected:
+        if side not in ("left", "right"):
+            continue
+        width = gripper_width(env, side)
+        target = 0.0 if width > float(threshold) else 1.0
+        try:
+            robot.set_gripper(target, side, gripper_eps=0.0)
+        except Exception as exc:
+            print(f"Gripper toggle failed ({side}): {exc}")
+            continue
+        actions.append(f"{side}={'open' if target > 0.5 else 'closed'}")
+    if not actions:
+        return False
+    print("Gripper: " + ", ".join(actions))
+    return True
+
+
 class ViewerViewToggle:
-    """Press V to switch the interactive viewer between top-down and head cam.
+    """V toggles top-down ↔ head; G switches to / cycles gripper wrist views.
+
+    F (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
-    (``_handle_focused_camera`` commented out), so we copy the head camera
+    (``_handle_focused_camera`` commented out), so we copy the active camera
     pose onto the free-fly viewer each frame instead.
     """
 
@@ -223,11 +422,17 @@ class ViewerViewToggle:
     # Viewer default is 90°; narrow this so the table fills the frame
     # while still showing both arms.
     DEFAULT_TOPDOWN_FOVY = float(np.deg2rad(65.0))
+    # Fallback only: when available, the selected head camera's own fovy is used.
     DEFAULT_HEAD_FOVY = float(np.pi / 2.0)
+    # D435-ish wrist fallback when collect_wrist_camera is off.
+    DEFAULT_GRIPPER_FOVY = float(np.deg2rad(42.0))
+    _SCENE_MODES = ("topdown", "head")
+    _GRIPPER_MODES = ("right_gripper", "left_gripper")
 
     def __init__(
         self,
         viewer,
+        env=None,
         head_camera=None,
         topdown_xyz=None,
         topdown_rpy=None,
@@ -237,12 +442,17 @@ class ViewerViewToggle:
         robot_controls=None,
     ):
         self.viewer = viewer
+        self.env = env
         self._prev_v = False
+        self._prev_g = False
+        self._prev_f = False
         self.mode = "topdown"  # always start overhead; V switches to head_camera
+        self._scene_mode = "topdown"
         self._head = head_camera
         self.robot_controls = robot_controls
+        self._warned_missing_gripper = False
         if self._head is None:
-            self._head = resolve_head_camera(viewer=viewer)
+            self._head = resolve_head_camera(env, viewer)
         if self._head is None and warn_missing_head:
             print("Warning: head_camera not found; V toggle will stay on top-down.")
 
@@ -306,6 +516,19 @@ class ViewerViewToggle:
             except Exception:
                 pass
 
+    def _camera_fovy(self, camera, default: float) -> float:
+        try:
+            fovy = float(camera.fovy)
+            if np.isfinite(fovy) and fovy > 0.0:
+                return fovy
+        except Exception:
+            pass
+        return float(default)
+
+    def _head_fovy(self) -> float:
+        """Use the render camera's lens so head view keeps its intended framing."""
+        return self._camera_fovy(self._head, self.DEFAULT_HEAD_FOVY)
+
     def _set_viewer_pose(self, pose):
         """Snap free-fly camera to ``pose`` and keep the FPS controller in sync."""
         try:
@@ -317,9 +540,62 @@ class ViewerViewToggle:
         if cw is not None and hasattr(cw, "_sync_fps_camera_controller"):
             cw._sync_fps_camera_controller()
 
+    def _scene_cycle_modes(self) -> list[str]:
+        """Usual V targets: top-down ↔ head_camera (unchanged from prior behavior)."""
+        modes = ["topdown"]
+        if self._head is not None:
+            modes.append("head")
+        return modes
+
+    def _gripper_side(self) -> str | None:
+        if self.mode == "right_gripper":
+            return "right"
+        if self.mode == "left_gripper":
+            return "left"
+        return None
+
+    def _wrist_pose(self, side: str):
+        """Current wrist camera pose, syncing the render camera when available."""
+        link = resolve_wrist_camera_link(self.env, side)
+        if link is None:
+            return None
+        try:
+            pose = link.get_pose() if hasattr(link, "get_pose") else link.global_pose
+        except Exception:
+            return None
+        render_cam = resolve_wrist_render_camera(self.env, side)
+        if render_cam is not None:
+            try:
+                render_cam.entity.set_pose(pose)
+            except Exception:
+                pass
+            try:
+                return render_cam.global_pose
+            except Exception:
+                return pose
+        return pose
+
+    def _gripper_fovy(self, side: str) -> float:
+        render_cam = resolve_wrist_render_camera(self.env, side)
+        if render_cam is not None:
+            return self._camera_fovy(render_cam, self.DEFAULT_GRIPPER_FOVY)
+        return self.DEFAULT_GRIPPER_FOVY
+
     def apply(self, announce=True):
+        side = self._gripper_side()
+        if side is not None:
+            pose = self._wrist_pose(side)
+            if pose is None:
+                if announce:
+                    print(f"View: {side} gripper unavailable; staying put.")
+                return
+            self._set_fovy(self._gripper_fovy(side))
+            self._set_viewer_pose(pose)
+            if announce:
+                print(f"View: {side} gripper")
+            return
         if self.mode == "head" and self._head is not None:
-            self._set_fovy(self.DEFAULT_HEAD_FOVY)
+            self._set_fovy(self._head_fovy())
             self._set_viewer_pose(self._head.global_pose)
             if announce:
                 print("View: head_camera")
@@ -328,6 +604,7 @@ class ViewerViewToggle:
             self.viewer.focus_camera(None)
         except Exception:
             pass
+        self.mode = "topdown"
         self._set_fovy(self._topdown_fovy)
         if self._topdown_pose is not None:
             self._set_viewer_pose(self._topdown_pose)
@@ -339,38 +616,94 @@ class ViewerViewToggle:
         if announce:
             print("View: top-down")
 
-    def _v_pressed(self, window) -> bool:
-        down = bool(window.key_down("v"))
-        edge = down and not self._prev_v
-        self._prev_v = down
+    def _edge_key(self, window, key: str, prev_attr: str) -> bool:
+        down = bool(window.key_down(key))
+        edge = down and not getattr(self, prev_attr)
+        setattr(self, prev_attr, down)
         if edge:
             return True
         try:
-            return bool(window.key_press("v"))
+            return bool(window.key_press(key))
         except Exception:
             return False
+
+    def _v_pressed(self, window) -> bool:
+        return self._edge_key(window, "v", "_prev_v")
+
+    def _g_pressed(self, window) -> bool:
+        return self._edge_key(window, "g", "_prev_g")
+
+    def _f_pressed(self, window) -> bool:
+        return self._edge_key(window, "f", "_prev_f")
+
+    def _cycle_scene_view(self):
+        """Top-down ↔ head_camera; from a gripper view, return to that cycle."""
+        modes = self._scene_cycle_modes()
+        if self.mode in self._GRIPPER_MODES:
+            self.mode = self._scene_mode if self._scene_mode in modes else modes[0]
+            self.apply(announce=True)
+            return
+        if self.mode not in modes:
+            self.mode = modes[0]
+            self._scene_mode = self.mode
+            self.apply(announce=True)
+            return
+        if len(modes) == 1:
+            if self.mode == "topdown" and self._head is None:
+                print("head_camera not available; staying on top-down.")
+            return
+        idx = modes.index(self.mode)
+        self.mode = modes[(idx + 1) % len(modes)]
+        self._scene_mode = self.mode
+        self.apply(announce=True)
+
+    def _activate_gripper_view(self):
+        sides = active_gripper_sides(self.env)
+        if not sides:
+            if not self._warned_missing_gripper:
+                print("No gripper/wrist camera available; G does nothing.")
+                self._warned_missing_gripper = True
+            return
+        if self.mode in self._SCENE_MODES:
+            self._scene_mode = self.mode
+        if len(sides) == 1:
+            self.mode = f"{sides[0]}_gripper"
+            self.apply(announce=True)
+            return
+        # Dual active: cycle right ↔ left (start on right when entering).
+        current = self._gripper_side()
+        if current in sides:
+            idx = sides.index(current)
+            self.mode = f"{sides[(idx + 1) % len(sides)]}_gripper"
+        else:
+            self.mode = f"{sides[0]}_gripper"
+        self.apply(announce=True)
 
     def update(self, window):
         if self.robot_controls is not None:
             self.robot_controls.update(window)
+        # F: open/close selected gripper(s). Independent of Space grasp helpers.
+        if self._f_pressed(window) and self.env is not None:
+            toggle_selected_grippers(self.env)
+        if self._g_pressed(window):
+            self._activate_gripper_view()
+            return
         if self._v_pressed(window):
-            if self.mode == "topdown":
-                if self._head is None:
-                    print("head_camera not available; staying on top-down.")
-                else:
-                    self.mode = "head"
-                    self.apply(announce=True)
-            else:
-                self.mode = "topdown"
-                self.apply(announce=True)
+            self._cycle_scene_view()
             return
         # Keep the fixed framing. WASD move_speed is zeroed at init; re-apply
         # still covers any leftover free-fly nudges (mouse drag, scroll).
         if self.mode == "topdown":
             self.apply(announce=False)
-        # Keep head view locked to the moving head_camera.
-        if self.mode == "head" and self._head is not None:
+        # Keep head / gripper views locked to the moving cameras.
+        elif self.mode == "head" and self._head is not None:
             self._set_viewer_pose(self._head.global_pose)
+        else:
+            side = self._gripper_side()
+            if side is not None:
+                pose = self._wrist_pose(side)
+                if pose is not None:
+                    self._set_viewer_pose(pose)
 
 
 def make_viewer_view_toggle(
@@ -381,7 +714,7 @@ def make_viewer_view_toggle(
     capture_current_as_topdown: bool = False,
     **kwargs,
 ) -> ViewerViewToggle:
-    """Build a V-key top-down ↔ head_camera toggle for an interactive env.
+    """Build V (top-down ↔ head) + G (gripper) view switching for an interactive env.
 
     Always starts on a zoomed, table-centered top-down view.
     Pass ``topdown_xyz`` / ``topdown_rpy`` only to override that framing.
@@ -413,6 +746,7 @@ def make_viewer_view_toggle(
         robot_controls = UniversalRobotControls(env)
     return ViewerViewToggle(
         viewer,
+        env=env,
         head_camera=resolve_head_camera(env, viewer),
         topdown_xyz=topdown_xyz,
         topdown_rpy=topdown_rpy,
@@ -498,17 +832,25 @@ class UniversalRobotControls:
     IK (SAPIEN's pinocchio CLIK, ~0.05 ms per solve). Seeding on the previous
     solution keeps the arm in one kinematic branch; Curobo's ``solve_ik`` is
     unseeded and returns elbow/wrist flips that are unusable for teleop.
+
+    Z / X tip the gripper about world +Y (left / right) for pour-style motions.
+    F (open/close selected gripper) is handled by ``ViewerViewToggle`` so it
+    also works when teleop is not attached.
     """
 
-    XY_SPEED = 0.20
-    Z_SPEED = 0.16
+    # Interactive teleop rates (m/s). 20% slower than the prior snappy sandbox
+    # rates; MAX_LEAD / MAX_JOINT_SPEED scale with them or the caps choke motion.
+    XY_SPEED = 0.288
+    Z_SPEED = 0.224
+    # World-Y tip rate for Z/X (rad/s) — enough to dump a board without feeling twitchy.
+    ROLL_SPEED = 1.28
     MAX_DT = 0.05
     # How far the commanded pose may run ahead of the achieved pose, so a
     # blocked or joint-limited arm cannot accumulate an unrecoverable lead.
-    MAX_LEAD = 0.03
+    MAX_LEAD = 0.044
     # Near a singularity a millimetre of Cartesian travel costs radians of
     # joint travel; slew at this cap instead of whipping the arm.
-    MAX_JOINT_SPEED = 3.0
+    MAX_JOINT_SPEED = 4.0
 
     def __init__(self, env):
         self.env = env
@@ -520,15 +862,23 @@ class UniversalRobotControls:
         self._highlight_materials = {}
         env._interactive_selected_arms = self.selected
         env._interactive_universal_controls = True
+        env._interactive_robot_controls = self
+        # Ensure the shared failure feedback exists for Space/action paths.
+        gripper_failure_feedback(env)
         self._highlight_selected()
 
     def _highlight_selected(self):
+        # A new selection cancels any failure tint so the highlight is readable.
+        fb = getattr(self.env, "_interactive_gripper_failure", None)
+        if isinstance(fb, GripperFailureFeedback) and fb._original:
+            fb.restore()
         for material, color in self._highlight_materials.values():
             try:
                 material.set_base_color(color)
                 material.base_color = color
             except Exception:
                 pass
+        self._highlight_materials.clear()
         colors = {
             "left": [1.0, 0.85, 0.10, 1.0],
             "right": [0.15, 0.75, 1.0, 1.0],
@@ -537,10 +887,7 @@ class UniversalRobotControls:
             articulation = (self.env.robot.left_entity if side == "left"
                             else self.env.robot.right_entity)
             for link in articulation.get_links():
-                if link.get_name() not in {
-                    "wsg_50_base_link", "gripper_left", "gripper_right",
-                    "finger_left", "finger_right",
-                }:
+                if link.get_name() not in GRIPPER_LINK_NAMES:
                     continue
                 for component in link.entity.get_components():
                     try:
@@ -592,8 +939,10 @@ class UniversalRobotControls:
                   else self.env.robot.get_right_ee_pose)
         return np.asarray(getter(), dtype=np.float64)
 
-    def _drive(self, side, step, dt):
+    def _drive(self, side, step, dt, roll: float = 0.0):
         """Advance this arm's commanded pose and track it with seeded IK."""
+        from transforms3d.quaternions import axangle2quat, qmult
+
         solver = arm_ik(self.env, side)
         if solver is None:
             return
@@ -619,6 +968,10 @@ class UniversalRobotControls:
         distance = float(np.linalg.norm(lead))
         if distance > self.MAX_LEAD:
             pose[:3] = achieved[:3] + lead * (self.MAX_LEAD / distance)
+        # World-Y tip (Z/X): rotate the commanded gripper orientation in place.
+        if abs(float(roll)) > 1e-9:
+            dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
+            pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
 
         solution = solver.solve(pose, seed=state["seed"])
         if solution is None:
@@ -636,6 +989,13 @@ class UniversalRobotControls:
         state["pose"] = pose
         state["seed"] = full
         state["joints"] = target
+        # Expose the commanded EE pose so spring/contact tasks can track the
+        # teleop target even when the measured link lags the drive a bit.
+        cmd = getattr(self.env, "_interactive_cmd_pose", None)
+        if not isinstance(cmd, dict):
+            cmd = {}
+            self.env._interactive_cmd_pose = cmd
+        cmd[side] = pose.copy()
 
     def _stop(self):
         """Zero the drive velocity targets, else the arms coast after release."""
@@ -643,9 +1003,12 @@ class UniversalRobotControls:
             joints = state["joints"]
             self.env.robot.set_arm_joints(joints, np.zeros_like(joints), side)
         self._command.clear()
+        if isinstance(getattr(self.env, "_interactive_cmd_pose", None), dict):
+            self.env._interactive_cmd_pose.clear()
 
     def update(self, window):
         self._select(window)
+        gripper_failure_feedback(self.env).update()
         now = time.perf_counter()
         dt = 0.0 if self._last_update is None else min(now - self._last_update, self.MAX_DT)
         self._last_update = now
@@ -655,7 +1018,9 @@ class UniversalRobotControls:
         x_dir = float(window.key_down("right")) - float(window.key_down("left"))
         y_dir = float(window.key_down("up")) - float(window.key_down("down"))
         z_dir = float(window.key_down("e")) - float(window.key_down("q"))
-        if not (x_dir or y_dir or z_dir):
+        # Z tip left / X tip right about world +Y (pour axis for board tasks).
+        roll_dir = float(window.key_down("x")) - float(window.key_down("z"))
+        if not (x_dir or y_dir or z_dir or roll_dir):
             self._stop()
             return
         if dt <= 0.0:
@@ -665,8 +1030,9 @@ class UniversalRobotControls:
             y_dir * self.XY_SPEED * dt,
             z_dir * self.Z_SPEED * dt,
         ], dtype=np.float64)
+        roll = float(roll_dir) * self.ROLL_SPEED * dt
         for side in self.selected:
-            self._drive(side, step, dt)
+            self._drive(side, step, dt, roll=roll)
 
 
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
@@ -674,10 +1040,14 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     """Standard interactive loop: callback → kinematics → step → render.
 
     ``is_done(step)`` may return ``True`` / ``False``, or ``(done, detail)``.
-    When done, prints SUCCESS/FAILURE via ``report_task_result`` and exits.
+    When done, prints SUCCESS/FAILURE via ``report_task_result`` and returns that
+    bool (or ``None`` if the viewer closed without a result).
     ``should_stop`` remains a raw break (no auto print) for backward compatibility.
-    Starts top-down; press V to toggle top-down ↔ head_camera.
+    Starts top-down; press V to toggle top-down ↔ head_camera;
+    press G for gripper/wrist view(s).
     """
+    global _LAST_TASK_RESULT
+    _LAST_TASK_RESULT = None
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
@@ -724,6 +1094,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
                 time.sleep(remaining)
     finally:
         env.close_env()
+    return _LAST_TASK_RESULT
 
 
 # ---------------------------------------------------------------------------
@@ -751,18 +1122,74 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
     return parser
 
 
+def _line_documents_key(lines: list[str], key: str) -> bool:
+    """True when a control banner line already documents ``key`` as a binding."""
+    key = key.strip().upper()
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith(f"{key} ") or s.startswith(f"{key}:") or s.startswith(f"{key}\t"):
+            return True
+        if f"{key}                 " in ln or f"{key}: " in ln:
+            return True
+        # Compact banners: "V: camera | G: gripper | F: open/close | Escape"
+        if f"{key}:" in s or f"| {key}:" in s or f"|{key}:" in s:
+            return True
+    return False
+
+
 def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str) -> None:
     """Print only the help block for the selected ``--control`` mode."""
     body = (robot if mode == "robot" else keyboard).strip("\n")
     if mode == "robot":
-        body = (
+        # Shared teleop keys; skip F here when the task banner already lists it.
+        shared = (
             "  Arrow keys        move selected arm(s) in world XY\n"
             "  E / Q             raise / lower selected arm(s)\n"
+            "  Z / X             tip gripper left / right (world Y)\n"
             "  1 / 2 / 3         select left / right / both arms\n"
-            + body
         )
+        if not _line_documents_key(body.splitlines(), "F"):
+            shared += "  F                 open / close selected gripper(s)\n"
+        body = shared + body
+    lines = body.splitlines()
+    # Inject G help next to V without duplicating when scripts already document it.
+    if not _line_documents_key(lines, "G"):
+        inserted = False
+        for i, ln in enumerate(lines):
+            if "toggle view" in ln.lower() or ln.strip().startswith("V ") or ln.strip().startswith("V:") or "V                 " in ln:
+                indent = ln[: len(ln) - len(ln.lstrip(" "))]
+                lines.insert(
+                    i + 1,
+                    f"{indent}G                 gripper view (cycle L/R when both arms active)",
+                )
+                inserted = True
+                break
+        if not inserted:
+            lines.append("  V                 toggle view: top-down ↔ head_camera")
+            lines.append("  G                 gripper view (cycle L/R when both arms active)")
+    # Inject F (gripper open/close) when missing (keyboard banners, or custom text).
+    if not _line_documents_key(lines, "F"):
+        inserted = False
+        for i, ln in enumerate(lines):
+            if (
+                _line_documents_key([ln], "G")
+                or "toggle view" in ln.lower()
+                or ln.strip().startswith("V ")
+                or ln.strip().startswith("V:")
+                or "V                 " in ln
+            ):
+                indent = ln[: len(ln) - len(ln.lstrip(" "))]
+                lines.insert(
+                    i + 1,
+                    f"{indent}F                 open / close selected gripper(s)",
+                )
+                inserted = True
+                break
+        if not inserted:
+            lines.append("  F                 open / close selected gripper(s)")
+    body = "\n".join(lines)
     bar = "=" * 60
-    print(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
+    print_instructions(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
 
 
 def default_arms_for_mode(mode):
@@ -777,6 +1204,138 @@ def selected_robot_arms(env, fallback=("left",)):
 
     selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
     return selected or tuple(fallback)
+
+
+GRIPPER_LINK_NAMES = frozenset({
+    "wsg_50_base_link", "gripper_left", "gripper_right",
+    "finger_left", "finger_right",
+})
+GRIPPER_FAILURE_RED = [0.92, 0.04, 0.03, 1.0]
+GRIPPER_FAILURE_SECONDS = 2.0
+
+
+def require_selected_arms(env, *, exactly_one: bool = False):
+    """Return currently highlighted arms, or ``()`` when the action must not run.
+
+    Unselected grippers never act. When ``exactly_one`` is set, both-arms (3)
+    is also rejected so the caller can require a single highlighted gripper.
+    """
+    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
+    if not selected:
+        print("Select an arm first: 1 (left) or 2 (right)"
+              + ("" if exactly_one else " [or 3 for both]") + ".")
+        return ()
+    if exactly_one and len(selected) != 1:
+        print("Select exactly one arm with 1 (left) or 2 (right).")
+        return ()
+    return selected
+
+
+def resolve_action_arm(env, arm_tag_cls, *, exactly_one: bool = True):
+    """Return an ``ArmTag`` for the highlighted gripper, or ``None`` to abort."""
+    selected = require_selected_arms(env, exactly_one=exactly_one)
+    if not selected:
+        return None
+    return arm_tag_cls(selected[0])
+
+
+class GripperFailureFeedback:
+    """Tint failed gripper mesh(es) red for a short, non-acting feedback window."""
+
+    def __init__(self, env):
+        self.env = env
+        self._until = 0.0
+        self._original = {}
+
+    def active(self) -> bool:
+        return bool(self._original) and time.perf_counter() < self._until
+
+    def restore(self):
+        for material, color in self._original.values():
+            try:
+                material.set_base_color(color)
+                material.base_color = color
+            except Exception:
+                pass
+        self._original.clear()
+        self._until = 0.0
+
+    def _tint_side(self, side: str):
+        robot = getattr(self.env, "robot", None)
+        if robot is None:
+            return
+        articulation = getattr(robot, f"{side}_entity", None)
+        if articulation is None:
+            return
+        try:
+            import sapien
+        except Exception:
+            return
+        for link in articulation.get_links():
+            if link.get_name() not in GRIPPER_LINK_NAMES:
+                continue
+            for component in link.entity.get_components():
+                if not isinstance(component, sapien.render.RenderBodyComponent):
+                    continue
+                for shape in component.render_shapes:
+                    material = shape.material
+                    key = id(material)
+                    if key not in self._original:
+                        self._original[key] = (material, list(material.base_color))
+                    try:
+                        material.set_base_color_texture(None)
+                        material.set_base_color(GRIPPER_FAILURE_RED)
+                        material.base_color = GRIPPER_FAILURE_RED
+                    except Exception:
+                        pass
+
+    def flash(self, arms, message: str | None = None):
+        """Show red for ``GRIPPER_FAILURE_SECONDS``; do not perform any motion."""
+        sides = tuple(str(a) for a in (arms or ()) if str(a) in ("left", "right"))
+        if not sides:
+            return
+        self.restore()
+        for side in sides:
+            self._tint_side(side)
+        self._until = time.perf_counter() + GRIPPER_FAILURE_SECONDS
+        if message:
+            print(message)
+
+    def update(self):
+        if self._original and time.perf_counter() >= self._until:
+            self.restore()
+            controls = getattr(self.env, "_interactive_robot_controls", None)
+            if controls is not None and hasattr(controls, "_highlight_selected"):
+                try:
+                    controls._highlight_selected()
+                except Exception:
+                    pass
+
+
+def gripper_failure_feedback(env) -> GripperFailureFeedback:
+    fb = getattr(env, "_interactive_gripper_failure", None)
+    if not isinstance(fb, GripperFailureFeedback):
+        fb = GripperFailureFeedback(env)
+        env._interactive_gripper_failure = fb
+    return fb
+
+
+def flash_gripper_failure(env, arms, message: str | None = None):
+    """Shared entry point: red gripper flash when a selected-arm action fails."""
+    gripper_failure_feedback(env).flash(arms, message=message)
+
+
+def action_failed(env, arms, detail: str = "action failed") -> bool:
+    """Flash red, clear the plan-failure latch, return False for callers."""
+    sides = tuple(str(a) for a in (arms or ()) if str(a))
+    label = "+".join(sides) if sides else "arm"
+    flash_gripper_failure(env, sides, f"{label} {detail}; no motion applied")
+    try:
+        env.plan_success = True
+        env._last_plan_fail = None
+    except Exception:
+        pass
+    return False
 
 
 class RobotButtonController:
@@ -1073,9 +1632,11 @@ class RobotButtonController:
     def update(self, requested_mode):
         if not self.env.plan_success:
             detail = getattr(self.env, "_last_plan_fail", None)
-            print(f"Robot button trajectory failed ({detail or 'unknown'}); controls remain available.")
-            self.env.plan_success = True
-            self.env._last_plan_fail = None
+            sides = tuple(self.arms_for_mode(self.mode or requested_mode))
+            action_failed(
+                self.env, sides,
+                detail=f"button trajectory failed ({detail or 'unknown'})",
+            )
         if self.hold and requested_mode == self.mode:
             if requested_mode is not None:
                 self.set_latch(self.env, requested_mode)
@@ -1084,15 +1645,24 @@ class RobotButtonController:
         if self.mode is not None:
             self._lift_from_buttons(self.mode)
         if requested_mode is not None:
-            self._move_to_buttons(requested_mode)
-            if not self.hold:
-                # Edge tap: press then release in one update.
-                self.clear_latch(self.env)
-                self._lift_from_buttons(requested_mode)
+            sides = tuple(self.arms_for_mode(requested_mode))
+            if not sides:
+                # No highlighted arm maps to this action — do nothing.
                 requested_mode = None
+            else:
+                self._move_to_buttons(requested_mode)
+                if not self.hold:
+                    # Edge tap: press then release in one update.
+                    self.clear_latch(self.env)
+                    self._lift_from_buttons(requested_mode)
+                    requested_mode = None
         if not self.env.plan_success:
             detail = getattr(self.env, "_last_plan_fail", None)
-            print(f"Robot button motion failed ({detail or 'unknown'}); release and try again.")
+            sides = tuple(self.arms_for_mode(requested_mode or self.mode))
+            action_failed(
+                self.env, sides,
+                detail=f"button motion failed ({detail or 'unknown'})",
+            )
             if self._hover_qpos:
                 self._interpolate_to_qpos(self._hover_qpos)
                 self._hover_qpos.clear()

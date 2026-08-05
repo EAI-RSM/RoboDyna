@@ -19,6 +19,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
+    print_instructions,
+    action_failed,
     add_robot_motion_arg,
     arrow_nudge_xy,
     bootstrap_repo,
@@ -27,6 +29,7 @@ from _interactive_common import (  # noqa: E402
     hold_dynamic_at,
     print_banner,
     release_dynamic,
+    require_selected_arms,
     run_viewer_loop,
 )
 
@@ -62,33 +65,25 @@ def _prepare_robot_hold(env, selected_arm=None):
     """Run load_train's standard grasp/carry sequence on the user's request."""
     from envs.utils.action import ArmTag
 
-    arm_name = selected_arm or ("left" if env.ball_side == "left" else "right")
+    selected = require_selected_arms(env, exactly_one=True)
+    if not selected:
+        return False
+    arm_name = selected[0]
     arm_tag = ArmTag(arm_name)
     env.selected_arm = arm_name
     z = _release_z(env)
 
-    def _try_grasp(tag):
-        env.plan_success = True
-        env.move(env.grasp_actor(env.ball, arm_tag=tag, pre_grasp_dis=0.1))
-        if not env.plan_success:
-            return False
-        env._move_ball_to_height(arm_tag=tag, target_z=z)
-        return float(env.ball.get_pose().p[2]) >= z - 0.08
-
-    if not _try_grasp(arm_tag):
-        # Keep the default controller's other-arm fallback for sphere grasps.
-        try:
-            env.move(env.back_to_origin(arm_tag))
-        except Exception:
-            pass
-        alt = "right" if arm_name == "left" else "left"
-        env.plan_success = True
-        if _try_grasp(ArmTag(alt)):
-            arm_name, arm_tag = alt, ArmTag(alt)
-            env.selected_arm = arm_name
+    env.plan_success = True
+    env.move(env.grasp_actor(env.ball, arm_tag=arm_tag, pre_grasp_dis=0.1))
+    if not env.plan_success:
+        action_failed(env, (arm_name,), detail="grasp failed")
+        env._interactive_holding = False
+        return False
+    env._move_ball_to_height(arm_tag=arm_tag, target_z=z)
 
     # Same authoritative hold check as load_train.play_once().
     if float(env.ball.get_pose().p[2]) < z - 0.08:
+        action_failed(env, (arm_name,), detail="grasp failed")
         env._interactive_holding = False
         return False
 
@@ -207,6 +202,7 @@ def main():
             "Space  — first press picks up the ball; second press releases it",
             "Arrows — nudge the held ball in XY (robot supports smooth interpolation)",
             "V — toggle view: top-down ↔ head_camera",
+            "G — gripper view (cycle L/R when both arms active)",
             "Esc — close the viewer window to quit",
             "The ball starts untouched; press Space to pick it up.",
             "--robot-motion planner|interpolate",
@@ -215,7 +211,7 @@ def main():
     env._interactive_holding = False
     env._interactive_released = False
     env._ball_released = False
-    print("Ball ready. Press Space to pick it up.")
+    print_instructions("Ball ready. Press Space to pick it up.")
 
     keys_prev: dict = {}
     post_release = 0
@@ -227,8 +223,7 @@ def main():
             if not env._interactive_holding:
                 if use_robot:
                     print("Robot: picking up the ball and carrying it to the drop station…")
-                    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-                    if _prepare_robot_hold(env, selected[0] if selected else None):
+                    if _prepare_robot_hold(env):
                         print("Ball picked up. Press Space again when a wagon is aligned.")
                     else:
                         print("Ball pickup failed. Press Space to try again.")
@@ -286,3 +281,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())

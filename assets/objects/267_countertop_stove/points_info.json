@@ -1,0 +1,21 @@
+{
+  "contact_points": [
+    {
+      "id": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "description": "Top-center",
+      "usage": "Grasp from above."
+    }
+  ],
+  "functional_points": [
+    {
+      "id": 0,
+      "description": "Bottom-center",
+      "usage": "Place onto / lift off a target."
+    }
+  ]
+}

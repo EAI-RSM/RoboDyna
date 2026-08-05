@@ -1,0 +1,10 @@
+catch_mouse_object_drop
+- Deep wall shelf with a random mix of cup / wineglass / beer bottle / wine bottle
+  (distinct types preferred; non-overlapping footprints).
+- Some objects near the front lip (edge → tip then fall); others deeper
+  (tip onto side, then roll if round / slip if wineglass, then fall).
+- Kinematic mouse starts at a far shelf end with a clear gap, scurries inward,
+  knocks exactly one reachable target.
+- Robot slides a pillow-lined 076_breadbasket under the predicted landing
+  (closed-gripper table push; no weld attach). Table impact = fail.
+- Config: task_config/demo_dynamic.yml → task_args.catch_mouse_object_drop

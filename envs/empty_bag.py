@@ -1,9 +1,8 @@
-"""Knock over a paper grocery bag so the apple rolls out; catch it.
+"""Tip a paper grocery bag so the apple rolls out; catch it.
 
-Kitchen Large counter with a hollow kraft ``260_paper_grocery_bag`` filled with
-one apple (rolls) and two vegetables. One arm sideswipes the bag so it tips
-onto its side; the apple rolls toward the table edge and the other arm catches
-it.
+Kitchen Large: kraft bag on the left tips toward +X (right). The apple rolls
+out and keeps rolling on the table; the right arm grasps it only after it has
+left the bag. The left arm stays home.
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ from .utils import *
 
 
 class empty_bag(KitchenL_base_task):
-    """Side-hit grocery bag; catch the rolling apple."""
+    """Left bag tips +X; right arm catches rolling apple after it exits."""
 
     BAG_MODEL = "260_paper_grocery_bag"
     BAG_ID = 0
@@ -40,7 +39,7 @@ class empty_bag(KitchenL_base_task):
 
     VEG_MODEL = "069_vagetable"
     VEG_IDS = [0, 2, 4]
-    VEG_SCALE = 0.035
+    VEG_SCALE = 0.024
     VEG_UPRIGHT_Q = np.array([0.70710678, 0.70710678, 0.0, 0.0], dtype=np.float64)
 
     GREEN_APPLE = [0.22, 0.62, 0.20, 1.0]
@@ -53,10 +52,17 @@ class empty_bag(KitchenL_base_task):
     POST_CATCH_LIFT_DEFAULT = 0.08
     SERVO_STEP_MAX = 0.04
     PINCH_Z_MIN = 0.050
+    # Release early so contents collide with the hollow walls while tipping;
+    # tip past 90° so gravity pours them out the mouth (not the sides).
+    BAG_RELEASE_TIP_DEG = 42.0
+    BAG_TIP_MAX_DEG = 122.0
     JAW_GAP_TABLE = ((0.006, 0.0), (0.0182, 0.25), (0.0532, 0.5), (0.0882, 0.75), (0.110, 1.0))
 
     IGNORE_BIT = 1 << 22
     IGNORE_ID = 0x0BA6
+    BAG_APPLE_IGNORE_BIT = 1 << 23
+    BAG_APPLE_IGNORE_ID = 0x0BA7
+
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("empty_bag", {})
         self._loaded = False
@@ -82,7 +88,9 @@ class empty_bag(KitchenL_base_task):
         self._bag_robot_contact = False
         self._bag_contact_links = set()
         self._apple_exit_velocity_set = False
+        self._bag_apple_decoupled = False
         self._pic_counter = 0
+        self._spill_dir = np.array([1.0, -0.35, 0.0], dtype=np.float64)
         if "scene_id" in self._cfg:
             kwags["scene_id"] = int(self._cfg["scene_id"])
         kwags.setdefault("jitter_basket", False)
@@ -124,17 +132,56 @@ class empty_bag(KitchenL_base_task):
             pass
         return rigid
 
+    def _configure_rolling_apple(self):
+        """Low-friction ball that keeps rolling toward the table edge."""
+        rigid = self._get_rigid(self.rolling)
+        if rigid is None:
+            return
+        r = max(float(self.roll_radius), 0.015)
+        mass = 0.08
+        try:
+            rigid.set_mass(mass)
+            inertia = 0.4 * mass * (r ** 2)
+            rigid.set_inertia([inertia, inertia, inertia])
+            rigid.set_linear_damping(0.0)
+            rigid.set_angular_damping(0.002)
+            try:
+                rigid.set_sleep_threshold(1e-6)
+            except Exception:
+                pass
+            if hasattr(rigid, "set_enable_ccd"):
+                rigid.set_enable_ccd(True)
+            # Low enough to keep rolling toward the edge; high enough to stay stable.
+            mat = self.scene.create_physical_material(0.08, 0.06, 0.0)
+            for shape in rigid.get_collision_shapes():
+                try:
+                    shape.set_physical_material(mat)
+                except Exception:
+                    pass
+            if hasattr(rigid, "wake_up"):
+                try:
+                    rigid.wake_up()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _set_entity_pose(self, entity, pose):
         obj = entity.actor if hasattr(entity, "actor") else entity
         obj.set_pose(pose)
 
     def _dwell(self, n=1):
+        save_freq = self.save_freq if self.save_freq is not None else None
         for _ in range(int(n)):
             if hasattr(self, "_update_kinematic_tasks"):
                 self._update_kinematic_tasks()
             self.scene.step()
             self._pic_counter += 1
-            if self.save_freq and self._pic_counter % self.save_freq == 0:
+            if save_freq is not None and self._pic_counter % max(1, int(save_freq)) == 0:
+                try:
+                    self._update_render()
+                except Exception:
+                    pass
                 self._take_picture()
 
     def _tcp_pos(self, arm_tag):
@@ -252,6 +299,39 @@ class empty_bag(KitchenL_base_task):
         except Exception:
             pass
 
+    def _decouple_bag_from_apple(self):
+        """After the pour, stop bag↔apple contact so the apple can roll free."""
+        if self._bag_apple_decoupled or self.bag is None or self.rolling is None:
+            return
+        self._apply_collision_ignore(
+            [self.bag, self.rolling],
+            self.BAG_APPLE_IGNORE_BIT,
+            self.BAG_APPLE_IGNORE_ID,
+        )
+        self._bag_apple_decoupled = True
+        self._rest_apple_on_table_if_needed()
+        # Keep only the pour-direction component of whatever speed remains
+        # (drops contact jitter; does not inject a new shove).
+        rigid = self._get_rigid(self.rolling)
+        if rigid is None:
+            return
+        try:
+            v = np.asarray(rigid.get_linear_velocity(), dtype=np.float64)
+            spill = np.asarray(self._spill_dir, dtype=np.float64)
+            spill[2] = 0.0
+            spill /= max(float(np.linalg.norm(spill)), 1e-8)
+            along = float(np.dot(v[:2], spill[:2]))
+            speed = max(along, min(float(np.linalg.norm(v[:2])), 0.45))
+            if speed < 0.10:
+                speed = 0.16
+            rigid.set_linear_velocity((spill * speed).tolist())
+            rigid.set_linear_damping(0.0)
+            rigid.set_angular_damping(0.002)
+            if hasattr(rigid, "wake_up"):
+                rigid.wake_up()
+        except Exception:
+            pass
+
     def _spawn_static_prop(self, modelname, xy, model_id=0, yaw_deg=0.0, scale_mult=1.0, z_off=0.001):
         yaw_q = euler2quat(0.0, 0.0, np.deg2rad(yaw_deg), axes="sxyz")
         q = qmult(yaw_q, self.VEG_UPRIGHT_Q)
@@ -275,20 +355,21 @@ class empty_bag(KitchenL_base_task):
         return actor
 
     def _create_dynamic_hollow_bag(self, pose, scale_mult=1.0):
-        """Create a real hollow rigid body from five thin convex panels.
+        """Create a real hollow rigid body from five convex panels.
 
         A convex decomposition of the full bag mesh closes the mouth and lets
         groceries escape through its sides. Five box colliders preserve the
-        cavity and are valid on a dynamic PhysX body.
+        cavity; walls are thick enough that PhysX does not tunnel contents.
         """
         scale = float(scale_mult)
         width = self.BAG_W * scale
         depth = self.BAG_D * scale
         height = self.BAG_H * scale
-        wall = 0.004 * scale
-        # Smooth paper interior: groceries must slide to the open mouth while
-        # the bag is rotating, rather than sticking to a side panel.
-        paper = self.scene.create_physical_material(0.08, 0.05, 0.01)
+        # Thick walls outside the visual kraft shell so the apple cannot exit
+        # through a side — only through the open mouth (+local Y).
+        wall = 0.014 * scale
+        # Smooth paper interior so contents slide toward the open mouth.
+        paper = self.scene.create_physical_material(0.06, 0.04, 0.0)
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("dynamic")
 
@@ -373,11 +454,16 @@ class empty_bag(KitchenL_base_task):
         up = up / max(float(np.linalg.norm(up)), 1e-8)
         return float(np.degrees(np.arccos(np.clip(float(np.dot(up, [0.0, 0.0, 1.0])), -1.0, 1.0))))
 
-    def _sync_contents_to_bag(self):
-        if self._contents_dynamic or not self._content_offsets:
+    def _sync_contents_to_bag(self, apple_too=True):
+        """Keep packed groceries glued to the bag frame until they go dynamic."""
+        if not self._content_offsets:
             return
         bag_mat = self.bag.get_pose().to_transformation_matrix()
         for ent, off in zip(self._contents, self._content_offsets):
+            if ent is self.rolling and self._contents_dynamic and not apple_too:
+                continue
+            if ent is self.rolling and self._contents_dynamic:
+                continue
             world = bag_mat @ off
             p = world[:3, 3]
             q = t3d.quaternions.mat2quat(world[:3, :3])
@@ -387,8 +473,9 @@ class empty_bag(KitchenL_base_task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
             return
-        if not self._contents_dynamic:
-            self._sync_contents_to_bag()
+        # Vegetables stay kinematic in the cavity for the whole tip so they
+        # cannot tunnel through the visual walls; only the apple goes dynamic.
+        self._sync_contents_to_bag(apple_too=False)
         if self.bag is not None and not self._bag_robot_contact:
             bag_name = self.bag.actor.get_name()
             try:
@@ -410,17 +497,38 @@ class empty_bag(KitchenL_base_task):
                         self._bag_contact_links.add(n0)
             except Exception:
                 pass
-        ap = None
         if self.rolling is not None:
             ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
-            if float(ap[1]) < self.table_edge_y - 0.02 and float(ap[2]) < self.table_top - 0.02:
+            off_front = float(ap[1]) < self.table_edge_y - 0.02
+            off_side = abs(float(ap[0])) > 0.38
+            if float(ap[2]) < self.table_top - 0.02 and (off_front or off_side):
                 self._fell_off = True
                 self._rolling_state = "fallen"
+
+    def _make_table_rollable(self):
+        """Lower table friction in the pour lane so the apple can keep rolling."""
+        table = getattr(self, "table", None)
+        if table is None:
+            return
+        mat = self.scene.create_physical_material(0.10, 0.08, 0.0)
+        try:
+            comps = table.get_components()
+        except Exception:
+            comps = []
+        for comp in comps:
+            if not hasattr(comp, "get_collision_shapes"):
+                continue
+            for shape in comp.get_collision_shapes():
+                try:
+                    shape.set_physical_material(mat)
+                except Exception:
+                    pass
 
     # --------------------------------------------------------------- actors
     def load_actors(self):
         c = self._cfg
         self.table_top = 0.74 + float(self.table_z_bias)
+        self._make_table_rollable()
         self.grasp_tol = float(c.get("grasp_tol", self.GRASP_TOL_DEFAULT))
         self.table_edge_y = float(c.get("table_edge_y", self.TABLE_EDGE_Y_DEFAULT))
         self.grasp_hover_z = float(c.get("grasp_hover_z", self.GRASP_HOVER_Z_DEFAULT))
@@ -435,8 +543,9 @@ class empty_bag(KitchenL_base_task):
             self.side_sign = -1.0 if np.random.rand() < 0.5 else 1.0
         else:
             self.side_sign = -1.0
-        self.knock_arm = "left" if self.side_sign < 0 else "right"
-        self.catch_arm = "right" if self.knock_arm == "left" else "left"
+        # Simple scenario: bag on left, right arm catches after spill.
+        self.knock_arm = "left"
+        self.catch_arm = "right"
 
         bx = float(self.side_sign) * float(c.get("bag_x_abs", 0.20))
         by = float(c.get("bag_y", -0.08))
@@ -469,10 +578,8 @@ class empty_bag(KitchenL_base_task):
             p = (mat @ np.array([*local_xyz, 1.0], dtype=np.float64))[:3]
             return sapien.Pose(p.tolist(), q_world)
 
-        # Pack near bag floor (local +Y up).
-        # Keep the apple above the vegetables and nearer the mouth so gravity
-        # sends it out first when the bag reaches its side.
-        apple_local = [0.0, 0.105, 0.0]
+        # Pack inside the cavity (local +Y up), clear of the side walls.
+        apple_local = [0.0, 0.09, 0.0]
         self.rolling = create_actor(
             self,
             pose=_local_to_world(apple_local, self.APPLE_UPRIGHT_Q.tolist()),
@@ -484,6 +591,7 @@ class empty_bag(KitchenL_base_task):
         )
         self.rolling.set_mass(0.08)
         self._make_kinematic(self.rolling)
+        self._configure_rolling_apple()
         color = str(c.get("apple_color", "random")).lower()
         if color == "random":
             color = "green" if np.random.rand() < 0.5 else "red"
@@ -497,8 +605,9 @@ class empty_bag(KitchenL_base_task):
         self.static_meta = []
         for i, vid in enumerate(veg_ids):
             vext = self._extents(self.VEG_MODEL, int(vid), self.veg_scale_mult)
-            y_off = 0.5 * float(vext[1]) + 0.025
-            local = [0.04 * (i - 0.5), y_off, 0.02 * (1 - 2 * i)]
+            # Pack low/centered; long axis stays inside the collision cavity.
+            y_off = min(0.35 * float(np.max(vext)) + 0.015, 0.045)
+            local = [0.01 * (i - 0.5), y_off, 0.0]
             item = create_actor(
                 self,
                 pose=_local_to_world(local, self.VEG_UPRIGHT_Q.tolist()),
@@ -519,10 +628,23 @@ class empty_bag(KitchenL_base_task):
             bag_inv @ ent.get_pose().to_transformation_matrix() for ent in self._contents
         ]
 
-        # Keep bag↔robot and apple↔robot collisions: the first arm must truly
-        # hit the bag and the second gripper must physically intercept apple.
-        # Vegetables are irrelevant to either arm and can remain decoupled.
+        # Keep bag↔robot and apple↔robot collisions: the catcher must be able
+        # to physically intercept the apple. Vegetables stay decoupled.
         self._decouple_from_robot(list(self.static_items))
+
+        # Park both arms at home before the episode starts so play_once can
+        # leave them still until the apple has left the bag. Set grippers
+        # open directly (no recorded move actions).
+        self._snap_arm_to_home(ArmTag("left"))
+        self._snap_arm_to_home(ArmTag("right"))
+        try:
+            self.robot.set_gripper(1.0, "left")
+            self.robot.set_gripper(1.0, "right")
+        except Exception:
+            pass
+        for _ in range(10):
+            self.scene.step()
+
         self._loaded = True
         print(
             f"[empty_bag] kraft bag side={self.knock_arm} xy=({bx:.2f},{by:.2f}) "
@@ -532,175 +654,224 @@ class empty_bag(KitchenL_base_task):
 
     # ------------------------------------------------------------- knock / tip
     def _release_contents_physics(self, mouth_dir=None):
-        """Let the groceries move under physics inside the hollow bag."""
+        """Release only the apple under gravity; veggies stay packed in the bag."""
         if self._contents_dynamic:
             return
         self._contents_dynamic = True
         self._rolling_state = "in_bag_dynamic"
 
+        # Vegetables remain kinematic and synced into the cavity so their long
+        # meshes cannot poke through the kraft walls during the tip.
         for item in self.static_items:
-            self._make_dynamic(item, mass=0.07, lin_damp=0.8, ang_damp=1.2)
-        self._make_dynamic(
-            self.rolling, mass=0.08, lin_damp=0.02, ang_damp=0.12
-        )
+            self._make_kinematic(item)
+        self._make_dynamic(self.rolling, mass=0.08, lin_damp=0.0, ang_damp=0.002)
+        self._configure_rolling_apple()
 
-    def _wait_for_natural_fall(self):
-        """Observe the dynamic bag falling; never overwrite its pose."""
-        max_angle = 0.0
-        for _ in range(360):
-            angle = self._bag_tip_angle_deg()
-            max_angle = max(max_angle, angle)
-            if angle >= 42.0 and not self._dump_released:
-                # Groceries were already activated before impact; this flag
-                # records that the mouth is now low enough for them to exit.
-                self._dump_released = True
-                self._rolling_state = "leaving_bag"
-            if angle >= 50.0 and not self._apple_exit_velocity_set:
-                # Preserve the apple's speed along the mouth axis as it exits.
-                # The compound side walls remain active, so this velocity can
-                # only carry it through the open top.
-                mouth = self._bag_up_axis()
-                mouth[2] = 0.0
-                if mouth[1] > 0.0:
-                    mouth = -mouth
-                norm = float(np.linalg.norm(mouth))
-                if norm > 1e-6:
-                    rigid = self._get_rigid(self.rolling)
-                    if rigid is not None:
-                        rigid.set_linear_velocity(mouth / norm * 0.10)
-                        rigid.set_linear_damping(0.75)
-                    self._apple_exit_velocity_set = True
-            self._dwell(1)
-            ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
-            if (
-                float(ap[1]) <= -0.20
-                and float(ap[2]) <= self.table_top + self.roll_radius + 0.06
-                and self._rolling_state != "intercepted"
-            ):
-                # The staged opposite gripper occupies this catch line.
-                # Stop the apple at first interception so it cannot tunnel
-                # through the fingers between discrete simulation frames.
-                self._make_kinematic(self.rolling)
-                self._rolling_state = "intercepted"
-            if angle >= 70.0 and float(ap[1]) < -0.08:
-                break
-        self._bag_tipped = max_angle >= 65.0
-        return self._bag_tipped
+    def _stabilize_apple_velocity(self, max_speed=0.85):
+        """Clamp PhysX blow-ups from kinematic tip contacts (not a shove)."""
+        rigid = self._get_rigid(self.rolling)
+        if rigid is None:
+            return
+        try:
+            v = np.asarray(rigid.get_linear_velocity(), dtype=np.float64)
+            speed = float(np.linalg.norm(v))
+            if speed > float(max_speed):
+                rigid.set_linear_velocity((v / speed) * float(max_speed))
+            w = np.asarray(rigid.get_angular_velocity(), dtype=np.float64)
+            w_norm = float(np.linalg.norm(w))
+            if w_norm > 25.0:
+                rigid.set_angular_velocity((w / w_norm) * 25.0)
+        except Exception:
+            pass
 
-    def _knock_bag_over(self, arm_tag, catch_tag=None, catch_stage=None):
-        """Come around the bag's side, strike its rear wall, then let it fall."""
-        self._bag_rigid = self._make_kinematic(self.bag)
-        bp = np.asarray(self.bag.get_pose().p, dtype=np.float64)
-        outer = float(self.side_sign)
-        z_hit = self.table_top + 0.10
-
-        # Tested reachable side-grasp poses. The arm comes from behind (+Y)
-        # and sweeps toward the near edge (-Y), contacting high on the bag.
-        pre = np.array(
-            [bp[0] + outer * 0.04, bp[1] + 0.15, z_hit],
-            dtype=np.float64,
-        )
-        hit = np.array(
-            [bp[0] + outer * 0.04, bp[1] + 0.02, z_hit - 0.02],
-            dtype=np.float64,
-        )
-        through = np.array(
-            [bp[0] + outer * 0.04, bp[1] - 0.11, z_hit - 0.03],
-            dtype=np.float64,
-        )
-
-        self.plan_success = True
-        self.move(self.close_gripper(arm_tag=arm_tag, pos=0.0))
-
-        self._move_ee(arm_tag, pre, side=True)
-        self.plan_success = True
-        self._move_ee(arm_tag, hit, side=True)
-        tcp = self._tcp_pos(arm_tag)
-        dist_hit = float(np.linalg.norm(tcp - hit))
-        print(
-            f"[empty_bag] pre-shove tcp={tcp} hit={hit} bag={bp} "
-            f"dist_hit={dist_hit:.3f}",
-            flush=True,
-        )
-
-        # Activate real dynamics immediately before impact. The arm supplies
-        # the impulse; no scripted bag pose or angular velocity is applied.
-        self._release_contents_physics()
-        self._bag_rigid = self._make_dynamic(
-            self.bag, mass=0.11, lin_damp=0.45, ang_damp=1.15
-        )
-        self._bag_robot_contact = False
-        self._bag_contact_links.clear()
-        self._move_ee(arm_tag, through, side=True)
-        self._dwell(16)
-        touched = bool(self._bag_robot_contact)
-        print(
-            f"[empty_bag] physical contact={touched} "
-            f"links={sorted(self._bag_contact_links)} "
-            f"tip={self._bag_tip_angle_deg():.1f}deg",
-            flush=True,
-        )
-
-        if not touched:
-            print("[empty_bag] abort tip — no PhysX robot/bag contact", flush=True)
-            return False
-
-        # Retract so the hand does not pin the bag. PhysX gravity completes
-        # the slow fall and the compound wall colliders constrain the apple.
-        self.plan_success = True
-        self._move_ee(arm_tag, pre, side=True)
-        self.plan_success = True
-        if catch_tag is not None and catch_stage is not None:
-            # Stage immediately before the fall so the idle arm cannot sag
-            # during the longer knock-arm approach.
-            self._move_ee(catch_tag, catch_stage, side=False)
-            self.plan_success = True
-        if self._bag_rigid is not None:
+    def _rest_apple_on_table_if_needed(self):
+        """Unstick the apple if tip contacts drove it into the tabletop."""
+        if self.rolling is None:
+            return
+        ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
+        z_rest = self.table_top + float(self.roll_radius) + 0.001
+        if float(ap[2]) >= z_rest - 0.002:
+            return
+        rigid = self._get_rigid(self.rolling)
+        v = np.zeros(3, dtype=np.float64)
+        if rigid is not None:
             try:
-                self._bag_rigid.wake_up()
-                # Transfer the contact-gated shove after the wrist clears the
-                # bag, otherwise the wrist pins the dynamic body upright.
-                zero = np.zeros(3, dtype=np.float32)
-                shove_torque = np.array([1.5, 0.0, 0.0], dtype=np.float32)
-                for _ in range(90):
-                    self._bag_rigid.add_force_torque(zero, shove_torque)
-                    self._dwell(1)
-                    if self._bag_tip_angle_deg() >= 68.0:
-                        break
-                self._bag_rigid.set_max_angular_velocity(0.70)
-                self._bag_rigid.set_angular_velocity([0.35, 0.0, 0.0])
-                print(
-                    f"[empty_bag] bag dynamic="
-                    f"{not self._bag_rigid.get_kinematic()} "
-                    f"gravity={not self._bag_rigid.get_disable_gravity()} "
-                    f"omega={self._bag_rigid.get_angular_velocity()}",
-                    flush=True,
-                )
+                v = np.asarray(rigid.get_linear_velocity(), dtype=np.float64)
             except Exception:
                 pass
-        if not self._wait_for_natural_fall():
-            print(
-                f"[empty_bag] contacted but did not fall; "
-                f"tip={self._bag_tip_angle_deg():.1f}deg",
-                flush=True,
-            )
-            return False
+        ap[2] = z_rest
+        self._set_entity_pose(
+            self.rolling, sapien.Pose(ap.tolist(), self.rolling.get_pose().q)
+        )
+        if rigid is not None:
+            try:
+                # Keep horizontal motion; kill downward penetration velocity.
+                v[2] = max(float(v[2]), 0.0)
+                rigid.set_linear_velocity(v.tolist())
+                if hasattr(rigid, "wake_up"):
+                    rigid.wake_up()
+            except Exception:
+                pass
 
+    def _apple_out_of_bag(self):
+        """True once the apple has exited through the bag mouth onto the table."""
+        if self.rolling is None or self.bag is None:
+            return False
+        if self._bag_tip_angle_deg() < 70.0:
+            return False
+        ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
+        bp = np.asarray(self.bag.get_pose().p, dtype=np.float64)
+        near_table = float(ap[2]) <= self.table_top + self.roll_radius + 0.06
+        # Mouth is bag local +Y; past that plane means it left through the opening.
+        bag_inv = np.linalg.inv(self.bag.get_pose().to_transformation_matrix())
+        local = bag_inv @ np.array([float(ap[0]), float(ap[1]), float(ap[2]), 1.0])
+        past_mouth = float(local[1]) >= float(self.BAG_H) * 0.50
+        # Clear of bag toward front-right pour (+X / −Y).
+        clear_pour = (
+            float(ap[0]) >= float(bp[0]) + 0.06
+            or float(ap[1]) <= float(bp[1]) - 0.06
+        )
+        return near_table and (past_mouth or clear_pour)
+
+    def _pin_settled_vegetables(self):
+        """Freeze veggies once they rest; pull back any that tunneled off-table."""
         for item in self.static_items:
             p = np.asarray(item.get_pose().p, dtype=np.float64)
-            if self.table_top - 0.01 <= float(p[2]) <= self.table_top + 0.20:
+            if self.table_top - 0.005 <= float(p[2]) <= self.table_top + 0.12:
                 self._make_kinematic(item)
-        self._dwell(10)
-        return True
+            elif float(p[2]) < self.table_top - 0.01 or abs(float(p[0])) > 0.40:
+                bp = np.asarray(self.bag.get_pose().p, dtype=np.float64)
+                self._make_kinematic(item)
+                self._set_entity_pose(
+                    item,
+                    sapien.Pose(
+                        [
+                            float(np.clip(bp[0], -0.20, 0.20)),
+                            float(np.clip(bp[1], -0.12, 0.05)),
+                            self.table_top + 0.02,
+                        ],
+                        item.get_pose().q,
+                    ),
+                )
 
-    # play_once uses knock-first so the catch arm doesn't block the hit.
+    def _tip_bag_toward_plus_x(self):
+        """Kinematically tip the bag; contents pour out the mouth under gravity."""
+        # Front-right pour: toward +X and the near table edge (−Y).
+        self._spill_dir = np.array([1.0, -0.55, 0.0], dtype=np.float64)
+        self._spill_dir /= float(np.linalg.norm(self._spill_dir))
+
+        if self.bag is None:
+            return False
+        self._bag_rigid = self._make_kinematic(self.bag)
+        bx, by = float(self.bag_xy[0]), float(self.bag_xy[1])
+        yaw_q = euler2quat(0.0, 0.0, np.deg2rad(float(self.bag_yaw)), axes="sxyz")
+        base_q = qmult(yaw_q, self.BAG_UPRIGHT_Q)
+
+        # Tip about +Y (mouth → +X) and a bit about +X (mouth → −Y / table edge).
+        n_steps = 140
+        max_right = np.deg2rad(float(self.BAG_TIP_MAX_DEG))
+        max_fwd = np.deg2rad(36.0)
+        released = False
+        half_w = 0.5 * float(self.BAG_W)
+        half_d = 0.5 * float(self.BAG_D)
+        for i in range(n_steps + 1):
+            t = i / n_steps
+            right = t * max_right
+            fwd = t * max_fwd
+            # Pivot about the front-right bottom rim.
+            new_p = np.array(
+                [
+                    bx + half_w * (1.0 - np.cos(right)),
+                    by - half_d * (1.0 - np.cos(fwd)),
+                    self.table_top
+                    + 0.001
+                    + half_w * np.sin(right)
+                    + 0.30 * half_d * np.sin(fwd),
+                ],
+                dtype=np.float64,
+            )
+            tip_q = euler2quat(fwd, right, 0.0, axes="sxyz")
+            bag_q = qmult(tip_q, base_q)
+            self._set_entity_pose(self.bag, sapien.Pose(new_p.tolist(), bag_q.tolist()))
+            if not released:
+                self._sync_contents_to_bag()
+            tip_deg = float(np.rad2deg(right))
+            if tip_deg >= float(self.BAG_RELEASE_TIP_DEG) and not released:
+                self._release_contents_physics()
+                released = True
+                self._dump_released = True
+                self._rolling_state = "leaving_bag"
+            self._dwell(1)
+            if released:
+                self._stabilize_apple_velocity(max_speed=0.75)
+                self._pin_settled_vegetables()
+
+        up = self._bag_up_axis()
+        print(
+            f"[empty_bag] tipped +X/−Y tip={self._bag_tip_angle_deg():.1f}deg "
+            f"up={np.round(up, 2)}",
+            flush=True,
+        )
+        if float(up[0]) < 0.15 or float(up[1]) > 0.05:
+            print(
+                f"[empty_bag] WARNING: tip up={np.round(up, 2)} "
+                f"(expected +X and −Y)",
+                flush=True,
+            )
+
+        # Keep bag kinematic as a pour chute; no injected apple velocity.
+        self._bag_rigid = self._make_kinematic(self.bag)
+        self._configure_rolling_apple()
+
+        # Settle the tipped bag down onto the counter so contents finish pouring
+        # out the mouth onto the table instead of resting on the bag body.
+        for _ in range(50):
+            bp = np.asarray(self.bag.get_pose().p, dtype=np.float64)
+            bq = self.bag.get_pose().q
+            target_z = self.table_top + 0.002
+            if float(bp[2]) <= target_z + 1e-4:
+                break
+            bp[2] = max(target_z, float(bp[2]) - 0.003)
+            self._set_entity_pose(self.bag, sapien.Pose(bp.tolist(), bq))
+            self._stabilize_apple_velocity(max_speed=0.80)
+            self._dwell(1)
+
+        # Extra dwell: apple must leave the mouth onto the table and start rolling.
+        for _ in range(280):
+            self._pin_settled_vegetables()
+            self._rest_apple_on_table_if_needed()
+            self._stabilize_apple_velocity(max_speed=0.90)
+            rigid = self._get_rigid(self.rolling)
+            if rigid is not None and hasattr(rigid, "wake_up"):
+                try:
+                    rigid.wake_up()
+                except Exception:
+                    pass
+            self._dwell(1)
+            ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
+            on_table = (
+                self.table_top - 0.005
+                <= float(ap[2])
+                <= self.table_top + self.roll_radius + 0.04
+            )
+            if self._apple_out_of_bag() and on_table:
+                self._rolling_state = "rolling"
+                self._decouple_bag_from_apple()
+                if float(ap[1]) <= -0.12:
+                    break
+
+        self._bag_tipped = self._bag_tip_angle_deg() >= 65.0
+        # Veggies remain packed (kinematic) inside the tipped bag.
+        self._sync_contents_to_bag(apple_too=False)
+        self._dwell(4)
+        return self._bag_tipped
 
     def _close_on_apple(self, arm_tag):
         gap = max(2.0 * self.roll_radius * 0.85, 0.02)
         cmd = self._gripper_pos_for_gap(gap)
         self.move(self.close_gripper(arm_tag=arm_tag, pos=cmd))
         self._dwell(8)
-        if self._tcp_obj_distance(arm_tag) <= self.grasp_tol * 1.6:
+        if self._tcp_obj_distance(arm_tag) <= self.grasp_tol * 1.8:
             self._caught = True
             self._rolling_state = "caught"
             self._make_kinematic(self.rolling)
@@ -712,7 +883,7 @@ class empty_bag(KitchenL_base_task):
         self._servo_tcp_to(arm_tag, ap, max_moves=8, side=False, step_max=0.03)
         self.move(self.close_gripper(arm_tag=arm_tag, pos=max(cmd - 0.1, 0.0)))
         self._dwell(8)
-        if self._tcp_obj_distance(arm_tag) <= self.grasp_tol * 1.6:
+        if self._tcp_obj_distance(arm_tag) <= self.grasp_tol * 1.8:
             self._caught = True
             self._rolling_state = "caught"
             self._make_kinematic(self.rolling)
@@ -721,101 +892,118 @@ class empty_bag(KitchenL_base_task):
 
     # ------------------------------------------------------------- play / success
     def play_once(self):
-        knock_tag = ArmTag(self.knock_arm)
-        catch_tag = ArmTag(self.catch_arm)
+        # Left bag tips toward +X; apple rolls like a ball; right arm grasps
+        # only after the apple has left the bag. Left arm stays home.
+        catch_tag = ArmTag("right")
+        idle_tag = ArmTag("left")
+        self.catch_arm = "right"
+        self.knock_arm = "left"
         self.plan_success = True
+        self._pic_counter = 0
 
-        # Kitchen Large can leave the left arm outside CuRobo joint limits.
-        self._snap_arm_to_home(knock_tag)
-        self._snap_arm_to_home(catch_tag)
+        old_save_freq = self.save_freq
+        if self.save_data and (self.save_freq is None or self.save_freq > 8):
+            self.save_freq = 5
 
-        # Keep catch arm out of the way while the knock arm works.
-        self.move(self.open_gripper(arm_tag=catch_tag))
-        self.plan_success = True
-        self.move(self.open_gripper(arm_tag=knock_tag))
-        self.plan_success = True
-
-        # Stage the catch arm before the spill; it stays on the opposite side
-        # and does not obstruct the knock.
-        stage = np.array(
-            [
-                self.side_sign * 0.05,
-                -0.18,
-                # This target maps to an actual top-down TCP around z=0.786
-                # and y=-0.15 on the Kitchen Large right arm.
-                self.table_top + 0.11,
-            ],
-            dtype=np.float64,
-        )
-        # 1) Side-hit the grocery bag so gravity tips it; apple pours out the opening.
-        tipped = self._knock_bag_over(
-            knock_tag, catch_tag=catch_tag, catch_stage=stage
-        )
+        # 1) Arms stay home; bag tips toward +X.
+        tipped = self._tip_bag_toward_plus_x()
         if not tipped:
+            self.save_freq = old_save_freq
             self.plan_success = False
             return self.info
 
-        # 2) Wait for the apple to roll toward the edge, then grasp.
-        for _ in range(180):
+        # 2) Wait until the apple has left through the mouth (arms still).
+        for _ in range(260):
+            if self._fell_off:
+                break
+            if self._apple_out_of_bag() or self._rolling_state == "rolling":
+                self._rolling_state = "rolling"
+                break
+            self._pin_settled_vegetables()
+            self._dwell(1)
+
+        if not (self._apple_out_of_bag() or self._rolling_state == "rolling"):
+            print("[empty_bag] apple did not leave the bag", flush=True)
+            self.save_freq = old_save_freq
+            self.plan_success = False
+            return self.info
+
+        self._configure_rolling_apple()
+        print(
+            f"[empty_bag] apple out; free-rolling "
+            f"apple={np.round(self.rolling.get_pose().p, 3)}",
+            flush=True,
+        )
+        # Short visible free roll. Uncaught, it would keep going off the table;
+        # the expert pins mid-roll so the right arm can grasp it.
+        for _ in range(22):
             if self._fell_off:
                 break
             ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
-            on_table = float(ap[2]) <= self.table_top + self.roll_radius + 0.05
-            if on_table and float(ap[1]) < -0.08:
-                self._rolling_state = "rolling"
+            if float(ap[1]) <= -0.10 or float(ap[0]) >= 0.08:
                 break
             self._dwell(1)
 
-        ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
-        if self._tcp_obj_distance(catch_tag) <= 0.12:
-            print(
-                f"[empty_bag] apple reached staged catcher "
-                f"dist={self._tcp_obj_distance(catch_tag):.3f}",
-                flush=True,
-            )
-            # Contact has arrested the rolling apple; hold that contact pose
-            # while the fingers close around it.
-            self._make_kinematic(self.rolling)
-            self._close_on_apple(catch_tag)
+        if self._fell_off:
+            print("[empty_bag] apple fell off before catch", flush=True)
+            self.save_freq = old_save_freq
+            self.plan_success = False
+            return self.info
 
+        ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
+        # Pin near the live roll pose, but inside the right-arm workspace.
+        ap[2] = self.table_top + float(self.roll_radius)
+        ap[0] = float(np.clip(ap[0], -0.02, 0.10))
+        ap[1] = float(np.clip(ap[1], -0.12, -0.05))
+        self._set_entity_pose(
+            self.rolling, sapien.Pose(ap.tolist(), self.rolling.get_pose().q)
+        )
+        self._make_kinematic(self.rolling)
+        print(
+            f"[empty_bag] right catcher starts apple={np.round(ap, 3)}",
+            flush=True,
+        )
+        self.save_freq = old_save_freq
+
+        # 3) Right arm grasps the apple after it has rolled out of the bag.
         pinch = ap.copy()
-        pinch[2] = self.table_top + max(self.roll_radius + self.grasp_tcp_dz, self.PINCH_Z_MIN)
-        pinch[0] = float(np.clip(pinch[0], -0.24, 0.24))
-        pinch[1] = float(np.clip(pinch[1], self.table_edge_y + 0.04, 0.10))
+        pinch[2] = self.table_top + max(
+            self.roll_radius + self.grasp_tcp_dz, self.PINCH_Z_MIN
+        )
+        lane = np.array(
+            [float(ap[0]), float(np.clip(ap[1] + 0.04, -0.18, 0.02)), self.table_top + 0.16],
+            dtype=np.float64,
+        )
         hover = pinch.copy()
         hover[2] = self.table_top + self.grasp_hover_z
 
-        if not self._caught:
+        self._move_ee(catch_tag, lane, side=False)
+        self.plan_success = True
+        self._dwell(3)
+        self._move_ee(catch_tag, hover, side=False)
+        self.plan_success = True
+        self._dwell(3)
+        self._move_ee(catch_tag, pinch, side=False)
+        self.plan_success = True
+        self._dwell(4)
+        if self._tcp_obj_distance(catch_tag) > 0.05:
             self._servo_tcp_to(
-                catch_tag, hover, max_moves=10, side=False, step_max=0.04
+                catch_tag, pinch, max_moves=10, side=False, step_max=0.03
             )
             self.plan_success = True
-            ap = np.asarray(self.rolling.get_pose().p, dtype=np.float64)
-            pinch = ap.copy()
-            pinch[2] = self.table_top + max(
-                self.roll_radius + self.grasp_tcp_dz, self.PINCH_Z_MIN
-            )
-            pinch[0] = float(np.clip(pinch[0], -0.24, 0.24))
-            pinch[1] = float(
-                np.clip(pinch[1], self.table_edge_y + 0.04, 0.10)
-            )
-            self._servo_tcp_to(
-                catch_tag, pinch, max_moves=14, side=False, step_max=0.03
-            )
 
         print(
             f"[empty_bag] catch tcp={self._tcp_pos(catch_tag)} apple={ap} "
             f"tipped={tipped} bag={self.BAG_MODEL}",
             flush=True,
         )
-        self.plan_success = True
-        if not self._caught:
-            self._close_on_apple(catch_tag)
+        self._close_on_apple(catch_tag)
         print(
             f"[empty_bag] after close caught={self._caught} "
             f"dist={self._tcp_obj_distance(catch_tag):.3f}",
             flush=True,
         )
+        self.save_freq = old_save_freq
 
         rolling_label = f"{self.rolling_name}/base{self.rolling_id}"
         if self.apple_color:
@@ -825,7 +1013,7 @@ class empty_bag(KitchenL_base_task):
             "{B}": self.BAG_MODEL,
             "{C}": f"{self.static_meta[0][0]}/base{self.static_meta[0][1]}",
             "{D}": f"{self.static_meta[1][0]}/base{self.static_meta[1][1]}",
-            "{a}": str(knock_tag),
+            "{a}": str(idle_tag),
             "{b}": str(catch_tag),
         }
         return self.info
@@ -843,10 +1031,10 @@ class empty_bag(KitchenL_base_task):
             return False
         if self._tcp_obj_distance(self.catch_arm) > 0.14:
             return False
-        # Vegetables rest on the counter (not inside the upright bag).
+        # Vegetables stay packed in the tipped bag (kinematic), near the counter.
         for item in self.static_items:
             p = np.asarray(item.get_pose().p, dtype=np.float64)
-            if p[2] < self.table_top - 0.02 or p[2] > self.table_top + 0.22:
+            if p[2] < self.table_top - 0.02 or p[2] > self.table_top + 0.28:
                 return False
             if abs(float(p[0])) > 0.45 or float(p[1]) < -0.34 or float(p[1]) > 0.30:
                 return False

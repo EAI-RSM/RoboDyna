@@ -1,0 +1,18 @@
+{
+  "contact_points": [
+    {
+      "id": [
+        0
+      ],
+      "description": "Top",
+      "usage": "N/A"
+    }
+  ],
+  "functional_points": [
+    {
+      "id": 0,
+      "description": "Bottom",
+      "usage": "Rest on surface"
+    }
+  ]
+}

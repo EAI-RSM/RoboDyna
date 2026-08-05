@@ -42,103 +42,238 @@ check_render_success: false
 task_args:
   boil_milk:
     scene_id: 0
+    stove_side: random          # left | right | random
+    pot_burner: random          # left_front | right_front | left_rear | right_rear | random
+    # Stove pulled forward off the backsplash so the knob is in easy arm reach.
+    range_xy: [0.28, 0.14]
+    range_x_right: 0.28
+    range_x_left: -0.28
+    microwave_y: 0.18
+    microwave_x_left: -0.32
+    microwave_x_right: 0.32
     # The pot boils through the whole reach for the knob (~960 steps), so the
     # rise is slow enough that the shutoff motion still lands under overflow.
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
     settle_steps: 1200          # steps for liquid to return toward baseline when off
     baseline_level: 0.35
-    expert_shutoff_level: 0.62  # level at which the expert starts reaching back
-    overflow_level: 0.95
+    # Red ring mark: 100 = pot rim, 0 = pot floor. Success = reach ring, then off.
+    target_ring: 80
+    shutoff_lead: 0.08          # start shutoff this far below the ring (keeps rising)
+    overflow_level: 0.98        # rim; spill + fail if reached while stove on
+    # force_overflow: true      # demo failure: leave burner on until spill
+    pot_radius: 0.054           # m; prior teapot then −30%
+    pot_height: 0.0735          # m; prior teapot then −30%
+    handle_length: 0.091        # m; saucepan dual-rod handle (−30%)
+    range_scale_mult: 1.0
+    microwave_scale_mult: 1.3   # +30% microwave
+    milk_box_id: -1             # -1 = random 038_milk-box variant
+    milk_box_height: 0.20       # m; ~1 L carton
+    mug_id: 0                   # 039_mug/base0 (classic ceramic)
+    mug_height: 0.0735          # m; prior 10.5 cm then −30%
+    mug_gap: 0.03               # m; air gap between milk/mug footprints (Y-stacked)
     knob_contact_radius: 0.06
   cook_food:
     scene_id: 0
-    # food_type: meat | chicken | sausage | random
+    # food_type: meat | sausage | onion_half | random
     # Food starts on a chopping board; expert places into pan, cooks via knob, then plates.
     food_type: random
-    # burner: left_front | left_rear | right_front | right_rear
-    burner: left_front
-    # Counter-local stove XY (shifted left vs default +0.42).
-    range_xy: [0.02, 0.08]
+    randomize_layout: true
+    stove_pose: random          # current | center | random
+    burner: random              # left_front | right_front | random
+    range_xy: [0.10, 0.14]
+    range_center_xy: [0.0, 0.14]
+    board_y: -0.02
+    plate_y: -0.12
+
     cook_steps: 2000            # steps for doneness 0→1 while stove is on
     cook_speed_jitter: 0.0
-    shutoff_lead: 0.04
-    cook_intensity: 0.75        # expert knob turn as fraction of 180°
-    pan_scale: 0.60
-    plate_scale: 0.55
-    board_scale_mult: 0.07
+    # Top-down knob shutoff is a longer reach than the old front knobs — leave
+    # more lead so doneness doesn't race past the target during the twist off.
+    shutoff_lead: 0.22
+    cook_intensity: 0.70        # expert knob turn as fraction of 180°
+    # Same cooktop scale as the other KitchenS stove tasks.
+    range_scale_mult: 1.0
+    pan_scale: 1.0
+    skillet_id: 2
+    skillet_handle_yaw: 1.5708   # +90° → handle on +X (right side of stove)
+    # Left-arm board→pan undershoots −X; bias release toward bowl +X.
+    place_dx: 0.05
+    place_dy: 0.05
+    plate_scale: 0.715
+    board_scale_mult: 0.0975
     knob_contact_radius: 0.06
   pour_beer:
     scene_id: 0
-    bottle_beer_frac: 0.90
-    pour_rate: 0.004
-    foam_gain: 1.8
-    foam_decay: 0.0035
-    expert_foam_stop: 0.82
-    expert_foam_resume: 0.55
+    randomize_layout: true
+    station_side: random
+    station_x: 0.10
+    cup_y: -0.08
+    tap_dy: 0.12
+    tap_y_down: 0.10
+    station_x_range_left: [-0.16, -0.06]
+    station_x_range_right: [0.06, 0.16]
+    station_x_range: [0.06, 0.16]
+    pour_rate: 0.00055
+    foam_gain: 0.60
+    foam_decay: 0.0045
+    expert_foam_pause: 0.16
+    expert_foam_resume: 0.09
     target_liquid: 0.90
     full_liquid_tol: 0.05
   measure_ingredient:
     # Baking counter (no sink/tap/stove): pour oil, then place jar on scale.
     scene_id: 0
+    # target_fill: 0.25 | 0.50 | 0.75 | 1.0 | random  (±fill_tol)
     target_fill: 0.25
+    fill_levels: [0.25, 0.50, 0.75, 1.0]
     pour_rate: 0.00022
-    fill_tol: 0.02
+    # Sample fill speed ∼ Uniform(1±pour_rate_jitter) * pour_rate (0 = fixed).
+    pour_rate_jitter: 0.15
+    fill_tol: 0.05
     # oil_style: solid (opaque sunflower yellow) | transparent (see-through amber)
     oil_style: solid
     scale_id: 0
+    # Layout: MW top-left|corner; dispenser L/R Y±6cm; scale L/R dist±10cm; decor clear.
+    randomize_layout: true
+    microwave_pose: random
+    microwave_top_left: [-0.32, 0.18]
+    microwave_left_corner: [-0.48, 0.22]
+    microwave_y: 0.18
+    microwave_x_range: [-0.42, -0.22]
+    station_side: random
     station_x: -0.08
+    station_x_range: [-0.20, -0.02]
+    station_x_range_left: [-0.22, -0.04]
+    station_x_range_right: [0.04, 0.22]
     disp_y: 0.08
+    disp_y_jitter: 0.06
     jar_y: -0.06
     scale_x: -0.32
     scale_y: -0.14
-    bread_xy: [0.22, -0.10]
-    flour_xy: [0.08, 0.06]
-    chips_xy: [0.16, 0.08]
-    bowl_xy: [0.30, 0.05]
-    board_scale_mult: 0.07
+    scale_dist: 0.25
+    scale_dist_jitter: 0.10
+    scale_near_dx_range: [-0.28, -0.16]
+    scale_near_dy_range: [-0.12, -0.02]
+    decor_on_microwave_prob: 0.35
+    decor_x_range: [-0.45, 0.48]
+    decor_y_range: [-0.26, 0.20]
+    # Sparse baking decor (used when randomize_layout=false).
+    bread_xy: [0.28, -0.20]
+    flour_xy: [0.38, 0.14]
+    chips_xy: [0.12, -0.22]
+    bowl_xy: [0.40, -0.02]
+    board_scale_mult: 0.091     # +30% cutting board
+    microwave_scale_mult: 1.3   # +30% microwave
   empty_bag:
-    # Kitchen Large: knock over kraft grocery bag; catch rolling apple.
-    # Center microwave removed; no fridge decor (clear workspace).
+    # Kitchen Large: left bag tips +X; apple rolls right; right arm grasps after exit.
     scene_id: 0
-    bag_side: left              # left | right | random — knock arm side
+    bag_side: left
     bag_x_abs: 0.16
-    bag_y: -0.05
+    bag_y: -0.02
+    bag_yaw_deg: 0.0
     bag_scale_mult: 1.0
     apple_color: random         # green | red | random
-    veg_scale_mult: 0.035
+    veg_scale_mult: 0.024
     table_edge_y: -0.30
     grasp_tol: 0.08
     grasp_hover_z: 0.14
     grasp_tcp_dz: 0.02
     post_catch_lift: 0.08
-
   make_soup:
-    # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
-    # Lift board level, pour into pot (physics), then turn stove on. No spills.
+    # KitchenS: no microwave. Stove slot (current/top-left/top-right), board on
+    # lower half, veggies scattered, pot on a front burner matching the arm.
     scene_id: 0
     burner: left_front
-    range_xy: [0.20, 0.06]
+    pin_burner: false
+    range_xy: [0.18, 0.14]
+    range_slots: [current, top_left, top_right]
+    range_scale_mult: 1.0
+    randomize_layout: true
+    randomize_background: true
+    clean_background_rate: 0.0
     water_level: 0.45
-    pot_radius: 0.055
-    pot_height: 0.075
+    # Original two-handled pot, sized to the boil_milk saucepan.
+    pot_radius: 0.058
+    pot_height: 0.0735
+    pot_wall: 0.005
     board_half: [0.095, 0.065, 0.010]
+    handle_half: [0.022, 0.024, 0.022]
+    board_x: 0.16                # fallback / mean when randomize_layout=false
+    board_y: -0.14
+    board_center_x_tol: 0.06
     cube_half: 0.012
     tomato_radius: 0.015
-    tilt_hold_dot: 0.82          # soft friction break during pour ≈35° tip
-    tilt_spill_dot: 0.50         # accidental spill during carry ≈60° tip
-    pour_tip_rad: 0.96           # expert pour tip (~55°)
+    tilt_hold_dot: 0.82
+    tilt_spill_dot: 0.50
+    pour_tip_rad: 0.70           # wrist roll for the pour (~40°)
     knob_contact_radius: 0.06
-  serve_dinner:
-    # KitchenS: pan with 3–4 meatballs in sauce on a lit burner; plate in front.
-    # Turn stove off, lift pan level, tip so meatballs land on the plate (physics).
-    # Any meatball off the plate = fail.
+    grasp_tcp_tol: 0.045
+    plate_x: -0.18
+    plate_y: -0.08
+    plate_scale: 0.55
+    bread_scale: 1.0
+    wine_x: -0.30
+    wine_y: -0.02
+    wine_scale: 1.0
+    glass_x: -0.22
+    glass_y: -0.16
+    glass_scale: 0.585           # prior 0.45 × 1.3
+  make_soup_test:
+    # Same as make_soup, but flush 4-burner gas cooktop + top-facing knob.
     scene_id: 0
     burner: left_front
-    range_xy: [0.18, 0.06]
-    pan_scale: 0.60
-    plate_scale: 0.55
-    meatball_radius: 0.016
-    # n_meatballs: 3 | 4 | omit for random 3–4
-    tilt_hold_dot: 0.82          # soft friction break during pour ≈35° tip
-    pour_tip_rad: 0.87           # expert pour tip (~50°)
+    range_xy: [0.18, 0.14]
+    range_x_range: [-0.10, 0.30]
+    range_scale_mult: 1.0
+    randomize_layout: true
+    randomize_background: true
+    clean_background_rate: 0.0
+    water_level: 0.45
+    pot_radius: 0.058
+    pot_height: 0.0735
+    pot_wall: 0.005
+    board_half: [0.095, 0.065, 0.010]
+    handle_half: [0.022, 0.024, 0.022]
+    board_x: 0.16
+    board_y: -0.14
+    cube_half: 0.012
+    tomato_radius: 0.015
+    tilt_hold_dot: 0.82
+    tilt_spill_dot: 0.50
+    pour_tip_rad: 0.70
     knob_contact_radius: 0.06
+    grasp_tcp_tol: 0.045
+    plate_x: -0.18
+    plate_y: -0.08
+    plate_scale: 0.55
+    bread_scale: 1.0
+    wine_x: -0.30
+    wine_y: -0.02
+    wine_scale: 1.0
+    glass_x: -0.22
+    glass_y: -0.16
+    glass_scale: 0.585
+  serve_dinner:
+    # KitchenS: pan with 3–4 meatballs on a lit burner (right-top); plate left-center.
+    # Turn stove off, tip pan so meatballs land on plate. Salad bowl + bottle + cup decor.
+    scene_id: 0
+    burner: left_front
+    range_xy: [0.36, 0.14]
+    plate_x: -0.08
+    plate_y: -0.08
+    pan_scale: 1.0
+    range_scale_mult: 1.0
+    plate_scale: 1.05          # prior 1.5 × 0.7 (−30%)
+    meatball_radius: 0.015
+    tilt_hold_dot: 0.78
+    pour_tip_rad: 1.13           # ~65° tip so balls roll over the rim
+    knob_contact_radius: 0.06
+    salad_x: -0.22
+    salad_y: -0.02
+    bottle_x: -0.32
+    bottle_y: -0.12
+    cup_x: -0.18
+    cup_y: -0.18
+    salad_bowl_scale: 1.15
+    lettuce_scale: 1.35
+    tomato_scale: 1.25

@@ -1,27 +1,27 @@
 {
-  "full_description": "A cup tips off the office shelf, falls onto the table, and rolls toward the edge; stop it with the hand while it stays on its side, grasp it from the side, turn it upright, and place it upright on the shelf plate.",
+  "full_description": "A cup tips off a wall shelf, falls onto the table, and rolls toward the edge; stop it with the hand, grasp around its exterior, and place it upright on the table.",
   "schema": "{A} notifies the cup, {B} notifies the shelf, {a} notifies the arm used",
   "preference": "num of words should not exceed 14. Degree of detail avg is 6",
   "seen": [
-    "Stop {A} then put it back on {B}",
-    "Use {a} to stop {A} and return it to {B}",
-    "Block the rolling {A} and place it on {B}",
-    "Stop {A} before the edge and shelve it",
-    "Catch {A} with {a} and put it on {B}",
-    "Halt {A} then grasp and shelve it",
-    "Stop the rolling cup and return it to {B}",
-    "Use {a} to stop {A} and put it back",
-    "Block {A}, pick it up, place on {B}",
-    "Stop {A} on the table and shelve it",
-    "Intercept {A} then put it back on {B}",
-    "Stop {A} after it leaves {B} and shelve it",
-    "Halt the cup and return it to the shelf",
-    "Use {a} to stop and re-shelf {A}",
-    "Block {A} before the edge and shelve it"
+    "Stop {A} and stand it upright on the table",
+    "Use {a} to stop {A} and set it upright",
+    "Block the rolling {A} and stand it up",
+    "Stop {A} before the edge and upright it",
+    "Catch {A} with {a} and place it upright",
+    "Halt {A} then stand it on the table",
+    "Stop the rolling cup and set it upright",
+    "Use {a} to stop {A} and stand it up",
+    "Block {A}, grasp it, place upright",
+    "Stop {A} and leave it upright on the table",
+    "Intercept {A} then stand it upright",
+    "Stop {A} after it leaves {B} and upright it",
+    "Halt the cup and stand it on the table",
+    "Use {a} to stop and upright {A}",
+    "Block {A} before the edge and upright it"
   ],
   "unseen": [
-    "Stop the rolling cup with {a} then return it to {B}",
-    "Block {A} mid-roll, grasp it, and put it on {B}",
-    "Halt {A} after the shelf drop and shelve it again"
+    "Stop the rolling cup with {a} then stand it upright",
+    "Block {A} mid-roll, grasp it, and set it upright",
+    "Halt {A} after the shelf drop and stand it on the table"
   ]
 }

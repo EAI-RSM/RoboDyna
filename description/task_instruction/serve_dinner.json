@@ -1,6 +1,6 @@
 {
-  "full_description": "In the KitchenS scene, a pan of meatballs in sauce sits on a lit burner. Turn the stove off, pick up the pan, and tip it carefully so the meatballs fall onto a plate. Success requires every meatball on the plate; any ball that falls off the plate is a failure.",
-  "schema": "{A} notifies the skillet/pan, {B} notifies the plate, {C} notifies the cooking range, {D} notifies the stove knob, {E} notifies the meatballs, {a} notifies the arm used",
+  "full_description": "In the KitchenS scene, a pan of meatballs sits on a lit burner at the right-top of the counter, with a plate toward the center-left and a salad bowl, drink bottle, and cup on the left. Turn the stove off, pick up the pan, and tip it carefully so the meatballs fall onto the plate. Success requires every meatball on the plate; any ball that falls off the plate is a failure.",
+  "schema": "{A} notifies the skillet/pan, {B} notifies the plate, {C} notifies the cooking range, {D} notifies the stove knob, {E} notifies the meatballs, {F} notifies the salad bowl, {G} notifies the drink bottle, {H} notifies the cup, {a} notifies the arm used",
   "preference": "num of words should not exceed 25. Degree of detail avg is 6",
   "seen": [
     "Turn off {C} with {D}, then tip {E} from {A} onto {B}",

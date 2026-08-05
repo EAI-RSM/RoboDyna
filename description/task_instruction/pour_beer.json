@@ -1,22 +1,22 @@
 {
-  "full_description": "In the KitchenS scene, pour all the beer from the beer bottle into the beer glass. Foam rises while pouring, so pause to let it settle; if foam spills over the rim the task fails. Align the bottle tip with the glass and fill it to succeed.",
-  "schema": "{A} is the beer bottle, {B} is the beer glass, {a} is the arm used to pour",
+  "full_description": "In the KitchenS bar scene, pull the beer tap lever by hand to pour into the beer mug under the spout. Flow and foam rise with how far the lever is open. Partially close to settle foam, then finish, close fully, and wait for the tap to stop before done. Overflow fails.",
+  "schema": "{A} is the beer tap, {B} is the beer mug, {C} is the tap lever, {a} is the arm used",
   "preference": "num of words should not exceed 20. Degree of detail avg is 6",
   "seen": [
-    "Pour beer from {A} into {B} without foam overflow",
-    "Use {a} to pour {A} into {B}, pausing so foam settles",
-    "Tilt {A} so its tip meets {B}, then pour carefully",
-    "Fill {B} from {A}; stop when foam rises, then continue",
-    "Pour all the beer into {B} carefully so foam does not spill",
-    "With {a}, align {A} over {B} and pour in bursts until full",
-    "Pour {A} into {B} and wait for foam to go down between pours",
-    "Empty {A} into {B}, managing the foam head as you pour"
+    "Pull {C} open by hand to pour beer from {A} into {B}",
+    "Use {a} to gradually open {C}, fill {B}, then close the lever",
+    "Pour from {A} into {B} without foam overflow",
+    "Open the tap lever, pause for foam, then finish filling {B}",
+    "Pull {C} to pour into {B}; close before it spills",
+    "Fill {B} from the beer tap, managing the foam head",
+    "With {a}, drive {C} until {B} is nearly full",
+    "Pour beer into {B} from {A} and shut the lever in time"
   ],
   "unseen": [
-    "Pour the beer bottle into the glass without spilling foam",
-    "Fill the beer glass carefully; pause whenever foam rises too high",
-    "Use {a} to tip the bottle into the glass until it is full",
-    "Do not let foam crest the rim while pouring from the bottle",
-    "Empty the beer bottle into the glass with controlled pours"
+    "Operate the beer tap lever gradually to fill the mug without spilling",
+    "Pull and release the lever so foam does not crest the rim",
+    "Use {a} to control the lever angle until the mug is full",
+    "Do not let foam or beer overflow while pouring from the tap",
+    "Fill the mug from the draft tap with careful lever control"
   ]
 }

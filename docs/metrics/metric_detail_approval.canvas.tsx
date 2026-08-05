@@ -111,8 +111,8 @@ const TASKS: TaskSpec[] = [
     ],
   },
   {
-    id: "packing",
-    name: "packing",
+    id: "pack_fruits",
+    name: "pack_fruits",
     category: "Sorting / packing",
     metrics: [
       { key: "n_apple", type: "int", meaning: "Apple count" },
@@ -191,8 +191,8 @@ const TASKS: TaskSpec[] = [
     ],
   },
   {
-    id: "quality_control",
-    name: "quality_control",
+    id: "control_quality",
+    name: "control_quality",
     category: "Belt / stamp",
     metrics: [
       { key: "n_tiles", type: "int", meaning: "Total tiles" },
@@ -294,8 +294,8 @@ const TASKS: TaskSpec[] = [
     ],
   },
   {
-    id: "dual_hole_punch",
-    name: "dual_hole_punch",
+    id: "punch_dual_holes",
+    name: "punch_dual_holes",
     category: "Belt / stamp",
     metrics: [
       {
@@ -391,8 +391,8 @@ const TASKS: TaskSpec[] = [
     ],
   },
   {
-    id: "whack_a_mole",
-    name: "whack_a_mole",
+    id: "whack_moles",
+    name: "whack_moles",
     category: "Manipulation",
     metrics: [
       { key: "n_moles", type: "int", meaning: "Moles this episode" },
@@ -442,8 +442,8 @@ const TASKS: TaskSpec[] = [
     ],
   },
   {
-    id: "goalkeeper",
-    name: "goalkeeper",
+    id: "save_goal",
+    name: "save_goal",
     category: "Catch / save",
     metrics: [
       {
@@ -542,8 +542,8 @@ const TASKS: TaskSpec[] = [
     ],
   },
   {
-    id: "rotating_shape_sorter",
-    name: "rotating_shape_sorter",
+    id: "drop_ball_hole",
+    name: "drop_ball_hole",
     category: "Manipulation",
     metrics: [
       {
@@ -736,8 +736,8 @@ const TASKS: TaskSpec[] = [
     ],
   },
   {
-    id: "cup_curtain_slot",
-    name: "cup_curtain_slot",
+    id: "put_cup_belt",
+    name: "put_cup_belt",
     category: "Catch / place",
     metrics: [
       {

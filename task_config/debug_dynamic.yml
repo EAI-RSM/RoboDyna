@@ -62,6 +62,15 @@ task_args:
     target_doneness: 0.5
     board_scale_mult: 0.07    # cutting board size (steak starts and finishes here)
     # plate removed: cooked steak returns to the cutting board
+  cook_meat_timer:
+    cook_steps: 1000
+    cook_speed_jitter: 0.20
+    cook_button_enabled: false
+    dual_setup_enabled: false
+    target_doneness_range: [0.45, 0.55]
+    board_scale_mult: 0.07
+    timer_radius: 0.045
+    timer_n_sections: 36
   assemble_markers_cylinder:
     side_cyl_radius: 0.018
     side_cyl_half_len: 0.10
@@ -97,7 +106,7 @@ task_args:
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
-  whack_a_mole:
+  whack_moles:
     num_moles: 2
     # Opt 1 — rabbit distractor. CLI: --task-arg distractor_enabled=true  or  --option 1
     distractor_enabled: false
@@ -126,7 +135,7 @@ task_args:
     fall_steps: 55
     rim_radius: 0.055
     pour_every: 3
-  cup_curtain_slot:
+  put_cup_belt:
     curtain_freq: 0.8
     curtain_amp: 0.05
     belt_speed: 0.04
@@ -134,7 +143,7 @@ task_args:
     placement_tol: 0.07
     gap_tol: 0.06
     reach_tol: 0.07
-  dual_hole_punch:
+  punch_dual_holes:
     # Options (independent toggles):
     #   Opt 1 — missing tile (alternate 1-arm vs 2-arm punches) → missing_tile_mode
     #   Opt 2 — continuous belt vs discrete stop-per-tile → belt_continous_motion
@@ -209,7 +218,7 @@ task_args:
     key_x_left: -0.26
     key_x_right: 0.26
     key_y: -0.13
-  goalkeeper:
+  save_goal:
     # Options (independent toggles):
     #   Option 1 — field players (bounce) → players_enabled
     #     CLI: --task-arg players_enabled=true   or   --option 1
@@ -309,7 +318,7 @@ task_args:
     block_belt_clearance: 0.05
     block_y_jitter: 0.05
     random_belt_flip: true
-  rotating_shape_sorter:
+  drop_ball_hole:
     spin_speed: 0.9
     spin_speed_jitter: 0.20     # sample ~ U(0.8, 1.2) × spin_speed
     r_tol: 0.06
@@ -420,7 +429,7 @@ task_args:
     amp_x: 0.010
     amp_y: 0.025
     amp_z: 0.018
-  quality_control:
+  control_quality:
     # Default: color_mode=alternating, black_frac_max=0 (no distractors)
     # Opt 1: color_mode=random | Opt 2: black_frac_max>0 (e.g. 0.50)
     # tile_pause_s = max hold under stamp; miss unstamped red/green → fail
@@ -432,7 +441,7 @@ task_args:
     spacing_max: 0.14
     black_frac_max: 0.0
     tile_pause_s: 2.0
-  packing:
+  pack_fruits:
     n_per_color: 3
     spawn_mode: parallel      # single | parallel; next wave after drop or belt-exit
     spawn_delay_s: 2.0        # unused (compat)
@@ -479,7 +488,7 @@ task_args:
     settle_steps: 100
     physics_max_steps: 2500
     cup_fwd_clearance: 0.025
-  catch_valley_ball:
+  catch_valley_ball_v1:
     # Default: straight exit. Opt1 wall_bounce_enabled. Opt2 enable_distractor.
     # Means sampled ±param_jitter; run lengths ±length_jitter; up_run −20%.
     param_jitter: 0.10
@@ -527,8 +536,58 @@ task_args:
     bowl_outer_radius: 0.052
     bowl_height: 0.080
     bowl_mass: 0.25
+  catch_valley_ball:
+    # Push procedural open box (~48% of 062_plasticbox) under landing; no teleport.
+    param_jitter: 0.10
+    length_jitter: 0.05
+    ramp_half_width: 0.1625     # +30% y-width vs 0.125
+    ramp_thickness: 0.012
+    ramp_center_y: 0.08
+    ramp_valley_x: -0.14
+    ramp_valley_height: 0.025
+    down_run: 0.324
+    down_rise: 0.094
+    up_run: 0.2592
+    up_rise: 0.085
+    curve_segments: 16
+    rail_height: 0.055
+    rail_thickness: 0.006
+    ball_radius: 0.018
+    ball_mass: 0.50
+    drop_height: 0.006
+    drop_time: 0.20
+    ball_entry_standoff: 0.012
+    ball_entry_clearance: 0.006
+    wall_bounce_enabled: false
+    enable_distractor: false
+    mirrored: null
+    random_mirror: true
+    ball_path_mode: straight
+    angled_path_min_deg: 15.0
+    angled_path_max_deg: 25.0
+    drop_forward_angle_min_deg: -8.0
+    drop_forward_angle_max_deg: 12.0
+    initial_forward_speed: 0.15
+    physics_max_steps: 1200
+    red_line_gap: 0.05
+    landing_gap: 0.15
+    roll_time_min: 4.0
+    roll_time_max: 7.0
+    roll_acceleration: 0.25
+    launch_speed: 0.55
+    idle_time_min: 1.0
+    idle_time_max: 2.0
+    settle_steps: 150
+    catcher_model: custom_catch_box
+    bowl_id: 0
+    bowl_scale_mult: 1.0
+    bowl_inner_radius: 0.0390
+    bowl_outer_radius: 0.0460
+    bowl_height: 0.040
+    bowl_mass: 0.12
+    push_step: 0.045
   stop_valley_ball:
-    # Mid-air ping-pong bat stop (based on catch_valley_ball).
+    # Mid-air ping-pong bat stop (based on catch_valley_ball_v1).
     # Wider track (+30% y), faster ball. Success: red head contact before table.
     param_jitter: 0.10
     ramp_half_width: 0.1625

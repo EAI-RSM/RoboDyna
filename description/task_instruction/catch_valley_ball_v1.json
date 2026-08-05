@@ -1,0 +1,26 @@
+{
+  "full_description": "a red ball drops onto a curved valley ramp, rolls, then flies off past a red line; use the matching arm to place a cup beyond the red safety line and catch the red ball without touching it; ignore any black distractor ball",
+  "schema": "{A} denotes the red ball, {B} denotes the cup, {a} denotes the arm that moves the cup",
+  "preference": "num of words should not exceed 16. Degree of detail avg is 6",
+  "seen": [
+    "Place {B} where {A} exits the valley ramp",
+    "Use {a} to catch {A} in {B}",
+    "Move {B} beyond the end of the ramp",
+    "Catch {A} after it rolls down and up the ramp",
+    "Position {B} at {A}'s landing point",
+    "Catch the red ramp ball without touching it",
+    "Place {B} beyond the red line and catch {A}",
+    "Use {B} to catch {A} beyond the upward slope",
+    "Put {B} where the red ball will fall",
+    "Move the cup to intercept the red ball off the ramp",
+    "Catch {A} as it leaves the valley-shaped ramp",
+    "Place {B} beyond the ramp exit and catch {A}",
+    "Anticipate the red ball's landing and position {B}",
+    "Catch only the red ball, not the black distractor"
+  ],
+  "unseen": [
+    "Set {B} beneath the red ball's exit trajectory",
+    "Catch the red ball after it crosses both slopes",
+    "Place the cup beyond the red boundary and catch the red ball"
+  ]
+}

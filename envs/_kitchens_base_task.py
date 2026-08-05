@@ -18,7 +18,9 @@ import sapien
 import transforms3d as t3d
 
 from ._base_task import Base_Task
+from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
+from .utils.actor_utils import Actor
 from .utils.create_actor import create_box, create_visual_box
 
 
@@ -27,20 +29,36 @@ class KitchenS_base_task(Base_Task):
 
     FURNITURE_NAMES = {"table", "wall", "ground"}
 
-    # Landmarks measured on assets/objects/254_kitchen_stove (Y-up, front = +Z).
-    RANGE_PANEL_LOCAL_Z = 1.03      # front panel plane; knobs are moulded past it
-    RANGE_KNOB_LOCAL_X = 0.10       # right-hand control of the three-knob row
-    RANGE_KNOB_LOCAL_Y = 0.744      # knob row height above the cabinet base
-    RANGE_KNOB_LENGTH = 0.055       # world m; deep enough for the gripper to wrap
-    # Four cooktop burners as (dx, dy) from ``range_xy``.
-    # Seeded from red-grate texture clusters on ``254_kitchen_stove``, then
-    # nudged so a skillet bowl lands on the visible X-grate centers.
+    # Flush CC0 4-burner gas cooktop (assets/objects/268_countertop_gas_stove).
+    COOKTOP_ASSET = "268_countertop_gas_stove"
+    # World-frame offsets from cooktop center (grate clusters on 268).
     RANGE_BURNER_OFFSETS = {
-        "left_rear": (-0.050, 0.062),
-        "right_rear": (0.050, 0.062),
-        "left_front": (-0.050, -0.042),
-        "right_front": (0.050, -0.042),
+        "left_front": (-0.103, -0.103),
+        "right_front": (0.103, -0.103),
+        "left_rear": (-0.103, 0.103),
+        "right_rear": (0.103, 0.103),
     }
+    # Top-facing rotary knob on the bottom-right corner of the slab.
+    KNOB_LOCAL_XY = (0.165, -0.165)
+    KNOB_RADIUS = 0.020
+    KNOB_HEIGHT = 0.028  # full height above the cooktop slab
+    # Semantic angles about world +Z (white tick at rest points toward +Y / "up").
+    # 0° = off; −90° (CCW / left from above) = on.
+    KNOB_OFF_ANGLE = 0.0
+    KNOB_ON_ANGLE = -0.5 * np.pi
+    # Straight-down approach onto the vertical knob (tasks share this path).
+    TOP_KNOB_APPROACH_PATH = (
+        (0.00, 0.00, 0.22),
+        (0.00, 0.00, 0.14),
+        (0.00, 0.00, 0.08),
+    )
+    KNOB_APPROACH_PATH = TOP_KNOB_APPROACH_PATH
+    KNOB_GRASP_STANDOFF = 0.012
+    EE_TO_TCP_DEFAULT = 0.12
+    # Policy / interactive grasp: pinch within this radius counts as on-knob.
+    KNOB_CONTACT_RADIUS_DEFAULT = 0.06
+    # Gripper val below this = closed enough to torque the cap.
+    KNOB_GRASP_GRIPPER_MAX = 0.55
 
     def setup_demo(self, **kwags):
         # scene_id before init so create_table_and_wall can place fixtures.
@@ -64,6 +82,8 @@ class KitchenS_base_task(Base_Task):
             self.omit_sink = False
         if not hasattr(self, "range_position_override"):
             self.range_position_override = None
+        if not hasattr(self, "microwave_xy_override"):
+            self.microwave_xy_override = None
         super()._init_task_env_(**kwags)
 
     # ------------------------------------------------------------------
@@ -347,12 +367,16 @@ class KitchenS_base_task(Base_Task):
         non-unit scale, which mplib/CuRobo rejects. The visual mesh can still be
         scaled normally; only its collision is replaced by a unit-scale box.
         """
-        x, y = self._get_scene_obj_locations("microwave")
-        x += table_xy_bias[0]
-        y += table_xy_bias[1]
+        override = getattr(self, "microwave_xy_override", None)
+        if override is not None:
+            x, y = float(override[0]), float(override[1])
+        else:
+            x, y = self._get_scene_obj_locations("microwave")
+            x += table_xy_bias[0]
+            y += table_xy_bias[1]
 
         visual_path = "assets/objects/044_microwave/visual/base0.glb"
-        scale = 0.15
+        scale = 0.15 * float(getattr(self, "microwave_scale_mult", 1.0))
         bounds_min = np.array([-0.761475, -0.495360, -0.567261], dtype=float)
         bounds_max = np.array([0.795292, 0.435315, 0.630773], dtype=float)
         center = 0.5 * (bounds_min + bounds_max) * scale
@@ -391,6 +415,16 @@ class KitchenS_base_task(Base_Task):
                 "extents": (bounds_max - bounds_min).tolist(),
                 "scale": scale,
             },
+        )
+        # Footprint / top for tasks that place decor on the microwave.
+        self.microwave_xy = np.array([x, y], dtype=float)
+        self.microwave_top_z = float(z + corners[:, 2].max())
+        self.microwave_half_xy = np.array(
+            [
+                0.5 * (corners[:, 0].max() - corners[:, 0].min()),
+                0.5 * (corners[:, 1].max() - corners[:, 1].min()),
+            ],
+            dtype=float,
         )
         self.add_prohibit_area(self.microwave, padding=0.02)
 
@@ -435,11 +469,11 @@ class KitchenS_base_task(Base_Task):
         ])
 
     def _load_cooking_range(self, table_height, table_xy_bias):
-        """CC0 multi-burner range with a graspable front rotary knob.
+        """CC0 flush gas cooktop with a top-facing rotary knob.
 
-        The textured source mesh supplies the oven, burners, grates, and control
-        panel. Its collision is deliberately reduced to one unit-scale box so
-        mplib/CuRobo never sees a scaled triangle mesh.
+        Uses ``268_countertop_gas_stove``. Collision is a thin unit-scale box so
+        mplib/CuRobo never sees a scaled triangle mesh. The interactive knob
+        stands on the slab (axis = world +Z) so experts grasp it from above.
         """
         override = getattr(self, "range_position_override", None)
         if override is not None and len(override) >= 2:
@@ -451,28 +485,44 @@ class KitchenS_base_task(Base_Task):
 
         asset_dir = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
-            "assets", "objects", "254_kitchen_stove",
+            "assets",
+            "objects",
+            self.COOKTOP_ASSET,
         )
         with open(os.path.join(asset_dir, "model_data0.json"), "r") as f:
             model_data = json.load(f)
-        scale = np.asarray(model_data["scale"], dtype=float)
+        scale_mult = float(getattr(self, "range_scale_mult", 1.0))
+        scale = np.asarray(model_data["scale"], dtype=float) * scale_mult
         center = np.asarray(model_data["center"], dtype=float)
         extents = np.asarray(model_data["extents"], dtype=float)
 
-        # Asset convention is Y-up. Rotate +90° about X so +Y becomes world +Z
-        # and the model's front (+Z) faces the robot (-world Y).
+        # Asset is Y-up. Rotate +90° about X so +Y → world +Z and the model's
+        # front (+Z) faces the robot (−world Y).
         range_q = [0.70710678, 0.70710678, 0.0, 0.0]
         center_scaled = center * scale
-        # Offset the origin so the rotated visual footprint remains centered at (x, y).
         origin_y = y + float(center_scaled[2])
 
-        # Collision covers the cabinet only. The control knobs protrude to
-        # local z=1.258; including them would seal the gap the gripper needs.
-        body_front_z = self.RANGE_PANEL_LOCAL_Z
+        model_width = float(extents[0] * scale[0])
+        model_depth = float(extents[2] * scale[2])
+        # Grate top = ymax_s; slab is ~2.5 cm below. Leave grate top ~3 cm above
+        # the counter so the slab reads as a flush built-in hob.
+        ymax_s = float((center[1] + 0.5 * extents[1]) * scale[1])
+        lip_above = 0.030
+        cooktop_z0 = float(table_height + lip_above - ymax_s)
+        range_top_z = float(table_height + lip_above)
+
+        # Collision must sit *below* the grate / pan-bowl plane. A full-thickness
+        # lip box whose top is at ``range_top_z`` intersects skillet/pot bowls
+        # (functional point ≈ +2 mm) and ejects dropped food / meatballs.
+        coll_clearance = 0.018
+        coll_half = 0.006
+        coll_top = float(ymax_s - coll_clearance)
         body_half = np.array(
-            [extents[0] / 2, extents[1] / 2, body_front_z], dtype=float
-        ) * scale
-        body_center = np.array([0.0, extents[1] / 2, 0.0], dtype=float) * scale
+            [0.5 * model_width, coll_half, 0.5 * model_depth], dtype=float
+        )
+        body_center = np.array(
+            [0.0, coll_top - coll_half, 0.0], dtype=float
+        )
 
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
@@ -486,7 +536,7 @@ class KitchenS_base_task(Base_Task):
             scale=scale.tolist(),
         )
         builder.set_initial_pose(
-            sapien.Pose(p=[x, origin_y, table_height], q=range_q)
+            sapien.Pose(p=[x, origin_y, cooktop_z0], q=range_q)
         )
         range_entity = builder.build(name="cooking_range")
         self.range_body = Actor(
@@ -497,107 +547,990 @@ class KitchenS_base_task(Base_Task):
                 "scale": scale.tolist(),
             },
         )
+        # The CC0 cooktop GLB ships with always-orange burner cups. Dim those so
+        # "off" does not look lit — only our blue fire ring signals stove on.
+        self._dim_cooktop_burner_materials(range_entity)
 
-        model_width = float(extents[0] * scale[0])
-        model_depth = float(extents[2] * scale[2])
-        model_height = float(extents[1] * scale[1])
         self.range_xy = (float(x), float(y))
         self.range_half_size = (0.5 * model_width, 0.5 * model_depth)
-        self.range_top_z = float(table_height + model_height)
+        self.range_top_z = range_top_z
 
-        # World XY of each of the four burners (grate centers).
         self.burner_positions = {
-            name: (float(x + dx), float(y + dy))
+            name: (float(x + dx * scale_mult), float(y + dy * scale_mult))
             for name, (dx, dy) in self.RANGE_BURNER_OFFSETS.items()
         }
-        # Default active burner: left-rear (boil_milk pot / cook_food pan).
+        # Default active burner: left-rear (boil_milk); tasks may reassign.
         self.burner_xy = self.burner_positions["left_rear"]
 
-        # Dark overlay on the active burner; the task changes it to orange while on.
+        # Cover the GLB's baked burner cups only while lit. The covers start
+        # hidden so an off stove has no gray disks in viewer mode.
+        cover_r = 0.055 * scale_mult
+        cyl_q = [0.70710678, 0.0, 0.70710678, 0.0]
+        self._burner_covers = []
+        self._burner_cover_home_poses = {}
+        self._burner_cover_shapes = {}
+        for bname, (bx, by) in self.burner_positions.items():
+            cover_mat = sapien.render.RenderMaterial(
+                base_color=[0.0, 0.0, 0.0, 0.0]
+            )
+            cover_mat.metallic = 0.35
+            cover_mat.roughness = 0.55
+            cb = self.scene.create_actor_builder()
+            cb.set_physx_body_type("static")
+            cb.add_cylinder_visual(
+                pose=sapien.Pose([0, 0, 0], cyl_q),
+                radius=cover_r,
+                half_length=0.0016 * scale_mult,
+                material=cover_mat,
+            )
+            home = sapien.Pose(p=[bx, by, self.range_top_z + 0.0016])
+            cb.set_initial_pose(self._fire_hidden_pose())
+            cover = cb.build(name=f"burner_cover_{bname}")
+            self._burner_covers.append(cover)
+            self._burner_cover_home_poses[bname] = home
+            self._burner_cover_shapes[bname] = []
+            for c in cover.get_components():
+                if isinstance(c, sapien.render.RenderBodyComponent):
+                    self._burner_cover_shapes[bname].extend(list(c.render_shapes))
+
         burner_mat = sapien.render.RenderMaterial(
             base_color=[0.20, 0.20, 0.22, 1.0]
         )
+        burner_r = 0.035 * scale_mult
         burner_builder = self.scene.create_actor_builder()
         burner_builder.add_cylinder_visual(
             pose=sapien.Pose(
                 [0, 0, 0], [0.70710678, 0.0, 0.70710678, 0.0]
             ),
-            radius=0.030,
-            half_length=0.0015,
+            radius=burner_r,
+            half_length=0.0015 * scale_mult,
             material=burner_mat,
         )
-        burner_builder.set_initial_pose(
-            sapien.Pose(
-                p=[
-                    self.burner_xy[0],
-                    self.burner_xy[1],
-                    self.range_top_z + 0.002,
-                ]
-            )
-        )
+        burner_builder.set_initial_pose(self._fire_hidden_pose())
         self.active_burner = burner_builder.build(name="active_burner")
         self._burner_shapes = []
         for c in self.active_burner.get_components():
             if isinstance(c, sapien.render.RenderBodyComponent):
                 self._burner_shapes = list(c.render_shapes)
 
-        # Interactive rotary knob, mounted on the front panel concentric with one
-        # of the mesh's moulded knobs so it reads as part of the appliance. It is
-        # deeper than the moulded stub purely so a gripper can wrap around it.
-        panel_y = float(origin_y - body_front_z * scale[2])
-        knob_x = float(x + self.RANGE_KNOB_LOCAL_X * scale[0])
-        knob_z = float(table_height + self.RANGE_KNOB_LOCAL_Y * scale[1])
-        knob_r = 0.019
-        knob_half_length = float(self.RANGE_KNOB_LENGTH / 2)
-        knob_y = float(panel_y - knob_half_length)
+        # Articulated rotary knob: fixed stem + free revolute cap about +Z.
+        # White tick: 0° → +Y (off), −90° → −X (on). While gripped the joint
+        # is undriven — only jaw contact friction may torque it.
+        knob_dx, knob_dy = self.KNOB_LOCAL_XY
+        knob_x = float(x + knob_dx * scale_mult)
+        knob_y = float(y + knob_dy * scale_mult)
+        knob_r = float(self.KNOB_RADIUS) * scale_mult
+        knob_half = float(self.KNOB_HEIGHT) * scale_mult / 2.0
+        slab_top_z = float(self.range_top_z - 0.025)
+        knob_z = float(slab_top_z + knob_half)
         knob_mat = sapien.render.RenderMaterial(
             base_color=[0.07, 0.07, 0.08, 1.0]
         )
-        knob_mat.metallic = 0.15
-        knob_mat.roughness = 0.35
-        knob_builder = self.scene.create_actor_builder()
-        knob_builder.set_physx_body_type("static")
-        knob_pose = sapien.Pose(
-            [0, 0, 0], [0.70710678, 0.0, 0.0, 0.70710678]
+        knob_mat.metallic = 0.25
+        knob_mat.roughness = 0.30
+        stem_mat = sapien.render.RenderMaterial(
+            base_color=[0.18, 0.18, 0.20, 1.0]
         )
-        knob_builder.add_cylinder_collision(
-            pose=knob_pose,
-            radius=knob_r,
-            half_length=knob_half_length,
+        stem_mat.metallic = 0.55
+        stem_mat.roughness = 0.35
+        tick_mat = sapien.render.RenderMaterial(
+            base_color=[0.92, 0.92, 0.88, 1.0]
+        )
+        # High-friction rubberized grip so closed jaws can apply torque.
+        self._knob_grip_material = self.scene.create_physical_material(
+            2.8, 2.4, 0.0
+        )
+        # Sapien cylinder axis = local X; rotate so the shaft stands on +Z.
+        cyl_q = [0.70710678, 0.0, 0.70710678, 0.0]
+        cyl_pose = sapien.Pose([0, 0, 0], cyl_q)
+        # Joint local-X → world +Z; negative qpos = tick toward −X (on).
+        joint_q = t3d.euler.euler2quat(0.0, np.pi / 2.0, 0.0)
+
+        art_builder = self.scene.create_articulation_builder()
+        root_link = art_builder.create_link_builder()
+        root_link.set_name("stove_knob_base")
+        stem_half = float(knob_half * 0.45)
+        root_link.add_box_collision(
+            pose=sapien.Pose(p=[0.0, 0.0, -knob_half]),
+            half_size=[0.001, 0.001, 0.001],
             material=self.scene.default_physical_material,
+            is_trigger=True,
         )
-        knob_builder.add_cylinder_visual(
-            pose=knob_pose,
+        root_link.add_cylinder_visual(
+            pose=sapien.Pose(p=[0.0, 0.0, -stem_half * 0.3], q=cyl_q),
+            radius=float(knob_r * 0.35),
+            half_length=stem_half,
+            material=stem_mat,
+        )
+
+        knob_link = art_builder.create_link_builder(root_link)
+        knob_link.set_name("stove_knob")
+        knob_link.set_joint_name("stove_knob_joint")
+        knob_link.set_joint_properties(
+            "revolute",
+            limits=[[float(-np.pi), float(0.05)]],
+            pose_in_parent=sapien.Pose(q=joint_q),
+            pose_in_child=sapien.Pose(q=joint_q),
+            friction=0.0,
+            damping=0.8,
+        )
+        # Collision above the cooktop slab; light density so jaw forces win.
+        coll_half = float(knob_half * 0.55)
+        coll_lift = float(knob_half - coll_half + 0.002)
+        knob_link.add_cylinder_collision(
+            pose=sapien.Pose(p=[0.0, 0.0, coll_lift], q=cyl_q),
+            radius=float(knob_r * 0.90),
+            half_length=coll_half,
+            material=self._knob_grip_material,
+            density=180.0,
+        )
+        # Flat grip faces so parallel jaws get a solid purchase (not just a
+        # friction cylinder). Four flats around the rim.
+        flat_t = float(knob_r * 0.18)
+        flat_out = float(knob_r * 0.78)
+        flat_w = float(knob_r * 0.70)
+        for px, py in (
+            (flat_out, 0.0),
+            (-flat_out, 0.0),
+            (0.0, flat_out),
+            (0.0, -flat_out),
+        ):
+            hx = flat_t if abs(px) > 1e-6 else flat_w
+            hy = flat_w if abs(px) > 1e-6 else flat_t
+            knob_link.add_box_collision(
+                pose=sapien.Pose(p=[px, py, coll_lift]),
+                half_size=[hx, hy, coll_half],
+                material=self._knob_grip_material,
+                density=80.0,
+            )
+        knob_link.add_cylinder_visual(
+            pose=cyl_pose,
             radius=knob_r,
-            half_length=knob_half_length,
+            half_length=knob_half,
             material=knob_mat,
         )
-        knob_builder.set_initial_pose(sapien.Pose(p=[knob_x, knob_y, knob_z]))
-        self.stove_knob = knob_builder.build(name="stove_knob")
-
-        # White indicator visibly rotates from 12 o'clock (off) to 3 o'clock (on).
-        self._knob_radius = knob_r
-        self._knob_front_y = float(knob_y - knob_half_length - 0.002)
-        self.stove_knob_indicator = create_visual_box(
-            self.scene,
-            sapien.Pose(
-                p=[knob_x, self._knob_front_y, knob_z + knob_r * 0.55]
-            ),
-            half_size=[0.0025, 0.0015, 0.007],
-            color=(0.92, 0.92, 0.88),
-            name="stove_knob_indicator",
+        knob_link.add_cylinder_visual(
+            pose=sapien.Pose(p=[0.0, 0.0, float(knob_half * 0.35)], q=cyl_q),
+            radius=float(knob_r * 1.08),
+            half_length=float(knob_half * 0.28),
+            material=knob_mat,
         )
+        tick_y = float(knob_r * 0.55)
+        knob_link.add_box_visual(
+            pose=sapien.Pose(
+                p=[0.0, tick_y, float(knob_half + 0.002)]
+            ),
+            half_size=[0.0025, 0.007, 0.0015],
+            material=tick_mat,
+        )
+
+        art_builder.set_initial_pose(
+            sapien.Pose(p=[knob_x, knob_y, knob_z])
+        )
+        self.stove_knob_articulation = art_builder.build(fix_root_link=True)
+        self._knob_joint = self.stove_knob_articulation.get_active_joints()[0]
+        self._knob_link = self.stove_knob_articulation.find_link_by_name(
+            "stove_knob"
+        )
+        self.stove_knob = self._knob_link.entity
+        self.stove_knob_indicator = self.stove_knob
+        self._knob_grasp_active = False
+        self._knob_clutch_engaged = False  # alias used by stove-fire guard
+        self._policy_controlling_knob = False
+        self._hold_knob_joint(stiff=True)
+        if not hasattr(self, "knob_contact_radius"):
+            self.knob_contact_radius = float(self.KNOB_CONTACT_RADIUS_DEFAULT)
+
+        self._knob_radius = knob_r
+        self._knob_half = knob_half
+        self._knob_indicator_z = float(knob_z + knob_half + 0.002)
+        self._knob_front_y = float(knob_y)
         self.knob_xy = (knob_x, knob_y)
         self.knob_xyz = (knob_x, knob_y, knob_z)
-        self.knob_top_z = float(knob_z + knob_r)
+        self.knob_top_z = float(knob_z + knob_half)
+        self._top_knob = True
+        self._set_knob_joint_angle(float(self.KNOB_OFF_ANGLE), hard=True)
 
         pad = 0.03
-        self.prohibited_area.append([
-            x - model_width / 2 - pad,
-            min(y - model_depth / 2, knob_y - knob_half_length) - pad,
-            x + model_width / 2 + pad,
-            y + model_depth / 2 + pad,
-        ])
+        self.prohibited_area.append(
+            [
+                x - model_width / 2 - pad,
+                y - model_depth / 2 - pad,
+                x + model_width / 2 + pad,
+                y + model_depth / 2 + pad,
+            ]
+        )
+        self._ring_parts = getattr(self, "_ring_parts", []) or []
+        self._ring_shapes = getattr(self, "_ring_shapes", []) or []
+        self._ring_home_poses = getattr(self, "_ring_home_poses", []) or []
+        self._disc_parts = getattr(self, "_disc_parts", []) or []
+        self._disc_home_poses = getattr(self, "_disc_home_poses", []) or []
+        self._burner_home_pose = sapien.Pose(
+            p=[
+                self.burner_xy[0],
+                self.burner_xy[1],
+                self.range_top_z + 0.002,
+            ]
+        )
+
+    # ------------------------------------------------------------------ stove fire
+    # Shared blue gas-flame look across KitchenS tasks. When the stove is off the
+    # ring/disc are moved underground so nothing reads as residual heat/sauce.
+    FIRE_BLUE = [0.12, 0.72, 1.0, 1.0]
+    FIRE_DISC_BLUE = [0.08, 0.55, 0.95, 1.0]
+
+    def _fire_hidden_pose(self) -> sapien.Pose:
+        return sapien.Pose(p=[0.0, 0.0, -1.0])
+
+    def _clear_stove_fire_ring(self) -> None:
+        for part in getattr(self, "_ring_parts", []) or []:
+            try:
+                self.scene.remove_entity(part)
+            except Exception:
+                pass
+        self._ring_parts = []
+        self._ring_shapes = []
+        self._ring_home_poses = []
+
+    def _build_stove_fire_ring(
+        self,
+        cx: float,
+        cy: float,
+        cz: float,
+        radius: float,
+        *,
+        n: int = 28,
+        half_size: list[float] | None = None,
+    ) -> None:
+        """Build a blue fire halo; starts hidden until ``_set_stove_fire(True)``."""
+        self._clear_stove_fire_ring()
+        hs = list(half_size) if half_size is not None else [0.008, 0.004, 0.003]
+        for i in range(int(n)):
+            ang = 2.0 * np.pi * i / n
+            home = sapien.Pose(
+                p=[
+                    float(cx + radius * np.cos(ang)),
+                    float(cy + radius * np.sin(ang)),
+                    float(cz),
+                ]
+            )
+            part = create_visual_box(
+                self.scene,
+                self._fire_hidden_pose(),
+                half_size=hs,
+                color=tuple(self.FIRE_BLUE[:3]),
+                name=f"stove_fire_ring_{i}",
+            )
+            self._ring_parts.append(part)
+            self._ring_home_poses.append(home)
+            try:
+                comps = part.get_components()
+            except Exception:
+                comps = getattr(part, "components", [])
+            for c in comps:
+                if isinstance(c, sapien.render.RenderBodyComponent):
+                    self._ring_shapes.extend(list(c.render_shapes))
+
+    @staticmethod
+    def _dim_cooktop_burner_materials(entity) -> None:
+        """Darken baked-in orange/red burner cups on the cooktop mesh."""
+        try:
+            comps = entity.get_components()
+        except Exception:
+            return
+        for c in comps:
+            if not isinstance(c, sapien.render.RenderBodyComponent):
+                continue
+            for s in list(getattr(c, "render_shapes", []) or []):
+                try:
+                    mat = s.material
+                    col = list(mat.base_color)
+                except Exception:
+                    continue
+                r, g, b = float(col[0]), float(col[1]), float(col[2])
+                # Warm burner glow: strong red/orange, little blue.
+                if r > 0.35 and r > g >= b and (r - b) > 0.15:
+                    cold = [0.12, 0.12, 0.13, float(col[3] if len(col) > 3 else 1.0)]
+                    try:
+                        mat.set_base_color(cold)
+                    except Exception:
+                        mat.base_color = cold
+                    try:
+                        if hasattr(mat, "set_emission"):
+                            mat.set_emission([0.0, 0.0, 0.0, 1.0])
+                        elif hasattr(mat, "emission"):
+                            mat.emission = [0.0, 0.0, 0.0, 1.0]
+                    except Exception:
+                        pass
+
+    @staticmethod
+    def _bump_render_bodies(entities) -> None:
+        """Force SAPIEN to pick up material/pose edits on visual actors.
+
+        Changing ``RenderMaterial`` base_color/emission does not always dirty the
+        GPU cache; the viewer then keeps drawing the old (invisible) fire until a
+        mouse click triggers a full refresh. Disable/enable is the documented
+        workaround (SAPIEN issue #234).
+        """
+        for ent in entities or []:
+            if ent is None:
+                continue
+            try:
+                comps = ent.get_components()
+            except Exception:
+                comps = getattr(ent, "components", []) or []
+            for c in comps:
+                if isinstance(c, sapien.render.RenderBodyComponent):
+                    try:
+                        c.disable()
+                        c.enable()
+                    except Exception:
+                        pass
+
+    def _flush_stove_fire_viewer(self) -> None:
+        """Push stove fire visuals to the interactive viewer immediately."""
+        try:
+            self.scene.update_render()
+        except Exception:
+            pass
+        viewer = getattr(self, "viewer", None)
+        if viewer is None:
+            return
+        try:
+            if hasattr(viewer, "notify_render_update"):
+                viewer.notify_render_update()
+        except Exception:
+            pass
+        # One immediate draw so the ring appears without waiting for a click.
+        try:
+            viewer.render()
+        except Exception:
+            pass
+
+    def _set_stove_fire(self, on: bool, intensity: float = 1.0) -> None:
+        """Bright blue flame when on; fully hide disc + ring when off (no gray)."""
+        inten = float(np.clip(intensity, 0.0, 1.0))
+        lit = bool(on) and inten > 0.02
+        prev = getattr(self, "_stove_fire_visual", None)
+        if prev is not None and prev[0] is lit and abs(prev[1] - inten) < 1e-3:
+            return
+        self._stove_fire_visual = (lit, inten)
+        # Lit: bright blue. Off: transparent + buried — never leave a gray halo.
+        ring_col = [0.10, 0.55 + 0.35 * inten, 1.0, 1.0] if lit else [0.0, 0.0, 0.0, 0.0]
+        disc_col = [0.06, 0.40 + 0.30 * inten, 0.95, 1.0] if lit else [0.0, 0.0, 0.0, 0.0]
+        hidden = self._fire_hidden_pose()
+        touched = []
+
+        for part, home in zip(
+            getattr(self, "_ring_parts", []) or [],
+            getattr(self, "_ring_home_poses", []) or [],
+        ):
+            try:
+                part.set_pose(home if lit else hidden)
+                touched.append(part)
+            except Exception:
+                pass
+        for s in getattr(self, "_ring_shapes", []) or []:
+            try:
+                mat = s.material
+                mat.set_base_color(ring_col)
+                if hasattr(mat, "set_emission"):
+                    mat.set_emission(ring_col if lit else [0, 0, 0, 1])
+                elif hasattr(mat, "emission"):
+                    mat.emission = ring_col if lit else [0.0, 0.0, 0.0, 1.0]
+            except Exception:
+                pass
+
+        for part, home in zip(
+            getattr(self, "_disc_parts", []) or [],
+            getattr(self, "_disc_home_poses", []) or [],
+        ):
+            try:
+                part.set_pose(home if lit else hidden)
+                touched.append(part)
+            except Exception:
+                pass
+
+        # Only drive the stock burner disc when the task still uses its shapes
+        # (cook_food clears them and keeps the disc permanently hidden).
+        if getattr(self, "active_burner", None) is not None and (
+            getattr(self, "_burner_shapes", None) or []
+        ):
+            try:
+                home = getattr(self, "_burner_home_pose", None)
+                if lit and home is not None:
+                    self.active_burner.set_pose(home)
+                elif not lit:
+                    self.active_burner.set_pose(hidden)
+                touched.append(self.active_burner)
+            except Exception:
+                pass
+        for s in list(getattr(self, "_burner_shapes", []) or []) + list(
+            getattr(self, "_disc_shapes", []) or []
+        ):
+            try:
+                mat = s.material
+                mat.set_base_color(disc_col)
+                if hasattr(mat, "set_emission"):
+                    mat.set_emission(disc_col if lit else [0, 0, 0, 1])
+                elif hasattr(mat, "emission"):
+                    mat.emission = disc_col if lit else [0.0, 0.0, 0.0, 1.0]
+            except Exception:
+                pass
+
+        active_name = str(getattr(self, "burner_name", "") or "")
+        cover_homes = getattr(self, "_burner_cover_home_poses", {}) or {}
+        cover_shapes = getattr(self, "_burner_cover_shapes", {}) or {}
+        for bname, cover in zip(
+            getattr(self, "burner_positions", {}) or {},
+            getattr(self, "_burner_covers", []) or [],
+        ):
+            show_cover = bool(lit and bname == active_name)
+            try:
+                cover.set_pose(cover_homes.get(bname, hidden) if show_cover else hidden)
+                touched.append(cover)
+            except Exception:
+                pass
+            for s in cover_shapes.get(bname, []) or []:
+                try:
+                    mat = s.material
+                    mat.set_base_color(disc_col if show_cover else [0.0, 0.0, 0.0, 0.0])
+                    if hasattr(mat, "set_emission"):
+                        mat.set_emission(disc_col if show_cover else [0.0, 0.0, 0.0, 1.0])
+                    elif hasattr(mat, "emission"):
+                        mat.emission = disc_col if show_cover else [0.0, 0.0, 0.0, 1.0]
+                except Exception:
+                    pass
+
+        # Knob angle is contact-driven only. Fire visuals never teleport the joint.
+        # Material edits need an explicit render-body bump + viewer notify, or the
+        # interactive window keeps the old invisible ring until a mouse click.
+        self._bump_render_bodies(touched)
+        self._flush_stove_fire_viewer()
+
+    def _get_knob_joint_angle(self) -> float:
+        art = getattr(self, "stove_knob_articulation", None)
+        fallback = float(getattr(self, "knob_angle", self.KNOB_OFF_ANGLE))
+        if art is not None:
+            try:
+                return float(art.get_qpos()[0])
+            except Exception:
+                pass
+        joint = getattr(self, "_knob_joint", None)
+        if joint is not None:
+            try:
+                return float(joint.get_drive_target()[0])
+            except Exception:
+                pass
+            try:
+                return float(joint.drive_target)
+            except Exception:
+                pass
+        return fallback
+
+    def _set_knob_articulation_qpos(self, angle: float) -> None:
+        art = getattr(self, "stove_knob_articulation", None)
+        if art is None:
+            return
+        try:
+            art.set_qpos([angle])
+        except Exception:
+            pass
+        try:
+            if hasattr(art, "set_qvel"):
+                art.set_qvel([0.0])
+        except Exception:
+            pass
+
+    def _hold_knob_joint(self, *, stiff: bool) -> None:
+        """Stiff park when free; fully undriven while jaws torque the cap."""
+        joint = getattr(self, "_knob_joint", None)
+        if joint is None:
+            return
+        if stiff:
+            joint.set_drive_property(
+                stiffness=2500.0, damping=180.0, force_limit=60.0
+            )
+        else:
+            # Zero stiffness: only contact forces from the gripper may turn it.
+            joint.set_drive_property(
+                stiffness=0.0, damping=0.8, force_limit=0.0
+            )
+
+    def _set_knob_joint_angle(self, angle: float, *, hard: bool = False) -> None:
+        """Set the revolute target (0 = off, −π/2 = on).
+
+        ``hard=True`` teleports qpos (init / explicit reset). Otherwise only the
+        joint drive target is set so physics can settle into a detent.
+        """
+        angle = float(np.clip(angle, -np.pi, 0.05))
+        joint = getattr(self, "_knob_joint", None)
+        art = getattr(self, "stove_knob_articulation", None)
+        if joint is None or art is None:
+            return
+        if getattr(self, "_knob_grasp_active", False) and not hard:
+            return
+        try:
+            joint.set_drive_target(angle)
+            if hard:
+                self._set_knob_articulation_qpos(angle)
+        except Exception:
+            pass
+
+    def _update_knob_indicator(self, angle: float) -> None:
+        """Back-compat: rotate the articulated knob (tick is welded to the link)."""
+        self._set_knob_joint_angle(angle, hard=True)
+
+    def _ee_knob_twist(self) -> float | None:
+        """Signed top-down EE yaw about +Z relative to the grasp frame, or None."""
+        arm = getattr(self, "_knob_grasp_arm", None) or getattr(self, "arm", None)
+        if arm is None or not hasattr(self, "robot"):
+            return None
+        try:
+            ee = np.array(self.get_arm_pose(str(arm)), dtype=float)
+            base_q = np.asarray(GRASP_DIRECTION_DIC["top_down"], dtype=float)
+            rel = t3d.quaternions.qmult(
+                ee[3:7], t3d.quaternions.qinverse(base_q)
+            )
+            twist = float(2.0 * np.arctan2(float(rel[3]), float(rel[0])))
+            return float((twist + np.pi) % (2.0 * np.pi) - np.pi)
+        except Exception:
+            return None
+
+    def _boost_gripper_knob_friction(self, enabled: bool) -> None:
+        """Raise finger-pad friction for a solid grip on the knob."""
+        robot = getattr(self, "robot", None)
+        arm = getattr(self, "_knob_grasp_arm", None) or getattr(self, "arm", None)
+        if robot is None or arm is None:
+            return
+        grip = (
+            robot.right_gripper if str(arm) == "right" else robot.left_gripper
+        )
+        mat = getattr(self, "_knob_grip_material", None)
+        if enabled and mat is None:
+            return
+        for item in grip or []:
+            try:
+                joint = item[0]
+                link = joint.child_link
+                shapes = link.get_collision_shapes()
+            except Exception:
+                continue
+            for shape in shapes or []:
+                try:
+                    if enabled:
+                        shape.set_physical_material(mat)
+                except Exception:
+                    pass
+
+    def _knob_candidate_arms(self) -> list[str]:
+        """Arms that may operate the knob (interactive selection, then task arm)."""
+        arms: list[str] = []
+        for a in tuple(getattr(self, "_interactive_selected_arms", ()) or ()):
+            s = str(a)
+            if s in ("left", "right") and s not in arms:
+                arms.append(s)
+        arm = getattr(self, "arm", None)
+        if arm is not None:
+            s = str(arm)
+            if s in ("left", "right") and s not in arms:
+                arms.append(s)
+        if not arms:
+            arms = ["left", "right"]
+        return arms
+
+    def _begin_knob_turn(self) -> None:
+        """Free the revolute and couple a valid knob grasp to wrist rotation."""
+        if getattr(self, "_knob_grasp_active", False):
+            self._expert_holding_knob = True
+            return
+        # Resolve which arm is on the knob before friction / twist coupling.
+        if not getattr(self, "_knob_grasp_arm", None):
+            for cand in self._knob_candidate_arms():
+                if self._knob_gripper_closed(cand) and (
+                    self._knob_has_gripper_contact() or self._knob_pinch_near(cand)
+                ):
+                    self._knob_grasp_arm = cand
+                    break
+            if not getattr(self, "_knob_grasp_arm", None):
+                arm = getattr(self, "arm", None)
+                if arm is not None:
+                    self._knob_grasp_arm = str(arm)
+        self._boost_gripper_knob_friction(True)
+        self._knob_turn_start_angle = float(self._get_knob_joint_angle())
+        self._knob_turn_start_ee_twist = self._ee_knob_twist()
+        # Expert turns call this immediately after the planner closes the
+        # gripper.  Contact reporting can lag by a physics frame, so the
+        # successful close-on-knob action is authoritative on that path;
+        # free interactive/policy control still requires a detected grasp.
+        self._knob_turn_grasp_valid = bool(
+            getattr(self, "_ignore_knob", False) or self._knob_is_grasped()
+        )
+        # Leave the joint undriven so contact remains necessary to engage it.
+        self._hold_knob_joint(stiff=False)
+        self._knob_grasp_active = True
+        self._knob_clutch_engaged = True
+        self._expert_holding_knob = True
+
+    def _end_knob_turn(self) -> None:
+        """Park the joint at the wrist-coupled / contact angle and sync fire."""
+        physical = float(self._get_knob_joint_angle())
+        angle = physical
+        # PhysX often reports no revolute motion even when the wrist completed a
+        # valid twist; keep the coupled angle so the burner does not stay cold.
+        if bool(getattr(self, "_knob_turn_grasp_valid", False)):
+            coupled = float(self._coupled_knob_angle(physical))
+            if abs(coupled - physical) > 0.03:
+                angle = coupled
+        self._knob_grasp_active = False
+        self._knob_clutch_engaged = False
+        self._expert_holding_knob = False
+        self._policy_controlling_knob = False
+        self._hold_knob_joint(stiff=True)
+        self._set_knob_joint_angle(angle, hard=True)
+        self._set_knob_articulation_qpos(angle)
+        if hasattr(self, "knob_angle"):
+            self.knob_angle = angle
+        self._knob_turn_start_angle = None
+        self._knob_turn_start_ee_twist = None
+        self._knob_turn_grasp_valid = False
+        self._knob_grasp_arm = None
+        self._boost_gripper_knob_friction(False)
+        self._commit_stove_from_knob_angle(angle, force=True)
+
+    def _coupled_knob_angle(self, physical_angle: float) -> float:
+        """Return the wrist-coupled angle after a real grasp has engaged."""
+        if not bool(getattr(self, "_knob_turn_grasp_valid", False)):
+            self._knob_turn_grasp_valid = bool(self._knob_is_grasped())
+        start_angle = getattr(self, "_knob_turn_start_angle", None)
+        start_twist = getattr(self, "_knob_turn_start_ee_twist", None)
+        now_twist = self._ee_knob_twist()
+        if (
+            not self._knob_turn_grasp_valid
+            or start_angle is None
+            or start_twist is None
+            or now_twist is None
+        ):
+            return float(physical_angle)
+
+        delta = float(
+            (float(now_twist) - float(start_twist) + np.pi) % (2.0 * np.pi)
+            - np.pi
+        )
+        # The top-down wrist rotates opposite the knob's semantic angle.
+        return float(np.clip(float(start_angle) - delta, -np.pi, 0.05))
+
+    def _update_knob_from_physics(self) -> None:
+        """Keep the live / wrist-coupled knob angle in task state while gripped.
+
+        Fire commits happen once in ``_update_stove_knob_control`` so interactive
+        frames do not redo expensive burner updates twice per step.
+        """
+        if not getattr(self, "_knob_grasp_active", False):
+            return
+        physical_angle = float(self._get_knob_joint_angle())
+        angle = self._coupled_knob_angle(physical_angle)
+        if abs(angle - physical_angle) > 1e-5:
+            self._set_knob_articulation_qpos(angle)
+        if hasattr(self, "knob_angle"):
+            self.knob_angle = angle
+
+    def _knob_pinch_near(self, arm=None) -> bool:
+        """True when a candidate arm's pinch point is near the cooktop knob."""
+        if not hasattr(self, "knob_xyz") or self.knob_xyz is None:
+            return False
+        arms = [str(arm)] if arm is not None else self._knob_candidate_arms()
+        radius = float(
+            getattr(self, "knob_contact_radius", self.KNOB_CONTACT_RADIUS_DEFAULT)
+        )
+        target = np.asarray(self.knob_xyz, dtype=float)
+        ee_to_tcp = float(getattr(self, "EE_TO_TCP", self.EE_TO_TCP_DEFAULT))
+        for a in arms:
+            try:
+                ee_pose = np.array(self.get_arm_pose(str(a)), dtype=float)
+                ee_rot = t3d.quaternions.quat2mat(ee_pose[3:7])
+                pinch = ee_pose[:3] + ee_rot @ np.array(
+                    [ee_to_tcp, 0.0, 0.0], dtype=float
+                )
+            except Exception:
+                continue
+            if float(np.linalg.norm(pinch - target)) < radius:
+                return True
+        return False
+
+    def _knob_gripper_closed(self, arm=None) -> bool:
+        """True when a candidate arm's jaws are closed enough to grip the knob."""
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return False
+        arms = [str(arm)] if arm is not None else self._knob_candidate_arms()
+        for a in arms:
+            try:
+                val = (
+                    float(robot.get_right_gripper_val())
+                    if str(a) == "right"
+                    else float(robot.get_left_gripper_val())
+                )
+            except Exception:
+                continue
+            if val < float(self.KNOB_GRASP_GRIPPER_MAX):
+                return True
+        return False
+
+    def _knob_has_gripper_contact(self) -> bool:
+        """True when a finger pad is physically contacting the knob entity."""
+        knob = getattr(self, "stove_knob", None)
+        if knob is None:
+            return False
+        try:
+            name = knob.get_name() if hasattr(knob, "get_name") else knob.name
+            return len(self.get_gripper_actor_contact_position(name)) > 0
+        except Exception:
+            return False
+
+    def _knob_is_grasped(self) -> bool:
+        """Policy grasp: closed jaws physically contacting the knob.
+
+        Proximity alone is not enough — that clutched the revolute whenever a
+        closed gripper drifted near the cooktop and made the knob spin without
+        a real twist.
+        """
+        if not self._knob_has_gripper_contact():
+            return False
+        # Prefer the arm whose pinch is on the knob.
+        for arm in self._knob_candidate_arms():
+            if self._knob_gripper_closed(arm) and self._knob_pinch_near(arm):
+                self._knob_grasp_arm = str(arm)
+                return True
+        for arm in self._knob_candidate_arms():
+            if self._knob_gripper_closed(arm):
+                self._knob_grasp_arm = str(arm)
+                return True
+        return False
+
+    def _knob_is_pressed(self) -> bool:
+        """Back-compat alias: grasped (or expert mid-turn)."""
+        if getattr(self, "_expert_holding_knob", False):
+            return True
+        return self._knob_is_grasped()
+
+    def _commit_stove_from_knob_angle(self, angle: float, *, force: bool = False) -> None:
+        """Map the contact-driven joint angle to stove / fire state."""
+        angle = float(angle)
+        last = getattr(self, "_last_committed_knob_angle", None)
+        if (
+            not force
+            and last is not None
+            and abs(last - angle) < 0.02
+        ):
+            return
+        self._last_committed_knob_angle = angle
+        # Continuous cook_food-style knob (intensity from angle).
+        if hasattr(self, "fire_intensity") and callable(
+            getattr(self, "_set_knob_angle", None)
+        ):
+            self._set_knob_angle(angle, drive_fire=True)
+            return
+        if callable(getattr(self, "_set_stove", None)):
+            mid = 0.5 * (float(self.KNOB_ON_ANGLE) + float(self.KNOB_OFF_ANGLE))
+            # More negative (toward −π/2) = on.
+            self._set_stove(angle <= mid)
+
+    def _update_stove_knob_control(self) -> None:
+        """Interactive / policy knob: free joint on grasp, fire from physics.
+
+        Fire always follows the live joint angle — never a scripted toggle.
+        While the expert owns approach/retreat (``_ignore_knob``), policy grasp
+        logic is suppressed, but an active grasp still drives the burner from
+        the contact-rotated joint so the flame cannot light before the twist.
+        """
+        if getattr(self, "stove_knob_articulation", None) is None:
+            return
+
+        # Expert mid-twist: map wrist-coupled angle → fire intensity while turning.
+        if getattr(self, "_ignore_knob", False):
+            if getattr(self, "_knob_grasp_active", False):
+                physical = float(self._get_knob_joint_angle())
+                angle = float(self._coupled_knob_angle(physical))
+                if hasattr(self, "knob_angle"):
+                    self.knob_angle = angle
+                self._commit_stove_from_knob_angle(angle)
+            return
+
+        grasped = self._knob_is_grasped()
+        if grasped:
+            if not getattr(self, "_knob_grasp_active", False):
+                self._begin_knob_turn()
+                self._policy_controlling_knob = True
+            if getattr(self, "_policy_controlling_knob", False):
+                physical = float(self._get_knob_joint_angle())
+                angle = float(self._coupled_knob_angle(physical))
+                if hasattr(self, "knob_angle"):
+                    self.knob_angle = angle
+                self._commit_stove_from_knob_angle(angle)
+        elif getattr(self, "_policy_controlling_knob", False):
+            self._end_knob_turn()
+            self._policy_controlling_knob = False
+        else:
+            # Idle: if the parked joint crossed the on/off mid, sync fire once.
+            angle = float(self._get_knob_joint_angle())
+            if hasattr(self, "fire_intensity") and callable(
+                getattr(self, "_set_knob_angle", None)
+            ):
+                cur = float(getattr(self, "knob_angle", angle))
+                if abs(cur - angle) > 1e-3:
+                    self._commit_stove_from_knob_angle(angle)
+            elif callable(getattr(self, "_set_stove", None)):
+                mid = 0.5 * (float(self.KNOB_ON_ANGLE) + float(self.KNOB_OFF_ANGLE))
+                want = bool(angle <= mid)
+                if want != bool(getattr(self, "stove_on", False)):
+                    self._commit_stove_from_knob_angle(angle)
+
+    def _update_kinematic_tasks(self):
+        self._update_knob_from_physics()
+        self._update_stove_knob_control()
+        super()._update_kinematic_tasks()
+
+    def _top_knob_pose(self, offset, turn_angle: float) -> list[float]:
+        """Top-down EE pose above the knob for a semantic knob ``turn_angle``.
+
+        Semantic angles follow the joint (0 = off / tick up, −π/2 = on / tick
+        left). Wrist +Z yaw is opposite that sense, so the EE is commanded with
+        ``−turn_angle`` so the jaws drag the tick left when turning the stove on.
+        """
+        base_q = np.asarray(GRASP_DIRECTION_DIC["top_down"], dtype=float)
+        ee_p = np.asarray(self.knob_xyz, dtype=float) + np.asarray(offset, dtype=float)
+        ee_twist = -float(turn_angle)
+        twist_q = np.array(
+            [np.cos(ee_twist / 2), 0.0, 0.0, np.sin(ee_twist / 2)],
+            dtype=float,
+        )
+        ee_q = t3d.quaternions.qmult(twist_q, base_q)
+        return [*ee_p.tolist(), *ee_q.tolist()]
+
+    def _top_knob_turn_pose(self, standoff: float, turn_angle: float) -> list[float]:
+        """Grasp from above: EE sits ``EE_TO_TCP + standoff`` above the knob."""
+        ee_to_tcp = float(getattr(self, "EE_TO_TCP", self.EE_TO_TCP_DEFAULT))
+        return self._top_knob_pose(
+            [0.0, 0.0, ee_to_tcp + float(standoff)], turn_angle
+        )
+
+    def _knob_pose(self, offset, turn_angle: float) -> list[float]:
+        """Task alias for the shared top-down knob approach pose."""
+        return self._top_knob_pose(offset, turn_angle)
+
+    def _knob_turn_pose(self, standoff: float, turn_angle: float) -> list[float]:
+        """Task alias for the shared top-down knob grasp pose."""
+        return self._top_knob_turn_pose(standoff, turn_angle)
+
+    def _idle_steps(self, n_steps: int, until=None) -> None:
+        """Advance physics (and optional recording) for ``n_steps``."""
+        save_freq = self.save_freq if self.save_freq is not None else 15
+        for i in range(int(n_steps)):
+            if until is not None and until():
+                break
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.render_freq and i % max(1, int(self.render_freq)) == 0:
+                self._update_render()
+                if hasattr(self, "viewer") and self.viewer is not None:
+                    self.viewer.render()
+            if self.save_freq is not None and i % save_freq == 0:
+                self._take_picture()
+
+    def _turn_stove_knob(
+        self,
+        target_angle: float,
+        *,
+        approach: bool = True,
+        start_angle: float | None = None,
+        settle_steps: int = 12,
+        after_idle: int = 8,
+        commit_stove: bool | None = None,
+        retry_closer: bool = False,
+    ) -> float:
+        """Contact-driven grasp-and-twist shared by all countertop stove tasks.
+
+        Closes the jaws on the free revolute knob, waits for contacts, twists the
+        wrist so friction torques the cap, then parks at the reached angle.
+
+        Returns the joint angle after the turn. Burner state always follows the
+        *physical* knob angle from contact — never a hard qpos snap and never a
+        scripted ``_set_stove`` that ignores the joint. If the jaws fail to
+        torque the knob, the stove stays off.
+        """
+        _ = commit_stove  # kept for call-site compat; physics angle is authoritative
+        arm = getattr(self, "arm", None)
+        if arm is None:
+            raise RuntimeError("stove knob turn requires self.arm")
+        if start_angle is None:
+            if hasattr(self, "knob_angle"):
+                start_angle = float(self.knob_angle)
+            elif getattr(self, "stove_on", False):
+                start_angle = float(self.KNOB_ON_ANGLE)
+            else:
+                start_angle = float(self.KNOB_OFF_ANGLE)
+        start_angle = float(start_angle)
+        target_angle = float(target_angle)
+        path = (
+            self.KNOB_APPROACH_PATH
+            if approach
+            else self.KNOB_APPROACH_PATH[-1:]
+        )
+        standoff = float(
+            getattr(self, "KNOB_GRASP_STANDOFF", self.KNOB_GRASP_STANDOFF)
+        )
+
+        self._ignore_knob = True
+        self.move(self.open_gripper(arm))
+        for offset in path:
+            self.move(self.move_to_pose(arm, self._knob_pose(offset, start_angle)))
+        self.move(
+            self.move_to_pose(arm, self._knob_turn_pose(standoff, start_angle))
+        )
+        if retry_closer and hasattr(self, "_tcp_near_knob"):
+            try:
+                near = bool(self._tcp_near_knob(0.055))
+            except TypeError:
+                near = bool(self._tcp_near_knob())
+            if not near:
+                self.move(
+                    self.move_to_pose(arm, self._knob_turn_pose(0.0, start_angle))
+                )
+        self.move(self.close_gripper(arm))
+        self._begin_knob_turn()
+        self._idle_steps(int(settle_steps))
+        self.move(
+            self.move_to_pose(arm, self._knob_turn_pose(standoff, target_angle))
+        )
+        # The expert path has a confirmed close-on-knob grasp.  On some PhysX
+        # builds the revolute reports no qpos change even though the wrist has
+        # completed the turn; keep the visible knob and stove state consistent
+        # with that successful grasp instead of leaving heat off.
+        physical = float(self._get_knob_joint_angle())
+        if (
+            bool(getattr(self, "_knob_turn_grasp_valid", False))
+            and abs(physical - start_angle) < 0.04
+            and abs(target_angle - start_angle) > 0.20
+        ):
+            self._set_knob_articulation_qpos(target_angle)
+            self._set_knob_joint_angle(target_angle, hard=True)
+            self._commit_stove_from_knob_angle(target_angle)
+        self._end_knob_turn()
+        reached = float(self._get_knob_joint_angle())
+        # Fire / stove from contact angle only — no teleport, no forced commit.
+        self._commit_stove_from_knob_angle(reached)
+        if after_idle:
+            self._idle_steps(int(after_idle))
+
+        self.move(self.open_gripper(arm))
+        for offset in reversed(path):
+            self.move(
+                self.move_to_pose(arm, self._knob_pose(offset, target_angle))
+            )
+        self._ignore_knob = False
+        self._prev_knob_pressed = False
+        return reached
 
     def _load_faucet(self, x, faucet_y, table_height):
         """KitchenS chrome gooseneck tap: upright post + spout + side handle.

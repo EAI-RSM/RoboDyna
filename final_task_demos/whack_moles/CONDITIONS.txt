@@ -1,0 +1,20 @@
+whack_moles — expert controller demos
+
+default  : distractor_enabled=false, relocating_moles=false
+           2 moles bob from fixed holes at randomized pop speeds; no rabbit
+opt1     : distractor_enabled=true,  relocating_moles=false
+           + compact rabbit distractor (touching it fails)
+opt2     : distractor_enabled=false, relocating_moles=true
+           every unhit mole may reappear from a free hole when it goes down
+opt1+2   : distractor_enabled=true,  relocating_moles=true
+           rabbit + relocating moles
+
+Success:
+  - every mole struck from above by a mallet's flat lower face (turns green), AND
+  - no rabbit touched (distractor_hit stays false).
+
+Files (side-by-side is the primary deliverable):
+  default_sidebyside.mp4   opt1_sidebyside.mp4
+  opt2_sidebyside.mp4      opt1+2_sidebyside.mp4
+Also: <tag>_head.mp4, <tag>_topdown.mp4
+Tags: default | opt1 | opt2 | opt1+2

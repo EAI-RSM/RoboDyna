@@ -1,13 +1,21 @@
-"""Fill a marked glass jar with coffee beans from a glass-box dispenser (KitchenS).
+"""Fill a marked glass jar with beans from a glass-box dispenser (KitchenS).
 
-Inherits ``KitchenS_base_task`` (microwave + dishrack + cooking range on a kitchen
-counter). The dispenser is a raised clear glass hopper packed with real bean
-meshes. Touching its lid opens a nozzle above the jar and releases beans into a
-glass jar marked with red ring lines at 25% / 50% / 75% (rim = full).
+Inherits ``KitchenS_base_task`` (cooking range on a solid kitchen counter; no
+microwave / sink / tap). The dispenser is a raised clear glass hopper packed
+with real bean meshes. Pressing the button on top opens a nozzle above the jar
+and releases beans into a glass jar marked with red ring lines at 25% / 50% /
+75% (rim = full).
+
+Counter decor: random ``113_coffee-box``, ``038_milk-box``, and ``039_mug``.
+A random ``009_kettle`` sits on one of the stove burners.
+
+Dispense amount is gated by **press force** on the button (four thresholds), not
+hold duration.
 """
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -16,6 +24,8 @@ import sapien
 import sapien.physx
 import sapien.render
 import transforms3d as t3d
+from transforms3d.euler import euler2quat
+from transforms3d.quaternions import qmult
 
 from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
@@ -24,43 +34,64 @@ from .utils.create_actor import create_actor, create_box
 
 
 class fill_coffee_jar(KitchenS_base_task):
-    """Touch the dispenser lid to fill a marked glass jar to a target level.
+    """Press the dispenser button to fill a marked glass jar to a target level.
 
     Task options (``task_args.fill_coffee_jar``):
-      - ``target_fill``: minimum *visual* fill vs red rings (default 0.25)
-      - ``press_duration_min`` / ``press_duration_max``: hold time range (sec)
-      - ``beans_per_press_min`` / ``beans_per_press``: beans at min / max hold
+      - ``target_fill``: 0.25 | 0.50 | 0.75 | ``random``
+      - ``fill_tol``: success band half-width (default 0.05 = ±5%)
+      - ``randomize_layout``: seed-randomized non-overlapping station pose
+      - ``force_thresholds``: 4 increasing force cutoffs (N)
+      - ``beans_per_force_level``: beans dispensed at each force level
       - ``beans_full``: bean count that packs to the rim / 100%
       - ``scene_id``: 0 | 1 | 2 (KitchenS fixture layout)
 
-    Hold duration maps linearly to dispense amount between the min/max
-    endpoints (clamped). Success is pile height vs the red-ring scale.
+    Peak button press force maps to four dispense levels; fill rises with beans.
+    Success when fill ∈ [target_fill − fill_tol, target_fill + fill_tol].
     """
 
     BEAN_MODEL = "252_coffee_bean"
     JAR_MODEL = "253_glass_jar"
     # Max beans that may be dispensed (enough to pass the 25% ring densely).
     BEANS_FULL = 160
-    # Hold-time → amount mapping (overridable via task_args).
-    PRESS_DURATION_MIN = 0.35
-    PRESS_DURATION_MAX = 1.40
-    BEANS_PER_PRESS_MIN = 2
-    BEANS_PER_PRESS = 12  # beans at press_duration_max
-    FILL_LEVELS = (0.25,)
-    FILL_TOL = 0.02
+    # Four force thresholds (N) → beans per press level (light → hard).
+    # Bean counts are spaced so each level raises fill by ~0.625%/3.125%/
+    # 6.25%/9.375% of the jar (beans_full=160 → 1/5/10/15 beans).
+    FORCE_THRESHOLDS = (3.0, 6.0, 10.0, 14.0)
+    BEANS_PER_FORCE_LEVEL = (1, 5, 10, 15)
+    # Spring proxy (N/m): F = k * virtual key compression.  Compression starts
+    # only inside the blue key's travel range, so dispense is tied to pressure
+    # against the button rather than to a keyboard/event trigger.
+    FORCE_STIFFNESS = 800.0
+    FORCE_ENGAGE_SLACK = 0.05
+    # Expert press depths from hover for force levels 1..4.
+    PRESS_DEPTHS = (0.020, 0.030, 0.044, 0.057)
+    PRESS_SAMPLE_S = 0.40  # hold time to sample peak force
+    FILL_LEVELS = (0.25, 0.50, 0.75)
+    FILL_TOL = 0.05  # success band: target_fill ± fill_tol
+    # Station footprints for non-overlap layout (half-extents, meters).
+    DISP_HALF_XY = (0.065, 0.065)
+    JAR_HALF_XY = (0.045, 0.045)
+    LAYOUT_MARGIN = 0.025
     # Dense mound packing (used for freeze + bean-need estimates).
     _BEAN_R = 0.0055
     _BEAN_H = 0.0065
     _PILE_R_SCALE = 0.72
 
     # Glass-box dispenser (inspired by reference photo — tall clear column on a base).
-    BOX_HALF = (0.035, 0.035, 0.090)       # tall slender glass box
-    PEDESTAL_HALF = (0.052, 0.052, 0.050)  # raises the hopper above the jar
+    BOX_HALF = (0.035, 0.035, 0.063)       # 30% shorter glass hopper
+    PEDESTAL_HALF = (0.052, 0.052, 0.035)  # 30% lower pedestal
     PLATFORM_HALF = (0.058, 0.058, 0.008)  # platform between pedestal and hopper
+    # Red push button on top of the glass lid (press target).
+    BTN_BASE_HALF = (0.016, 0.016, 0.003)
+    BTN_HALF = (0.011, 0.011, 0.010)
+    BTN_BASE_COLOR = (0.12, 0.12, 0.14)
+    BTN_COLOR = (0.08, 0.36, 0.95)
+    BTN_TOUCH_XY_TOL = 0.05   # m; fingertip XY tolerance around button center
     BEAN_FILL_FRAC = 0.65                  # visual fill inside the glass box
     EE_TO_TCP = 0.12
     KEY_HOVER_DIS = 0.06
-    KEY_PRESS_DEPTH = 0.055
+    KEY_PRESS_DEPTH = 0.057  # default = hardest force level
+    BUTTON_VISUAL_STEP = 0.0007
     SETTLE_STEPS = 80
 
     JAR_INNER_R = 0.035
@@ -68,14 +99,66 @@ class fill_coffee_jar(KitchenS_base_task):
     JAR_BOTTOM_T = 0.005
 
     GLASS = [0.88, 0.95, 0.98, 0.14]
+    # Interactive viewer look (matches trap_bug plain trap): no transmission/IOR.
+    PLAIN_GLASS = [0.18, 0.32, 0.48, 0.55]
     BEAN_BROWN = [0.30, 0.14, 0.05]
     RING_RED = [0.95, 0.05, 0.05]
+
+    # Counter / stove decor (static props; not task goals).
+    COFFEE_BOX_MODEL = "113_coffee-box"
+    MILK_BOX_MODEL = "038_milk-box"
+    MUG_MODEL = "039_mug"
+    KETTLE_MODEL = "009_kettle"
+    UPRIGHT_Q = np.array([0.70710678, 0.70710678, 0.0, 0.0], dtype=np.float64)
+    MILK_TARGET_HEIGHT = 0.18
+    MUG_TARGET_HEIGHT = 0.075
+    COFFEE_BOX_SCALE = 1.15
+    KETTLE_SCALE = 1.0
+    # Authored mesh meta for 009_kettle (visual GLBs exist; model_data may be absent).
+    KETTLE_MODEL_DATA = {
+        0: {
+            "center": [0.033335, 0.3552585, 0.0680835],
+            "extents": [1.378758, 1.356831, 1.535575],
+            "scale": [0.1, 0.1, 0.1],
+        },
+        1: {
+            "center": [0.0000505, 0.2696635, 0.1514755],
+            "extents": [0.932073, 1.451321, 1.315845],
+            "scale": [0.1, 0.1, 0.1],
+        },
+        2: {
+            "center": [0.004627, 0.2282145, 0.152863],
+            "extents": [1.186794, 1.415909, 1.565162],
+            "scale": [0.1, 0.1, 0.1],
+        },
+    }
+
+    # Stove L/R anchors (microwave omitted in this task).
+    RANGE_Y = 0.14
+    RANGE_X_RIGHT = 0.28
+    RANGE_X_LEFT = -0.28
+    # Tight station band so the top-button press still reaches force thresholds.
+    # Wider |x| / far −y poses plan the reach but often register near-zero force.
+    STATION_X_LEFT = (-0.105, -0.07)
+    STATION_X_RIGHT = (0.055, 0.085)
+    # Dispenser Y jitter relative to the baseline ``disp_y`` (meters).
+    DISP_Y_UP = 0.015   # +1.5 cm
+    DISP_Y_DOWN = 0.02  # −2 cm
+    JAR_Y_MIN = -0.17
 
     def setup_demo(self, **kwags):
         self._cfg = dict(kwags.get("task_args", {}).get("fill_coffee_jar", {}))
         if kwags.get("scene_id") is None:
             kwags["scene_id"] = int(self._cfg.get("scene_id", 0))
+        self._layout_seed = int(kwags.get("seed", 0) or 0)
         self.replace_sink_with_range = True
+        self.omit_sink = True  # solid counter; no sink basin or faucet tap
+        self._ensure_kettle_assets()
+
+        rng = np.random.RandomState(self._layout_seed + 17)
+        self.stove_side, self.range_position_override = self._sample_stove_side(
+            self._cfg, rng
+        )
 
         self._loaded = False
         self.beans = []
@@ -86,16 +169,88 @@ class fill_coffee_jar(KitchenS_base_task):
         self.jar = None
         self.jar_visual = None
         self.fill_visual = None
+        self._jar_visual_hollow = False
+        self.decor_coffee_box = None
+        self.decor_milk_box = None
+        self.decor_mug = None
+        self.decor_kettle = None
+        self.kettle_burner = None
         self._touch_latched = False
         self._dispensing = False
         self._press_active = False
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
+        self._press_peak_force = 0.0
+        self._press_force_level = 0
+        self._button_visual_depth = 0.0
+        self._button_target_depth = 0.0
         self.table_top = 0.74
+        self._plain_glass = bool(self._cfg.get("plain_glass", False))
 
         super().setup_demo(**kwags)
         self._configure_observer_camera()
+
+    def _sample_stove_side(self, cfg, rng: np.random.RandomState):
+        """Place the cooktop on the left or right half of the counter."""
+        side = str(cfg.get("stove_side", "random")).lower().strip()
+        if side not in ("left", "right"):
+            side = str(rng.choice(["left", "right"]))
+        range_y = float(cfg.get("range_xy", [self.RANGE_X_RIGHT, self.RANGE_Y])[1])
+        if side == "left":
+            range_xy = [float(cfg.get("range_x_left", self.RANGE_X_LEFT)), range_y]
+        else:
+            range_xy = [
+                float(
+                    cfg.get(
+                        "range_x_right",
+                        cfg.get("range_xy", [self.RANGE_X_RIGHT, self.RANGE_Y])[0],
+                    )
+                ),
+                range_y,
+            ]
+        return side, range_xy
+
+    def _load_microwave(self, table_height, table_xy_bias):
+        """Leave the left/back counter open — no microwave in this task."""
+        self.microwave = None
+        self.microwave_xy = None
+        self.microwave_half_xy = None
+        self.microwave_top_z = None
+        return
+
+    @classmethod
+    def _ensure_kettle_assets(cls):
+        """Ensure ``009_kettle`` has create_actor-compatible model_data + collision."""
+        root = Path("assets/objects") / cls.KETTLE_MODEL
+        visual = root / "visual"
+        if not visual.exists():
+            return
+        collision = root / "collision"
+        collision.mkdir(exist_ok=True)
+        for mid, meta in cls.KETTLE_MODEL_DATA.items():
+            vfile = visual / f"base{mid}.glb"
+            cfile = collision / f"base{mid}.glb"
+            if vfile.exists() and not cfile.exists():
+                try:
+                    cfile.symlink_to(vfile.resolve())
+                except OSError:
+                    # Fall back to using the visual path name if symlink fails.
+                    pass
+            mpath = root / f"model_data{mid}.json"
+            if not mpath.exists():
+                data = {
+                    "center": list(meta["center"]),
+                    "extents": list(meta["extents"]),
+                    "scale": list(meta["scale"]),
+                    "transform_matrix": [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                }
+                mpath.write_text(json.dumps(data, indent=4) + "\n")
 
     def _configure_observer_camera(self):
         cams = getattr(self, "cameras", None)
@@ -115,8 +270,30 @@ class fill_coffee_jar(KitchenS_base_task):
         camera.entity.set_pose(sapien.Pose(m))
 
     # ------------------------------------------------------------------ helpers
+    def _plain_glass_material(self):
+        """Simple alpha-transparent plastic — no glass transmission/IOR (viewer-friendly)."""
+        mat = sapien.render.RenderMaterial(base_color=list(self.PLAIN_GLASS))
+        try:
+            mat.set_transmission(0.0)
+            mat.set_transmission_roughness(1.0)
+            mat.set_roughness(0.55)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.55
+            mat.metallic = 0.0
+        try:
+            mat.set_ior(1.0)
+        except Exception:
+            try:
+                mat.ior = 1.0
+            except Exception:
+                pass
+        return mat
+
     def _glass_material(self, rgba=None, transmission=0.90):
         """Nearly-clear glass matching trap_bug / reference acrylic look."""
+        if bool(getattr(self, "_plain_glass", False)):
+            return self._plain_glass_material()
         c = list(rgba if rgba is not None else self.GLASS)
         if len(c) == 3:
             c = c + [0.18]
@@ -148,6 +325,77 @@ class fill_coffee_jar(KitchenS_base_task):
         except Exception:
             mat.roughness = 0.45
             mat.metallic = 0.0
+        return mat
+
+    def _remove_entity(self, ent):
+        if ent is None:
+            return None
+        try:
+            self.scene.remove_entity(ent)
+        except Exception:
+            pass
+        return None
+
+    def _jar_glass_material(self, viewer_shell: bool = False):
+        """Glass for the jar.
+
+        Demo cameras use transmission glass. The interactive SAPIEN viewer does
+        not composite opaque fill behind transmission materials (or a solid
+        cylinder wall), so the viewer shell uses plain alpha glass — same trick
+        as ``measure_ingredient`` / ``trap_bug``.
+        """
+        if viewer_shell:
+            glass = sapien.render.RenderMaterial(
+                base_color=[0.88, 0.94, 0.98, 0.20]
+            )
+            try:
+                glass.set_transmission(0.0)
+                glass.set_transmission_roughness(1.0)
+                glass.set_roughness(0.10)
+                glass.set_metallic(0.0)
+            except Exception:
+                glass.roughness = 0.10
+                glass.metallic = 0.0
+            try:
+                glass.set_ior(1.0)
+            except Exception:
+                pass
+            return glass
+
+        if bool(getattr(self, "_plain_glass", False)):
+            return self._plain_glass_material()
+
+        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
+        try:
+            glass.set_transmission(1.0)
+            glass.set_transmission_roughness(0.0)
+            glass.set_roughness(0.04)
+            glass.set_metallic(0.0)
+        except Exception:
+            pass
+        try:
+            glass.set_ior(1.0)
+        except Exception:
+            pass
+        return glass
+
+    def _viewer_coffee_material(self):
+        """Fully opaque coffee column for viewer compositing through alpha glass."""
+        mat = sapien.render.RenderMaterial(
+            base_color=[0.22, 0.10, 0.04, 1.0]
+        )
+        try:
+            mat.set_transmission(0.0)
+            mat.set_transmission_roughness(1.0)
+            mat.set_roughness(0.85)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.85
+            mat.metallic = 0.0
+        try:
+            mat.set_ior(1.0)
+        except Exception:
+            pass
         return mat
 
     def _add_static_box(self, pose, half_size, material=None, color=None, name="", collision=True):
@@ -213,38 +461,405 @@ class fill_coffee_jar(KitchenS_base_task):
         builder.set_initial_pose(pose)
         return builder.build(name=name)
 
+    # ------------------------------------------------------------------ layout
+    @staticmethod
+    def _aabb_overlap(c1, h1, c2, h2, margin=0.0):
+        c1 = np.asarray(c1, dtype=float)
+        c2 = np.asarray(c2, dtype=float)
+        h1 = np.asarray(h1, dtype=float)
+        h2 = np.asarray(h2, dtype=float)
+        m = float(margin)
+        return bool(
+            abs(c1[0] - c2[0]) < (h1[0] + h2[0] + m)
+            and abs(c1[1] - c2[1]) < (h1[1] + h2[1] + m)
+        )
+
+    def _layout_blockers(self):
+        """Kitchen fixture footprints the station must not overlap."""
+        blockers = []
+        # Microwave is omitted for this task; only the cooktop blocks the station.
+        range_xy = getattr(self, "range_xy", None)
+        range_half = getattr(self, "range_half_size", None)
+        if range_xy is not None and range_half is not None:
+            blockers.append(
+                (np.asarray(range_xy, dtype=float), np.asarray(range_half, dtype=float))
+            )
+        return blockers
+
+    @staticmethod
+    def _model_data(modelname: str, model_id: int) -> dict:
+        path = Path("assets/objects") / modelname / f"model_data{model_id}.json"
+        with open(path) as f:
+            return json.load(f)
+
+    @classmethod
+    def _available_model_ids(cls, modelname: str) -> list[int]:
+        root = Path("assets/objects") / modelname
+        ids = []
+        for p in root.glob("model_data*.json"):
+            try:
+                mid = int(p.stem.replace("model_data", ""))
+            except ValueError:
+                continue
+            vis = root / "visual" / f"base{mid}.glb"
+            col = root / "collision" / f"base{mid}.glb"
+            if vis.exists() or col.exists():
+                ids.append(mid)
+        return sorted(ids)
+
+    @classmethod
+    def _yup_authored_height(cls, modelname: str, model_id: int) -> float:
+        data = cls._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        if isinstance(sc, (int, float)):
+            sc = [float(sc)] * 3
+        return float(sc[1]) * float(data["extents"][1])
+
+    @classmethod
+    def _yup_authored_half_xy(cls, modelname: str, model_id: int) -> tuple[float, float]:
+        data = cls._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        if isinstance(sc, (int, float)):
+            sc = [float(sc)] * 3
+        ext = data["extents"]
+        return 0.5 * float(sc[0]) * float(ext[0]), 0.5 * float(sc[2]) * float(ext[2])
+
+    def _scale_for_target_height(self, modelname: str, model_id: int, target_h: float) -> float:
+        authored = self._yup_authored_height(modelname, model_id)
+        if authored <= 1e-6:
+            return 1.0
+        return float(target_h) / authored
+
+    def _yup_pose_z(self, modelname: str, model_id: int, scale_mult: float, surface_z: float) -> float:
+        """Pose Z so an upright Y-up mesh rests on ``surface_z``."""
+        data = self._model_data(modelname, model_id)
+        sc = data.get("scale") or [1.0, 1.0, 1.0]
+        if isinstance(sc, (int, float)):
+            sc = [float(sc)] * 3
+        final_sy = float(sc[1]) * float(scale_mult)
+        cy = float(data.get("center", [0.0, 0.0, 0.0])[1])
+        ey = float(data["extents"][1])
+        bottom_local_y = cy - 0.5 * ey
+        return float(surface_z - bottom_local_y * final_sy)
+
+    def _place_upright_prop(
+        self,
+        modelname: str,
+        model_id: int,
+        xy: tuple[float, float],
+        scale_mult: float,
+        yaw: float,
+        name: str,
+        surface_z: float | None = None,
+    ):
+        z_surf = float(self.table_top if surface_z is None else surface_z)
+        z = self._yup_pose_z(modelname, model_id, scale_mult, z_surf)
+        q = qmult(euler2quat(0.0, 0.0, float(yaw), axes="sxyz"), self.UPRIGHT_Q)
+        pose = sapien.Pose([float(xy[0]), float(xy[1]), float(z)], q.tolist())
+        actor = create_actor(
+            self,
+            pose=pose,
+            modelname=modelname,
+            model_id=int(model_id),
+            convex=True,
+            is_static=True,
+            scale_mult=float(scale_mult),
+        )
+        if actor is None:
+            print(f"[fill_coffee_jar] failed to spawn {name} ({modelname}/base{model_id})")
+            return None
+        try:
+            actor.set_name(name)
+        except Exception:
+            pass
+        try:
+            self.add_prohibit_area(actor, padding=0.02)
+        except Exception:
+            pad = 0.05
+            self.prohibited_area.append(
+                [xy[0] - pad, xy[1] - pad, xy[0] + pad, xy[1] + pad]
+            )
+        return actor
+
+    def _decor_clear(
+        self,
+        xy: np.ndarray,
+        half_xy: tuple[float, float],
+        blockers: list,
+        margin: float = 0.02,
+    ) -> bool:
+        for b_c, b_h in blockers:
+            if self._aabb_overlap(xy, half_xy, b_c, b_h, margin):
+                return False
+        return True
+
+    def _decor_free_bounds(self):
+        """Open counter half opposite the stove, away from the jar approach corridor."""
+        rx = float(getattr(self, "range_xy", (self.RANGE_X_RIGHT, self.RANGE_Y))[0])
+        rhx = float(getattr(self, "range_half_size", (0.14, 0.16))[0])
+        # Prefer the free half (same side as the dispenser).
+        free_sign = -1.0 if rx >= 0.0 else 1.0
+        if free_sign < 0:
+            x_lo, x_hi = -0.42, min(-0.02, float(rx - rhx - 0.06))
+        else:
+            x_lo, x_hi = max(0.02, float(rx + rhx + 0.06)), 0.42
+        # Keep back / mid counter; jar corridor occupies the near-robot apron.
+        y_lo, y_hi = -0.02, 0.22
+        if x_hi <= x_lo + 0.06:
+            x_lo, x_hi = (free_sign * 0.34, free_sign * 0.12) if free_sign < 0 else (
+                free_sign * 0.12,
+                free_sign * 0.34,
+            )
+            if x_lo > x_hi:
+                x_lo, x_hi = x_hi, x_lo
+        return float(x_lo), float(x_hi), float(y_lo), float(y_hi)
+
+    def _jar_corridor_blocker(self):
+        """Keep decor out of the robot approach lane in front of the jar."""
+        jx, jy = float(self.jar_xy[0]), float(self.jar_xy[1])
+        # Corridor from jar toward the robot (−Y), wide enough for the arm.
+        half_x = max(float(self.JAR_HALF_XY[0]) + 0.06, 0.10)
+        half_y = 0.14
+        cy = jy - half_y
+        return (
+            np.array([jx, cy], dtype=float),
+            np.array([half_x, half_y], dtype=float),
+        )
+
+    def _spawn_counter_decor(self, cfg, rng: np.random.RandomState):
+        """Coffee box + milk carton + mug on open space (clear of stove / station / corridor)."""
+        coffee_ids = self._available_model_ids(self.COFFEE_BOX_MODEL) or [0]
+        milk_ids = self._available_model_ids(self.MILK_BOX_MODEL) or [0]
+        mug_ids = [i for i in self._available_model_ids(self.MUG_MODEL) if i <= 8] or [0]
+
+        coffee_id = int(cfg.get("coffee_box_id", -1))
+        if coffee_id < 0 or coffee_id not in coffee_ids:
+            coffee_id = int(rng.choice(coffee_ids))
+        milk_id = int(cfg.get("milk_box_id", -1))
+        if milk_id < 0 or milk_id not in milk_ids:
+            milk_id = int(rng.choice(milk_ids))
+        mug_id = int(cfg.get("mug_id", -1))
+        if mug_id < 0 or mug_id not in mug_ids:
+            mug_id = int(rng.choice(mug_ids))
+
+        coffee_scale = float(cfg.get("coffee_box_scale", self.COFFEE_BOX_SCALE))
+        milk_h = float(cfg.get("milk_box_height", self.MILK_TARGET_HEIGHT))
+        mug_h = float(cfg.get("mug_height", self.MUG_TARGET_HEIGHT))
+        milk_scale = self._scale_for_target_height(self.MILK_BOX_MODEL, milk_id, milk_h)
+        mug_scale = self._scale_for_target_height(self.MUG_MODEL, mug_id, mug_h)
+
+        chx, chz = self._yup_authored_half_xy(self.COFFEE_BOX_MODEL, coffee_id)
+        mhx, mhz = self._yup_authored_half_xy(self.MILK_BOX_MODEL, milk_id)
+        uhx, uhz = self._yup_authored_half_xy(self.MUG_MODEL, mug_id)
+        coffee_half = (chx * coffee_scale, chz * coffee_scale)
+        milk_half = (mhx * milk_scale, mhz * milk_scale)
+        # Mug extents include the handle; body footprint is smaller.
+        mug_half = (0.42 * uhx * mug_scale, 0.42 * uhz * mug_scale)
+
+        blockers = list(self._layout_blockers())
+        blockers.append((self.dispenser_xy, self.DISP_HALF_XY))
+        blockers.append((self.jar_xy, self.JAR_HALF_XY))
+        blockers.append(self._jar_corridor_blocker())
+
+        x_lo, x_hi, y_lo, y_hi = self._decor_free_bounds()
+        free_sign = -1.0 if float(self.dispenser_xy[0]) <= 0.0 else 1.0
+        specs = [
+            ("coffee", coffee_half, coffee_scale, self.COFFEE_BOX_MODEL, coffee_id, "decor_coffee_box"),
+            ("milk", milk_half, milk_scale, self.MILK_BOX_MODEL, milk_id, "decor_milk_box"),
+            ("mug", mug_half, mug_scale, self.MUG_MODEL, mug_id, "decor_mug"),
+        ]
+        placed = {}
+        for key, half, scale, model, mid, name in specs:
+            pose_xy = None
+            for _ in range(80):
+                xy = np.array(
+                    [rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi)], dtype=float
+                )
+                if self._decor_clear(xy, half, blockers, margin=0.025):
+                    pose_xy = xy
+                    break
+            if pose_xy is None:
+                # Deterministic fallback behind the station on the free half.
+                fallback = {
+                    "coffee": np.array([free_sign * 0.30, 0.14]),
+                    "milk": np.array([free_sign * 0.22, 0.14]),
+                    "mug": np.array([free_sign * 0.26, 0.04]),
+                }
+                pose_xy = fallback[key]
+            yaw = float(rng.uniform(-0.6, 0.6))
+            actor = self._place_upright_prop(
+                model, mid, (float(pose_xy[0]), float(pose_xy[1])), scale, yaw, name
+            )
+            setattr(self, name, actor)
+            placed[key] = {
+                "id": int(mid),
+                "xy": [float(pose_xy[0]), float(pose_xy[1])],
+                "scale": float(scale),
+            }
+            blockers.append((pose_xy, half))
+        self._decor_layout = placed
+        self.coffee_box_id = coffee_id
+        self.milk_box_id = milk_id
+        self.mug_id = mug_id
+
+    def _spawn_kettle_on_burner(self, cfg, rng: np.random.RandomState):
+        """Place a random ``009_kettle`` on a random cooktop burner."""
+        burners = getattr(self, "burner_positions", None) or {}
+        if not burners:
+            print("[fill_coffee_jar] no burners — skipping kettle decor")
+            return
+        kettle_ids = self._available_model_ids(self.KETTLE_MODEL) or list(
+            self.KETTLE_MODEL_DATA.keys()
+        )
+        kettle_id = int(cfg.get("kettle_id", -1))
+        if kettle_id < 0 or kettle_id not in kettle_ids:
+            kettle_id = int(rng.choice(list(kettle_ids)))
+        burner_name = cfg.get("kettle_burner", "random")
+        names = list(burners.keys())
+        if not isinstance(burner_name, str) or burner_name.lower() == "random":
+            burner_name = str(rng.choice(names))
+        elif burner_name not in burners:
+            burner_name = str(rng.choice(names))
+        bx, by = burners[burner_name]
+        scale = float(cfg.get("kettle_scale", self.KETTLE_SCALE))
+        yaw = float(rng.uniform(-np.pi, np.pi))
+        surface_z = float(getattr(self, "range_top_z", self.table_top) + 0.002)
+        self.decor_kettle = self._place_upright_prop(
+            self.KETTLE_MODEL,
+            kettle_id,
+            (float(bx), float(by)),
+            scale,
+            yaw,
+            "decor_kettle",
+            surface_z=surface_z,
+        )
+        self.kettle_id = int(kettle_id)
+        self.kettle_burner = str(burner_name)
+        self.kettle_xy = (float(bx), float(by))
+
+    def _station_clear(self, side_x, disp_y, jar_y, blockers, margin=None):
+        if margin is None:
+            margin = self.LAYOUT_MARGIN
+        disp = np.array([side_x, disp_y], dtype=float)
+        jar = np.array([side_x, jar_y], dtype=float)
+        # Dispenser ↔ jar must not overlap each other.
+        if self._aabb_overlap(disp, self.DISP_HALF_XY, jar, self.JAR_HALF_XY, margin):
+            return False
+        for b_c, b_h in blockers:
+            if self._aabb_overlap(disp, self.DISP_HALF_XY, b_c, b_h, margin):
+                return False
+            if self._aabb_overlap(jar, self.JAR_HALF_XY, b_c, b_h, margin):
+                return False
+        return True
+
+    def _resolve_target_fill(self, cfg, rng: np.random.RandomState) -> float:
+        tf = cfg.get("target_fill", 0.25)
+        if tf is None:
+            return 0.25
+        if isinstance(tf, str) and tf.lower() == "random":
+            return float(rng.choice(self.FILL_LEVELS))
+        val = float(tf)
+        if val not in self.FILL_LEVELS:
+            raise ValueError(f"target_fill must be one of {self.FILL_LEVELS} or 'random'")
+        return val
+
+    def _sample_station_layout(self, cfg, rng: np.random.RandomState):
+        """Place dispenser+jar on the free half opposite the stove.
+
+        Keeps a shared X (nozzle alignment) with the jar in front (−y) of the
+        dispenser so the jar stays under the nozzle. Pose jitter is kept inside
+        a tight press-reliable band (far stations often register ~0 N on the button).
+        """
+        randomize = bool(cfg.get("randomize_layout", True))
+        blockers = self._layout_blockers()
+        rx = float(getattr(self, "range_xy", (self.RANGE_X_RIGHT, self.RANGE_Y))[0])
+        free_sign = -1.0 if rx >= 0.0 else 1.0
+        # Baseline station on the free half (left when stove is right, and vice versa).
+        base_x = float(cfg.get("station_x", free_sign * 0.08))
+        if np.sign(base_x) != 0 and np.sign(base_x) != free_sign:
+            base_x = float(free_sign * abs(base_x))
+        base_disp_y = float(cfg.get("disp_y", -0.02))
+        base_jar_y = float(cfg.get("jar_y", -0.16))
+        y_lo = base_disp_y - float(cfg.get("disp_y_down", self.DISP_Y_DOWN))
+        y_hi = base_disp_y + float(cfg.get("disp_y_up", self.DISP_Y_UP))
+        jar_y_min = float(cfg.get("jar_y_min", self.JAR_Y_MIN))
+        if free_sign < 0:
+            x_lo, x_hi = (
+                float(cfg.get("station_x_left_lo", self.STATION_X_LEFT[0])),
+                float(cfg.get("station_x_left_hi", self.STATION_X_LEFT[1])),
+            )
+        else:
+            x_lo, x_hi = (
+                float(cfg.get("station_x_right_lo", self.STATION_X_RIGHT[0])),
+                float(cfg.get("station_x_right_hi", self.STATION_X_RIGHT[1])),
+            )
+
+        if not randomize:
+            side_x = float(np.clip(base_x, x_lo, x_hi))
+            disp_y = float(np.clip(base_disp_y, y_lo, y_hi))
+            gap = float(np.clip(base_disp_y - base_jar_y, 0.125, 0.145))
+            jar_y = max(disp_y - gap, jar_y_min)
+            if not self._station_clear(side_x, disp_y, jar_y, blockers):
+                for x in np.linspace(side_x, 0.5 * (x_lo + x_hi), 20):
+                    if self._station_clear(float(x), disp_y, jar_y, blockers):
+                        side_x = float(x)
+                        break
+            return side_x, disp_y, jar_y
+
+        for _ in range(100):
+            side_x = float(rng.uniform(x_lo, x_hi))
+            disp_y = float(rng.uniform(y_lo, y_hi))
+            # Keep jar under the nozzle: same X, modest gap ahead of the dispenser.
+            gap = float(rng.uniform(0.125, 0.145))
+            jar_y = disp_y - gap
+            if jar_y < jar_y_min:
+                continue
+            if self._station_clear(side_x, disp_y, jar_y, blockers):
+                return side_x, disp_y, jar_y
+
+        # Deterministic fallback on the free half (center of the press-safe band).
+        gap = float(np.clip(base_disp_y - base_jar_y, 0.125, 0.145))
+        disp_y = float(np.clip(base_disp_y, y_lo, y_hi))
+        return (
+            float(np.clip(base_x, x_lo, x_hi)),
+            disp_y,
+            max(disp_y - gap, jar_y_min),
+        )
+
     # ------------------------------------------------------------------ actors
     def load_actors(self):
         cfg = self._cfg
         self.table_top = float(self.kitchens_info["table_height"]) + float(self.table_z_bias)
-        tf = cfg.get("target_fill", 0.25)
-        if tf is None:
-            # Task objective: fill to the first (25%) red ring.
-            self.target_fill = 0.25
-        else:
-            self.target_fill = float(tf)
-            if self.target_fill not in self.FILL_LEVELS:
-                raise ValueError(f"target_fill must be one of {self.FILL_LEVELS}")
+        seed = int(getattr(self, "_layout_seed", 0) or 0)
+        # Separate streams so target choice doesn't collide with layout jitter.
+        rng_target = np.random.RandomState(seed + 202)
+        rng_layout = np.random.RandomState(seed + 101)
 
+        self.target_fill = self._resolve_target_fill(cfg, rng_target)
         self.beans_full = int(cfg.get("beans_full", self.BEANS_FULL))
-        self.beans_per_press_min = int(
-            cfg.get("beans_per_press_min", self.BEANS_PER_PRESS_MIN)
+        thr = cfg.get("force_thresholds", self.FORCE_THRESHOLDS)
+        beans_lv = cfg.get("beans_per_force_level", self.BEANS_PER_FORCE_LEVEL)
+        self.force_thresholds = tuple(float(x) for x in thr)
+        self.beans_per_force_level = tuple(int(x) for x in beans_lv)
+        if len(self.force_thresholds) != 4 or len(self.beans_per_force_level) != 4:
+            raise ValueError("force_thresholds and beans_per_force_level need length 4")
+        if any(
+            self.force_thresholds[i] >= self.force_thresholds[i + 1]
+            for i in range(3)
+        ):
+            raise ValueError("force_thresholds must be strictly increasing")
+        self.force_stiffness = float(cfg.get("force_stiffness", self.FORCE_STIFFNESS))
+        self.force_engage_slack = float(
+            cfg.get("force_engage_slack", self.FORCE_ENGAGE_SLACK)
         )
-        # ``beans_per_press`` = amount at a full-duration hold (max).
-        self.beans_per_press = int(cfg.get("beans_per_press", self.BEANS_PER_PRESS))
-        self.beans_per_press_max = int(
-            cfg.get("beans_per_press_max", self.beans_per_press)
-        )
-        self.press_duration_min = float(
-            cfg.get("press_duration_min", self.PRESS_DURATION_MIN)
-        )
-        self.press_duration_max = float(
-            cfg.get("press_duration_max", self.PRESS_DURATION_MAX)
-        )
-        if self.press_duration_max < self.press_duration_min:
-            raise ValueError("press_duration_max must be >= press_duration_min")
-        if self.beans_per_press_max < self.beans_per_press_min:
-            raise ValueError("beans_per_press_max must be >= beans_per_press_min")
+        depths = cfg.get("press_depths", self.PRESS_DEPTHS)
+        self.press_depths = tuple(float(x) for x in depths)
+        if len(self.press_depths) != 4:
+            raise ValueError("press_depths needs length 4")
+        self.press_sample_s = float(cfg.get("press_sample_s", self.PRESS_SAMPLE_S))
+        # Convenience aliases used by fill estimates / expert loop.
+        self.beans_per_press_min = int(self.beans_per_force_level[0])
+        self.beans_per_press_max = int(self.beans_per_force_level[-1])
         self.fill_tol = float(cfg.get("fill_tol", self.FILL_TOL))
         self.beans = []
         self.beans_in_jar = 0
@@ -255,14 +870,15 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
-        # Free front workspace (toward robot, −y), clear of MW / dishrack / range.
-        # scene_0: MW left-back, dishrack center-back, range right → use mid-left front.
-        side_x = float(cfg.get("station_x", -0.08))
-        disp_y = float(cfg.get("disp_y", -0.02))
-        jar_y = float(cfg.get("jar_y", -0.16))
+        self._press_peak_force = 0.0
+        self._press_force_level = 0
 
+        side_x, disp_y, jar_y = self._sample_station_layout(cfg, rng_layout)
         self.dispenser_xy = np.array([side_x, disp_y], dtype=float)
         self.jar_xy = np.array([side_x, jar_y], dtype=float)
+        self.layout_ok = bool(
+            self._station_clear(side_x, disp_y, jar_y, self._layout_blockers())
+        )
 
         self._build_dispenser()
         self._build_jar()
@@ -271,17 +887,30 @@ class fill_coffee_jar(KitchenS_base_task):
         self.add_prohibit_area(sapien.Pose([*self.dispenser_xy, self.table_top + 0.1]), padding=0.08)
         self.add_prohibit_area(sapien.Pose([*self.jar_xy, self.table_top + 0.05]), padding=0.05)
 
+        rng_decor = np.random.RandomState(seed + 303)
+        self._spawn_counter_decor(cfg, rng_decor)
+        self._spawn_kettle_on_burner(cfg, rng_decor)
+
         self._loaded = True
+        levels = ", ".join(
+            f"≥{t:.0f}N→{n}" for t, n in zip(self.force_thresholds, self.beans_per_force_level)
+        )
         print(
-            f"[fill_coffee_jar] KitchenS scene={self.scene_id} "
-            f"success≥{self.target_fill:.0%} ring "
-            f"(~{self._beans_needed()}/{self.beans_full} beans; "
-            f"hold {self.press_duration_min:.2f}-{self.press_duration_max:.2f}s → "
-            f"{self.beans_per_press_min}-{self.beans_per_press_max} beans)"
+            f"[fill_coffee_jar] KitchenS scene={self.scene_id} seed={seed} "
+            f"stove_side={getattr(self, 'stove_side', '?')} "
+            f"range={np.round(getattr(self, 'range_xy', (0, 0)), 3).tolist()} "
+            f"target={self.target_fill:.0%}±{self.fill_tol:.0%} "
+            f"disp={self.dispenser_xy.tolist()} jar={self.jar_xy.tolist()} "
+            f"layout_ok={self.layout_ok} "
+            f"coffee={getattr(self, 'coffee_box_id', '?')} "
+            f"milk={getattr(self, 'milk_box_id', '?')} "
+            f"mug={getattr(self, 'mug_id', '?')} "
+            f"kettle={getattr(self, 'kettle_id', '?')}@{getattr(self, 'kettle_burner', '?')} "
+            f"(~{self._beans_needed()}/{self.beans_full} beans; force {levels})"
         )
 
     def _build_dispenser(self):
-        """Raised glass bean hopper whose lid touch opens a nozzle over the jar."""
+        """Raised glass bean hopper; red top button opens a nozzle over the jar."""
         x, y = self.dispenser_xy
         z0 = self.table_top
         bx, by, bz = self.BOX_HALF
@@ -316,15 +945,39 @@ class fill_coffee_jar(KitchenS_base_task):
             open_top=True,
             collision=True,
         )
-        # The clear lid itself is the touch target; there is no separate button.
-        lid_z = box_z + bz + 0.003
-        self.dispenser_touch_surface = self._add_static_box(
-            pose=sapien.Pose([x, y, box_z + bz + 0.003]),
-            half_size=[bx * 1.01, by * 1.01, 0.003],
+        # Clear lid (visual/structural only) — press target is the button above.
+        lid_hz = 0.003
+        lid_z = box_z + bz + lid_hz
+        self._add_static_box(
+            pose=sapien.Pose([x, y, lid_z]),
+            half_size=[bx * 1.01, by * 1.01, lid_hz],
             material=self._glass_material([0.90, 0.96, 0.99, 0.22]),
-            name="dispenser_touch_lid",
+            name="dispenser_lid",
             collision=True,
         )
+        lid_top = lid_z + lid_hz
+        # Dark collar + blue push button centered on the lid.
+        bbx, bby, bbz = self.BTN_BASE_HALF
+        bhx, bhy, bhz = self.BTN_HALF
+        base_z = lid_top + bbz
+        btn_z = lid_top + 2.0 * bbz + bhz
+        self._add_static_box(
+            pose=sapien.Pose([x, y, base_z]),
+            half_size=[bbx, bby, bbz],
+            color=[*self.BTN_BASE_COLOR, 1.0],
+            name="dispenser_button_base",
+            collision=True,
+        )
+        self.dispenser_touch_surface = self._add_static_box(
+            pose=sapien.Pose([x, y, btn_z]),
+            half_size=[bhx, bhy, bhz],
+            color=[*self.BTN_COLOR, 1.0],
+            name="dispenser_push_button",
+            collision=True,
+        )
+        self._button_home_pose = sapien.Pose([x, y, btn_z])
+        self._button_pressed_pose = sapien.Pose([x, y, btn_z - bhz])
+        self._button_pressed_visual = False
 
         # One packed mesh containing many individual coffee beans (not a solid block).
         self._add_static_mesh_visual(
@@ -335,8 +988,8 @@ class fill_coffee_jar(KitchenS_base_task):
         )
 
         # Nozzle ends short of jar center so the fill column stays visible.
-        nozzle_joint_z = self.table_top + self.JAR_HEIGHT + 0.070
-        nozzle_outlet_z = self.table_top + self.JAR_HEIGHT + 0.035
+        nozzle_joint_z = self.table_top + self.JAR_HEIGHT + 0.049
+        nozzle_outlet_z = self.table_top + self.JAR_HEIGHT + 0.0245
         hopper_front_y = y - by
         jar_x, jar_y = self.jar_xy
         tip_y = jar_y + 0.018
@@ -371,22 +1024,204 @@ class fill_coffee_jar(KitchenS_base_task):
         )
 
         self.touch_xy = np.array([x, y], dtype=float)
-        self.touch_top_z = lid_z + 0.003
+        self.touch_top_z = float(btn_z + bhz)
 
-    def _build_jar(self):
-        """FROZEN jar design — matches demo ``v23``; do not modify this method.
+    def _set_button_press_depth(self, depth: float) -> None:
+        max_depth = float(getattr(self, "BTN_HALF", (0.0, 0.0, 0.0))[2])
+        self._button_target_depth = float(np.clip(depth, 0.0, max_depth))
 
-        Smooth see-through cylinder via ``RenderShapeCylinder`` (IOR=1) + thin
-        floor disk. Collision from the hollow jar mesh (no GLB visual).
+    def _advance_button_press_visual(self) -> None:
+        button = getattr(self, "dispenser_touch_surface", None)
+        home = getattr(self, "_button_home_pose", None)
+        if button is None or home is None:
+            return
+        max_depth = float(getattr(self, "BTN_HALF", (0.0, 0.0, 0.0))[2])
+        target = float(np.clip(getattr(self, "_button_target_depth", 0.0), 0.0, max_depth))
+        current = float(np.clip(getattr(self, "_button_visual_depth", 0.0), 0.0, max_depth))
+        step = float(getattr(self, "BUTTON_VISUAL_STEP", 0.0007))
+        if target > current:
+            current = min(target, current + step)
+        elif target < current:
+            current = max(target, current - step)
+        self._button_visual_depth = current
+        self._button_pressed_visual = bool(current > 1e-6)
+        try:
+            button.set_pose(
+                sapien.Pose(
+                    [float(home.p[0]), float(home.p[1]), float(home.p[2] - current)],
+                    list(home.q),
+                )
+            )
+        except Exception:
+            pass
+
+    def _set_button_pressed_visual(self, pressed: bool) -> None:
+        """Compatibility helper; robot paths use pressure-derived target depth."""
+        max_depth = float(getattr(self, "BTN_HALF", (0.0, 0.0, 0.0))[2])
+        self._set_button_press_depth(max_depth if bool(pressed) else 0.0)
+
+    def _button_press_signal(self):
+        """Return the best current button press candidate from either arm."""
+        if not hasattr(self, "robot"):
+            return None
+        touch_xy = np.asarray(getattr(self, "touch_xy", None), dtype=float)
+        if touch_xy.size != 2:
+            return None
+        preferred = str(getattr(self, "_pressing_arm_side", ""))
+        sides = [preferred] if preferred in ("left", "right") else []
+        sides += [side for side in ("left", "right") if side not in sides]
+        best = None
+        for side in sides:
+            try:
+                getter = (
+                    self.robot.get_left_ee_pose
+                    if side == "left"
+                    else self.robot.get_right_ee_pose
+                )
+                ee = np.asarray(getter(), dtype=float)
+                tcp = np.asarray(ee, dtype=float)
+                tcp[2] -= float(self.EE_TO_TCP)
+            except Exception:
+                try:
+                    getter = (
+                        self.robot.get_left_tcp_pose
+                        if side == "left"
+                        else self.robot.get_right_tcp_pose
+                    )
+                    tcp = np.asarray(getter(), dtype=float)
+                except Exception:
+                    continue
+            xy_dist = float(np.linalg.norm(tcp[:2] - touch_xy))
+            if xy_dist > float(self.BTN_TOUCH_XY_TOL):
+                continue
+            contact_force = float(self._lid_contact_force())
+            spring_force = float(
+                self.force_stiffness
+                * max(0.0, float(self.touch_top_z + self.force_engage_slack - tcp[2]))
+            )
+            force = max(spring_force, contact_force)
+            signal = {"side": side, "tcp": tcp, "force": force}
+            if best is None or signal["force"] > best["force"]:
+                best = signal
+        if best is not None:
+            self._pressing_arm_side = best["side"]
+        return best
+
+    def _update_button_pressed_visual_from_robot(self) -> None:
+        signal = self._button_press_signal()
+        if signal is None:
+            self._set_button_press_depth(0.0)
+        else:
+            max_depth = float(getattr(self, "BTN_HALF", (0.0, 0.0, 0.0))[2])
+            target = float(
+                np.clip(
+                    float(signal["force"]) / max(float(self.force_thresholds[-1]), 1e-6) * max_depth,
+                    0.0,
+                    max_depth,
+                )
+            )
+            self._set_button_press_depth(target)
+        self._advance_button_press_visual()
+
+    def _build_jar_visual(self, hollow: bool = False):
+        """Glass jar visual. ``hollow=True`` for SAPIEN viewer (open interior).
+
+        Camera / expert demos keep the smooth solid transmission cylinder (looks
+        correct in offline render). The interactive viewer treats that cylinder
+        as an opaque volume, so viewer mode uses a thin alpha-glass shell instead.
         """
-        x, y = self.jar_xy
-        z0 = self.table_top + 0.001
+        self.jar_visual = self._remove_entity(getattr(self, "jar_visual", None))
+        if self.jar is None:
+            return
+
         outer_r = self.JAR_INNER_R + 0.0035
         h = self.JAR_HEIGHT
         bottom_t = self.JAR_BOTTOM_T
         upright_q = [0.70710678, 0.0, -0.70710678, 0.0]
+        wall_h = h - bottom_t
+        wall_half = wall_h * 0.5
+        wall_z = bottom_t + wall_half
+        glass = self._jar_glass_material(viewer_shell=bool(hollow))
 
-        col_path = Path("assets/objects/253_glass_jar/collision/base0.glb").resolve()
+        try:
+            pose = self.jar.get_pose()
+        except Exception:
+            pose = sapien.Pose(
+                [float(self.jar_xy[0]), float(self.jar_xy[1]), self.table_top + 0.001]
+            )
+        vis = sapien.Entity()
+        vis.set_name("glass_jar_visual")
+        vis.set_pose(pose)
+        render_body = sapien.render.RenderBodyComponent()
+
+        floor = sapien.render.RenderShapeCylinder(
+            radius=outer_r * 0.98,
+            half_length=max(0.0015, bottom_t * 0.5),
+            material=glass,
+        )
+        floor.set_local_pose(sapien.Pose([0.0, 0.0, bottom_t * 0.5], upright_q))
+        render_body.attach(floor)
+
+        if hollow:
+            # Thin faceted glass shell — empty inside so the coffee column reads.
+            wall_t = 0.0024
+            n_seg = 36
+            wall_radius = outer_r - 0.5 * wall_t
+            tangent_half = wall_radius * np.tan(np.pi / n_seg) * 1.03
+            for ang in np.linspace(0.0, 2.0 * np.pi, n_seg, endpoint=False):
+                px = float(wall_radius * np.cos(ang))
+                py = float(wall_radius * np.sin(ang))
+                yaw = float(ang + 0.5 * np.pi)
+                q = [
+                    float(np.cos(0.5 * yaw)),
+                    0.0,
+                    0.0,
+                    float(np.sin(0.5 * yaw)),
+                ]
+                panel = sapien.render.RenderShapeBox(
+                    [float(tangent_half), float(0.5 * wall_t), float(wall_half)],
+                    glass,
+                )
+                panel.set_local_pose(sapien.Pose([px, py, wall_z], q))
+                render_body.attach(panel)
+        else:
+            wall = sapien.render.RenderShapeCylinder(
+                radius=outer_r,
+                half_length=wall_half,
+                material=glass,
+            )
+            wall.set_local_pose(sapien.Pose([0.0, 0.0, wall_z], upright_q))
+            render_body.attach(wall)
+
+        vis.add_component(render_body)
+        self.scene.add_entity(vis)
+        self.jar_visual = vis
+        self._jar_visual_hollow = bool(hollow)
+
+    def use_viewer_hollow_jar(self):
+        """Swap to hollow alpha-glass shell for interactive SAPIEN viewer only."""
+        self._build_jar_visual(hollow=True)
+        # Rebuild fill after the shell so it composites through the alpha walls.
+        self._sync_fill_visual()
+        print(
+            "[fill_coffee_jar] viewer jar: hollow alpha-glass shell "
+            "(coffee fill column visible from the side)"
+        )
+
+    def _build_jar(self):
+        """Clear glass cylinder (original jar design) — no handle/spout.
+
+        Smooth see-through cylinder via ``RenderShapeCylinder`` (IOR=1) + thin
+        floor disk. Collision from the hollow jar mesh (no GLB visual).
+        Default visual is the smooth transmission cylinder (demo cameras).
+        Interactive viewer calls ``use_viewer_hollow_jar()`` after setup.
+        """
+        x, y = self.jar_xy
+        z0 = self.table_top + 0.001
+
+        col_path = Path(
+            f"assets/objects/{self.JAR_MODEL}/collision/base0.glb"
+        ).resolve()
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
         builder.add_nonconvex_collision_from_file(filename=str(col_path), scale=[1, 1, 1])
@@ -397,53 +1232,15 @@ class fill_coffee_jar(KitchenS_base_task):
         except Exception:
             pass
 
-        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
-        glass.set_transmission(1.0)
-        glass.set_transmission_roughness(0.0)
-        glass.set_roughness(0.04)
-        glass.set_metallic(0.0)
-        try:
-            glass.set_ior(1.0)
-        except Exception:
-            pass
-
-        wall_h = h - bottom_t
-        wall_half = wall_h * 0.5
-        wall_z = bottom_t + wall_half
-
-        vis = sapien.Entity()
-        vis.set_name("glass_jar_visual")
-        vis.set_pose(sapien.Pose([x, y, z0]))
-        render_body = sapien.render.RenderBodyComponent()
-
-        wall = sapien.render.RenderShapeCylinder(
-            radius=outer_r,
-            half_length=wall_half,
-            material=glass,
-        )
-        wall.set_local_pose(sapien.Pose([0.0, 0.0, wall_z], upright_q))
-        render_body.attach(wall)
-
-        floor = sapien.render.RenderShapeCylinder(
-            radius=outer_r * 0.98,
-            half_length=max(0.0015, bottom_t * 0.5),
-            material=glass,
-        )
-        floor.set_local_pose(sapien.Pose([0.0, 0.0, bottom_t * 0.5], upright_q))
-        render_body.attach(floor)
-
-        vis.add_component(render_body)
-        self.scene.add_entity(vis)
-        self.jar_visual = vis
-
         self.jar_bottom_z = self.table_top + self.JAR_BOTTOM_T
         self.jar_fillable_h = self.JAR_HEIGHT - self.JAR_BOTTOM_T
+        self._build_jar_visual(hollow=False)
 
     def _build_fill_rings(self):
-        """Add three subtle, thin red rings around the smooth glass cylinder."""
+        """Add three subtle, thin red rings around the glass jar body."""
         x, y = self.jar_xy
         ring_material = self._opaque_material([0.78, 0.05, 0.05], 0.70)
-        ring_mesh = Path("assets/objects/253_glass_jar/rings/thin_ring.glb")
+        ring_mesh = Path(f"assets/objects/{self.JAR_MODEL}/rings/thin_ring.glb")
         for frac in (0.25, 0.50, 0.75):
             z = self.jar_bottom_z + frac * self.jar_fillable_h
             self._add_static_mesh_visual(
@@ -463,10 +1260,8 @@ class fill_coffee_jar(KitchenS_base_task):
         return n
 
     def _beans_needed(self) -> int:
-        """Approx. beans for a dense mound up to the target red ring."""
-        target_h = self.target_fill * self.jar_fillable_h
-        n_layers = max(1, int(math.ceil(target_h / self._BEAN_H)))
-        return min(self.beans_full, n_layers * self._beans_per_layer())
+        """Beans required to reach the target fill fraction of the jar."""
+        return int(math.ceil(float(self.target_fill) * float(self.beans_full)))
 
     def _beans_in_jar_list(self):
         x, y = self.jar_xy
@@ -483,19 +1278,24 @@ class fill_coffee_jar(KitchenS_base_task):
     def _count_beans_in_jar(self) -> int:
         return len(self._beans_in_jar_list())
 
-    def _pile_height(self) -> float:
-        """Height of the bean pile above the jar floor (meters)."""
-        bean_half = self._BEAN_H * 0.5
-        zs = []
-        for b in self._beans_in_jar_list():
-            zs.append(float(b.get_pose().p[2]))
-        if not zs:
-            return 0.0
-        return max(0.0, max(zs) + bean_half - self.jar_bottom_z)
+    def _effective_bean_count(self) -> int:
+        """Beans that count toward fill (in-jar + still streaming this press)."""
+        n = int(getattr(self, "beans_in_jar", 0) or 0)
+        if getattr(self, "_press_active", False):
+            n += int(getattr(self, "_press_spawned", 0) or 0)
+        return int(min(self.beans_full, max(0, n)))
 
     def _current_fill(self) -> float:
-        """Fill fraction from pile height vs the red-ring scale (0 = empty, 1 = rim)."""
-        return float(self._pile_height() / max(1e-6, self.jar_fillable_h))
+        """Fill fraction vs red-ring scale — proportional to beans dispensed.
+
+        More coffee out → higher level. Uses bean count (not packed max-Z) so
+        small force-level differences still move the visible column.
+        """
+        return float(self._effective_bean_count()) / float(max(1, self.beans_full))
+
+    def _pile_height(self) -> float:
+        """Coffee column height above the jar floor (meters), from fill fraction."""
+        return float(self._current_fill() * self.jar_fillable_h)
 
     def _spawn_bean(self, pose: sapien.Pose):
         bean = create_actor(
@@ -531,7 +1331,7 @@ class fill_coffee_jar(KitchenS_base_task):
         return bean
 
     def _freeze_beans(self, beans):
-        """Freeze beans into a dense mound, stacking upward from the jar floor."""
+        """Freeze beans into a mound whose top matches the bean-count fill height."""
         x, y = self.jar_xy
         pile_r = self.JAR_INNER_R * self._PILE_R_SCALE
         inside = []
@@ -544,6 +1344,9 @@ class fill_coffee_jar(KitchenS_base_task):
 
         bean_r = self._BEAN_R
         bean_h = self._BEAN_H
+        # Target top of the pile from dispensed count (same scale as fill column).
+        fill = min(1.0, float(len(inside)) / float(max(1, self.beans_full)))
+        target_top = self.jar_bottom_z + fill * self.jar_fillable_h
         max_ring = max(1, int((pile_r - bean_r) / (2.0 * bean_r * 0.95)))
         positions = []
         layer = 0
@@ -571,6 +1374,16 @@ class fill_coffee_jar(KitchenS_base_task):
             if layer > 60:
                 break
 
+        # Stretch / compress layers so the mound top tracks fill fraction.
+        if positions:
+            z0 = self.jar_bottom_z + bean_h * 0.5
+            z_max = max(pz for _, _, pz in positions)
+            span = max(1e-6, z_max - z0)
+            scale = max(0.15, (target_top - z0) / span)
+            positions = [
+                (px, py, z0 + (pz - z0) * scale) for px, py, pz in positions
+            ]
+
         for bean, (px, py, pz) in zip(inside, positions):
             yaw = float(np.random.uniform(0, 2 * np.pi))
             qx, qy, qz, qw = t3d.euler.euler2quat(0.25, 0.15, yaw)
@@ -592,39 +1405,42 @@ class fill_coffee_jar(KitchenS_base_task):
                 pass
 
     def _sync_fill_visual(self):
-        """Opaque coffee column up to the current pile height (readable vs red rings).
+        """Opaque coffee column proportional to beans dispensed (vs red rings).
 
         Top-down cameras flatten a real bean stack into a small floor sprinkle, so
-        success-by-height is invisible without an explicit fill body.
+        the fill body is what makes force-level differences readable. Interactive
+        viewer uses a fuller opaque column so the level reads through the hollow
+        alpha-glass shell (same approach as measure_ingredient oil).
         """
-        if getattr(self, "fill_visual", None) is not None:
-            try:
-                self.scene.remove_entity(self.fill_visual)
-            except Exception:
-                pass
-            self.fill_visual = None
+        self.fill_visual = self._remove_entity(getattr(self, "fill_visual", None))
 
         h = float(self._pile_height())
-        if h < 0.004:
+        if h < 0.003:
             return
 
         x, y = self.jar_xy
         upright_q = [0.70710678, 0.0, -0.70710678, 0.0]
         half = h * 0.5
-        mat = sapien.render.RenderMaterial(base_color=[0.22, 0.10, 0.04, 0.92])
-        try:
-            mat.set_transmission(0.0)
-            mat.set_roughness(0.85)
-            mat.set_metallic(0.0)
-        except Exception:
-            pass
+        viewer_shell = bool(getattr(self, "_jar_visual_hollow", False))
+        if viewer_shell:
+            mat = self._viewer_coffee_material()
+            fill_r = self.JAR_INNER_R * 0.97
+        else:
+            mat = sapien.render.RenderMaterial(base_color=[0.22, 0.10, 0.04, 0.92])
+            try:
+                mat.set_transmission(0.0)
+                mat.set_roughness(0.85)
+                mat.set_metallic(0.0)
+            except Exception:
+                pass
+            fill_r = self.JAR_INNER_R * 0.90
 
         ent = sapien.Entity()
         ent.set_name("coffee_fill_visual")
         ent.set_pose(sapien.Pose([x, y, self.jar_bottom_z]))
         body = sapien.render.RenderBodyComponent()
         col = sapien.render.RenderShapeCylinder(
-            radius=self.JAR_INNER_R * 0.90,
+            radius=fill_r,
             half_length=half,
             material=mat,
         )
@@ -640,21 +1456,80 @@ class fill_coffee_jar(KitchenS_base_task):
         except Exception:
             return 1.0 / 250.0
 
-    def _beans_for_duration(self, hold_s: float) -> int:
-        """Map a hold duration (sec) → bean count between min/max endpoints."""
-        t = float(np.clip(hold_s, self.press_duration_min, self.press_duration_max))
-        span = self.press_duration_max - self.press_duration_min
-        if span <= 1e-9:
-            n = self.beans_per_press_max
-        else:
-            alpha = (t - self.press_duration_min) / span
-            n = int(
-                round(
-                    self.beans_per_press_min
-                    + alpha * (self.beans_per_press_max - self.beans_per_press_min)
-                )
-            )
-        return int(np.clip(n, self.beans_per_press_min, self.beans_per_press_max))
+    def _lid_contact_force(self) -> float:
+        """PhysX contact force (N) between gripper links and the push button."""
+        if not hasattr(self, "robot"):
+            return 0.0
+        dt = self._sim_dt()
+        btn = "dispenser_push_button"
+        grip = set(getattr(self.robot, "gripper_name", []) or [])
+        imp = 0.0
+        try:
+            for contact in self.scene.get_contacts():
+                n0 = contact.bodies[0].entity.name
+                n1 = contact.bodies[1].entity.name
+                if btn not in (n0, n1):
+                    continue
+                other = n1 if n0 == btn else n0
+                if grip and other not in grip:
+                    # Still accept left-arm / finger-like links.
+                    o = other.lower()
+                    if not (
+                        o.startswith("left")
+                        or o.startswith("right")
+                        or "finger" in o
+                        or "pad" in o
+                        or "hand" in o
+                        or "gripper" in o
+                    ):
+                        continue
+                for pt in getattr(contact, "points", None) or []:
+                    v = np.asarray(getattr(pt, "impulse", [0.0, 0.0, 0.0]), dtype=float)
+                    imp += float(np.linalg.norm(v))
+        except Exception:
+            return 0.0
+        return float(imp / max(dt, 1e-6))
+
+    def _lid_spring_force(self) -> float:
+        """Spring proxy (N) from virtual key compression.
+
+        Position-controlled presses often yield sparse contact impulses against a
+        static button; this proxy makes pressure a deterministic function of
+        how far the gripper pushes into the blue key's travel range.
+        """
+        signal = self._button_press_signal()
+        if signal is None:
+            return 0.0
+        tip_z = float(signal["tcp"][2])
+        engage_z = float(self.touch_top_z + self.force_engage_slack)
+        pen = max(0.0, engage_z - tip_z)
+        return float(self.force_stiffness * pen)
+
+    def _lid_press_force(self) -> float:
+        """Effective button press force (N) used for the 4 dispense thresholds.
+
+        Position-controlled presses into a static button produce huge, noisy PhysX
+        impulse spikes (often >100 N) that would collapse every press to the
+        hardest level. The spring force is a stable, depth-correlated signal:
+        more key compression means more pressure and therefore more beans.
+        Contact impulse is still available via ``_lid_contact_force`` for debug.
+        """
+        return float(self._lid_spring_force())
+
+    def _force_level(self, force_n: float) -> int:
+        """Map force (N) → level in {0,1,2,3,4} (0 = below first threshold)."""
+        level = 0
+        for i, thr in enumerate(self.force_thresholds):
+            if float(force_n) >= float(thr):
+                level = i + 1
+        return int(level)
+
+    def _beans_for_force(self, force_n: float) -> int:
+        """Map force (N) → bean count via the four thresholds."""
+        level = self._force_level(force_n)
+        if level <= 0:
+            return 0
+        return int(self.beans_per_force_level[level - 1])
 
     def _spawn_one_dispensed_bean(self):
         """Drop a single bean from the nozzle into the jar."""
@@ -682,50 +1557,68 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
+        self._press_peak_force = 0.0
+        self._press_force_level = 0
 
     def _tick_press(self):
-        """While the lid is held, stream beans according to elapsed hold time."""
+        """While the button is held, stream beans according to peak press force."""
         if not self._press_active:
             return
         if self.beans_in_jar + self._press_spawned >= self.beans_full:
             return
         self._press_steps += 1
         self._press_hold_s = self._press_steps * self._sim_dt()
-        # Progressive target: ramp 0→max over duration_max, then clamp via
-        # ``_beans_for_duration`` so short holds still grant the min amount
-        # once finished (see ``_end_press``).
-        if self._press_hold_s < self.press_duration_min:
-            # Before min duration: linear ramp from 0 to beans_min.
-            alpha = self._press_hold_s / max(1e-6, self.press_duration_min)
-            target = int(math.floor(alpha * self.beans_per_press_min))
-        else:
-            target = self._beans_for_duration(self._press_hold_s)
+        force_n = self._lid_press_force()
+        if force_n > self._press_peak_force:
+            self._press_peak_force = force_n
+        self._press_force_level = self._force_level(self._press_peak_force)
+        target = self._beans_for_force(self._press_peak_force)
         target = min(target, self.beans_full - self.beans_in_jar)
         while self._press_spawned < target:
             self._spawn_one_dispensed_bean()
             self._press_spawned += 1
+            # Raise the fill column as beans stream out (force → amount → level).
+            if self._press_spawned == target or self._press_spawned % 3 == 0:
+                self._sync_fill_visual()
             # Small settle between beans so the cascade stays visible.
             for _ in range(8):
                 super()._update_kinematic_tasks()
                 self.scene.step()
 
     def _end_press(self):
-        """Finalize a hold: top up to the duration mapping, settle, freeze pile."""
+        """Finalize a press: top up to the force-level mapping, settle, freeze."""
         if not self._press_active:
             return
-        # Guarantee the min/max mapping even if the stream lagged.
-        hold_s = max(self._press_hold_s, self._sim_dt())
-        want = self._beans_for_duration(hold_s)
+        # One last pressure sample in case the peak arrived on the release frame.
+        force_n = self._lid_press_force()
+        if force_n > self._press_peak_force:
+            self._press_peak_force = force_n
+        self._press_force_level = self._force_level(self._press_peak_force)
+        # Ignore ghost touches during approach (below first threshold → no beans).
+        if self._press_force_level <= 0 and int(self._press_spawned) <= 0:
+            self._press_active = False
+            self._dispensing = False
+            self._press_steps = 0
+            self._press_spawned = 0
+            self._press_hold_s = 0.0
+            self._press_peak_force = 0.0
+            self._press_force_level = 0
+            return
+        want = self._beans_for_force(self._press_peak_force)
         want = min(want, self.beans_full - self.beans_in_jar)
         while self._press_spawned < want:
             self._spawn_one_dispensed_bean()
             self._press_spawned += 1
+            if self._press_spawned == want or self._press_spawned % 3 == 0:
+                self._sync_fill_visual()
             for _ in range(8):
                 super()._update_kinematic_tasks()
                 self.scene.step()
 
         self.press_count += 1
         spawned = int(self._press_spawned)
+        peak = float(self._press_peak_force)
+        level = int(self._press_force_level)
         # Close the press session before settle so touch-detect cannot re-enter.
         self._press_active = False
         self._dwell(self.SETTLE_STEPS)
@@ -733,15 +1626,18 @@ class fill_coffee_jar(KitchenS_base_task):
         self._dwell(6)
         self.beans_in_jar = self._count_beans_in_jar()
         self._sync_fill_visual()
+        fill = self._current_fill()
         print(
-            f"[fill_coffee_jar] hold={hold_s:.2f}s → {spawned} beans "
-            f"(map {self.beans_per_press_min}-{self.beans_per_press_max} "
-            f"over {self.press_duration_min:.2f}-{self.press_duration_max:.2f}s)"
+            f"[fill_coffee_jar] force={peak:.1f}N level={level}/4 → {spawned} beans "
+            f"fill={fill:.0%} "
+            f"(thresholds {list(self.force_thresholds)} → {list(self.beans_per_force_level)})"
         )
         self._dispensing = False
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
+        self._press_peak_force = 0.0
+        self._press_force_level = 0
 
     def _dwell(self, steps: int):
         for i in range(max(0, int(steps))):
@@ -758,26 +1654,41 @@ class fill_coffee_jar(KitchenS_base_task):
         ee_z = tcp_z + self.EE_TO_TCP
         return [float(self.touch_xy[0]), float(self.touch_xy[1]), ee_z, *GRASP_DIRECTION_DIC["top_down"]]
 
-    def _press_dispenser(self, arm_tag: ArmTag, duration: float | None = None):
-        """Press and hold the lid for ``duration`` seconds (clamped to min/max)."""
-        if duration is None:
-            duration = self.press_duration_max
-        duration = float(
-            np.clip(duration, self.press_duration_min, self.press_duration_max)
-        )
-        self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(self.KEY_HOVER_DIS)))
+    def _press_dispenser(self, arm_tag: ArmTag, force_level: int = 4):
+        """Press the top button to the requested force level (1–4) and dispense."""
+        self._pressing_arm_side = str(arm_tag)
+        level = int(np.clip(force_level, 1, 4))
+        depth = float(self.press_depths[level - 1])
+        # Press with the WSG fingers closed so the gripper behaves like one
+        # rigid button-pushing tool rather than straddling the dispenser top.
+        self.move(self.close_gripper(arm_tag))
+        if not self.plan_success:
+            print("[fill_coffee_jar] could not close gripper for dispenser press")
+            return False
+        # Two-stage approach: high waypoint, then drop to hover (more reliable IK).
+        high_dis = self.KEY_HOVER_DIS + 0.08
+        self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(high_dis)))
+        if not self.plan_success:
+            # Fallback: direct hover.
+            self.plan_success = True
+            self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(self.KEY_HOVER_DIS)))
+        else:
+            self.move(self.move_by_displacement(arm_tag, z=-(high_dis - self.KEY_HOVER_DIS)))
         if not self.plan_success:
             print(f"[fill_coffee_jar] hover failed to {self._touch_tip_pose(self.KEY_HOVER_DIS)}")
             return False
-        self.move(self.move_by_displacement(arm_tag, z=-self.KEY_PRESS_DEPTH))
+        self.move(self.move_by_displacement(arm_tag, z=-depth))
         if not self.plan_success:
             return False
 
-        # Hold: stream beans for the requested duration (expert path; does not
-        # rely on the per-step touch detector, which can miss during move()).
+        # Sample peak force while pressed (expert path; does not rely on the
+        # per-step touch detector, which can miss during move()).
         self._start_press()
-        hold_steps = max(1, int(round(duration / self._sim_dt())))
+        hold_steps = max(1, int(round(self.press_sample_s / self._sim_dt())))
         for _ in range(hold_steps):
+            measured = self._lid_press_force()
+            if measured > self._press_peak_force:
+                self._press_peak_force = measured
             self._tick_press()
             if not self._press_active:
                 break
@@ -787,28 +1698,24 @@ class fill_coffee_jar(KitchenS_base_task):
                 self._take_picture()
         self._end_press()
 
-        self.move(self.move_by_displacement(arm_tag, z=self.KEY_PRESS_DEPTH))
+        self.move(self.move_by_displacement(arm_tag, z=depth))
         self._dwell(8)
         return True
 
     def _detect_lid_touch(self):
         if self.dispenser_touch_surface is None or not hasattr(self, "robot"):
             return
-        try:
-            ee = np.asarray(self.robot.get_left_ee_pose()[:3], dtype=float)
-        except Exception:
-            return
-        xy_ok = float(np.linalg.norm(ee[:2] - self.touch_xy)) <= 0.05
-        # EE origin is about EE_TO_TCP above the fingertip. Trigger only when
-        # the fingertip reaches the clear lid, not during the hover approach.
-        z_ok = ee[2] <= self.touch_top_z + self.EE_TO_TCP + 0.02
-        touching = bool(xy_ok and z_ok)
+        signal = self._button_press_signal()
+        touching = bool(signal is not None and self._lid_press_force() > 0.5)
         if touching and not self._touch_latched:
             self._start_press()
         if touching and self._press_active:
             self._tick_press()
-            # Auto-finish once the max hold has been reached.
-            if self._press_hold_s >= self.press_duration_max:
+            # Auto-finish once the hardest level has been held briefly.
+            if (
+                self._press_force_level >= 4
+                and self._press_hold_s >= self.press_sample_s
+            ):
                 self._end_press()
                 touching = False
         if (not touching) and self._touch_latched and self._press_active:
@@ -819,6 +1726,7 @@ class fill_coffee_jar(KitchenS_base_task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
             return
+        self._update_button_pressed_visual_from_robot()
         # While actively holding we still need touch edge detection for release
         # / max-duration stop; `_tick_press` is driven from `_detect_lid_touch`.
         if getattr(self, "_dispensing", False) and not self._press_active:
@@ -826,39 +1734,69 @@ class fill_coffee_jar(KitchenS_base_task):
         self._detect_lid_touch()
 
     # ------------------------------------------------------------------ expert / success
+    def _fill_band(self):
+        lo = float(self.target_fill) - float(self.fill_tol)
+        hi = float(self.target_fill) + float(self.fill_tol)
+        return max(0.0, lo), min(1.0, hi)
+
+    def _force_level_for_remaining(self, fill: float) -> int:
+        """Pick the smallest force level that enters the success band without overshoot."""
+        _, hi = self._fill_band()
+        lo, _ = self._fill_band()
+        if fill + 1e-6 >= lo:
+            return 1
+        need_frac = max(0.0, float(self.target_fill) - float(fill))
+        need_beans = int(math.ceil(need_frac * float(self.beans_full)))
+        # Prefer a level that lands inside [lo, hi].
+        best = 4
+        for i, n in enumerate(self.beans_per_force_level):
+            pred = fill + float(n) / float(self.beans_full)
+            if pred + 1e-6 >= lo and pred - 1e-6 <= hi:
+                return i + 1
+            if n >= need_beans:
+                best = i + 1
+                break
+        return int(best)
+
     def play_once(self):
-        arm = ArmTag("left")
+        # Station lives on the free half opposite the stove; pick that arm.
+        arm = ArmTag("left" if float(self.dispenser_xy[0]) <= 0.0 else "right")
         self.move(self.close_gripper(arm))
         if not self.plan_success:
             print("[fill_coffee_jar] close_gripper failed")
             return self.info
 
         needed = self._beans_needed()
-        # Full-duration holds; shorter holds dispense less (see press_duration_*).
-        max_presses = int(math.ceil(needed / max(1, self.beans_per_press_max))) + 3
+        lo, hi = self._fill_band()
+        max_presses = int(math.ceil(needed / max(1, self.beans_per_press_min))) + 4
         for i in range(max_presses):
             self.beans_in_jar = self._count_beans_in_jar()
             fill = self._current_fill()
-            if fill >= self.target_fill:
+            if fill + 1e-6 >= lo:
                 break
             if not self.plan_success:
                 print(f"[fill_coffee_jar] plan failed before press {i}")
                 break
-            ok = self._press_dispenser(arm, duration=self.press_duration_max)
+            level = self._force_level_for_remaining(fill)
+            # Fresh plan flag each press (a prior miss shouldn't abort the episode).
+            self.plan_success = True
+            ok = self._press_dispenser(arm, force_level=level)
+            if not ok:
+                self.plan_success = True
+                ok = self._press_dispenser(arm, force_level=level)
             self.beans_in_jar = self._count_beans_in_jar()
             fill = self._current_fill()
             print(
-                f"[fill_coffee_jar] press={i} ok={ok} "
+                f"[fill_coffee_jar] press={i} force_lvl={level} ok={ok} "
                 f"beans={self.beans_in_jar}/{needed} fill={fill:.0%} "
-                f"(need≥{self.target_fill:.0%}) plan={self.plan_success}"
+                f"(band {lo:.0%}–{hi:.0%}) plan={self.plan_success}"
             )
 
-        # Target reached → stop interacting and withdraw.
+        # Target band reached → withdraw.
         if self.plan_success:
             self.move(self.move_by_displacement(arm, z=0.08))
 
-        fill = self._current_fill()
-        if fill >= self.target_fill:
+        if self.check_success():
             self.plan_success = True
 
         level_pct = int(round(self.target_fill * 100))
@@ -868,28 +1806,51 @@ class fill_coffee_jar(KitchenS_base_task):
             "{C}": "252_coffee_bean/base0",
             "{a}": str(arm),
             "{L}": f"{level_pct}%",
+            "{side}": str(getattr(self, "stove_side", "right")),
+            "{burner}": str(getattr(self, "kettle_burner", "")),
         }
         return self.info
 
     def check_success(self):
-        """Success when the bean pile reaches at least the target red ring."""
+        """Success when fill is inside target_fill ± fill_tol (default ±5%)."""
+        if not getattr(self, "layout_ok", True):
+            return False
+        # Never declare success mid-press. The final fill must be evaluated
+        # after the button is released so an overshooting last press does not
+        # terminate the episode early.
+        if bool(getattr(self, "_press_active", False)):
+            return False
         self.beans_in_jar = self._count_beans_in_jar()
         fill = self._current_fill()
-        return bool(fill + 1e-3 >= self.target_fill and self.beans_in_jar > 0)
+        lo, hi = self._fill_band()
+        return bool(self.beans_in_jar > 0 and lo - 1e-3 <= fill <= hi + 1e-3)
 
     def get_obs(self):
         obs = super().get_obs()
+        lo, hi = self._fill_band()
         obs["coffee_jar"] = {
             "target_fill": float(self.target_fill),
+            "fill_tol": float(self.fill_tol),
+            "fill_lo": float(lo),
+            "fill_hi": float(hi),
             "fill": float(self._current_fill()),
             "pile_height": float(self._pile_height()),
             "beans_in_jar": int(self.beans_in_jar),
             "beans_full": int(self.beans_full),
-            "beans_per_press_min": int(self.beans_per_press_min),
-            "beans_per_press_max": int(self.beans_per_press_max),
-            "press_duration_min": float(self.press_duration_min),
-            "press_duration_max": float(self.press_duration_max),
+            "force_thresholds": [float(x) for x in self.force_thresholds],
+            "beans_per_force_level": [int(x) for x in self.beans_per_force_level],
+            "lid_force": float(self._lid_press_force()) if self._loaded else 0.0,
             "press_count": int(self.press_count),
+            "dispenser_xy": [float(x) for x in self.dispenser_xy],
+            "jar_xy": [float(x) for x in self.jar_xy],
+            "layout_ok": bool(getattr(self, "layout_ok", True)),
             "scene_id": int(self.scene_id),
+            "coffee_box_id": int(getattr(self, "coffee_box_id", -1)),
+            "milk_box_id": int(getattr(self, "milk_box_id", -1)),
+            "mug_id": int(getattr(self, "mug_id", -1)),
+            "kettle_id": int(getattr(self, "kettle_id", -1)),
+            "kettle_burner": str(getattr(self, "kettle_burner", "")),
+            "stove_side": str(getattr(self, "stove_side", "right")),
+            "range_xy": list(np.asarray(getattr(self, "range_xy", (0, 0)), dtype=float)),
         }
         return obs

@@ -5,12 +5,13 @@ Run directly from any directory:
 
     /path/to/RoboDynaExp/script_exp/interactive_sort_apples_belt.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_sort_apples_belt.py --control mouse
+    /path/to/RoboDynaExp/script_exp/interactive_sort_apples_belt.py --control robot
 
 Keyboard mode changes the diverter directly. Robot mode uses 1/2/3 to select
-gripper and arrows/E/Q to move it; Space clicks the selected arm's button
-(3 = both / dump). Mouse mode: click a red or green button to toggle its
-routing direction. This is an interaction sandbox, not a data-collection or
-robot-control rollout.
+gripper and arrows/E/Q to move it; lower with Q onto a button to divert
+(hold both for dump). Space is unused. Mouse mode: click a red or green button
+to toggle its routing direction. This is an interaction sandbox, not a
+data-collection or robot-control rollout.
 """
 
 import argparse
@@ -35,8 +36,9 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    make_button_controller,
+    UniversalRobotControls,
     make_viewer_view_toggle,
+    print_instructions,
     report_task_result,
 )
 
@@ -175,32 +177,6 @@ def _move_grippers_to_ready_position(env, arm_tag):
         env.plan_success = True
         env._last_plan_fail = None
     env._expert_hold = None
-
-
-def _make_robot_controller(env, arm_tag, robot_motion):
-    """Space holds the selected arm's diverter button (3 = both / dump)."""
-    return make_button_controller(
-        env,
-        arm_tag,
-        robot_motion,
-        get_button=lambda e, side: e.buttons[side],
-        get_top_z=lambda e, _side: float(e._button_top_z),
-        hold=True,
-        active_dz=float(getattr(env, "PRESS_DZ_ACTIVE", 0.12)),
-        grasp_dis=0.09,
-        pre_grasp_dis=0.09,
-        sides=("left", "right"),
-    )
-
-
-def _space_button_mode(env, window):
-    """Map held Space + 1/2/3 selection onto left / right / dump."""
-    if not window.key_down("space"):
-        return None
-    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
-    if len(selected) == 2:
-        return "dump"
-    return selected[0] if selected else None
 
 
 def _button_click_handler(env):
@@ -463,6 +439,9 @@ def main():
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     env = sort_apples_belt()
+    # Always enable arm teleop when robot mode: presses are gripper-Z only (no Space).
+    if args.control == "robot":
+        env._interactive_robot_mode = True
     env.setup_demo(**_configure_default_task(
         args.config, args.seed, use_robot=args.control == "robot"
     ))
@@ -471,12 +450,8 @@ def main():
     env.together_close_gripper(save_freq=None)
     _move_grippers_to_ready_position(env, ArmTag)
     belt_clear_since = None
-    arm_teleop = None
-    robot_controller = None
-    if args.control == "robot":
-        arm_teleop = FastArmTeleop(env)
-        env._interactive_space_click = True
-        robot_controller = _make_robot_controller(env, ArmTag, args.robot_motion)
+    # Disable legacy Space-click latch if the env still checks it.
+    env._interactive_space_click = False
     recorder = None
     record_frame_count = 0
     record_every = max(1, round(1.0 / (env.scene.get_timestep() * 30.0)))
@@ -486,6 +461,8 @@ def main():
 
     # A fixed overhead camera with the robot at the bottom keeps its controls in view.
     views = make_viewer_view_toggle(env, viewer)
+    if args.control == "robot" and views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
     composite_view = None
     restore_composite_motion_renderer = lambda: None
     if args.composite_view:
@@ -499,38 +476,31 @@ def main():
         print("Two-view mode ready: overhead interaction view + perspective view.")
     if args.control == "mouse":
         viewer.register_click_handler(_button_click_handler(env))
-        print("Top-down sort-apples sandbox ready. Click red/green to toggle the plank direction.")
+        print_instructions(
+            "Top-down sort-apples sandbox ready. Click red/green to toggle the plank direction."
+        )
     elif args.control == "robot":
-        if composite_view is not None:
-            print(
-                f"Composite robot mode ready ({args.robot_motion}).\n"
-                "  1 / 2 / 3              — select left / right / both grippers\n"
-                "  Arrow keys             — move selected gripper in world XY\n"
-                "  E / Q                  — raise / lower selected gripper\n"
-                "  Space                  — click the selected arm's button "
-                "(hold; 3 = both / dump)\n"
-                "  V          — toggle top-down / head_camera\n"
-                "  Esc        — quit\n"
-                "  --robot-motion planner|interpolate"
-            )
-        else:
-            print(
-                f"Robot mode ready ({args.robot_motion}).\n"
-                "  1 / 2 / 3           — select left / right / both grippers\n"
-                "  Arrow keys          — move selected gripper in world XY\n"
-                "  E / Q               — raise / lower selected gripper\n"
-                "  Space               — click the selected arm's button "
-                "(hold; 3 = both / dump)\n"
-                "  V                   — toggle top-down / head_camera\n"
-                "  Esc                 — quit\n"
-                "  --robot-motion planner|interpolate"
-            )
+        print_instructions(
+            "Robot mode ready (gripper-Z).\n"
+            "  1 / 2 / 3           — select left / right / both grippers\n"
+            "  Arrow keys          — move selected gripper in world XY\n"
+            "  E / Q               — raise / lower selected gripper\n"
+            "  Lower with Q onto a button to divert (both = dump)\n"
+            "  Space is unused\n"
+            "  F                   — open / close selected gripper(s)\n"
+            "  V                   — toggle top-down / head_camera\n"
+            "  G                   — gripper view (cycle L/R when both arms active)\n"
+            "  Esc                 — quit"
+        )
     else:
-        print(
+        print_instructions(
             "Top-down sort-apples sandbox ready (direct diverter control).\n"
             "  Left / Right Arrow  — hold to divert left / right\n"
             "  Down Arrow          — hold both (dump)\n"
+            "  Space is unused\n"
+            "  F                   — open / close selected gripper(s)\n"
             "  V                   — toggle top-down / head_camera\n"
+            "  G                   — gripper view (cycle L/R when both arms active)\n"
             "  release             — plank returns to rest"
         )
 
@@ -541,17 +511,11 @@ def main():
             if composite_view is None:
                 views.update(viewer.window)
             if composite_view is not None:
-                if arm_teleop is not None:
-                    # Composite mode has no SAPIEN key window; retain its click action.
-                    env._expert_hold = composite_view.action
-                else:
-                    env._expert_hold = composite_view.action
+                # Composite mode has no SAPIEN key window; retain its click action.
+                env._expert_hold = composite_view.action
             elif args.control == "keyboard":
                 _update_keyboard_control(env, viewer.window)
-            elif arm_teleop is not None:
-                arm_teleop.update(viewer.window)
-                if robot_controller is not None:
-                    robot_controller.update(_space_button_mode(env, viewer.window))
+            # Robot mode: gripper-Z reactive held_mask drives the diverter (no Space latch).
             env._update_kinematic_tasks()
             env.scene.step()
             if composite_view is not None:
@@ -608,8 +572,6 @@ def main():
                 time.sleep(remaining)
     finally:
         try:
-            if robot_controller is not None:
-                robot_controller.release()
             _close_recorder(recorder)
         finally:
             restore_second_view()
@@ -621,3 +583,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())

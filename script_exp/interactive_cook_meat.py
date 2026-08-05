@@ -5,10 +5,11 @@ Run from any directory:
 
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat.py --control robot
-    /path/to/RoboDynaExp/script_exp/interactive_cook_meat.py --control robot --robot-motion interpolate
 
-Respects ``cook_button_enabled`` from the selected config. When enabled, keyboard
-latches ``station["_expert_key_held"]`` and robot mode presses the matching key.
+Respects ``cook_button_enabled`` from the selected config. When enabled, cooking
+advances when a gripper lowers onto the cook key (ReactivePushButtons). Space
+toggles steak board ↔ pan transfer — no ``_expert_key_held`` latching from the
+interactive script.
 """
 
 import argparse
@@ -28,36 +29,39 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    print_instructions,
+    UniversalRobotControls,
+    action_failed,
     make_viewer_view_toggle,
     add_robot_motion_arg,
-    make_button_controller,
     report_task_result,
     print_mode_controls,
+    require_selected_arms,
 )
 
 
 CONTROLS_KEYBOARD = """
-  Hold Space       →  cook (all stations / primary)
-  Hold Q           →  cook LEFT station only (dual)
-  Hold E           →  cook RIGHT station only (dual)
-  G                →  toggle steak(s): board ↔ pan
+  Select an arm, move over the cook key, lower with Q to press.
+  Space            →  toggle steak(s): board ↔ pan
   P                →  snap steak(s) onto pan(s)
   B                →  snap steak(s) back to board(s)
 
-  Cooking advances only while the steak is on the pan and the key is held.
-  Latches station["_expert_key_held"] directly (no arm).
+  Cooking advances only while the steak is on the pan and the key is depressed.
+  Gripper-Z / ReactivePushButtons drives cooking (no Space latch).
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
 CONTROLS_ROBOT = """
-  Hold Space       →  cook with selected arm(s)
-  G                →  robot toggles steak(s): board → pan, then pan → board
+  Select an arm (1/2/3), move over the cook key, lower with Q to press
+  (E to raise).
+  Space            →  robot toggles steak(s): board → pan, then pan → board
 
-  Cooking advances only while the steak is on the pan and the key is held.
-  Selected arm(s) press the cook key while Space is held.
-  --robot-motion planner|interpolate
+  Cooking advances only while the steak is on the pan and the key is depressed.
+  Gripper-Z / ReactivePushButtons drives cooking (no Space latch).
   V                 toggle view: top-down ↔ head_camera
+  G                 gripper view (cycle L/R when both arms active)
   Close the viewer window to quit.
 """
 
@@ -118,6 +122,11 @@ def _clear_cook_latches(env):
 
 
 def _active_stations(env, mode):
+    """Stations whose arm matches ``mode`` (highlighted gripper).
+
+    Never fall back to the other arm's station when the selected gripper has
+    no matching station — that would move an unselected gripper.
+    """
     left_st, right_st = _stations_by_arm(env)
     if mode == "all":
         return list(env.stations)
@@ -125,8 +134,6 @@ def _active_stations(env, mode):
         return [left_st]
     if mode == "right" and right_st is not None:
         return [right_st]
-    if mode in ("left", "right") and len(env.stations) == 1:
-        return [env.stations[0]]
     return []
 
 
@@ -136,11 +143,9 @@ def _arms_for_mode(env, mode):
 
 
 def _station_for_side(env, side):
+    """Station owned by ``side`` only — never the other arm's station."""
     left_st, right_st = _stations_by_arm(env)
-    st = left_st if side == "left" else right_st
-    if st is None and len(getattr(env, "stations", []) or []) == 1:
-        st = env.stations[0]
-    return st
+    return left_st if side == "left" else right_st
 
 
 def _snap_steaks_to_pans(env):
@@ -159,7 +164,7 @@ def _snap_steaks_to_pans(env):
         if not env.use_cook_button:
             st["cooking_active"] = True
     if env.use_cook_button:
-        print("Snapped steak(s) onto pan(s). Hold Space/Q/E to cook.")
+        print("Snapped steak(s) onto pan(s). Lower gripper with Q onto the cook key.")
     else:
         print("Snapped steak(s) onto pan(s); contact cooking is active.")
 
@@ -180,73 +185,185 @@ def _steaks_on_pans(env):
     return bool(env.stations) and all(env._steak_on_pan_station(st) for st in env.stations)
 
 
+def _stations_for_selected(env):
+    """Stations owned by the currently highlighted gripper(s)."""
+    selected = require_selected_arms(env, exactly_one=False)
+    if not selected:
+        return []
+    selected_set = set(selected)
+    stations = [
+        st for st in (getattr(env, "stations", None) or [])
+        if str(st["arm"]) in selected_set
+    ]
+    if not stations:
+        action_failed(
+            env, selected,
+            detail="has no cook station / steak to transfer",
+        )
+    return stations
+
+
+def _place_selected_steaks_on_pans(env, stations):
+    """Place already-held steaks for ``stations`` only (no other-arm motion)."""
+    for st in stations:
+        arm = st["arm"]
+        pan_target = env._pan_place_target(st)
+        env.plan_success = True
+        env.move(
+            env.place_actor(
+                st["steak"],
+                target_pose=pan_target,
+                arm_tag=arm,
+                constrain="free",
+                pre_dis=0.10,
+                dis=0.02,
+                is_open=True,
+            )
+        )
+        if not env.plan_success:
+            return False
+        env.move(env.move_by_displacement(arm_tag=arm, z=0.10, move_axis="arm"))
+        if not env.plan_success:
+            return False
+        if not env._steak_on_pan_station(st):
+            env.plan_success = True
+            env.move(
+                env.place_actor(
+                    st["steak"],
+                    target_pose=pan_target,
+                    arm_tag=arm,
+                    constrain="free",
+                    pre_dis=0.10,
+                    dis=0.02,
+                    is_open=True,
+                )
+            )
+        if not env._steak_on_pan_station(st):
+            env.plan_success = False
+            return False
+    return True
+
+
+def _return_selected_steaks_to_boards(env, stations):
+    """Return cooked steaks for ``stations`` only (no other-arm motion)."""
+    for st in stations:
+        arm = st["arm"]
+        p = st["board"].get_pose().p
+        board_target = [float(p[0]), float(p[1]), float(st["board_top"]) + 0.03]
+        st["awaiting_return_grasp"] = True
+        env.plan_success = True
+        env.move(env.open_gripper(arm))
+        if not env.plan_success:
+            return False
+        env.move(env._safe_grasp_actor(st["steak"], arm_tag=arm, pre_grasp_dis=0.1))
+        if not env.plan_success:
+            return False
+        env._latch_grasp_doneness(st, force=True)
+        env.move(env.move_by_displacement(arm_tag=arm, z=0.12, move_axis="arm"))
+        if not env.plan_success:
+            return False
+        env.move(
+            env.place_actor(
+                st["steak"],
+                target_pose=board_target,
+                arm_tag=arm,
+                constrain="free",
+                pre_dis=0.10,
+                dis=0.015,
+                is_open=True,
+            )
+        )
+        if not env.plan_success:
+            return False
+        env.move(env.move_by_displacement(arm_tag=arm, z=0.08))
+    return True
+
+
 def _toggle_steak_transfer(env, *, robot: bool):
-    """Move all steaks between boards and pans using one toggle action."""
+    """Move steaks between boards and pans for the selected arm(s) only."""
 
     _clear_cook_latches(env)
-    on_pans = _steaks_on_pans(env)
     if not robot:
-        if on_pans:
+        if _steaks_on_pans(env):
             _snap_steaks_to_boards(env)
         else:
             _snap_steaks_to_pans(env)
         return
 
+    stations = _stations_for_selected(env)
+    if not stations:
+        return
+    arms = [str(st["arm"]) for st in stations]
+    stations = sorted(stations, key=lambda st: str(st["arm"]))
+
+    on_pans = all(env._steak_on_pan_station(st) for st in stations)
     if on_pans:
-        env._return_steaks_to_boards()
-        print("Robot returned steak(s) from pan(s) to board(s).")
+        env.plan_success = True
+        try:
+            if len(stations) == len(env.stations):
+                env._return_steaks_to_boards()
+                ok = bool(env.plan_success)
+            else:
+                ok = _return_selected_steaks_to_boards(env, stations)
+        except Exception as exc:
+            action_failed(env, arms, detail=f"could not return steak(s): {exc}")
+            return
+        if not ok or not env.plan_success:
+            action_failed(env, arms, detail="could not return steak(s) to board(s)")
+            return
+        print(f"Robot returned steak(s) with {'+'.join(arms)} arm(s).")
         return
 
-    # The task's placement helper expects each steak to be held first.
-    stations = sorted(env.stations, key=lambda st: str(st["arm"]))
-    open_actions = [env.open_gripper(st["arm"]) for st in stations]
-    if len(open_actions) == 1:
-        env.move(open_actions[0])
-    else:
-        env.move(open_actions[0], open_actions[1])
-    grasp_actions = [
+    env.plan_success = True
+    env.move(*[env.open_gripper(st["arm"]) for st in stations])
+    if not env.plan_success:
+        action_failed(env, arms, detail="could not open gripper before steak grasp")
+        return
+    env.move(*[
         env._safe_grasp_actor(st["steak"], arm_tag=st["arm"], pre_grasp_dis=0.10)
         for st in stations
-    ]
-    if len(grasp_actions) == 1:
-        env.move(grasp_actions[0])
-        env.move(env.move_by_displacement(stations[0]["arm"], z=0.10, move_axis="arm"))
-    else:
-        env.move(grasp_actions[0], grasp_actions[1])
-        env.move(
-            env.move_by_displacement(stations[0]["arm"], z=0.10, move_axis="arm"),
-            env.move_by_displacement(stations[1]["arm"], z=0.10, move_axis="arm"),
+    ])
+    if not env.plan_success:
+        action_failed(
+            env, arms,
+            detail="could not grasp steak (out of reach or plan failed)",
         )
-    env._place_steaks_on_pans()
+        return
+    env.move(*[
+        env.move_by_displacement(st["arm"], z=0.10, move_axis="arm")
+        for st in stations
+    ])
+    if not env.plan_success:
+        action_failed(env, arms, detail="could not lift steak after grasp")
+        return
+    try:
+        if len(stations) == len(env.stations):
+            env._place_steaks_on_pans()
+            ok = bool(env.plan_success)
+        else:
+            ok = _place_selected_steaks_on_pans(env, stations)
+    except Exception as exc:
+        action_failed(env, arms, detail=f"could not place steak(s): {exc}")
+        return
+    if not ok or not env.plan_success:
+        action_failed(env, arms, detail="could not place steak(s) on pan(s)")
+        return
     if not env.use_cook_button:
-        for st in env.stations:
+        for st in stations:
             st["cooking_active"] = True
-    print("Robot moved steak(s) from board(s) to pan(s).")
+    print(f"Robot moved steak(s) to pan(s) with {'+'.join(arms)} arm(s).")
 
 
 class KeyboardState:
+    """P/B/Space helpers only — cooking is gripper-Z (no Space cook latch)."""
+
     def __init__(self):
         self.prev_p = False
         self.prev_b = False
-        self.prev_g = False
+        self.prev_space = False
 
     def update(self, env, window):
-        left_st, right_st = _stations_by_arm(env)
-        space = window.key_down("space")
-        q = window.key_down("q")
-        e = window.key_down("e")
         _clear_cook_latches(env)
-        if space:
-            for st in env.stations:
-                st["_expert_key_held"] = True
-        else:
-            if q and left_st is not None:
-                left_st["_expert_key_held"] = True
-            if e and right_st is not None:
-                right_st["_expert_key_held"] = True
-            # Single-station: Q/E/Space all map to the only cook key.
-            if len(env.stations) == 1 and (q or e):
-                env.stations[0]["_expert_key_held"] = True
 
         p = window.key_down("p")
         if p and not self.prev_p:
@@ -256,31 +373,10 @@ class KeyboardState:
         if b and not self.prev_b:
             _snap_steaks_to_boards(env)
         self.prev_b = b
-        g = window.key_down("g")
-        if g and not self.prev_g:
+        space = window.key_down("space")
+        if space and not self.prev_space:
             _toggle_steak_transfer(env, robot=False)
-        self.prev_g = g
-
-
-def _requested_cook_mode(window):
-    if window.key_down("space"):
-        return "all"
-    q = window.key_down("q")
-    e = window.key_down("e")
-    if q and not e:
-        return "left"
-    if e and not q:
-        return "right"
-    return None
-
-
-def _selected_cook_mode(env, window):
-    if not window.key_down("space"):
-        return None
-    selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-    if len(selected) == 2:
-        return "all"
-    return selected[0] if selected else None
+        self.prev_space = space
 
 
 def _station_cook_finished(env, st):
@@ -433,6 +529,26 @@ class CookKeyController:
             self._started_at = None
 
     def update(self, requested_mode):
+        if requested_mode is not None:
+            active = {
+                str(st["arm"])
+                for st in _active_stations(self.env, requested_mode)
+            } & self.hover_qpos.keys()
+            if not active:
+                # Highlighted arm(s) cannot cook (no station / not prepared).
+                if requested_mode != self.mode and not getattr(
+                    self.env, "_interactive_cook_fail_latched", False
+                ):
+                    selected = tuple(
+                        getattr(self.env, "_interactive_selected_arms", ()) or ()
+                    )
+                    action_failed(
+                        self.env, selected or (requested_mode,),
+                        detail="cannot cook with this gripper",
+                    )
+                    self.env._interactive_cook_fail_latched = True
+                _clear_cook_latches(self.env)
+                return
         if requested_mode != self.mode:
             # A release immediately reverses any incomplete downward transition.
             self._begin_transition(requested_mode)
@@ -449,48 +565,6 @@ class CookKeyController:
         self._started_at = None
 
 
-def _make_robot_controller(env, arm_tag, robot_motion):
-    def get_button(e, side):
-        st = _station_for_side(e, side)
-        if st is not None and st.get("cook_key") is not None:
-            return st["cook_key"]
-        return e.cook_key
-
-    def get_top_z(e, side):
-        st = _station_for_side(e, side)
-        if st is not None and st.get("key_top_z") is not None:
-            return float(st["key_top_z"])
-        return float(e._key_top_z)
-
-    def set_latch(e, mode):
-        _clear_cook_latches(e)
-        for st in _active_stations(e, mode):
-            st["_expert_key_held"] = True
-
-    sides = tuple(
-        str(st["arm"])
-        for st in env.stations
-        if st.get("cook_key") is not None
-    ) or ("left", "right")
-
-    if robot_motion == "planner":
-        return CookKeyController(env, arm_tag)
-
-    return make_button_controller(
-        env,
-        arm_tag,
-        robot_motion,
-        get_button=get_button,
-        get_top_z=get_top_z,
-        set_latch=set_latch,
-        clear_latch=_clear_cook_latches,
-        arms_for_mode=lambda m: _arms_for_mode(env, m),
-        hold=True,
-        active_dz=float(getattr(env, "key_press_dz", 0.20)),
-        sides=sides,
-    )
-
-
 def main():
     parser = argparse.ArgumentParser(description="Interactive cook_meat viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
@@ -500,39 +574,38 @@ def main():
 
     from envs import CONFIGS_PATH
     from envs.cook_meat import cook_meat
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("cook_meat", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = cook_meat()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    # Always enable arm teleop: cooking is gripper-Z only (no Space latch).
+    env._interactive_robot_mode = True
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     # Match the main cook_meat rollout: open fingers before approaching steak.
     env.together_open_gripper(save_freq=None)
     _clear_cook_latches(env)
     if not env.use_cook_button:
         print("cook_button_enabled=false: no cook button; meat cooks by pan contact.")
 
-    # Keyboard sandbox starts with steaks on pans so Space can cook immediately.
+    # Keyboard sandbox starts with steaks on pans so gripper-Z can cook immediately.
     if args.control == "keyboard":
         _snap_steaks_to_pans(env)
 
     keyboard = KeyboardState()
-    robot_controller = (
-        _make_robot_controller(env, ArmTag, args.robot_motion)
-        if args.control == "robot" and env.use_cook_button
-        else None
-    )
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
 
     n = len(env.stations)
-    print(
+    print_instructions(
         f"Cook-button sandbox ready ({n} station(s)). "
-        f"Control={args.control}. robot-motion={args.robot_motion}."
+        "Select an arm, move over the cook key, lower with Q to press. "
+        "Space toggles steak board ↔ pan."
     )
 
     last_status = None
@@ -542,15 +615,8 @@ def main():
             frame_start = time.perf_counter()
             if args.control == "keyboard":
                 keyboard.update(env, viewer.window)
-            else:
-                if robot_controller is not None:
-                    robot_controller.update(_selected_cook_mode(env, viewer.window))
-                if viewer.window.key_press("g"):
-                    if robot_controller is not None:
-                        robot_controller.release()
-                    _toggle_steak_transfer(env, robot=True)
-                    if robot_controller is not None and hasattr(robot_controller, "prepare"):
-                        robot_controller.prepare()
+            elif viewer.window.key_press("space"):
+                _toggle_steak_transfer(env, robot=True)
             env._update_kinematic_tasks()
             env.scene.step()
             env.scene.update_render()
@@ -574,12 +640,11 @@ def main():
             if remaining > 0:
                 time.sleep(remaining)
     finally:
-        try:
-            if robot_controller is not None:
-                robot_controller.release()
-        finally:
-            env.close_env()
+        env.close_env()
 
 
 if __name__ == "__main__":
     main()
+    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
+    from _interactive_common import task_result_exit_code
+    raise SystemExit(task_result_exit_code())
