@@ -1,10 +1,14 @@
 from ._base_task import Base_Task
 from .utils import *
+import os
+import tempfile
 import sapien
 import sapien.physx
 import sapien.render
 import numpy as np
 import transforms3d as t3d
+from shapely.geometry import Point, Polygon
+from trimesh.creation import extrude_polygon
 
 
 class drop_ball_hole(Base_Task):
@@ -30,7 +34,7 @@ class drop_ball_hole(Base_Task):
     CAP_HOLE_RADIUS_DEFAULT = 0.03    # radius of the circular opening at the cap center
     CAP_HOLE_DIAMETER_DEFAULT = 2.0 * CAP_HOLE_RADIUS_DEFAULT
     CAP_HOLE_CORNER_MARGIN_DEFAULT = 0.012  # clearance between the hole and the square edges
-    CAP_HOLE_BANDS_DEFAULT = 40       # more bands => smoother approximation of the circular cutout
+    CAP_HOLE_BANDS_DEFAULT = 48       # shapely circle resolution for hole cutouts (visual + collision)
     BALL_RADIUS_DEFAULT = 0.025
     BALL_SIDE_CLEARANCE_DEFAULT = 0.14
     BALL_SIDE_DEFAULT = "random"          # random | left | right — which arm operates
@@ -444,25 +448,6 @@ class drop_ball_hole(Base_Task):
                 return component
         return None
 
-    def _add_cap_box(self, builder, x0, x1, y0, y1, material, visual_material):
-        if x1 - x0 <= 1e-4 or y1 - y0 <= 1e-4:
-            return
-        pose = sapien.Pose(
-            [0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.0],
-            [1.0, 0.0, 0.0, 0.0],
-        )
-        half_size = [0.5 * (x1 - x0), 0.5 * (y1 - y0), self.cap_thickness]
-        builder.add_box_collision(
-            pose=pose,
-            half_size=half_size,
-            material=material,
-        )
-        builder.add_box_visual(
-            pose=pose,
-            half_size=half_size,
-            material=visual_material,
-        )
-
     def _build_ball(self, pose, color):
         entity = create_sphere(
             self,
@@ -521,113 +506,59 @@ class drop_ball_hole(Base_Task):
             ))
         return holes
 
-    @staticmethod
-    def _subtract_intervals(span, gaps):
-        """Subtract merged gaps from [span_lo, span_hi]; return solid segments."""
-        lo, hi = span
-        if hi - lo <= 1e-6:
-            return []
-        cleaned = []
-        for g0, g1 in gaps:
-            a = max(lo, float(g0))
-            b = min(hi, float(g1))
-            if b - a > 1e-6:
-                cleaned.append((a, b))
-        if not cleaned:
-            return [(lo, hi)]
-        cleaned.sort()
-        merged = [cleaned[0]]
-        for a, b in cleaned[1:]:
-            m0, m1 = merged[-1]
-            if a <= m1 + 1e-8:
-                merged[-1] = (m0, max(m1, b))
-            else:
-                merged.append((a, b))
-        solids = []
-        cursor = lo
-        for a, b in merged:
-            if a - cursor > 1e-4:
-                solids.append((cursor, a))
-            cursor = max(cursor, b)
-        if hi - cursor > 1e-4:
-            solids.append((cursor, hi))
-        return solids
+    def _cap_polygon(self):
+        """Cap-top polygon in local XY with true circular hole cutouts (billiard-style)."""
+        resolution = max(24, int(self.cap_hole_bands))
+        if self.container_shape == "cylinder":
+            poly = Point(0.0, 0.0).buffer(float(self.cap_radius), resolution=resolution)
+        else:
+            he = float(self.cap_half_extent)
+            poly = Polygon([(-he, -he), (he, -he), (he, he), (-he, he)])
+        for cx, cy, radius in self._cap_holes():
+            cut = Point(float(cx), float(cy)).buffer(float(radius), resolution=resolution)
+            poly = poly.difference(cut)
+        if poly.is_empty:
+            raise RuntimeError("cap hole cutouts removed the entire platform")
+        if poly.geom_type == "MultiPolygon":
+            poly = max(poly.geoms, key=lambda g: g.area)
+        return poly
 
-    def _band_solid_segments(self, y0, y1, holes):
-        band_cy = 0.5 * (y0 + y1)
-        gaps = []
-        for cx, cy, radius in holes:
-            dy = band_cy - cy
-            if abs(dy) >= radius:
-                continue
-            dx = float(np.sqrt(max(radius ** 2 - dy ** 2, 0.0)))
-            gaps.append((cx - dx, cx + dx))
-        return self._subtract_intervals((-self.cap_half_extent, self.cap_half_extent), gaps)
+    def _export_cap_mesh(self, path):
+        """Extrude the holed cap polygon to a centered mesh (same as billiard lid)."""
+        thickness = 2.0 * float(self.cap_thickness)
+        mesh = extrude_polygon(self._cap_polygon(), height=thickness)
+        mesh.apply_translation([0.0, 0.0, -0.5 * thickness])
+        try:
+            mesh.fix_normals()
+        except Exception:
+            pass
+        mesh.export(path)
+        return path
 
     def _build_cap(self):
-        if self.container_shape == "cylinder":
-            return self._build_circular_cap()
-        builder = self.scene.create_actor_builder()
-        builder.set_physx_body_type("dynamic")
+        """Kinematic rotating plate with smooth circular hole cutouts.
 
-        hole_bands = max(12, int(self.cap_hole_bands))
-        cap_span = 2.0 * self.cap_half_extent
-        band_h = cap_span / hole_bands
-        holes = self._cap_holes()
-        physical_material = self.scene.default_physical_material
+        Uses a shapely disk/square minus circular buffers, extruded to a triangle
+        mesh — the same approach as the billiard felt pockets — so openings look
+        round instead of stair-stepped box bands.
+        """
+        tag = "cylinder" if self.container_shape == "cylinder" else "square"
+        path = os.path.join(tempfile.gettempdir(), f"drop_ball_hole_cap_{tag}.obj")
+        self._export_cap_mesh(path)
+
         visual_material = sapien.render.RenderMaterial(base_color=[0.45, 0.85, 0.50, 1.0])
-
-        for band_idx in range(hole_bands):
-            y0 = -self.cap_half_extent + band_idx * band_h
-            y1 = min(self.cap_half_extent, y0 + band_h)
-            for x0, x1 in self._band_solid_segments(y0, y1, holes):
-                self._add_cap_box(
-                    builder,
-                    x0,
-                    x1,
-                    y0,
-                    y1,
-                    physical_material,
-                    visual_material,
-                )
-
-        builder.set_initial_pose(sapien.Pose(self.cap_center.tolist(), [1, 0, 0, 0]))
-        return builder.build(name="sorter_cap")
-
-    def _build_circular_cap(self):
-        """Approximate a circular rotating plate with box sectors and true gaps."""
         builder = self.scene.create_actor_builder()
-        builder.set_physx_body_type("dynamic")
-        physical_material = self.scene.default_physical_material
-        visual_material = sapien.render.RenderMaterial(base_color=[0.45, 0.85, 0.50, 1.0])
-        # Fine cells make both the outer rim and the cutout read as circles;
-        # the previous coarse grid left the opening visibly polygonal.
-        radial_bands, angular_bands = 24, 144
-        dr = self.cap_radius / radial_bands
-        holes = self._cap_holes()
-        for radial_idx in range(radial_bands):
-            r0, r1 = radial_idx * dr, (radial_idx + 1) * dr
-            rmid = 0.5 * (r0 + r1)
-            tangential = max(0.004, rmid * 2.0 * np.pi / angular_bands)
-            for angular_idx in range(angular_bands):
-                angle = 2.0 * np.pi * (angular_idx + 0.5) / angular_bands
-                center = np.array([rmid * np.cos(angle), rmid * np.sin(angle)])
-                # Skip any cell intersecting the analytic circular cutout.
-                # With the dense grid this produces a visually round, fully
-                # open hole while retaining box-based collision primitives.
-                cell_radius = 0.5 * np.hypot(dr, tangential)
-                if any(np.linalg.norm(center - np.array([cx, cy])) <= radius + cell_radius
-                       for cx, cy, radius in holes):
-                    continue
-                pose = sapien.Pose(
-                    [float(center[0]), float(center[1]), 0.0],
-                    t3d.quaternions.axangle2quat([0, 0, 1], angle),
-                )
-                half_size = [0.5 * dr, 0.5 * tangential, self.cap_thickness]
-                builder.add_box_collision(pose=pose, half_size=half_size, material=physical_material)
-                builder.add_box_visual(pose=pose, half_size=half_size, material=visual_material)
+        # Triangle-mesh collision is valid for kinematic (not free dynamic) bodies.
+        builder.set_physx_body_type("kinematic")
+        builder.add_nonconvex_collision_from_file(filename=path)
+        builder.add_visual_from_file(filename=path, material=visual_material)
         builder.set_initial_pose(sapien.Pose(self.cap_center.tolist(), [1, 0, 0, 0]))
-        return builder.build(name="cylinder_sorter_cap")
+        name = "cylinder_sorter_cap" if self.container_shape == "cylinder" else "sorter_cap"
+        if hasattr(builder, "build_kinematic"):
+            entity = builder.build_kinematic(name=name)
+        else:
+            entity = builder.build(name=name)
+        return entity
 
     def _place_cap(self, angle):
         """Pose the rotating square platform with its corner pass-through hole."""
