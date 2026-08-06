@@ -107,6 +107,10 @@ class whack_moles(Base_Task):
     MALLET_PRE_GRASP_DIS = 0.120
     _MALLET_ROBOT_IGNORE_BIT = 1 << 9
     _MALLET_ROBOT_IGNORE_ID = 0xA117
+    # PhysX contact groups: bit0 (1) = world/board, bit1 (2) = moles/rabbits.
+    # Held mallets must keep both so the head collides with the hole grid and
+    # still reports mesh contact against bobbing critters.
+    _MALLET_CONTACT_GROUP = 1 | 2
     # Peak |dz/dt| upper bound (m/s). 20% below the original 0.08 so the expert
     # (and a policy) have more time to meet the crest.
     POP_SPEED = 0.064
@@ -258,6 +262,9 @@ class whack_moles(Base_Task):
         self.board_center = np.array(
             [0.0, board_cy, self.table_top + board_half_z], dtype=float)
         board_color = self._cfg.get("board_color", self.BOARD_COLOR)
+        # Deck collision thickness matches the raised play-surface band so the
+        # mallet head cannot tunnel through a paper-thin lattice.
+        deck_thickness = 2.0 * float(self.BOARD_TOP_HALF_Z)
         self.board = create_hollow_box_with_holes(
             self.scene,
             sapien.Pose(p=self.board_center.tolist()),
@@ -268,7 +275,7 @@ class whack_moles(Base_Task):
             hole_count=self.hole_count,
             hole_size=self.hole_size,
             wall_thickness=0.02,
-            top_thickness=0.02,
+            top_thickness=deck_thickness,
             bar_thickness=self.hole_bar_thickness,
         )
         self.board_top_z = float(self.board_center[2] + self.BOARD_HALF[2])
@@ -1046,18 +1053,28 @@ class whack_moles(Base_Task):
         ]
         return float(np.mean(zs)) if zs else None
 
-    def _disable_mallet_robot_collision(self, mallet):
-        """Let the fingers surround a mallet while preserving mole contact."""
+    def _set_mallet_collision_groups(self, mallet, *, ignore_robot=False):
+        """Enable mallet↔board and mallet↔mole contacts; optionally ignore robot."""
 
         rigid = self._get_rigid_dynamic_component(mallet)
         if rigid is None:
             return
+        group = int(self._MALLET_CONTACT_GROUP)
+        ignore_bit = int(self._MALLET_ROBOT_IGNORE_BIT) if ignore_robot else 0
+        ignore_id = (int(self._MALLET_ROBOT_IGNORE_ID) & 0xFFFF) if ignore_robot else 0
+        try:
+            for shape in rigid.get_collision_shapes():
+                shape.set_collision_groups([group, group, ignore_bit, ignore_id])
+        except Exception:
+            pass
+
+    def _disable_mallet_robot_collision(self, mallet):
+        """Let the fingers surround a mallet while keeping board/mole contact."""
+
+        self._set_mallet_collision_groups(mallet, ignore_robot=True)
         ignore_bit = int(self._MALLET_ROBOT_IGNORE_BIT)
         ignore_id = int(self._MALLET_ROBOT_IGNORE_ID) & 0xFFFF
         try:
-            for shape in rigid.get_collision_shapes():
-                # Moles use contact group 2; retain that group after pickup.
-                shape.set_collision_groups([2, 2, ignore_bit, ignore_id])
             for articulation in (self.robot.left_entity, self.robot.right_entity):
                 if articulation is None:
                     continue
@@ -1179,16 +1196,11 @@ class whack_moles(Base_Task):
                     except Exception:
                         pass
                     # Kinematic seat in the jaw aperture (between fingers).
-                    # Collision only with moles (group bit 2) so PhysX can report
-                    # real cube–mole mesh contact without fighting the robot/board.
+                    # Collide with the hole board (group bit 0) and moles (bit 1).
                     c.set_kinematic(True)
                     c.set_disable_gravity(True)
                     c.set_kinematic_target(pose)
-                    try:
-                        for shape in c.get_collision_shapes():
-                            shape.set_collision_groups([2, 2, 0, 0])
-                    except Exception:
-                        pass
+            self._disable_mallet_robot_collision(cube)
             self.hammer_cubes[str(arm)] = cube
             self._cube_comps[str(arm)] = rigid
             self._cube_weld[str(arm)] = local_T.copy()
@@ -1368,6 +1380,111 @@ class whack_moles(Base_Task):
             if not self.plan_success:
                 self.plan_success = prev_plan
 
+    def _board_contact_z(self):
+        """World Z of the play-surface top (mallet head may rest here, not below)."""
+        return float(getattr(self, "board_top_z", 0.0)) + 5e-4
+
+    def _mallet_head_geometry_from_pose(self, pose):
+        """Head center / striking-face bottom for an arbitrary mallet pose."""
+        mallet_T = np.asarray(pose.to_transformation_matrix(), dtype=float)
+        center = (mallet_T @ np.array([0.0, self.MALLET_HEAD_Y, 0.0, 1.0]))[:3]
+        axis = np.asarray(mallet_T[:3, 0], dtype=float)
+        axis = axis / max(float(np.linalg.norm(axis)), 1e-9)
+        r = float(self.MALLET_HEAD_RADIUS)
+        half_len = float(self.MALLET_HEAD_HALF_X)
+        az = float(axis[2])
+        end = center - np.sign(az) * axis * half_len if abs(az) > 1e-6 else center
+        bottom = end.copy()
+        if abs(az) > 1e-6:
+            perp = np.array([0.0, 0.0, -1.0]) + axis * az
+            n = float(np.linalg.norm(perp))
+            if n > 1e-9:
+                bottom = end + (perp / n) * r
+            else:
+                bottom[2] -= r
+        else:
+            bottom[2] -= r
+        return np.asarray(center, dtype=float), np.asarray(bottom, dtype=float)
+
+    def _mallet_head_over_board(self, pose):
+        """True if the head's XY footprint overlaps the hole-board deck."""
+        if not hasattr(self, "board_center"):
+            return False
+        center, _bottom = self._mallet_head_geometry_from_pose(pose)
+        # Conservative AABB using the head disc radius (axis near vertical).
+        r = float(self.MALLET_HEAD_RADIUS)
+        bx, by = float(self.board_center[0]), float(self.board_center[1])
+        hx, hy = float(self.BOARD_HALF[0]), float(self.BOARD_HALF[1])
+        return (
+            (center[0] + r) >= (bx - hx)
+            and (center[0] - r) <= (bx + hx)
+            and (center[1] + r) >= (by - hy)
+            and (center[1] - r) <= (by + hy)
+        )
+
+    def _clamp_mallet_pose_above_board(self, pose):
+        """Raise a kinematic mallet so its head cannot tunnel into the deck.
+
+        Welded mallets are pose-driven, so PhysX will not stop them from sinking
+        through the static hole lattice — keep the striking face on/above it.
+        The head is wider than a hole, so resting on the deck is always valid.
+        """
+        if not self._mallet_head_over_board(pose):
+            return pose
+        floor = self._board_contact_z()
+        _center, bottom = self._mallet_head_geometry_from_pose(pose)
+        min_z = float(bottom[2])
+        if min_z >= floor:
+            return pose
+        p = np.asarray(pose.p, dtype=np.float64).copy()
+        p[2] += floor - min_z
+        return sapien.Pose(p.tolist(), list(pose.q))
+
+    def mallet_resting_on_board(self, arm=None, tol=0.003):
+        """True when a held mallet head is already on the play surface."""
+        arms = (
+            (str(arm),)
+            if arm is not None
+            else tuple(getattr(self, "hammer_cubes", {}) or {})
+        )
+        floor = self._board_contact_z()
+        for a in arms:
+            mallet = getattr(self, "hammer_cubes", {}).get(str(a))
+            if mallet is None:
+                continue
+            try:
+                pose = mallet.get_pose()
+            except Exception:
+                continue
+            if not self._mallet_head_over_board(pose):
+                continue
+            _c, bottom = self._mallet_head_geometry_from_pose(pose)
+            if float(bottom[2]) <= floor + float(tol):
+                return True
+        return False
+
+    def interactive_ee_z_floor(self, side, ee_pose):
+        """Lowest allowed EE Z so a welded mallet cannot enter the hole board.
+
+        Used by ``UniversalRobotControls`` so Q/-Z teleop stops on the deck.
+        """
+        arm = str(side)
+        local_T = getattr(self, "_cube_weld", {}).get(arm)
+        if local_T is None or arm not in getattr(self, "hammer_cubes", {}):
+            return None
+        ee = np.asarray(ee_pose, dtype=np.float64).reshape(-1)
+        if ee.size < 7:
+            return None
+        mallet_pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
+        if not self._mallet_head_over_board(mallet_pose):
+            return None
+        floor = self._board_contact_z()
+        _c, bottom = self._mallet_head_geometry_from_pose(mallet_pose)
+        min_z = float(bottom[2])
+        if min_z < floor - 1e-6:
+            return float(ee[2]) + (floor - min_z)
+        return None
+
     def _update_hammer_cubes(self):
         """Keep each cube seated in its gripper's jaw aperture (between fingers)."""
         if not getattr(self, "_cubes_ready", False):
@@ -1377,7 +1494,8 @@ class whack_moles(Base_Task):
             if cube is None:
                 continue
             ee = np.array(self.get_arm_pose(ArmTag(arm)), dtype=float)
-            pose = self._mat_to_pose(self._pose7_to_mat(ee) @ local_T)
+            pose = self._clamp_mallet_pose_above_board(
+                self._mat_to_pose(self._pose7_to_mat(ee) @ local_T))
             cube.actor.set_pose(pose)
             rigid = self._cube_comps.get(arm)
             if rigid is not None:
@@ -1870,8 +1988,12 @@ class whack_moles(Base_Task):
         )
 
     def _cube_board_contact(self):
-        """Cube–board touch. Cubes do not PhysX-collide with the board (group 2
-        only), so detect via underside depth over the board footprint."""
+        """Cube–board touch via underside depth over the board footprint.
+
+        Held mallets also PhysX-collide with the hole lattice (contact group
+        bit 0), but kinematic welding can clear manifolds — keep this geometric
+        check as the authoritative board-touch signal.
+        """
         if not getattr(self, "_cubes_ready", False):
             return False
         eps = float(self._cfg.get(
