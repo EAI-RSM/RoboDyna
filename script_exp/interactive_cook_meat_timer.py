@@ -41,28 +41,18 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Select an arm, move over the cook key, lower with Q to press.
-  Space            →  toggle steak(s): board ↔ pan
-  P                →  snap steak(s) onto pan(s)
-  B                →  snap steak(s) back to board(s)
+  Space             toggle steak(s): board ↔ pan
+  P                 snap steak(s) onto pan(s)
+  B                 snap steak(s) back to board(s)
 
-  Pie timer (green→yellow→red) fills with cooking; with a cook key it only
-  advances while the key is held. Contact-cook: advances on pan contact.
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
+  Pie timer (green→yellow→red) tracks doneness; with a cook key it advances only while held.
 """
 
 CONTROLS_ROBOT = """
-  Select an arm (1/2/3), move over the cook key, lower with Q to press
-  (E to raise).
-  Space            →  robot toggles steak(s): board → pan, then pan → board
+  Space             toggle steak(s): board → pan, then pan → board
 
-  Pie timer (green→yellow→red) fills with cooking; with a cook key it only
-  advances while the key is held. Contact-cook: advances on pan contact.
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
+  Select an arm, move over the cook key, lower with Q to press (E to raise).
+  Pie timer (green→yellow→red) tracks doneness; with a cook key it advances only while held.
 """
 
 

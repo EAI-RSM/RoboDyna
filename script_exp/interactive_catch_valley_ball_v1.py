@@ -37,22 +37,12 @@ from _interactive_common import (  # noqa: E402
 
 CONTROLS_KEYBOARD = """
   Space             freeze/place catcher at current XY
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Success: red ball in catcher, catcher fully past red line
 """
 
 CONTROLS_ROBOT = """
-  Space             first press picks up the catcher; second drops it
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Flow: Space to pick up → move with arrows / E/Q → Space to drop
-  Success: red ball in catcher, catcher fully past red line
-  --robot-motion planner|interpolate
+  Space             pick up catcher; press again to drop it
+
+  Flow: Space to pick up → move with arrows / E/Q → Space to drop.
 """
 
 

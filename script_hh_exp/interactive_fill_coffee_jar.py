@@ -5,8 +5,13 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Use robot control for this task: select an arm, move above the blue key, then lower in Z to press\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
-ROBOT = """\n  Select one arm, move it above the blue key, then lower with Q to press and raise with E to release\n  Coffee dispenses only from measured key pressure; Space is unused for this task\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+KEYBOARD = """
+  Prefer --control robot: select an arm, move above the blue key, then lower in Z to press.
+"""
+ROBOT = """
+  Select one arm, move above the blue key, then lower with Q to press and raise with E to release.
+  Coffee dispenses only from measured key pressure.
+"""
 
 
 def _post_setup(env):

@@ -8,7 +8,7 @@ Run from any directory:
 
 Keyboard mode tilts the active shelf via ``_press_tilt_direct`` (no arm).
 Robot mode: select an arm, move over the shelf button, lower with Q to press.
-Queued tilts run via ``consume_pending_tilt``. Space is unused. Sandbox only.
+Queued tilts run via ``consume_pending_tilt``. Sandbox only.
 """
 
 import argparse
@@ -37,32 +37,15 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow       →  tilt active shelf LEFT  (red / left button)
-  Right Arrow      →  tilt active shelf RIGHT (right button)
-  Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
+  Left Arrow        tilt active shelf left
+  Right Arrow       tilt active shelf right
 
-  One press tilts the current shelf, rolls the marble off, and
-  waits for the fall/settle before accepting another press.
-  Hint: correct_dir for each shelf is printed at startup.
-
-  Keys call the tilt API directly (no arm motion).
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
+  One press tilts the current shelf, rolls the marble off, then waits before the next press.
 """
 
 CONTROLS_ROBOT = """
-  Select left (1) or right (2) arm, move over the matching shelf button,
-  then lower with Q to press (E to raise). Space is unused.
-
-  One press tilts the current shelf, rolls the marble off, and
-  waits for the fall/settle before accepting another press.
-  Hint: correct_dir for each shelf is printed at startup.
-
-  Gripper-Z depresses the key; reactive edge queues a tilt.
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
+  Select left (1) or right (2) arm, move over the matching shelf button, then lower with Q to press (E to raise).
+  One press tilts the current shelf, rolls the marble off, then waits before the next press.
 """
 
 
@@ -295,10 +278,6 @@ def main():
 
     dirs = list(getattr(env, "correct_dir", []) or [])
     print(f"Shelves={env.n_shelves}. Suggested directions top→bottom: {dirs}")
-    print_instructions(
-        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
-        "Space is unused."
-    )
     if args.control == "keyboard":
         print_instructions("Keyboard arrows still call _press_tilt_direct as a sandbox shortcut.")
 

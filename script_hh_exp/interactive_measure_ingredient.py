@@ -5,8 +5,19 @@ try:
 except ImportError:
     from _interactive_common import make_parser, print_instructions, run_task
 
-KEYBOARD = """\n  Lower gripper onto the red key to latch oil ON/OFF\n  Space: hold/release jar | arrows/Q/E: move it\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
-ROBOT = """\n  Select an arm, move above the red key, lower with Q to press (latches ON/OFF)\n  Key stays down while oil flows; press again to turn off and raise the key\n  Space: side-grasp / release jar (release ends the episode; success = fill + on scale)\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+KEYBOARD = """
+  Space             hold/release jar
+  Arrow keys        move held jar in XY
+  E / Q             move held jar in Z
+
+  Lower the gripper onto the red key to latch oil ON/OFF.
+"""
+ROBOT = """
+  Space             side-grasp / release jar
+
+  Lower onto the red key with Q to latch oil ON/OFF (press again to turn off).
+  Releasing the jar ends the episode; success requires correct fill on the scale.
+"""
 
 
 def _post_setup(env):

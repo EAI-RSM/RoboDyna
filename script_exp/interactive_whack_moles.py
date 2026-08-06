@@ -38,22 +38,11 @@ from _interactive_common import (  # noqa: E402
 CONTROLS_KEYBOARD = """
   Q / E             select previous / next unhit mole
   1 .. N            select mole index directly
-  Space             jab selected mole (cube press)
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Success: all moles hit (green), no rabbit touched
+  Space             jab selected mole
 """
 
 CONTROLS_ROBOT = """
   Space             pick selected side's mallet, then strike and return to hover
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Success: all moles hit (green), no rabbit touched
-  --robot-motion planner|interpolate
 """
 
 

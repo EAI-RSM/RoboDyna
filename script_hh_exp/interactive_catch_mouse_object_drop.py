@@ -5,8 +5,18 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Mouse/object motion starts as soon as the viewer is ready\n  Space: hold/release catcher basket | arrows/Q/E: move it\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
-ROBOT = """\n  Mouse/object motion starts as soon as the viewer is ready\n  Space: grasp/release basket\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+KEYBOARD = """
+  Space             hold/release catcher basket
+  Arrow keys        move held basket in XY
+  E / Q             move held basket in Z
+
+  Mouse/object motion starts as soon as the viewer is ready.
+"""
+ROBOT = """
+  Space             grasp/release basket
+
+  Mouse/object motion starts as soon as the viewer is ready.
+"""
 
 if __name__ == "__main__":
     a = make_parser("catch_mouse_object_drop", __doc__)

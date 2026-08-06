@@ -50,23 +50,12 @@ INTERACTIVE_CUP_SOUTH_CLEARANCE = 0.05
 CONTROLS_KEYBOARD = """
   Left / Right      move cup left/right (world X)
   Up / Down         move cup forward/backward (world Y)
-  Q / E             raise/lower cup (world Z)
+  E / Q             raise/lower cup (world Z)
   Space             release cup at its current position
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Success: cup lands between yellow sticks after release/slip; no curtain touch
 """
 
 CONTROLS_ROBOT = """
   Space             first press: grasp; second press: release at current pose
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Success: cup lands between yellow sticks after release/slip; no curtain touch
-  --robot-motion planner|interpolate
 """
 
 

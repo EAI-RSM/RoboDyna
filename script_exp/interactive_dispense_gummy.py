@@ -7,8 +7,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_dispense_gummy.py --control robot
 
 Keyboard mode forces belt-key latches via arrows. Robot mode: select an arm,
-move over a key, lower with Q to press (left → red dispense; right → belt keys).
-Space is unused. Sandbox only — not data collection.
+move over a key, lower with Q to press (left → red dispense; right → belt keys). Sandbox only — not data collection.
 """
 
 import argparse
@@ -37,34 +36,18 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow       →  move bowl LEFT  (right-arm belt key)
-  Right Arrow      →  move bowl RIGHT (right-arm belt key)
-  Space is unused. Prefer --control robot: select arm, move over key, lower with Q
-  (left arm → red dispense; right arm → belt keys).
+  Left Arrow        move bowl left (right-arm belt key)
+  Right Arrow       move bowl right (right-arm belt key)
 
   Continuous belt (Opt 2): hold an arrow key to slide.
   Discrete belt (default): tap an arrow key to hop one station.
-
-  Forces belt-key latches directly (no arm). Dispense via gripper-Z in robot mode.
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
 """
 
 CONTROLS_ROBOT = """
-  Select left (1) or right (2) arm, move over a key, lower with Q to press
-  (E to raise). Space is unused.
-
-    Left arm  — hover over the red dispense key, lower with Q
-    Right arm — hover over a left/right belt key, lower with Q
-
+  Left arm — hover over the red dispense key, lower with Q.
+  Right arm — hover over a left/right belt key, lower with Q.
   Continuous belt (Opt 2): hold the gripper down on a belt key to slide.
   Discrete belt (default): press edge hops one station.
-
-  Gripper-Z / ReactivePushButtons drives keys (no Space latch).
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
 """
 
 
@@ -427,10 +410,6 @@ def main():
 
     mode = "continuous" if getattr(env, "belt_continuous_motion", False) else "discrete"
     print(f"Belt mode: {mode}.")
-    print_instructions(
-        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
-        "Space is unused."
-    )
     if args.control == "keyboard":
         print_instructions("Keyboard arrows still latch belt motion as a sandbox shortcut.")
 

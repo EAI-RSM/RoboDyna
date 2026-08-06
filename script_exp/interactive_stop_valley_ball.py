@@ -36,30 +36,13 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Space             place bat at the predicted intercept, then arm it
-  Arrow keys        move bat in world XY
-  E / Q             raise / lower bat height
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Flow: Space → use arrows/E/Q to aim
-  Success: red ball hits the red circular bat head before
-           falling to the table; handle contact does not count.
+  Space             grasp the bat
+  Arrow keys        move bat in XY
+  E / Q             move bat height
 """
 
 CONTROLS_ROBOT = """
-  Space             fast grasp and move bat to predicted intercept
-  Arrow keys        move the held bat in world XY
-  E / Q             raise / lower the held bat
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Flow: Space → use arrows/E/Q to aim
-  Success: red ball hits the red circular bat head before
-           falling to the table; handle contact does not count.
-  --robot-motion planner|interpolate
+  Space             grasp the bat
 """
 
 

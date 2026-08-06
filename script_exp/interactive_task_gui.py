@@ -382,9 +382,9 @@ class RoundedButton(tk.Canvas):
 
 
 class InteractiveTaskLauncher(tk.Tk):
-    # Side-by-side demos are 8:3 (e.g. 960x360). Size previews to fill a
-    # typical window width while keeping that aspect — avoids letterbox bars.
-    IMAGE_SIZE = (1400, 525)
+    # Head-camera stills are ~4:3. Width seeds the first layout; height follows
+    # each image's native aspect so previews are not letterboxed.
+    IMAGE_SIZE = (1400, 1050)
     CARD_PAD = 8
     PREVIEW_SIDE_PAD = 28
 
@@ -808,7 +808,14 @@ class InteractiveTaskLauncher(tk.Tk):
                 "--control",
                 self.control.get(),
             ]
-            self.child = subprocess.Popen(command, cwd=ROOT, start_new_session=True)
+            child_env = os.environ.copy()
+            child_env.setdefault(
+                "PYTHONWARNINGS",
+                "ignore::UserWarning,ignore::FutureWarning,ignore::DeprecationWarning",
+            )
+            self.child = subprocess.Popen(
+                command, cwd=ROOT, start_new_session=True, env=child_env
+            )
         except Exception as exc:
             self._remove_temporary_config()
             messagebox.showerror("Could not start task", str(exc))

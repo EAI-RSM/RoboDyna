@@ -5,8 +5,21 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Mug tips and spill starts as soon as the viewer is ready\n  Space: pick up / release sponge | arrows/Q/E: move it\n  Press the yellow pad onto a stain to wipe it (must touch the table)\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
-ROBOT = """\n  Mug tips and spill starts as soon as the viewer is ready\n  Grippers start OPEN — select sponge-side arm (2 if mug is right)\n  Space: pick up the sponge (approach the small top cube open, then pinch)\n  Lower the yellow pad onto a stain to wipe it (must touch the table)\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+KEYBOARD = """
+  Space             pick up / release sponge
+  Arrow keys        move held sponge in XY
+  E / Q             move held sponge in Z
+
+  Mug tips and spill starts as soon as the viewer is ready.
+  Press the yellow pad onto a stain to wipe it (must touch the table).
+"""
+ROBOT = """
+  Space             pick up / release sponge
+
+  Mug tips and spill starts as soon as the viewer is ready.
+  Grippers start open — select the sponge-side arm (2 if mug is right).
+  Approach the small top cube open, then pinch; lower the yellow pad onto a stain to wipe.
+"""
 
 if __name__ == "__main__":
     a = make_parser("clean_table", __doc__)

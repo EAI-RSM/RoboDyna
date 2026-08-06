@@ -7,8 +7,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_shelf_marble.py --control robot
 
 Keyboard mode latches bowl keys directly via arrows. Robot mode: select an arm,
-move over the bowl key, lower with Q to press (gripper-Z / ReactivePushButtons).
-Space is unused. Sandbox only — not data collection.
+move over the bowl key, lower with Q to press (gripper-Z / ReactivePushButtons). Sandbox only — not data collection.
 """
 
 import argparse
@@ -36,26 +35,12 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Hold Left Arrow   →  slide bowl LEFT
-  Hold Right Arrow  →  slide bowl RIGHT
-  First key press also releases the marble (default mode).
-  Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
-
-  Keys latch the bowl motion directly (no arm motion).
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
+  Left Arrow        move bowl left
+  Right Arrow       move bowl right
 """
 
 CONTROLS_ROBOT = """
-  Select left (1) or right (2) arm, move over the matching bowl key,
-  then lower with Q to press (E to raise). Space is unused.
-  First key press also releases the marble (default mode).
-
-  Gripper-Z held_mask drives the bowl; no Space latch.
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
+  Select an arm, move over a key, lower with Q to press (E to raise).
 """
 
 
@@ -149,10 +134,6 @@ def main():
     if views.robot_controls is None:
         views.robot_controls = UniversalRobotControls(env)
 
-    print_instructions(
-        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
-        "Space is unused."
-    )
     if args.control == "keyboard":
         print_instructions("Keyboard arrows still latch bowl motion as a sandbox shortcut.")
 

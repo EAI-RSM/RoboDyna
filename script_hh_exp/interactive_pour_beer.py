@@ -5,8 +5,15 @@ try:
 except ImportError:
     from _interactive_common import make_parser, print_instructions, run_task
 
-KEYBOARD = """\n  Open the tap with robot arm teleop (--control robot); no keyboard lever shortcut\n  Stream thickness and fill rate follow how far the handle is turned\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
-ROBOT = """\n  Push the tap lever with the gripper (spring returns when released)\n  Hold the handle open — fill rate + stream thickness scale with how far it turns\n  Arm teleop: arrows/Q/E; use arm 2 (right) for the tap\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+KEYBOARD = """
+  Use --control robot to open the tap with arm teleop (no keyboard lever shortcut).
+  Stream thickness and fill rate follow how far the handle is turned.
+"""
+ROBOT = """
+  Push the tap lever with the gripper (spring returns when released).
+  Hold the handle open — fill rate and stream thickness scale with how far it turns.
+  Prefer arm 2 (right) for the tap.
+"""
 
 
 def _post_setup(env):

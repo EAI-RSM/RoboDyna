@@ -37,24 +37,15 @@ from _interactive_common import (  # noqa: E402
 CONTROLS_KEYBOARD = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
   Space             deploy / freeze keeper in place
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Success: keeper in green zone, front-face save, grippers open
-  Place BEFORE the ball crosses the red line
+
+  Place the keeper before the ball crosses the red line.
 """
 
 CONTROLS_ROBOT = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
-  Space             grasp, then release
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Success: keeper in green zone, front-face save, grippers open
-  Place BEFORE the ball crosses the red line
-  --robot-motion planner|interpolate
+  Space             grasp, then release (arm returns home after drop)
+
+  Place the keeper before the ball crosses the red line.
 """
 
 
@@ -242,6 +233,8 @@ class RobotKeeperController:
         self.env._freeze_keeper_in_place()
         self.env._keeper_deployed = True
         self.env._hold_keeper_kinematic()
+        # Match expert policy: clear the drop, then return the arm home.
+        self.env._retreat_arm_home(self.arm, lift_z=0.08)
         self.holding = False
         self.deployed = True
         print(f"Keeper released; in_zone={self.env._keeper_in_zone()}.")

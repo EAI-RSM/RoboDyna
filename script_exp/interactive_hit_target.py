@@ -39,23 +39,12 @@ from _interactive_common import (  # noqa: E402
 
 CONTROLS_KEYBOARD = """
   Arrow keys        aim dart tip (L/R = x, U/D = y / depth)
-  Q / E             raise/lower dart tip (world Z)
+  E / Q             raise/lower dart tip
   Space             thrust tip at yellow center
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Success: tip sticks in yellow center; never hit a blocker
 """
 
 CONTROLS_ROBOT = """
   Space             grasp dart, then jab / thrust
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Success: tip sticks in yellow center; never hit a blocker
-  --robot-motion planner|interpolate
 """
 
 

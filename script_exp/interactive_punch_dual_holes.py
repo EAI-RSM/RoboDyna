@@ -8,7 +8,6 @@ Run from any directory:
 
 Keyboard mode calls ``_fire_punch`` via arrows. Robot mode: select an arm, move
 over the key, lower with Q to press (ReactivePushButtons fires the punch).
-Space is unused.
 """
 
 import argparse
@@ -37,27 +36,14 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow        punch LEFT belt
-  Right Arrow       punch RIGHT belt
-  Up Arrow          punch BOTH belts
-  Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
-  Counts only when half the stamp head is on the card; otherwise missed
-  V                 toggle view: front ↔ top-down
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Punches via direct _fire_punch (no arm motion).
+  Left Arrow / Right Arrow
+                    fire punch on the matching belt
+
+  Prefer --control robot for gripper-Z key presses.
 """
 
 CONTROLS_ROBOT = """
-  Select an arm (1/2/3), move over the matching side key, lower with Q to press
-  (E to raise). Space is unused.
-  Counts only when half the stamp head is on the card; otherwise missed
-  V                 toggle view: front ↔ top-down
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Gripper-Z depresses the key; ReactivePushButtons fires the punch.
+  Select an arm, move over a key, lower with Q to press (E to raise).
 """
 
 
@@ -373,7 +359,7 @@ def main():
 
     print_instructions(
         "Arms start above the buttons; belts begin after that ready pose. "
-        "Select an arm (1/2/3), move over a key, lower with Q to press. Space is unused."
+        "Select an arm (1/2/3), move over a key, lower with Q to press. "
     )
     if args.control == "keyboard":
         print_instructions("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")

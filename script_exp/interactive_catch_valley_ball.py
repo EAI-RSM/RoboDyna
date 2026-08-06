@@ -34,31 +34,15 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Prefer --control robot. Keyboard arrows drive the arm (not the box).
-  The box is PhysX-dynamic — shove it with the closed gripper.
+  Space             close/open gripper for pushing
 
-  1 / 2 / 3       select left / right / both arms
-  Arrows / E/Q    nudge selected arm
-  Space           close/open gripper for pushing
-  V               toggle view: top-down ↔ head_camera
-  G               gripper view (cycle L/R when both arms active)
-  Escape          quit
-------------------------------------------------------------
-  Success: red ball in box, box fully past red line
+  Prefer --control robot. The box is PhysX-dynamic — shove it with the closed gripper.
 """
 
 CONTROLS_ROBOT = """
-  The catch box is PhysX-dynamic (catch_cup pillow pattern) — it moves only
-  under gripper contact. No box teleport.
+  Space             close/open gripper for pushing
 
-  1 / 2 / 3       select left / right / both arms
-  Arrows / E/Q    nudge selected arm
-  Space           close/open gripper for pushing
-  V               toggle view: top-down ↔ head_camera
-  G               gripper view (cycle L/R when both arms active)
-  Escape          quit
-------------------------------------------------------------
-  Success: red ball in box, box fully past red line
+  The catch box is PhysX-dynamic — it moves only under gripper contact (no teleport).
 """
 
 

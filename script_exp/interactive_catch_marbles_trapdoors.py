@@ -9,7 +9,7 @@ Run from any directory:
 Select an arm, move over the matching colored key, then lower with Q to press.
 The keycap depresses and springs back like ``fill_coffee_jar``; the trapdoor
 opens briefly on the press edge (then auto-closes). Holding does not keep it
-open — release the key fully and press again to reopen. Space is unused.
+open — release the key fully and press again to reopen.
 """
 
 import argparse
@@ -37,25 +37,15 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  This task uses gripper press — prefer --control robot.
-  Select an arm, move over the matching colored key, lower with Q to press.
+  Prefer --control robot: select an arm, move over the matching colored key, lower with Q to press.
   The keycap springs back when you raise the gripper.
-
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
 """
 
 CONTROLS_ROBOT = """
-  Select left (1) or right (2) arm, move over the matching colored key,
-  then lower with Q to press (E to raise). Space is unused.
-
+  Select left (1) or right (2) arm, move over the matching colored key, then lower with Q to press (E to raise).
   Left arm covers left-half keys; right arm covers right-half keys.
   Door opens when the keycap is pushed down past its trigger depth.
-
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
+  Release fully and press again to reopen a door.
 """
 
 
@@ -147,11 +137,6 @@ def main():
     if views.robot_controls is None:
         views.robot_controls = UniversalRobotControls(env)
 
-    print_instructions(
-        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
-        "Door stays open briefly then closes; release the key fully to press again. "
-        "Space is unused."
-    )
 
     left_track_since = None
     settle_s = 0.6

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture fresh HD side-by-side scene snapshots for GUI task cards.
+"""Capture fresh head-camera scene snapshots for GUI task cards.
 
 Suite (base interactive) tasks write four condition stills::
 
@@ -11,6 +11,8 @@ Suite (base interactive) tasks write four condition stills::
 plus ``scene_snapshot.png`` (copy of default) for compatibility.
 
 Household GUI tasks write a single ``scene_snapshot.png``.
+
+Each still is a single ``head_camera`` frame (no top-down montage).
 
 Usage (repo root, robodyna env, headless Vulkan)::
 
@@ -33,11 +35,7 @@ import numpy as np
 from PIL import Image
 
 from envs.utils.household_view import HOUSEHOLD_TASKS, configure_household_head_camera
-from script.bench_script.record_demo import (
-    _resize_to_height,
-    build_args,
-    configure_topdown_camera,
-)
+from script.bench_script.record_demo import build_args
 from script.collect_data import class_decorator
 from script_exp.interactive_task_gui import (
     SCENARIO_OVERRIDES,
@@ -48,7 +46,7 @@ from script_hh_exp.household_task_gui import TASKS as HOUSEHOLD_GUI_TASKS
 
 ROOT = os.path.abspath(".")
 FINAL = os.path.join(ROOT, "final_task_demos")
-# Max width for the side-by-side still (head 640 + topdown 640 = 1280).
+# Upscale head stills for crisp GUI cards (native D435 is typically 640×480).
 SNAPSHOT_MAX_WIDTH = 1280
 SETTLE_STEPS = 8
 
@@ -74,19 +72,22 @@ def _household_gui_tasks() -> list[str]:
     return names
 
 
-def _side_by_side(head: np.ndarray, top: np.ndarray) -> np.ndarray:
-    height = max(int(head.shape[0]), int(top.shape[0]))
-    height += height % 2
-    montage = np.hstack([_resize_to_height(head, height), _resize_to_height(top, height)])
-    if montage.shape[1] > SNAPSHOT_MAX_WIDTH:
-        scale = SNAPSHOT_MAX_WIDTH / float(montage.shape[1])
-        new_h = max(1, int(round(montage.shape[0] * scale)))
-        new_h += new_h % 2
+def _prepare_head_frame(head: np.ndarray) -> np.ndarray:
+    """Return an RGB head frame, optionally upscaled to SNAPSHOT_MAX_WIDTH."""
+    frame = np.asarray(head)
+    if frame.ndim != 3 or frame.shape[2] < 3:
+        raise ValueError(f"Unexpected head RGB shape: {getattr(frame, 'shape', None)}")
+    frame = frame[:, :, :3]
+    h, w = int(frame.shape[0]), int(frame.shape[1])
+    if w < SNAPSHOT_MAX_WIDTH:
+        scale = SNAPSHOT_MAX_WIDTH / float(w)
         new_w = SNAPSHOT_MAX_WIDTH - (SNAPSHOT_MAX_WIDTH % 2)
-        montage = np.asarray(
-            Image.fromarray(montage).resize((new_w, new_h), Image.Resampling.LANCZOS)
+        new_h = max(1, int(round(h * scale)))
+        new_h += new_h % 2
+        frame = np.asarray(
+            Image.fromarray(frame).resize((new_w, new_h), Image.Resampling.LANCZOS)
         )
-    return montage
+    return frame
 
 
 def _overrides_to_cli(overrides: dict) -> list[str]:
@@ -108,7 +109,7 @@ def capture_snapshot(
     task_arg_overrides: list[str] | None = None,
     out_name: str = "scene_snapshot.png",
 ) -> str:
-    save_root = os.path.abspath(f"./tmp_{task_name}_snapshot")
+    save_root = os.path.abspath(f"./tmp/tmp_{task_name}_snapshot")
     os.makedirs(save_root, exist_ok=True)
 
     args = build_args(
@@ -129,14 +130,13 @@ def capture_snapshot(
     )
     args.setdefault("data_type", {})
     args["data_type"]["rgb"] = True
-    args["data_type"]["third_view"] = True
+    args["data_type"]["third_view"] = False
 
     task = class_decorator(task_name)
     _orig_setup = task.setup_demo
 
     def _setup_demo(**kwargs):
         _orig_setup(**kwargs)
-        configure_topdown_camera(task)
         if task_name in HOUSEHOLD_TASKS:
             configure_household_head_camera(task)
 
@@ -153,16 +153,14 @@ def capture_snapshot(
             break
 
     obs = task.get_obs()
-    head = np.asarray(obs["observation"]["head_camera"]["rgb"])
-    top = np.asarray(obs["third_view_rgb"])
-    montage = _side_by_side(head, top)
+    head = _prepare_head_frame(obs["observation"]["head_camera"]["rgb"])
 
     dest_dir = os.path.join(FINAL, task_name)
     os.makedirs(dest_dir, exist_ok=True)
     out_path = os.path.join(dest_dir, out_name)
-    Image.fromarray(montage).save(out_path, optimize=True)
+    Image.fromarray(head).save(out_path, optimize=True)
     tag = f" [{scenario}]" if scenario else ""
-    print(f"  WROTE{tag} {out_path} ({montage.shape[1]}x{montage.shape[0]})", flush=True)
+    print(f"  WROTE{tag} {out_path} ({head.shape[1]}x{head.shape[0]})", flush=True)
 
     try:
         task.close_env(clear_cache=True)

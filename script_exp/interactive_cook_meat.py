@@ -41,28 +41,18 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Select an arm, move over the cook key, lower with Q to press.
-  Space            →  toggle steak(s): board ↔ pan
-  P                →  snap steak(s) onto pan(s)
-  B                →  snap steak(s) back to board(s)
+  Space             toggle steak(s): board ↔ pan
+  P                 snap steak(s) onto pan(s)
+  B                 snap steak(s) back to board(s)
 
-  Cooking advances only while the steak is on the pan and the key is depressed.
-  Gripper-Z / ReactivePushButtons drives cooking (no Space latch).
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
+  Cooking advances only while the steak is on the pan and the cook key is depressed.
 """
 
 CONTROLS_ROBOT = """
-  Select an arm (1/2/3), move over the cook key, lower with Q to press
-  (E to raise).
-  Space            →  robot toggles steak(s): board → pan, then pan → board
+  Space             toggle steak(s): board → pan, then pan → board
 
+  Select an arm, move over the cook key, lower with Q to press (E to raise).
   Cooking advances only while the steak is on the pan and the key is depressed.
-  Gripper-Z / ReactivePushButtons drives cooking (no Space latch).
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Close the viewer window to quit.
 """
 
 

@@ -137,13 +137,29 @@ def _robot_pack(env, picks):
             held = [(idx_l, arm_l), (idx_r, arm_r)]
 
         wrong, aborted = [], []
-        for idx, arm in held:
+        if len(held) == 1:
+            idx, arm = held[0]
             basket = ARM_BASKET[str(arm)]
             target = env._basket_target_xy(idx, basket=basket)
             if not env._carry_and_drop(idx, arm, target, resend_on_miss=False):
                 aborted.append(idx)
             elif not env._fruit_in_basket(idx):
                 wrong.append(idx)
+        else:
+            # Dual grasp already happened together — drop both at once too
+            # (sequential _carry_and_drop would park one fruit first).
+            (idx_l, arm_l), (idx_r, arm_r) = held
+            target_l = env._basket_target_xy(idx_l, basket=ARM_BASKET[str(arm_l)])
+            target_r = env._basket_target_xy(idx_r, basket=ARM_BASKET[str(arm_r)])
+            ok_l, ok_r = env._carry_and_drop_pair(
+                idx_l, arm_l, target_l, idx_r, arm_r, target_r,
+                resend_on_miss=False,
+            )
+            for idx, ok in ((idx_l, ok_l), (idx_r, ok_r)):
+                if not ok:
+                    aborted.append(idx)
+                elif not env._fruit_in_basket(idx):
+                    wrong.append(idx)
         if aborted:
             names = ", ".join(f"{env.item_types[i]}_{i}" for i in aborted)
             print(f"Could not reach the basket with {names} — back on the belt.")
@@ -178,8 +194,7 @@ def main():
             "Goal: apple → left basket, orange → right basket. Never pack black (Opt2).",
             "Space — arm approaches while the belt keeps moving, then grasps and "
             "drops into that arm's basket in one shot",
-            "V — toggle view: top-down ↔ head_camera",
-            "G — gripper view (cycle L/R when both arms active)",
+            "V — cycle view: head_camera ↔ gripper(s)",
             "Esc — close the viewer window to quit",
             "Pick apples with 1 and oranges with 2 — the wrong arm mis-packs "
             "into its own basket and fails the episode.",

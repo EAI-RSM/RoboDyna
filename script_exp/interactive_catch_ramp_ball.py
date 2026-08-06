@@ -36,24 +36,12 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Space             freeze/place cup at current XY
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Flow: nudge with arrows → Space to place
-  Success: red ball lands in the cup (not the distractor)
+  Space             place / pick up the cup
+  Arrow keys        nudge cup in XY
 """
 
 CONTROLS_ROBOT = """
-  Space             first press picks up the cup; second drops it
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape            quit
-------------------------------------------------------------
-  Flow: Space to pick up → move with arrows / E/Q → Space to drop
-  Success: red ball lands in the cup (not the distractor)
-  --robot-motion planner|interpolate
+  Space             pick up the cup; press again to drop it
 """
 
 

@@ -5,8 +5,19 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Space: hold/release food | arrows/Q/E: move it\n  C: toggle burner knob | V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
-ROBOT = """\n  Space: grasp/release food | C: toggle burner knob\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+KEYBOARD = """
+  Space             hold/release food
+  Arrow keys        move held food in XY
+  E / Q             move held food in Z
+
+  Turn the stove by closing on the cooktop knob and twisting (no keyboard snap).
+"""
+ROBOT = """
+  Space             grasp/release food
+  C                 gripper grasp-and-twist cooktop knob
+
+  Or close on the knob and twist with teleop.
+"""
 
 if __name__ == "__main__":
     a = make_parser("cook_food", __doc__)

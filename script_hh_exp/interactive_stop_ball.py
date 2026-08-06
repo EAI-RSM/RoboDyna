@@ -5,8 +5,12 @@ try:
 except ImportError:
     from _interactive_common import make_parser, run_task
 
-KEYBOARD = """\n  Ball starts rolling as soon as the viewer is ready\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
-ROBOT = """\n  Ball starts rolling as soon as the viewer is ready\n  V: top-down/head camera | G: gripper view | F: open/close gripper | Escape: quit\n"""
+KEYBOARD = """
+  Ball starts rolling as soon as the viewer is ready. Block it with the gripper before it falls off the table.
+"""
+ROBOT = """
+  Ball starts rolling as soon as the viewer is ready. Block it with the gripper before it falls off the table.
+"""
 
 if __name__ == "__main__":
     a = make_parser("stop_ball", __doc__)

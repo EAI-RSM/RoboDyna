@@ -9,7 +9,7 @@ Run directly from any directory:
 
 Keyboard mode changes the diverter directly. Robot mode uses 1/2/3 to select
 gripper and arrows/E/Q to move it; lower with Q onto a button to divert
-(hold both for dump). Space is unused. Mouse mode: click a red or green button
+(hold both for dump). Mouse mode: click a red or green button
 to toggle its routing direction. This is an interaction sandbox, not a
 data-collection or robot-control rollout.
 """
@@ -39,6 +39,7 @@ from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     make_viewer_view_toggle,
     print_instructions,
+    print_mode_controls,
     report_task_result,
 )
 
@@ -480,28 +481,27 @@ def main():
             "Top-down sort-apples sandbox ready. Click red/green to toggle the plank direction."
         )
     elif args.control == "robot":
-        print_instructions(
-            "Robot mode ready (gripper-Z).\n"
-            "  1 / 2 / 3           — select left / right / both grippers\n"
-            "  Arrow keys          — move selected gripper in world XY\n"
-            "  E / Q               — raise / lower selected gripper\n"
-            "  Lower with Q onto a button to divert (both = dump)\n"
-            "  Space is unused\n"
-            "  F                   — open / close selected gripper(s)\n"
-            "  V                   — toggle top-down / head_camera\n"
-            "  G                   — gripper view (cycle L/R when both arms active)\n"
-            "  Esc                 — quit"
+        print_mode_controls(
+            "sort_apples_belt",
+            "robot",
+            keyboard="",
+            robot=(
+                "\n  Lower with Q onto a button to divert (both arms = dump).\n"
+            ),
         )
     else:
-        print_instructions(
-            "Top-down sort-apples sandbox ready (direct diverter control).\n"
-            "  Left / Right Arrow  — hold to divert left / right\n"
-            "  Down Arrow          — hold both (dump)\n"
-            "  Space is unused\n"
-            "  F                   — open / close selected gripper(s)\n"
-            "  V                   — toggle top-down / head_camera\n"
-            "  G                   — gripper view (cycle L/R when both arms active)\n"
-            "  release             — plank returns to rest"
+        print_mode_controls(
+            "sort_apples_belt",
+            "keyboard",
+            keyboard=(
+                "\n"
+                "  Left Arrow        hold to divert left\n"
+                "  Right Arrow       hold to divert right\n"
+                "  Down Arrow        hold both (dump)\n"
+                "\n"
+                "  Release the arrow key to let the plank return to rest.\n"
+            ),
+            robot="",
         )
 
     try:

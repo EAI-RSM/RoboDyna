@@ -7,7 +7,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_control_quality.py --control robot
 
 Select an arm, move over the red/green key, lower with Q to press. Skip black
-tiles (do not press). Space is unused.
+tiles (do not press).
 """
 
 import argparse
@@ -35,26 +35,15 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow     stamp RED   (left arm)
-  Right Arrow    stamp GREEN (right arm)
-  Space is unused. Prefer --control robot: select arm, move over key, lower with Q.
-  Skip BLACK tiles — do not press while they are under the stamp
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Each press smoothly moves the matching arm: hover → press → lift.
+  Left Arrow        stamp RED (left arm)
+  Right Arrow       stamp GREEN (right arm)
+
+  Skip BLACK tiles — do not press while they are under the stamp.
 """
 
 CONTROLS_ROBOT = """
-  Select an arm (1/2), move over the matching colored key, lower with Q to press
-  (E to raise). Space is unused.
-  Skip BLACK tiles — do not press while they are under the stamp
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Gripper-Z depresses the key; ReactivePushButtons triggers the stamp.
+  Select an arm (1/2), move over the matching colored key, lower with Q to press (E to raise).
+  Skip BLACK tiles — do not press while they are under the stamp.
 """
 
 
@@ -317,10 +306,6 @@ def main():
     last_frame_start = time.perf_counter()
     simulation_credit = 0.0
 
-    print_instructions(
-        "Control=robot teleop. Select an arm (1/2), move over a key, lower with Q to press. "
-        "Space is unused."
-    )
     print(f"Tile colors: {env.tile_colors}")
     if args.control == "keyboard":
         print_instructions("Keyboard arrows still animate key taps as a sandbox shortcut.")
