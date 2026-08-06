@@ -228,15 +228,15 @@
     <h3><code>cook_meat</code> — Cook Meat</h3>
     <span class="pill basic">basic</span>
   </header>
-  <p class="summary">Every steak is cooked into the target doneness band and returned to its cutting board (off the pan).</p>
+  <p class="summary">Every steak is shut off inside the target doneness band via the cook key; the steak may stay on the pan (board return not required).</p>
   <div class="cols">
     <div>
       <h4>Requires</h4>
-      <ul><li>grasp_doneness in target_doneness_range</li><li>Steak on its board (closer to board than pan; height OK)</li><li>Dual setup (Opt 2 / Opt 1+2): both stations succeed</li></ul>
+      <ul><li>grasp_doneness in target_doneness_range (doneness frozen when cooking stopped)</li><li>Cooking stopped: latch key OFF (default / Opt 2), or hold key released (Opt 1 / Opt 1+2)</li><li>Dual setup (Opt 2 / Opt 1+2): both stations succeed</li></ul>
     </div>
     <div>
       <h4>Fails if</h4>
-      <ul class="fail"><li>Under/overcooked</li><li>Left in pan</li><li>Dual mode with only one station OK</li></ul>
+      <ul class="fail"><li>Under/overcooked at shutoff</li><li>Key still cooking (latched ON or held down)</li><li>Never stopped cooking (no grasp_doneness)</li><li>Dual mode with only one station OK</li></ul>
     </div>
   </div>
   <p class="src">Source: <code>envs/cook_meat.py</code> → <code>check_success()</code></p>
@@ -247,7 +247,7 @@
     <h3><code>cook_meat_timer</code> — Cook Meat Timer</h3>
     <span class="pill basic">basic</span>
   </header>
-  <p class="summary">Same as cook_meat (pie timer is visual; success inherited).</p>
+  <p class="summary">Same as cook_meat (pie timer is visual only; success inherited).</p>
   <div class="cols">
     <div>
       <h4>Requires</h4>
