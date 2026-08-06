@@ -292,3 +292,34 @@ class ReactivePushButtons:
 
     def held_ids(self) -> list:
         return [self.ids[i] for i, on in enumerate(self.held_mask()) if on]
+
+    def tip_z_at_trigger(self, idx: int) -> float:
+        """World tip Z that just reaches ``trigger_depth`` via the spring model."""
+        force_needed = (self.trigger_depth / self.max_depth) * self.force_full
+        return float(
+            self.tops_z[idx]
+            + self.force_engage_slack
+            - force_needed / max(self.force_stiffness, 1e-6)
+        )
+
+    def min_ee_z_over_pressed(self, xy, *, margin: float = 0.003) -> float | None:
+        """Lowest allowed EE Z while ``xy`` is over a pressed key, else ``None``.
+
+        Once a key has triggered (latched) or is held past the press threshold,
+        interactive teleop must not drive the tip any deeper — further Q
+        descent collapses the arm pose into the key/table.  The floor is the
+        EE height whose tip sits at the trigger spring depth (plus a small
+        hold margin).
+        """
+        xy = np.asarray(xy, dtype=float)[:2]
+        floor = None
+        for i in range(self._n):
+            pressed = self._latched[i] or float(self.visual_depth[i]) >= self.trigger_depth
+            if not pressed:
+                continue
+            home_xy = np.asarray(self.home_poses[i].p[:2], dtype=float)
+            if float(np.linalg.norm(xy - home_xy)) > self.xy_tol:
+                continue
+            ee_floor = self.tip_z_at_trigger(i) - float(margin) + self.ee_to_tcp
+            floor = ee_floor if floor is None else min(floor, ee_floor)
+        return floor

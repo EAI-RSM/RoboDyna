@@ -962,6 +962,13 @@ class UniversalRobotControls:
 
         pose = state["pose"].copy()
         pose[:3] += step
+        # Once a reactive key is pressed, block further -Z while over it so the
+        # gripper cannot drive through the keycap and ruin the arm pose.
+        bank = getattr(self.env, "_reactive_buttons", None)
+        if bank is not None and hasattr(bank, "min_ee_z_over_pressed"):
+            z_floor = bank.min_ee_z_over_pressed(pose[:2])
+            if z_floor is not None and float(pose[2]) < float(z_floor):
+                pose[2] = float(z_floor)
         # Keep the command within reach of the achieved pose: a blocked or
         # joint-limited arm must not build up a lead it later snaps through.
         lead = pose[:3] - achieved[:3]
