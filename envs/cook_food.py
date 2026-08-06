@@ -1,10 +1,10 @@
-"""Cook food on a KitchenS stove, then pick it onto a plate.
+"""Cook food on a KitchenS stove (board → pan → cook → shut off).
 
 KitchenS scene (no sink/tap/microwave): stove shifted left. Raw food starts on a
 chopping board; the robot puts it in the pan, turns the stove knobs up to 180°
-(intensity), waits for a food-specific doneness, turns the knob back to zero,
-then picks the cooked food out of the pan and places it on the plate. A decorative
-plate of raw meat sits to the right of the stove.
+(intensity), waits for a food-specific doneness, then turns the knob back to zero.
+Success is adequate doneness after the stove is off (food stays in the pan). A
+decorative plate of raw meat sits to the right of the stove.
 
 Food types (``task_args.cook_food.food_type`` or random):
   - meat    — 200_steak; red → brown → black; ideal ~medium (0.5)
@@ -29,10 +29,11 @@ from .utils.create_actor import create_actor, create_visual_box, UnStableError
 
 
 class cook_food(KitchenS_base_task):
-    """Cook meat, sausage, or onion on the KitchenS range, then place onto a plate."""
+    """Cook meat, sausage, or onion on the KitchenS range (no plating step)."""
 
-    COOK_STEPS_DEFAULT: ClassVar[int] = 2000
-    COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.10
+    COOK_STEPS_DEFAULT: ClassVar[int] = 1538  # ~30% faster than prior 2000
+    COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
+    COOK_STEPS_ONION_DEFAULT: ClassVar[int] = 846  # ~30% faster than prior 1100
     KNOB_CONTACT_RADIUS_DEFAULT: ClassVar[float] = 0.06
     EE_TO_TCP: ClassVar[float] = 0.12
     # Straight-down approach onto the top-facing cooktop knob.
@@ -61,7 +62,7 @@ class cook_food(KitchenS_base_task):
     PAN_SCALE_DEFAULT: ClassVar[float] = 1.0
     RANGE_SCALE_DEFAULT: ClassVar[float] = 1.0
     LAYOUT_MARGIN: ClassVar[float] = 0.030
-    # Small per-episode jitter (meters) for board / plate / decor / food-on-board.
+    # Small per-episode jitter (meters) for board / decor / food-on-board.
     POS_JITTER_XY: ClassVar[float] = 0.025
     FOOD_ON_BOARD_JITTER: ClassVar[float] = 0.018
 
@@ -221,7 +222,7 @@ class cook_food(KitchenS_base_task):
         rx, ry = getattr(self, "range_xy", (0.22, 0.05))
         bx = float(getattr(self, "board_xy", (rx - 0.25, ry))[0])
         dx = float(getattr(self, "decor_plate_xy", (rx + 0.25, ry))[0])
-        # Frame board + stove + deco plate (no sink / microwave).
+        # Frame board + stove + deco (no sink / microwave / serving plate).
         center_x = 0.5 * (bx + dx)
         # Match the close-up KitchenS head framing used by the other cooking
         # tasks.  The previous y=-1.20/z=1.95, 58° setup made the workspace
@@ -253,11 +254,10 @@ class cook_food(KitchenS_base_task):
         if not hasattr(self, "burner_positions"):
             raise UnStableError("cooking range missing — KitchenS base did not load a range")
 
-        self.cook_steps = self._sample_cook_steps(cfg)
         self.knob_contact_radius = float(
             cfg.get("knob_contact_radius", self.KNOB_CONTACT_RADIUS_DEFAULT)
         )
-        # Match cook_meat skillet; board/plate are +30% vs cook_meat for this scene.
+        # Match cook_meat skillet; board is +30% vs cook_meat for this scene.
         self.pan_scale = float(cfg.get("pan_scale", self.PAN_SCALE_DEFAULT))
         self.plate_scale = float(cfg.get("plate_scale", self.PLATE_SCALE_DEFAULT))
         self.board_scale = float(cfg.get("board_scale_mult", self.BOARD_SCALE_DEFAULT))
@@ -283,8 +283,14 @@ class cook_food(KitchenS_base_task):
             # Flat disc must land at bowl center for a reliable pan re-grasp.
             self.place_dx = float(cfg.get("place_dx", 0.0))
             self.place_dy = float(cfg.get("place_dy", 0.0))
-            # Slow cook so white→yellow→brown spans several seconds on video.
-            self.cook_steps = int(cfg.get("cook_steps_onion", 1100))
+            # Slower than meat so white→yellow→brown still reads on video; ±jitter.
+            onion_cfg = dict(cfg)
+            onion_cfg["cook_steps"] = float(
+                cfg.get("cook_steps_onion", self.COOK_STEPS_ONION_DEFAULT)
+            )
+            self.cook_steps = self._sample_cook_steps(onion_cfg)
+        else:
+            self.cook_steps = self._sample_cook_steps(cfg)
         # place_dx bias is finalized after burner selection (right_front needs more +X).
 
         range_cfg = cfg.get("target_doneness_range")
@@ -459,17 +465,14 @@ class cook_food(KitchenS_base_task):
         board_half_x = 0.5 * float(board_data["extents"][0]) * self.board_scale
         board_half_y = 0.5 * float(board_data["extents"][2]) * self.board_scale
         board_half = np.array([board_half_x, board_half_y], dtype=float)
-        plate_half = 0.5 * 0.20 * float(self.plate_scale)  # approx plate radius
-        plate_half_xy = np.array([plate_half, plate_half], dtype=float)
         jitter = float(cfg.get("pos_jitter", self.POS_JITTER_XY if randomize else 0.0))
 
-        # Board/plate stay on the left so the left food-arm can reach both front
-        # burners. Right-front pans get a 180° handle flip (handle into the stove);
-        # pull the board slightly forward so the arm approaches under the handle arc.
+        # Board stays on the left so the left food-arm can reach both front burners.
+        # Right-front pans get a 180° handle flip (handle into the stove); pull the
+        # board slightly forward so the arm approaches under the handle arc.
         board_y0 = float(cfg.get("board_y", self.BOARD_REL_XY[1]))
         if randomize and burner_name == "right_front" and "board_y" not in cfg:
             board_y0 = float(np.clip(board_y0 - 0.06, -0.20, 0.05))
-        plate_y0 = float(cfg.get("plate_y", self.PLATE_REL_XY[1]))
         board_on_right = False
         if "board_x" in cfg:
             board_x0 = float(cfg["board_x"])
@@ -479,26 +482,16 @@ class cook_food(KitchenS_base_task):
             board_x0 = float(np.clip(board_x0, -0.40, -0.08))
         else:
             board_x0 = float(rx - float(hx) - board_half_x - 0.12)
-        if "plate_x" in cfg:
-            plate_x0 = float(cfg["plate_x"])
-        else:
-            plate_x0 = 0.5 * (board_x0 + float(bx))
-            if randomize:
-                plate_x0 = float(np.clip(plate_x0, -0.30, float(bx) - 0.08))
 
-        board_xy, plate_xy = self._sample_board_plate_xy(
+        board_xy = self._sample_board_xy(
             rng,
             board_x0,
             board_y0,
-            plate_x0,
-            plate_y0,
             board_half,
-            plate_half_xy,
             [range_blocker, pan_blocker],
             jitter=jitter,
         )
         board_x, board_y = float(board_xy[0]), float(board_xy[1])
-        plate_x, plate_y = float(plate_xy[0]), float(plate_xy[1])
         board_pose = sapien.Pose(
             [board_x, board_y, bz + 0.5 * board_th], list(self.BOARD_QPOS)
         )
@@ -520,29 +513,11 @@ class cook_food(KitchenS_base_task):
         self.add_prohibit_area(self.board, padding=0.03)
         self.board_xy = (board_x, board_y)
         self.board_top_z = bz + board_th
-
-        # Serving plate forward-left — clear of the board→pan path.
-        plate_pose = sapien.Pose([plate_x, plate_y, bz], [0.707, 0.707, 0.0, 0.0])
-        self.plate = create_actor(
-            self,
-            pose=plate_pose,
-            modelname="003_plate",
-            model_id=0,
-            convex=True,
-            is_static=True,
-            scale_mult=self.plate_scale,
-        )
-        self.plate.set_name("003_plate")
-        if self.plate.config is None:
-            self.plate.config = {"scale": [self.plate_scale] * 3}
-        self.add_prohibit_area(self.plate, padding=0.03)
-        self.plate_xy = (plate_x, plate_y)
-        # On-plate radius scales with plate size (0.55 → tol 0.10 historically).
-        self.plate_tol = 0.10 * (self.plate_scale / 0.55)
-        try:
-            self.plate_top_z = float(self.plate.get_functional_point(0)[2])
-        except Exception:
-            self.plate_top_z = bz + 0.02
+        # No serving plate — success is cook quality after the stove is shut off.
+        self.plate = None
+        self.plate_xy = None
+        self.plate_tol = 0.0
+        self.plate_top_z = bz
 
         # Task food starts on the chopping board (slight XY jitter, stays on board).
         food_j = float(
@@ -610,7 +585,6 @@ class cook_food(KitchenS_base_task):
                 range_blocker,
                 pan_blocker,
                 (np.array([board_x, board_y], dtype=float), board_half),
-                (np.array([plate_x, plate_y], dtype=float), plate_half_xy),
             ],
         )
         print(
@@ -618,58 +592,36 @@ class cook_food(KitchenS_base_task):
             f"stove={np.round(self.range_xy, 3).tolist()} "
             f"pose={getattr(self, '_stove_pose_choice', 'fixed')} "
             f"burner={self.burner_name} handle_yaw={self.skillet_handle_yaw:.2f} "
-            f"board={np.round(self.board_xy, 3)} plate={np.round(self.plate_xy, 3)} "
+            f"board={np.round(self.board_xy, 3)} "
             f"decor={np.round(getattr(self, 'decor_plate_xy', (0, 0)), 3)}",
             flush=True,
         )
 
-    def _sample_board_plate_xy(
+    def _sample_board_xy(
         self,
         rng: np.random.RandomState,
         board_x0: float,
         board_y0: float,
-        plate_x0: float,
-        plate_y0: float,
         board_half: np.ndarray,
-        plate_half: np.ndarray,
-        blockers: list,
-        jitter: float = 0.0,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Place board + serving plate clear of stove/pan and each other."""
-        j = float(max(0.0, jitter))
+        blockers: list[tuple[np.ndarray, np.ndarray]],
+        *,
+        jitter: float,
+    ) -> np.ndarray:
+        """Place the chopping board clear of stove/pan."""
         board0 = np.array([board_x0, board_y0], dtype=float)
-        plate0 = np.array([plate_x0, plate_y0], dtype=float)
-        if j <= 1e-9:
-            return board0, plate0
-
-        board_on_right = float(board_x0) >= 0.0
+        if jitter <= 1e-9:
+            return board0
         for _ in range(80):
             b = board0 + np.array(
-                [rng.uniform(-j, j), rng.uniform(-j, j)], dtype=float
+                [rng.uniform(-jitter, jitter), rng.uniform(-jitter, jitter)],
+                dtype=float,
             )
-            if board_on_right:
-                b[0] = float(np.clip(b[0], float(self.burner_xy[0]) + 0.06, 0.48))
-            else:
-                b[0] = float(np.clip(b[0], -0.48, float(self.range_xy[0]) - 0.08))
-            b[1] = float(np.clip(b[1], -0.24, 0.18))
-            if not self._footprint_clear(b, board_half, blockers):
-                continue
-            for _ in range(40):
-                p = plate0 + np.array(
-                    [rng.uniform(-j, j), rng.uniform(-j, j)], dtype=float
-                )
-                if board_on_right:
-                    p[0] = float(np.clip(p[0], float(self.burner_xy[0]) + 0.04, 0.45))
-                else:
-                    p[0] = float(np.clip(p[0], -0.40, float(self.burner_xy[0]) - 0.04))
-                p[1] = float(np.clip(p[1], -0.26, 0.10))
-                if not self._footprint_clear(p, plate_half, blockers):
-                    continue
-                if not self._footprint_clear(p, plate_half, [(b, board_half)]):
-                    continue
-                return b, p
-        # Fallback: deterministic baselines (may be tight but valid historically).
-        return board0, plate0
+            b[0] = float(np.clip(b[0], -0.42, 0.42))
+            b[1] = float(np.clip(b[1], -0.22, 0.18))
+            if self._footprint_clear(b, board_half, blockers):
+                return b
+        return board0
+
 
     def _spawn_decor_meat_plate(
         self,
@@ -1194,41 +1146,6 @@ class cook_food(KitchenS_base_task):
             except Exception:
                 pass
 
-    def _seat_food_on_plate(self, max_d: float = 0.28) -> bool:
-        """Place cooked food onto the plate if it is still in the workspace."""
-        if self.food is None or not hasattr(self, "plate_xy"):
-            return False
-        food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
-        plate = np.asarray(self.plate_xy, dtype=float)
-        if float(np.linalg.norm(food_xy - plate)) > float(max_d):
-            return False
-        z = float(getattr(self, "plate_top_z", self.table_z_bias + 0.76)) + 0.012
-        q = list(self.food.get_pose().q)
-        tol = float(getattr(self, "plate_tol", 0.13))
-        # Meat can bounce off after a single teleport; retry a few settles.
-        for _ in range(3):
-            self.food.actor.set_pose(
-                sapien.Pose([float(plate[0]), float(plate[1]), z], q)
-            )
-            if self._food_rigid is not None:
-                try:
-                    self._food_rigid.set_linear_velocity(np.zeros(3))
-                    self._food_rigid.set_angular_velocity(np.zeros(3))
-                except Exception:
-                    pass
-            self._idle_steps(6)
-            food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
-            if float(np.linalg.norm(food_xy - plate)) < tol:
-                return True
-        # Trust the teleport for near-miss meat demos (left-arm short place).
-        self.food.actor.set_pose(sapien.Pose([float(plate[0]), float(plate[1]), z], q))
-        if self._food_rigid is not None:
-            try:
-                self._food_rigid.set_linear_velocity(np.zeros(3))
-                self._food_rigid.set_angular_velocity(np.zeros(3))
-            except Exception:
-                pass
-        return True
 
     def _fallback_food_grasp_poses(
         self, arm_tag: ArmTag, pre_dis: float = 0.10
@@ -1504,7 +1421,7 @@ class cook_food(KitchenS_base_task):
         self.plan_success = True
         self.move(self.move_by_displacement(arm_tag=arm, z=0.10, move_axis="arm"))
         self._pause(4 if getattr(self, "food_type", "") == "onion_half" else 12)
-        # Verify against the intended target (bowl OR plate) — never hardcode bowl.
+        # Verify against the intended target (pan bowl) — never hardcode a fixed XY.
         food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
         return float(np.linalg.norm(food_xy - tgt_xy)) < float(release_tol) * 1.6
 
@@ -1538,20 +1455,7 @@ class cook_food(KitchenS_base_task):
         self.move(self.move_by_displacement(arm_tag=arm, z=0.10, move_axis="arm"))
         self._idle_steps(8)
 
-    def _plate_place_target(self) -> list[float]:
-        z_off = 0.018 if getattr(self, "food_type", "") == "onion_half" else 0.025
-        return [
-            float(self.plate_xy[0]),
-            float(self.plate_xy[1]),
-            float(self.plate_top_z) + z_off,
-            *self.FOOD_QPOS,
-        ]
 
-    def _plate_ok(self, tol: float | None = None) -> bool:
-        if tol is None:
-            tol = float(getattr(self, "plate_tol", 0.13))
-        food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
-        return float(np.linalg.norm(food_xy - np.asarray(self.plate_xy))) < float(tol)
 
     def _lift_held_food(self, arm: ArmTag, total_z: float = 0.12) -> None:
         """Incremental lift with re-close so layered onion meshes stay pinched."""
@@ -1760,209 +1664,10 @@ class cook_food(KitchenS_base_task):
         self._idle_steps(10)
         return self._food_held()
 
-    def _pick_food_to_plate(self) -> None:
-        """Physical grasp from the pan → place onto the plate."""
-        # Clear the knob arm only when it is a different arm than the food arm.
-        if str(self.arm) != str(self.food_arm):
-            self._park_knob_arm(self.arm)
-        else:
-            self.plan_success = True
-            self.move(self.open_gripper(self.arm))
-        if self._grasp_doneness is None:
-            self._grasp_doneness = float(self.doneness)
-        self._cook_phase_done = True
-        self._unlock_food()
-        self.plan_success = True
-        # Let the food settle under gravity — do not teleport into the pan.
-        self._pause(4 if self.food_type == "onion_half" else 18)
-        if self.food_type == "onion_half":
-            bowl = np.asarray(self.skillet.get_functional_point(0)[:2], dtype=float)
-            food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
-            self._dbg(
-                f"pre_pan_grasp dxy={float(np.linalg.norm(food_xy - bowl)):.3f} "
-                f"in_bowl={self._food_in_bowl()}"
-            )
-
-        # Skillet rim blocks side contact grasps; ignore skillet↔robot while pinching.
-        self._ignore_skillet_robot_collision()
-
-        arm = None
-        # Prefer a slightly open jaw first (0.14 worked in isolation smoke tests).
-        gpos_try = (0.14, 0.16, 0.12, 0.18, 0.10) if self.food_type == "onion_half" else (0.12, 0.18, 0.05)
-        for cand in (self.food_arm, self.arm):
-            for gpos in gpos_try:
-                if self._pinch_food_topdown(cand, gripper_pos=gpos):
-                    arm = cand
-                    self._dbg(f"pan_pinch ok arm={cand} gpos={gpos}")
-                    break
-            if arm is not None:
-                break
-            self.plan_success = True
-            self.move(self.open_gripper(cand))
-            try:
-                pinch = 0.14 if self.food_type == "onion_half" else 0.18
-                self.move(
-                    self._safe_grasp_actor(
-                        self.food, arm_tag=cand, pre_grasp_dis=0.12, gripper_pos=pinch
-                    )
-                )
-            except UnStableError:
-                continue
-            self._pause(10)
-            if self._food_held():
-                arm = cand
-                self._dbg(f"pan_grasp_actor ok arm={cand}")
-                break
-
-        if arm is None:
-            raise UnStableError("cook_food: failed to grasp food from pan — skip")
-
-        self.food_arm = arm
-        # Onion: weld only after a real pinch, while carrying. Never while resting
-        # in the pan (no post-drop seat / self-slide).
-        if self.food_type == "onion_half":
-            self._weld_food_to_ee(arm)
-            self.plan_success = True
-            self.move(self.move_by_displacement(arm_tag=arm, z=0.12, move_axis="arm"))
-            self._pause(4)
-            lifted = True
-        else:
-            lifted = False
-            for attempt in range(5):
-                for dz in (0.05, 0.08):
-                    self.plan_success = True
-                    self.move(self.move_by_displacement(arm_tag=arm, z=dz, move_axis="arm"))
-                    self._idle_steps(4)
-                    if self._food_held():
-                        break
-                if self._food_held():
-                    lifted = True
-                    break
-                self.plan_success = True
-                self.move(self.open_gripper(arm))
-                self._pause(6)
-                gpos = gpos_try[min(attempt, len(gpos_try) - 1)]
-                if not self._pinch_food_topdown(arm, gripper_pos=gpos):
-                    try:
-                        self.move(
-                            self._safe_grasp_actor(
-                                self.food, arm_tag=arm, pre_grasp_dis=0.10, gripper_pos=gpos
-                            )
-                        )
-                    except UnStableError:
-                        continue
-                    self._pause(8)
-                if not self._food_held():
-                    continue
-        if not lifted:
-            self._release_food_weld()
-            raise UnStableError("cook_food: lost food after pan lift — skip")
-        self._dbg("grasp_food")
-        if self.food_type != "onion_half" and not self._food_held():
-            raise UnStableError("cook_food: lost food after pan lift — skip")
-
-        # Prefer grasp-relative carry onto the plate (more reliable than place_actor
-        # after a pan pinch, which often opens short of the plate).
-        plate_tol = float(getattr(self, "plate_tol", 0.13))
-        if self.food_type == "onion_half":
-            plate_tol = min(plate_tol, 0.09)
-        plate_tgt = self._plate_place_target()
-        carried = False
-        if self._food_held():
-            carried = self._carry_held_food_to(
-                arm, plate_tgt, hover_z=0.10, release_tol=plate_tol + 0.02
-            )
-        if not carried:
-            self._place_held_food(plate_tgt, arm, pre_dis=0.10, dis=0.015)
-        self._pause(4 if self.food_type == "onion_half" else 14)
-
-        food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
-        d_plate = float(np.linalg.norm(food_xy - np.asarray(self.plate_xy)))
-        retries = 1 if self.food_type == "onion_half" else 4
-        for _ in range(retries):
-            if d_plate < plate_tol:
-                break
-            self._release_food_weld()
-            self.plan_success = True
-            self.move(self.open_gripper(arm))
-            regrasped = self._pinch_food_topdown(
-                arm, gripper_pos=0.12 if self.food_type == "onion_half" else 0.12
-            )
-            if not regrasped:
-                try:
-                    self.move(
-                        self._safe_grasp_actor(
-                            self.food, arm_tag=arm, pre_grasp_dis=0.10, gripper_pos=0.14
-                        )
-                    )
-                    self._pause(8)
-                    regrasped = self._food_held()
-                except UnStableError:
-                    regrasped = False
-            if not regrasped:
-                break
-            if self.food_type == "onion_half":
-                self._weld_food_to_ee(arm)
-            self.plan_success = True
-            self.move(self.move_by_displacement(arm_tag=arm, z=0.10, move_axis="arm"))
-            # Bias retry toward residual plate error.
-            tgt = self._plate_place_target()
-            err = np.asarray(self.plate_xy, dtype=float) - np.asarray(
-                self.food.get_pose().p[:2], dtype=float
-            )
-            tgt[0] = float(tgt[0] + 0.6 * err[0])
-            tgt[1] = float(tgt[1] + 0.6 * err[1])
-            if not self._carry_held_food_to(
-                arm, tgt, hover_z=0.10, release_tol=plate_tol + 0.02
-            ):
-                self._place_held_food(tgt, arm, pre_dis=0.12, dis=0.01)
-            self._pause(12)
-            food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
-            d_plate = float(np.linalg.norm(food_xy - np.asarray(self.plate_xy)))
-
-        self._placed = bool(self._plate_ok(plate_tol)) and not self._food_in_bowl(
-            require_released=False
-        )
-        self._dbg(f"place_plate d={d_plate:.3f}")
-        self._release_food_weld()
-        soft_seated = False
-        if not self._placed:
-            # Meat/sausage only: soft-seat near-misses. Onion must land physically.
-            if self.food_type == "onion_half":
-                raise UnStableError(
-                    f"cook_food: food missed plate (d={d_plate:.3f}) — skip"
-                )
-            # Left-arm place often lands ~15–25 cm short — still soft-seat even if
-            # the drop is nearer the skillet XY than the plate (common miss mode).
-            near_plate = d_plate < 0.28
-            if near_plate and self._seat_food_on_plate(max_d=0.28):
-                self._placed = True
-                soft_seated = True
-                self._dbg("place_plate_seated")
-            else:
-                raise UnStableError(
-                    f"cook_food: food missed plate (d={d_plate:.3f}) — skip"
-                )
-        self._pause(4 if self.food_type == "onion_half" else 12)
-        if not self._plate_ok():
-            if soft_seated or (
-                self.food_type != "onion_half" and d_plate < 0.28
-            ):
-                if self._seat_food_on_plate(max_d=0.32):
-                    self._placed = True
-                else:
-                    raise UnStableError(
-                        f"cook_food: food missed plate (d={d_plate:.3f}) — skip"
-                    )
-            else:
-                raise UnStableError("cook_food: food not stably on plate at end — skip")
-        elif self._food_in_bowl(tol=0.055, require_released=False) and not soft_seated:
-            raise UnStableError("cook_food: food not stably on plate at end — skip")
-        self._placed = True
 
     # ----------------------------------------------------------- policy
     def play_once(self) -> dict[str, Any]:
-        # Strict sequence: board → drop in pan → cook in pan → plate.
+        # Strict sequence: board → drop in pan → cook → shut off (no plating).
         # Right arm stays parked until food is released; left arm parks before knob.
         # Onion demos must stay under ~60s video — keep pauses short.
         onion = self.food_type == "onion_half"
@@ -1990,26 +1695,29 @@ class cook_food(KitchenS_base_task):
             raise UnStableError("cook_food: refuse to cook — food not seated in pan")
         self._pause(2 if onion else 14)
 
-        # 2) Cook via knob (right arm) — food must already be released in the pan
+        # 2) Cook via knob — food must already be released in the pan
         target_on = -float(self.cook_intensity) * self.KNOB_MAX_ANGLE
         self._set_knob_to(target_on, approach=True)
         self._dbg("stove_on")
         self._pause(2 if onion else 10)
 
-        # Wait to target doneness while the burner stays lit (knob still on).
+        # Wait to target doneness while the burner stays lit.
         self._idle_until_doneness(self.target_doneness)
-        self._cook_phase_done = True  # freeze doneness only — not the flame
-        if not self._doneness_in_target_range(self.doneness):
-            raise UnStableError(
-                f"cook_food: doneness {self.doneness:.2f} outside "
-                f"{self.target_doneness_range} — skip"
-            )
+        # Freeze doneness for the shutoff approach, then latch after the stove is off.
+        self._cook_phase_done = True
         self._pause(2 if onion else 12)
 
         # Fire follows the knob twist off; never kill the ring early in code.
         self._set_knob_to(0.0, approach=False)
         self._grasp_doneness = float(self.doneness)
         self._dbg("stove_off")
+        if not self._doneness_in_target_range(float(self._grasp_doneness)):
+            raise UnStableError(
+                f"cook_food: doneness {self._grasp_doneness:.2f} outside "
+                f"{self.target_doneness_range} — skip"
+            )
+        # Cook phase complete — food stays in the pan (no plate transfer).
+        self._placed = True
         if onion:
             self.plan_success = True
             self.move(self.open_gripper(self.arm))
@@ -2021,15 +1729,9 @@ class cook_food(KitchenS_base_task):
             self.move(self.open_gripper(self.arm))
             self._pause(6)
 
-        # 3) Pan → plate (physical grasp + place)
-        self._pick_food_to_plate()
-        if not self._plate_ok() or self._food_in_bowl(require_released=False):
-            raise UnStableError("cook_food: refuse success — food not on plate")
-
         self.info["info"] = {
             "{A}": f"{self.food_spec['modelname']}/base{self.food_spec['model_id']}",
             "{B}": f"106_skillet/base{self.skillet_id}",
-            "{C}": "003_plate/base0",
             "{D}": "cooking_range",
             "{E}": "stove_knob",
             "{F}": self.food_type,
@@ -2044,6 +1746,7 @@ class cook_food(KitchenS_base_task):
         return float(lo) <= float(doneness) <= float(hi)
 
     def check_success(self) -> bool:
+        """Success: food cooked into the target band after the stove is shut off."""
         if self._grasp_doneness is None:
             return False
         if not self._doneness_in_target_range(float(self._grasp_doneness)):
@@ -2052,24 +1755,13 @@ class cook_food(KitchenS_base_task):
             return False
         if not self.turned_on_once or not self.turned_off_after_cook:
             return False
-        if not self._placed:
-            return False
         if self._food_held():
             return False
-        food_p = self.food.get_pose().p
-        food_xy = np.asarray(food_p[:2], dtype=float)
-        pan_xy = np.asarray(self.burner_xy, dtype=float)
-        d_pan = float(np.linalg.norm(food_xy - pan_xy))
-        plate_tol = float(getattr(self, "plate_tol", 0.13))
-        if self.food_type == "onion_half":
-            plate_tol = min(plate_tol, 0.09)
-        on_plate = self._plate_ok(plate_tol)
-        off_pan = d_pan > 0.12
-        # Must not still be resting in the skillet bowl.
-        if self._food_in_bowl(tol=0.08, require_released=False):
-            return False
-        above_plate = float(food_p[2]) > (self.plate_top_z - 0.03)
-        return bool(on_plate and off_pan and above_plate)
+        # Food remains in the pan — no plating step.
+        return bool(
+            self._food_in_pan
+            or self._food_in_bowl(tol=0.10, require_released=True)
+        )
 
     def get_obs(self) -> dict[str, Any]:
         obs = super().get_obs()

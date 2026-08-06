@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import sapien.core as sapien
 from sapien.render import clear_cache as sapien_clear_cache
 from sapien.utils.viewer import Viewer
@@ -79,6 +80,8 @@ class Base_Task(gym.Env):
         self.save_data = kwags.get("save_data", False)
         self.dual_arm = kwags.get("dual_arm", True)
         self.eval_mode = kwags.get("eval_mode", False)
+        # Interactive teleop rates (demo_dynamic.yml → interactive_params).
+        self._interactive_params = dict(kwags.get("interactive_params") or {})
         self.force_clear_cache_on_close = os.getenv(
             "ROBOREAL_FORCE_CLEAR_CACHE_ON_CLOSE", "1"
         ).strip().lower() not in {"0", "false", "no"}
@@ -174,6 +177,16 @@ class Base_Task(gym.Env):
                 except:
                     print(f"{self.task_name} not in step limit file, set to 1000")
                     self.step_lim = 1000
+
+        # Household tasks: hard saved-frame / control-step episode cutoff.
+        try:
+            from .utils.household_view import HOUSEHOLD_MAX_STEPS, HOUSEHOLD_TASKS
+
+            if getattr(self, "task_name", None) in HOUSEHOLD_TASKS:
+                self._max_episode_steps = int(HOUSEHOLD_MAX_STEPS)
+                self._episode_timed_out = False
+        except Exception:
+            pass
 
         # info
         self.info = dict()
@@ -783,6 +796,14 @@ class Base_Task(gym.Env):
             **kwags,
         )
         self.cameras.load_camera(self.scene)
+        # Household tasks share one elevated head framing.
+        try:
+            from .utils.household_view import HOUSEHOLD_TASKS, configure_household_head_camera
+
+            if getattr(self, "task_name", None) in HOUSEHOLD_TASKS:
+                configure_household_head_camera(self)
+        except Exception:
+            pass
         self._update_kinematic_tasks()
         self.scene.step()  # run a physical step
         self.scene.update_render()  # sync pose from SAPIEN to renderer
@@ -884,9 +905,73 @@ class Base_Task(gym.Env):
         (e.g. self.mark_phase("grasp", arm="left", object="200_steak")). Harmless if unused."""
         self._phase_marks.append({"label": str(label), "frame": int(self.FRAME_IDX), **meta})
 
+    def _episode_step_count(self) -> int:
+        """Progress toward the household step cutoff.
+
+        During data collection this is the saved-frame index; during policy
+        eval (no RGB save) it falls back to ``take_action_cnt``.
+        """
+        if getattr(self, "save_data", False):
+            return int(getattr(self, "FRAME_IDX", 0) or 0)
+        return int(getattr(self, "take_action_cnt", 0) or 0)
+
+    def _episode_past_deadline(self) -> bool:
+        max_steps = getattr(self, "_max_episode_steps", None)
+        if max_steps is not None:
+            step = self._episode_step_count()
+            if step >= int(max_steps):
+                if not getattr(self, "_episode_timed_out", False):
+                    self._episode_timed_out = True
+                    print(
+                        f"\n[episode cutoff] {getattr(self, 'task_name', '?')} "
+                        f"hit {int(max_steps)} simulation-step limit "
+                        f"(frames={getattr(self, 'FRAME_IDX', '?')}, "
+                        f"take_action={getattr(self, 'take_action_cnt', '?')})",
+                        flush=True,
+                    )
+                return True
+            return False
+
+        # Optional legacy wall-clock cap (e.g. fail-demo --max-seconds).
+        max_s = getattr(self, "_max_episode_seconds", None)
+        if max_s is None:
+            return False
+        t0 = getattr(self, "_episode_t0", None)
+        if t0 is None:
+            self._episode_t0 = time.monotonic()
+            return False
+        if time.monotonic() - float(t0) >= float(max_s):
+            if not getattr(self, "_episode_timed_out", False):
+                self._episode_timed_out = True
+                print(
+                    f"\n[episode cutoff] {getattr(self, 'task_name', '?')} "
+                    f"hit {float(max_s):.0f}s wall-clock limit "
+                    f"(frames={getattr(self, 'FRAME_IDX', '?')})",
+                    flush=True,
+                )
+            return True
+        return False
+
     def _take_picture(self):  # save data
         if not self.save_data:
             return
+        if self._episode_past_deadline():
+            from .utils.household_view import EpisodeTimeLimit
+
+            max_steps = getattr(self, "_max_episode_steps", None)
+            if max_steps is not None:
+                detail = (
+                    f"{int(max_steps)}-step episode cutoff "
+                    f"(frames={getattr(self, 'FRAME_IDX', 0)})"
+                )
+            else:
+                detail = (
+                    f"{float(self._max_episode_seconds):.0f}s episode cutoff "
+                    f"(frames={getattr(self, 'FRAME_IDX', 0)})"
+                )
+            raise EpisodeTimeLimit(
+                f"{getattr(self, 'task_name', '?')} exceeded {detail}"
+            )
 
         print("saving: episode = ", self.ep_num, " index = ", self.FRAME_IDX, end="\r")
 
@@ -931,7 +1016,13 @@ class Base_Task(gym.Env):
         if 'dynamic_motion_info' in traj_data:
             self._loaded_dynamic_motion_info = traj_data['dynamic_motion_info']
         else:
-            print(f"[Warning] No dynamic motion info found for episode {idx}")
+            # Interactive sandboxes often have no recorded dynamic traj — stay quiet.
+            if not (
+                getattr(self, "_interactive_session", False)
+                or getattr(self, "_interactive_robot_mode", False)
+                or getattr(self, "_interactive_universal_controls", False)
+            ):
+                print(f"[Warning] No dynamic motion info found for episode {idx}")
             self._loaded_dynamic_motion_info = None
         
         return traj_data
@@ -2170,6 +2261,37 @@ class Base_Task(gym.Env):
         print(f"Warning: No PhysxRigidDynamicComponent found for actor '{target_actor.get_name()}'. Is it static?")
         return None
     
+    def _arm_tcp_xyz(self, side: str, *, ee_to_tcp: float = 0.12):
+        """World TCP (gripper-center) xyz for ``side``.
+
+        Prefers the measured TCP so reactive keys engage when fingers reach the
+        keycap — not when a leading teleop EE command is still above it.
+        """
+        side = str(side)
+        robot = getattr(self, "robot", None)
+        if robot is not None:
+            try:
+                pose_fn = (
+                    robot.get_left_tcp_pose if side == "left" else robot.get_right_tcp_pose
+                )
+                return np.asarray(pose_fn(), dtype=float)[:3]
+            except Exception:
+                pass
+        cmd = getattr(self, "_interactive_cmd_pose", None)
+        if isinstance(cmd, dict) and side in cmd:
+            ee = np.asarray(cmd[side][:3], dtype=float)
+            return ee - np.array([0.0, 0.0, float(ee_to_tcp)], dtype=float)
+        if robot is None:
+            return None
+        try:
+            pose_fn = robot.get_left_ee_pose if side == "left" else robot.get_right_ee_pose
+            ee = np.asarray(pose_fn(), dtype=float)
+            return np.asarray(ee[:3], dtype=float) - np.array(
+                [0.0, 0.0, float(ee_to_tcp)], dtype=float
+            )
+        except Exception:
+            return None
+
     def _update_kinematic_tasks(self):
         """
         Process all registered active_kinematic_tasks and update their kinematic targets.
@@ -3862,6 +3984,8 @@ class Base_Task(gym.Env):
 
     def take_action(self, action, action_type:Literal['qpos', 'ee']='qpos'):  # action_type: qpos or ee
         if self.take_action_cnt == self.step_lim or self.eval_success:
+            return
+        if self._episode_past_deadline():
             return
 
         eval_video_freq = 1  # fixed

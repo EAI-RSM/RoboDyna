@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>RoboDynaExp — Task Success Conditions</title>
+<style>
+  :root {
+    --bg:#0f1419; --panel:#1a222c; --border:#334155; --text:#e8eef4; --muted:#9aabbc;
+    --accent:#5b9fd4; --ok:#2f9e6b; --bad:#c45c5c; --basic:#3d8b6e; --hh:#b8860b; --extra:#6b7280;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:"IBM Plex Sans","Segoe UI",sans-serif; color:var(--text);
+    background:radial-gradient(1100px 500px at 15% -10%, #1a2a3a 0%, var(--bg) 55%);
+    line-height:1.45;
+  }
+  .wrap { max-width:1000px; margin:0 auto; padding:1rem 1.5rem 3rem; }
+  header.hero {
+    padding:2rem 1.5rem 1rem; border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg,#15202b,transparent);
+  }
+  h1 { margin:0 0 .4rem; font-size:1.7rem; letter-spacing:-.02em; }
+  h2 { margin:1.75rem 0 .6rem; font-size:1.25rem; }
+  h3 { margin:0; font-size:1.05rem; }
+  h4 { margin:.2rem 0 .4rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .muted { color:var(--muted); max-width:72ch; }
+  .toolbar {
+    display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; position:sticky; top:0; z-index:5;
+    background:rgba(15,20,25,.92); backdrop-filter:blur(8px); padding:.75rem 0; border-bottom:1px solid var(--border);
+  }
+  input[type=search] {
+    flex:1; min-width:200px; padding:.55rem .75rem; border-radius:8px;
+    border:1px solid var(--border); background:var(--panel); color:var(--text);
+  }
+  .filters label { margin-right:.75rem; color:var(--muted); font-size:.9rem; cursor:pointer; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:.75rem; margin:1rem 0; }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:.85rem 1rem; }
+  .stat b { display:block; font-size:1.4rem; }
+  .stat span { color:var(--muted); font-size:.85rem; }
+  .pill {
+    display:inline-block; font-size:.72rem; padding:.15rem .5rem; border-radius:999px;
+    border:1px solid var(--border); color:var(--muted);
+  }
+  .pill.basic { color:#b7e4d0; border-color:var(--basic); background:rgba(61,139,110,.15); }
+  .pill.household { color:#f0d48a; border-color:var(--hh); background:rgba(184,134,11,.15); }
+  .pill.extra { color:#d1d5db; border-color:var(--extra); }
+  .task {
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:1rem 1.1rem; margin:.85rem 0;
+  }
+  .task header { display:flex; flex-wrap:wrap; gap:.5rem 1rem; justify-content:space-between; align-items:baseline; }
+  .summary { margin:.55rem 0 .75rem; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  @media (max-width:720px) { .cols { grid-template-columns:1fr; } }
+  ul { margin:.2rem 0 0; padding-left:1.15rem; }
+  ul.fail li { color:#f0b4b4; }
+  .src { margin:.75rem 0 0; color:var(--muted); font-size:.85rem; }
+  code { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.88em; color:#c6e0f5; }
+  .index { columns:2; gap:1.5rem; }
+  @media (max-width:720px) { .index { columns:1; } }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .callout {
+    background:#222c38; border-left:3px solid var(--accent); padding:.85rem 1rem;
+    border-radius:0 8px 8px 0; margin:1rem 0; color:var(--muted); font-size:.92rem;
+  }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <h1>RoboDynaExp — Task Success Conditions</h1>
+    <p class="muted">
+      Full success criteria from each task’s <code>check_success()</code>
+      (basic suite, household suite, and related extras).
+    </p>
+    <div class="stats">
+      <div class="stat"><b>23</b><span>basic</span></div>
+      <div class="stat"><b>12</b><span>household</span></div>
+      <div class="stat"><b>4</b><span>extras</span></div>
+      <div class="stat"><b>39</b><span>total</span></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="toolbar">
+    <input id="q" type="search" placeholder="Filter tasks…" />
+    <div class="filters">
+      <label><input type="radio" name="suite" value="all" checked/> All</label>
+      <label><input type="radio" name="suite" value="basic"/> Basic</label>
+      <label><input type="radio" name="suite" value="household"/> Household</label>
+      <label><input type="radio" name="suite" value="extra"/> Extras</label>
+    </div>
+  </div>
+
+  <div class="callout">
+    Ground truth is <code>envs/&lt;task&gt;.py</code> → <code>check_success()</code>.
+    Expert demos may do extra steps (e.g. make_soup stove-on is scored; cook_food plating was removed).
+    Timer variants inherit the parent task’s success check.
+  </div>
+
+  <h2>Index</h2>
+  <h3>Basic</h3><ol class="index"><li><a href="#catch_marbles_trapdoors"><code>catch_marbles_trapdoors</code></a> — Catch Marbles Trapdoors</li><li><a href="#catch_ramp_ball"><code>catch_ramp_ball</code></a> — Catch Ramp Ball</li><li><a href="#catch_cuboid"><code>catch_cuboid</code></a> — Catch Cuboid</li><li><a href="#catch_shelf_marble"><code>catch_shelf_marble</code></a> — Catch Shelf Marble</li><li><a href="#catch_valley_ball"><code>catch_valley_ball</code></a> — Catch Valley Ball</li><li><a href="#stop_valley_ball"><code>stop_valley_ball</code></a> — Stop Valley Ball</li><li><a href="#cook_meat"><code>cook_meat</code></a> — Cook Meat</li><li><a href="#cook_meat_timer"><code>cook_meat_timer</code></a> — Cook Meat Timer</li><li><a href="#put_cup_belt"><code>put_cup_belt</code></a> — Put Cup Belt</li><li><a href="#dispense_gummy"><code>dispense_gummy</code></a> — Dispense Gummy</li><li><a href="#punch_dual_holes"><code>punch_dual_holes</code></a> — Punch Dual Holes</li><li><a href="#save_goal"><code>save_goal</code></a> — Save Goal</li><li><a href="#hit_target"><code>hit_target</code></a> — Hit Target</li><li><a href="#load_train"><code>load_train</code></a> — Load Train</li><li><a href="#marble_shelf_maze"><code>marble_shelf_maze</code></a> — Marble Shelf Maze</li><li><a href="#pack_fruits"><code>pack_fruits</code></a> — Pack Fruits</li><li><a href="#pick_ripe_apple"><code>pick_ripe_apple</code></a> — Pick Ripe Apple</li><li><a href="#place_block_belt"><code>place_block_belt</code></a> — Place Block Belt</li><li><a href="#play_billiard"><code>play_billiard</code></a> — Play Billiard</li><li><a href="#control_quality"><code>control_quality</code></a> — Control Quality</li><li><a href="#drop_ball_hole"><code>drop_ball_hole</code></a> — Drop Ball Hole</li><li><a href="#sort_apples_belt"><code>sort_apples_belt</code></a> — Sort Apples Belt</li><li><a href="#whack_moles"><code>whack_moles</code></a> — Whack Moles</li></ol>
+  <h3>Household</h3><ol class="index"><li><a href="#trap_bug"><code>trap_bug</code></a> — Trap Bug</li><li><a href="#boil_milk"><code>boil_milk</code></a> — Boil Milk</li><li><a href="#fill_coffee_jar"><code>fill_coffee_jar</code></a> — Fill Coffee Jar</li><li><a href="#pour_beer"><code>pour_beer</code></a> — Pour Beer</li><li><a href="#cook_food"><code>cook_food</code></a> — Cook Food</li><li><a href="#cook_food_timer"><code>cook_food_timer</code></a> — Cook Food Timer</li><li><a href="#measure_ingredient"><code>measure_ingredient</code></a> — Measure Ingredient</li><li><a href="#make_soup"><code>make_soup</code></a> — Make Soup</li><li><a href="#catch_cup"><code>catch_cup</code></a> — Catch Cup</li><li><a href="#catch_mouse_object_drop"><code>catch_mouse_object_drop</code></a> — Catch Mouse Object Drop</li><li><a href="#stop_ball"><code>stop_ball</code></a> — Stop Ball</li><li><a href="#clean_table"><code>clean_table</code></a> — Clean Table</li></ol>
+  <h3>Extras</h3><ol class="index"><li><a href="#serve_dinner"><code>serve_dinner</code></a> — Serve Dinner</li><li><a href="#make_soup_test"><code>make_soup_test</code></a> — Make Soup Test</li><li><a href="#catch_rolling_cup"><code>catch_rolling_cup</code></a> — Catch Rolling Cup</li><li><a href="#empty_bag"><code>empty_bag</code></a> — Empty Bag</li></ol>
+
+  <h2 id="basic">Basic tasks</h2>
+  
+<section class="task" id="catch_marbles_trapdoors" data-suite="basic" data-name="catch_marbles_trapdoors Catch Marbles Trapdoors">
+  <header>
+    <h3><code>catch_marbles_trapdoors</code> — Catch Marbles Trapdoors</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Target marble fell through the matching-color trapdoor into the box (below the trapdoor floor).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Target released through the matching-color door</li><li>Target is inside the box and below the original trapdoor floor level</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Opening the matching door under the marble alone is not enough if it never drops</li><li>Wrong-door / miss</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/catch_marbles_trapdoors.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="catch_ramp_ball" data-suite="basic" data-name="catch_ramp_ball Catch Ramp Ball">
+  <header>
+    <h3><code>catch_ramp_ball</code> — Catch Ramp Ball</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Red target ball rests in the catch vessel (cup); distractor must not be in the vessel.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Target ball in vessel</li><li>If distractor enabled: distractor not in vessel</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Target missed cup</li><li>Distractor caught</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/catch_ramp_ball.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="catch_cuboid" data-suite="basic" data-name="catch_cuboid Catch Cuboid">
+  <header>
+    <h3><code>catch_cuboid</code> — Catch Cuboid</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Required cuboid(s) are picked up / held.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Default: the (single) cuboid is held</li><li>Opt 1 (catch_two_cuboids): both cuboids held and catches ≥ 2</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed pop-up window</li><li>Only one of two caught in Opt 1</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/catch_cuboid.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="catch_shelf_marble" data-suite="basic" data-name="catch_shelf_marble Catch Shelf Marble">
+  <header>
+    <h3><code>catch_shelf_marble</code> — Catch Shelf Marble</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Marble episode resolved as caught (in the bowl).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>_marble_state == resolved and _marble_result == caught</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed / not caught</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/catch_shelf_marble.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="catch_valley_ball" data-suite="basic" data-name="catch_valley_ball Catch Valley Ball">
+  <header>
+    <h3><code>catch_valley_ball</code> — Catch Valley Ball</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Red ball is in the box past the red line; no arm–ball contact; distractor not in box.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Ball released</li><li>Target in box</li><li>Box past red success line</li><li>No arm–ball contact</li><li>Distractor not in box (when present)</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Ball not in box</li><li>Box not past line</li><li>Arm touched ball</li><li>Distractor in box</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/catch_valley_ball.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="stop_valley_ball" data-suite="basic" data-name="stop_valley_ball Stop Valley Ball">
+  <header>
+    <h3><code>stop_valley_ball</code> — Stop Valley Ball</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Red ball hits the bat head in mid-air before the table; bat still held off the table.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Ball released</li><li>Valid panel/head hit before table contact</li><li>Bat/panel still above min air clearance</li><li>No arm–ball contact</li><li>Distractor did not hit panel (when present)</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Table before hit</li><li>Missed panel</li><li>Panel resting on table</li><li>Distractor hit panel</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/stop_valley_ball.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="cook_meat" data-suite="basic" data-name="cook_meat Cook Meat">
+  <header>
+    <h3><code>cook_meat</code> — Cook Meat</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Every steak is cooked into the target doneness band and returned to its cutting board (off the pan).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>grasp_doneness in target_doneness_range</li><li>Steak on its board (closer to board than pan; height OK)</li><li>Dual setup (Opt 2 / Opt 1+2): both stations succeed</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Under/overcooked</li><li>Left in pan</li><li>Dual mode with only one station OK</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/cook_meat.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="cook_meat_timer" data-suite="basic" data-name="cook_meat_timer Cook Meat Timer">
+  <header>
+    <h3><code>cook_meat_timer</code> — Cook Meat Timer</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Same as cook_meat (pie timer is visual; success inherited).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>All cook_meat conditions</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Same as cook_meat</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/cook_meat_timer.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="put_cup_belt" data-suite="basic" data-name="put_cup_belt Put Cup Belt">
+  <header>
+    <h3><code>put_cup_belt</code> — Put Cup Belt</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Cup is detached from the hand and seated between the yellow tools (and not illegally hitting the curtain).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Cup released / not still held</li><li>Z and Y on/above belt plate</li><li>Between the yellow tools</li><li>Curtain not hit (_curtain_hit is false)</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Still held</li><li>Landed outside slot</li><li>Curtain hit</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/put_cup_belt.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="dispense_gummy" data-suite="basic" data-name="dispense_gummy Dispense Gummy">
+  <header>
+    <h3><code>dispense_gummy</code> — Dispense Gummy</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">All target-color gummies caught; none missed; no distractor caught; pattern valid.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>not invalid_pattern</li><li>target_caught == total_target</li><li>target_missed == 0</li><li>distractor_caught == 0</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed a target</li><li>Caught a distractor</li><li>Invalid pattern</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/dispense_gummy.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="punch_dual_holes" data-suite="basic" data-name="punch_dual_holes Punch Dual Holes">
+  <header>
+    <h3><code>punch_dual_holes</code> — Punch Dual Holes</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Every present tile was punched; no invalid empty-slot press.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>All present tiles punched (missing slots skipped)</li><li>not invalid_empty_press</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed a present tile</li><li>Pressed an empty slot (Opt 1)</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/punch_dual_holes.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="save_goal" data-suite="basic" data-name="save_goal Save Goal">
+  <header>
+    <h3><code>save_goal</code> — Save Goal</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Keeper in zone, ball blocked, no goal/late failure; both grippers open.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Keeper in zone</li><li>Ball blocked</li><li>not late_failure</li><li>not goal_conceded</li><li>Left and right grippers open</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Goal conceded</li><li>Late keeper</li><li>Keeper out of zone</li><li>Gripper still closed</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/save_goal.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="hit_target" data-suite="basic" data-name="hit_target Hit Target">
+  <header>
+    <h3><code>hit_target</code> — Hit Target</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Black tip stuck on the yellow paint center; never struck a blocker.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>_stuck and _hit_center (tip on painted yellow face)</li><li>No blocker strike (when blockers enabled)</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed yellow / tip short of paint</li><li>Hit blocker</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/hit_target.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="load_train" data-suite="basic" data-name="load_train Load Train">
+  <header>
+    <h3><code>load_train</code> — Load Train</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Ball is in a success/target wagon of the train (mode-dependent).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>ball_in_train / _success_in_target_wagon()</li><li>With target_wagon_mode: must be the nominated wagon</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed train</li><li>Wrong wagon in target mode</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/load_train.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="marble_shelf_maze" data-suite="basic" data-name="marble_shelf_maze Marble Shelf Maze">
+  <header>
+    <h3><code>marble_shelf_maze</code> — Marble Shelf Maze</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Marble ends in the bowl (table contact without bowl fails).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Marble in bowl</li><li>not missed</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>On table / missed bowl</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/marble_shelf_maze.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="pack_fruits" data-suite="basic" data-name="pack_fruits Pack Fruits">
+  <header>
+    <h3><code>pack_fruits</code> — Pack Fruits</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Every fruit item is in its correct matching basket.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>For all items i: _fruit_in_basket(i)</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Any fruit wrong/missing basket</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/pack_fruits.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="pick_ripe_apple" data-suite="basic" data-name="pick_ripe_apple Pick Ripe Apple">
+  <header>
+    <h3><code>pick_ripe_apple</code> — Pick Ripe Apple</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Good apple grasped inside the ripeness window and in the basket; spoiled (if any) not in basket.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Good apple in basket and was grasped (r_grasp set)</li><li>Grasp ripeness in red window</li><li>Spoiled apple not in basket</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Outside ripeness window</li><li>Good apple not in basket</li><li>Spoiled in basket</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/pick_ripe_apple.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="place_block_belt" data-suite="basic" data-name="place_block_belt Place Block Belt">
+  <header>
+    <h3><code>place_block_belt</code> — Place Block Belt</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Block first contacted before the red place line, cleared blocker lane, ends in the bowl.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>dropped_at_start_left (placed before red line)</li><li>placed_on_belt</li><li>avoided_blocker (or blocker disabled)</li><li>in_bowl</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Placed after line</li><li>Hit blocker / wrong lane</li><li>Not in bowl</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/place_block_belt.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="play_billiard" data-suite="basic" data-name="play_billiard Play Billiard">
+  <header>
+    <h3><code>play_billiard</code> — Play Billiard</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Primary (red) ball in an allowed pocket; no distractor pocketed.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Primary in allowed pocket set (any of 6 default; nominated pocket in Opt 1)</li><li>No distractor ball in any pocket</li><li>No illegal robot–ball contact failure path</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Wrong pocket</li><li>Distractor pocketed</li><li>Robot touched ball</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/play_billiard.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="control_quality" data-suite="basic" data-name="control_quality Control Quality">
+  <header>
+    <h3><code>control_quality</code> — Control Quality</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Every non-black tile correctly stamped; every black tile skipped; no black press.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>not black_press</li><li>No tile_missed</li><li>Red/green: marked and correct</li><li>Black: skipped and not marked</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed stamp</li><li>Wrong stamp</li><li>Pressed black</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/control_quality.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="drop_ball_hole" data-suite="basic" data-name="drop_ball_hole Drop Ball Hole">
+  <header>
+    <h3><code>drop_ball_hole</code> — Drop Ball Hole</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">Ball fell through the target hole and rests inside the box.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>ball_in_box</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed box</li><li>Stuck / dummy-hole failure modes when those options apply</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/drop_ball_hole.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="sort_apples_belt" data-suite="basic" data-name="sort_apples_belt Sort Apples Belt">
+  <header>
+    <h3><code>sort_apples_belt</code> — Sort Apples Belt</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">All apples correctly sorted (and rotten hard-fail if in a fresh basket under Opt 2).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Belt finished feeding (fed)</li><li>correct == n_apples</li><li>Opt 2: rotten in a basket → fail</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Wrong bin</li><li>Missed apple</li><li>Rotten in basket (Opt 2)</li><li>Step budget exceeded</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/sort_apples_belt.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="whack_moles" data-suite="basic" data-name="whack_moles Whack Moles">
+  <header>
+    <h3><code>whack_moles</code> — Whack Moles</h3>
+    <span class="pill basic">basic</span>
+  </header>
+  <p class="summary">All moles touched; rabbit distractor not hit.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>all(touched) and len(touched) == num_moles</li><li>Rabbit not hit</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Missed a mole</li><li>Hit rabbit</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/whack_moles.py</code> → <code>check_success()</code></p>
+</section>
+
+  <h2 id="household">Household tasks</h2>
+  
+<section class="task" id="trap_bug" data-suite="household" data-name="trap_bug Trap Bug">
+  <header>
+    <h3><code>trap_bug</code> — Trap Bug</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Released trap has landed covering the bug (not while still held).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Trap released / left the hand</li><li>Trap landed</li><li>Bug under trap footprint (covered)</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Still holding trap</li><li>Bug not under cover</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/trap_bug.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="boil_milk" data-suite="household" data-name="boil_milk Boil Milk">
+  <header>
+    <h3><code>boil_milk</code> — Boil Milk</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Milk reached the red-ring target, then stove shut off before spill.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>turned_on_once</li><li>reached_target (or max_liquid_level ≥ target)</li><li>turned_off_after_boil</li><li>stove off</li><li>not overflowed</li><li>liquid_level not near overflow</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Overflow</li><li>Never reached mark</li><li>Stove left on</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/boil_milk.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="fill_coffee_jar" data-suite="household" data-name="fill_coffee_jar Fill Coffee Jar">
+  <header>
+    <h3><code>fill_coffee_jar</code> — Fill Coffee Jar</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Jar fill is inside target_fill ± fill_tol after the button is released.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>beans_in_jar &gt; 0</li><li>fill within [target − tol, target + tol]</li><li>Not mid-press (evaluated after release)</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Under/over fill</li><li>Success claimed while still pressing</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/fill_coffee_jar.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="pour_beer" data-suite="household" data-name="pour_beer Pour Beer">
+  <header>
+    <h3><code>pour_beer</code> — Pour Beer</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Tap fully closed and settled; beer level in band; foam low; no overflow.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>opened_once and closed_after_pour</li><li>Tap not open / not flowing / not pressed; fully stopped</li><li>Liquid level stable</li><li>Foam ≤ cap</li><li>liquid_level in target ± tol</li><li>Total fill below overflow</li><li>not overflowed</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Overflow</li><li>Tap still open/flowing</li><li>Foam too high</li><li>Level outside band</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/pour_beer.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="cook_food" data-suite="household" data-name="cook_food Cook Food">
+  <header>
+    <h3><code>cook_food</code> — Cook Food</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Food cooked into the target doneness band after the stove is shut off; food stays in the pan.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>grasp_doneness in target_doneness_range</li><li>fire ≈ off and knob ≈ 0</li><li>turned_on_once and turned_off_after_cook</li><li>Food not held</li><li>Food still in pan / bowl</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Under/overcooked</li><li>Stove still on</li><li>Food not in pan</li><li>Never shut off after cook</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/cook_food.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="cook_food_timer" data-suite="household" data-name="cook_food_timer Cook Food Timer">
+  <header>
+    <h3><code>cook_food_timer</code> — Cook Food Timer</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Same as cook_food (timer visual only; success inherited).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>All cook_food conditions</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Same as cook_food</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/cook_food_timer.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="measure_ingredient" data-suite="household" data-name="measure_ingredient Measure Ingredient">
+  <header>
+    <h3><code>measure_ingredient</code> — Measure Ingredient</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Jar filled in [target±tol] with no spill/overflow, switch off after pour, jar on scale.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Fill in target ± tol (≤ overflow_level)</li><li>No spill/overflow</li><li>Switch off after a pour</li><li>Jar placed on the scale</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Wrong fill</li><li>Spill</li><li>Switch left on</li><li>Not on scale</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/measure_ingredient.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="make_soup" data-suite="household" data-name="make_soup Make Soup">
+  <header>
+    <h3><code>make_soup</code> — Make Soup</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Every vegetable piece is inside the pot and the burner has been turned on.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>All veggies in pot</li><li>No veg fallen off elsewhere</li><li>stove_on and turned_on_once</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Any veg outside pot</li><li>Stove never turned on</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/make_soup.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="catch_cup" data-suite="household" data-name="catch_cup Catch Cup">
+  <header>
+    <h3><code>catch_cup</code> — Catch Cup</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">PhysX left the cup sitting on the pillow; table contact fails.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Cup sitting on pillow</li><li>Cup does not touch the table</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Hard table landing</li><li>Not on pillow</li><li>Mid-air teleport does not count</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/catch_cup.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="catch_mouse_object_drop" data-suite="household" data-name="catch_mouse_object_drop Catch Mouse Object Drop">
+  <header>
+    <h3><code>catch_mouse_object_drop</code> — Catch Mouse Object Drop</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Dropped object rests in the basket and never touched the table.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>Object in basket</li><li>Never touched the table</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Table contact</li><li>Missed basket</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/catch_mouse_object_drop.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="stop_ball" data-suite="household" data-name="stop_ball Stop Ball">
+  <header>
+    <h3><code>stop_ball</code> — Stop Ball</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Robot arm stopped the ball and it stayed on the table (in bounds).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>_stopped settle-hold happened</li><li>Ball still on table and in XY bounds</li><li>Robot was the stopper (not décor alone)</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Fell off any edge after touch</li><li>Settled without arm contact</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/stop_ball.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="clean_table" data-suite="household" data-name="clean_table Clean Table">
+  <header>
+    <h3><code>clean_table</code> — Clean Table</h3>
+    <span class="pill household">household</span>
+  </header>
+  <p class="summary">Cup tipped, spill grew, all wipeable spots dabbed, laptop never reached.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>cup_tipped</li><li>≥ 3 active wipeable spots (not under mug)</li><li>No dirty spots left</li><li>max_spill_amount ≥ 0.20</li><li>not laptop_reached</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Laptop reached</li><li>Spots remaining</li><li>Claimed success before spill grew</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/clean_table.py</code> → <code>check_success()</code></p>
+</section>
+
+  <h2 id="extra">Extras / aliases</h2>
+  
+<section class="task" id="serve_dinner" data-suite="extra" data-name="serve_dinner Serve Dinner">
+  <header>
+    <h3><code>serve_dinner</code> — Serve Dinner</h3>
+    <span class="pill extra">extra</span>
+  </header>
+  <p class="summary">Stove turned off once; all meatballs on the plate; none fallen.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>turned_off_once and stove off</li><li>All meatballs on plate</li><li>not _balls_fallen</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Stove left on</li><li>Meatball off plate / fallen</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/serve_dinner.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="make_soup_test" data-suite="extra" data-name="make_soup_test Make Soup Test">
+  <header>
+    <h3><code>make_soup_test</code> — Make Soup Test</h3>
+    <span class="pill extra">extra</span>
+  </header>
+  <p class="summary">Same as make_soup (alias).</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>All make_soup conditions</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Same as make_soup</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/make_soup_test.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="catch_rolling_cup" data-suite="extra" data-name="catch_rolling_cup Catch Rolling Cup">
+  <header>
+    <h3><code>catch_rolling_cup</code> — Catch Rolling Cup</h3>
+    <span class="pill extra">extra</span>
+  </header>
+  <p class="summary">Cup stopped on the table, in bounds, and upright.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>on_table</li><li>in_xy bounds</li><li>upright</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Still rolling / off table</li><li>Tipped over</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/catch_rolling_cup.py</code> → <code>check_success()</code></p>
+</section>
+
+<section class="task" id="empty_bag" data-suite="extra" data-name="empty_bag Empty Bag">
+  <header>
+    <h3><code>empty_bag</code> — Empty Bag</h3>
+    <span class="pill extra">extra</span>
+  </header>
+  <p class="summary">Bag tipped and apple caught; catcher still near apple; static veggies stay packed near counter.</p>
+  <div class="cols">
+    <div>
+      <h4>Requires</h4>
+      <ul><li>bag tipped and dump released</li><li>Apple caught (_caught)</li><li>Apple at table height; TCP near apple</li><li>Static veggies still packed near counter (not fallen)</li><li>not fell_off</li></ul>
+    </div>
+    <div>
+      <h4>Fails if</h4>
+      <ul class="fail"><li>Apple fallen</li><li>Not caught</li><li>Veggies spilled away</li></ul>
+    </div>
+  </div>
+  <p class="src">Source: <code>envs/empty_bag.py</code> → <code>check_success()</code></p>
+</section>
+</div>
+
+<script>
+const q = document.getElementById('q');
+const radios = document.querySelectorAll('input[name=suite]');
+function apply() {
+  const query = (q.value || '').trim().toLowerCase();
+  const suite = document.querySelector('input[name=suite]:checked').value;
+  document.querySelectorAll('section.task').forEach(sec => {
+    const suiteOk = suite === 'all' || sec.dataset.suite === suite;
+    const text = (sec.innerText || '').toLowerCase();
+    sec.classList.toggle('hidden', !(suiteOk && (!query || text.includes(query))));
+  });
+}
+q.addEventListener('input', apply);
+radios.forEach(r => r.addEventListener('change', apply));
+</script>
+</body>
+</html>

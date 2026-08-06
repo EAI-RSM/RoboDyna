@@ -43,6 +43,17 @@ lerobot_root: ./data_lerobot/domino_suite
 lerobot_chunks_size: 1000
 lerobot_task_state_dim: 32
 # ---------------------------------------------------------------------------
+# Interactive teleop (script_exp / script_hh_exp robot mode). Read by
+# UniversalRobotControls; collection/eval ignore this block.
+# ---------------------------------------------------------------------------
+interactive_params:
+  xy_speed: 0.3456         # m/s; WASD planar teleop rate (+20%)
+  z_speed: 0.2688          # m/s; Q/E vertical teleop rate (+20%)
+  roll_speed: 1.536        # rad/s; Z/X tip about world +Y (+20%)
+  max_dt: 0.05             # s; clamp on per-frame dt
+  max_lead: 0.0528         # m; max commanded EE lead over achieved pose (+20%)
+  max_joint_speed: 4.8     # rad/s; joint slew cap near singularities (+20%)
+# ---------------------------------------------------------------------------
 # Per-task params, namespaced by task name. This is the SHARED config for the
 # whole suite: invoke as `collect_data.sh <task> demo_dynamic 0` -- the task arg
 # selects which block below is read (kwags["task_args"][<task>]); all other tasks'
@@ -88,6 +99,7 @@ task_args:
     ball_speed_scale_min: 0.8   # target marble speed low scale vs ball_speed
     ball_speed_scale_max: 1.2   # target marble speed high scale vs ball_speed
     ball_bounce_height: 0.012   # m; vertical bounce amplitude
+    marble_protrude_frac: 0.40  # fraction of marble diameter above catch-bowl rim when settled
   catch_ramp_ball:
     # Options (independent toggles; Opt 1+2 can both be on):
     #   Default — red ball drops at ramp top and rolls straight down
@@ -123,16 +135,16 @@ task_args:
     cup_fwd_clearance: 0.0      # m; unused (landing from ballistic exit)
     release_clearance: 0.055    # m; PhysX spawn past the front lip
     ramp_friction: 0.06         # kinetic μ on the incline
-  catch_rat:
-    # Option 1: two mice from opposite holes; success requires both held.
-    catch_two_mice: false
+  catch_cuboid:
+    # Option 1: two cuboids from opposite holes; success requires both held.
+    catch_two_cuboids: false
     # Option 2: opaque colored top lattice (false = glass / see-through).
     opaque_surface: false
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    rat_move_speed_min: 0.04
-    rat_move_speed_max: 0.10
+    cuboid_move_speed_min: 0.04
+    cuboid_move_speed_max: 0.10
     num_appearances: 3          # how many pop windows per episode
-    pop_steps: 90               # sim steps rat stays raised per pop
+    pop_steps: 90               # sim steps cuboid stays raised per pop
     grasp_tol: 0.05             # m; catch offset scale (success uses ~2.5×)
   catch_rolling_cup:
     # Full-width single shelf (+30cm), no drawer/file/plates. Cup tips→rolls;
@@ -454,8 +466,8 @@ task_args:
     #   Opt1+2             : dual stations, each with its own cook key; both steaks cooked
     # CLI: --task-arg cook_button_enabled=... / dual_setup_enabled=...
     #      --option 1 | --option 2
-    cook_steps: 5000            # CHANGE: nominal steps for doneness 0→1.0 (~10 s to medium@0.5, 250Hz)
-    cook_speed_jitter: 0.0      # exact cooking rate; variation comes from target-range shift
+    cook_steps: 3846            # nominal steps for doneness 0→1 (~30% faster than prior 5000)
+    cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
     cook_button_enabled: true  # CHANGE: Opt 1; true = hold red key to cook
     dual_setup_enabled: True   # CHANGE: Opt 2; true = dual stations (both arms)
     key_offset_x: 0.14          # CHANGE: m; |lateral| distance of key from pan center
@@ -473,8 +485,8 @@ task_args:
     # Same knobs as cook_meat, plus a per-station pie timer (green→yellow→red).
     #   timer_radius / timer_n_sections  ← pie disc size / angular sections
     # Combinations match cook_meat (default / Opt1 / Opt2 / Opt1+2).
-    cook_steps: 5000
-    cook_speed_jitter: 0.0
+    cook_steps: 3846
+    cook_speed_jitter: 0.20
     cook_button_enabled: false   # default = contact cook; Opt1 sets true
     dual_setup_enabled: false    # Opt2 / Opt1+2
     key_offset_x: 0.14
@@ -550,7 +562,7 @@ task_args:
     #   Opt 2 — continuous belt vs discrete stop-per-tile → belt_continous_motion
     #     DEFAULT false = discrete: tiles STOP under stamps so both arms press together.
     #     Pause under stamp capped by tile_pause_s (2.0 s). true = never stop.
-    #     Continuous uses belt_speed × belt_continuous_speed_scale (default 2×).
+    #     Continuous uses belt_speed × belt_continuous_speed_scale (default 1.6×).
     #     CLI: --task-arg belt_continous_motion=true   or   --option 2
     # Tile spacing is always variable (not an option); gaps ~ U(square_gap_min, square_gap_max).
     n_pages: 4                  # tiles/pages per side
@@ -561,7 +573,7 @@ task_args:
     belt_continous_motion: true # Opt 2: false = discrete stop-per-tile (default); true = continuous
     tile_pause_s: 2.0           # Opt 2 discrete: seconds the tile holds under the stamp
     belt_speed: 0.0002          # m per physics step (discrete); continuous uses × scale below
-    belt_continuous_speed_scale: 2.0  # Opt 2: multiply belt_speed when continuous
+    belt_continuous_speed_scale: 1.6  # Opt 2: multiply belt_speed when continuous
     square_gap_min: 0.010       # m; variable-spacing min gap
     square_gap_max: 0.030       # m; variable-spacing max gap
   save_goal:
@@ -599,7 +611,7 @@ task_args:
     net_strand_t: 0.0022        # m; strand thickness
     mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
     random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
-    ball_speed: 0.0375          # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
+    ball_speed: 0.06435         # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
     ball_speed_scale_min: 0.8   # low scale vs ball_speed
     ball_speed_scale_max: 1.2   # high scale vs ball_speed
     ball_angle_deg_min: -10.0   # deg; path angle vs goal-axis min (straight-shot mode)
@@ -975,7 +987,8 @@ task_args:
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
     settle_steps: 1200          # steps for liquid to return toward baseline when off
     baseline_level: 0.35        # resting fill fraction
-    target_ring: 80             # 100 = rim, 0 = pot floor
+    target_ring: 80             # 100 = rim, 0 = pot floor (base before jitter)
+    target_ring_jitter: 0.10    # ±10% multiplicative jitter on target_ring
     shutoff_lead: 0.08          # start shutoff this far below the ring
     overflow_level: 0.98        # rim; spill + fail if reached while stove on
     # force_overflow: true      # demo failure: leave burner on until spill
@@ -992,10 +1005,10 @@ task_args:
     mug_gap: 0.03               # m; air gap between milk/mug footprints
     knob_contact_radius: 0.06   # m; pinch-to-knob distance that counts as held
   cook_food:
-    # KitchenS: food starts on chopping board → pan → cook via knob → plate.
+    # KitchenS: food starts on chopping board → pan → cook via knob → shut off (no plating).
     # food_type: meat|sausage|onion_half|random
     # Layout: stove current|center; pan on left_front|right_front (handle inward on right);
-    # board/plate/decor/food jittered with AABB clearance.
+    # board/decor/food jittered with AABB clearance.
     scene_id: 0
     food_type: random
     randomize_layout: true
@@ -1006,8 +1019,8 @@ task_args:
     range_center_xy: [0.0, 0.14]
     board_y: -0.02
     plate_y: -0.12
-    cook_steps: 2000
-    cook_speed_jitter: 0.0
+    cook_steps: 1538            # ~30% faster than prior 2000
+    cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
     # Top-down knob shutoff is a longer reach than the old front knobs.
     shutoff_lead: 0.22
     cook_intensity: 0.70
@@ -1021,6 +1034,35 @@ task_args:
     plate_scale: 0.715
     board_scale_mult: 0.0975
     knob_contact_radius: 0.06
+  cook_food_timer:
+    # Same knobs as cook_food (no plating), plus a pie timer (green→yellow→red)
+    # that advances only while the stove is on (and freezes when the stove is off).
+    scene_id: 0
+    food_type: random
+    randomize_layout: true
+    stove_pose: random
+    burner: random
+    range_xy: [0.10, 0.14]
+    range_center_xy: [0.0, 0.14]
+    board_y: -0.02
+    plate_y: -0.12
+    cook_steps: 1538
+    cook_speed_jitter: 0.20
+    shutoff_lead: 0.22
+    cook_intensity: 0.70
+    range_scale_mult: 1.0
+    pan_scale: 1.0
+    skillet_id: 2
+    skillet_handle_yaw: 1.5708
+    place_dx: 0.05
+    place_dy: 0.05
+    plate_scale: 0.715
+    board_scale_mult: 0.0975
+    knob_contact_radius: 0.06
+    timer_radius: 0.045
+    timer_n_sections: 24
+    timer_x: -0.36              # top-left of table (x−, y+)
+    timer_y: 0.28
   pour_beer:
     # KitchenS: pull the hinged beer-tap lever by hand; flow follows opening.
     # Pause so foam settles; foam over the rim = fail. Fill beer mug (~90% beer) to succeed.

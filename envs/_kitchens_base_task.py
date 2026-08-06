@@ -38,10 +38,11 @@ class KitchenS_base_task(Base_Task):
         "left_rear": (-0.103, 0.103),
         "right_rear": (0.103, 0.103),
     }
-    # Top-facing rotary knob on the bottom-right corner of the slab.
-    KNOB_LOCAL_XY = (0.165, -0.165)
-    KNOB_RADIUS = 0.020
-    KNOB_HEIGHT = 0.028  # full height above the cooktop slab
+    # Top-facing rotary knob on the right-front corner of the cooktop
+    # (slightly forward of the slab so it sits on the counter apron).
+    KNOB_LOCAL_XY = (0.165, -0.185)
+    KNOB_RADIUS = 0.022
+    KNOB_HEIGHT = 0.028  # full height of the knob body
     # Semantic angles about world +Z (white tick at rest points toward +Y / "up").
     # 0° = off; −90° (CCW / left from above) = on.
     KNOB_OFF_ANGLE = 0.0
@@ -622,7 +623,9 @@ class KitchenS_base_task(Base_Task):
         knob_r = float(self.KNOB_RADIUS) * scale_mult
         knob_half = float(self.KNOB_HEIGHT) * scale_mult / 2.0
         slab_top_z = float(self.range_top_z - 0.025)
-        knob_z = float(slab_top_z + knob_half)
+        # Sit on the counter just in front of the cooktop apron
+        # so the black knob stays visible against the surface.
+        knob_z = float(table_height + knob_half + 0.008)
         knob_mat = sapien.render.RenderMaterial(
             base_color=[0.07, 0.07, 0.08, 1.0]
         )

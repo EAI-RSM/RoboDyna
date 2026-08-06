@@ -50,7 +50,7 @@ class cook_meat(Base_Task):
           Success still requires both steaks cooked within the target range.
     """
 
-    COOK_STEPS_DEFAULT: ClassVar[int] = 1000
+    COOK_STEPS_DEFAULT: ClassVar[int] = 769  # ~30% faster than prior 1000
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
     TARGET_DONENESS_DEFAULT: ClassVar[float] = 0.5
     COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = False  # default = contact cook

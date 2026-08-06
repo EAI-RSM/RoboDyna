@@ -26,6 +26,7 @@ TASKS = (
     ("Fill Coffee Jar", "fill_coffee_jar", "interactive_fill_coffee_jar.py"),
     ("Pour Beer", "pour_beer", "interactive_pour_beer.py"),
     ("Cook Food", "cook_food", "interactive_cook_food.py"),
+    ("Cook Food Timer", "cook_food_timer", "interactive_cook_food_timer.py"),
     ("Measure Ingredient", "measure_ingredient", "interactive_measure_ingredient.py"),
     ("Make Soup", "make_soup", "interactive_make_soup.py"),
     ("Catch Cup", "catch_cup", "interactive_catch_cup.py"),
@@ -204,8 +205,8 @@ class RoundedButton(tk.Canvas):
 
 
 class HouseholdTaskLauncher(tk.Tk):
-    # Three times the old 480×270 preview size.
-    IMAGE_SIZE = (1440, 810)
+    # Head-camera stills are ~4:3; width is the card max, height follows aspect.
+    IMAGE_SIZE = (1280, 960)
 
     def __init__(self):
         super().__init__()
@@ -386,7 +387,14 @@ class HouseholdTaskLauncher(tk.Tk):
             with Image.open(path) as source:
                 source.seek(0)
                 image = source.convert("RGB")
-            image = image.resize(self.IMAGE_SIZE, Image.Resampling.LANCZOS)
+            max_w, max_h = self.IMAGE_SIZE
+            aspect = image.width / max(image.height, 1)
+            width = max_w
+            height = max(1, int(round(width / aspect)))
+            if height > max_h:
+                height = max_h
+                width = max(1, int(round(height * aspect)))
+            image = image.resize((width, height), Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(image)
         except Exception:
             return None
@@ -438,10 +446,10 @@ class HouseholdTaskLauncher(tk.Tk):
             text="No preview available" if photo is None else "",
             bg="#080a0d",
             fg="#aab2bd",
-            width=self.IMAGE_SIZE[0],
-            height=self.IMAGE_SIZE[1],
             cursor="hand2",
         )
+        if photo is None:
+            image_label.configure(width=self.IMAGE_SIZE[0], height=self.IMAGE_SIZE[1])
         image_label.pack()
         image_label.bind(
             "<Enter>",

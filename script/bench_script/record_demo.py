@@ -5,19 +5,19 @@ Records ONE successful expert rollout and writes two MP4s:
   - robot head  -> ``head_camera``  (elevated training cam)
   - top-down    -> ``observer_camera`` reframed as a bird's-eye nadir view
 
-Output layout (flat tmp dir, versioned, never overwrites prior demos)::
+Output layout (under ``tmp/``, versioned, never overwrites prior demos)::
 
-    ./tmp_<task>/video/vN_head.mp4
-    ./tmp_<task>/video/vN_topdown.mp4
-    ./tmp_<task>/video/vN_sidebyside.mp4   # convenience montage
+    ./tmp/tmp_<task>/video/vN_head.mp4
+    ./tmp/tmp_<task>/video/vN_topdown.mp4
+    ./tmp/tmp_<task>/video/vN_sidebyside.mp4   # convenience montage
 
 Usage (from repo root, with the robodyna / domino env active)::
 
     python script/bench_script/record_demo.py place_block_belt
     python script/bench_script/record_demo.py place_block_belt --config demo_dynamic
-    python script/bench_script/record_demo.py catch_rat --task-arg catch_two_mice=true
-    python script/bench_script/record_demo.py catch_rat --task-arg opaque_surface=true
-    # legacy shorthand still works: --option 1 (catch_two_mice) / --option 2 (opaque_surface)
+    python script/bench_script/record_demo.py catch_cuboid --task-arg catch_two_cuboids=true
+    python script/bench_script/record_demo.py catch_cuboid --task-arg opaque_surface=true
+    # legacy shorthand still works: --option 1 (catch_two_cuboids) / --option 2 (opaque_surface)
 
 Agents MUST use this script for task demo videos (not ad-hoc record_*_demo.py
 copies, and not the training ``head_camera``-only collector preview).
@@ -42,13 +42,19 @@ import sapien
 import yaml
 
 from envs import CONFIGS_PATH
+from envs.utils.household_view import (
+    HOUSEHOLD_MAX_SECONDS,
+    HOUSEHOLD_MAX_STEPS,
+    HOUSEHOLD_TASKS,
+    configure_household_head_camera,
+)
 from envs.utils.images_to_video import images_to_video
 from envs.utils.pkl2hdf5 import load_pkl_file
 from script.collect_data import class_decorator, get_embodiment_config, run
 
 
 class DemoRenderTimeout(Exception):
-    """Raised when a failure-demo render hits the wall-clock cap."""
+    """Raised when a failure-demo render hits the step / wall-clock cap."""
 
 # Bird's-eye framing: above table center, looking straight down.
 TOPDOWN_POS = np.array([0.0, 0.05, 1.85], dtype=np.float64)
@@ -317,16 +323,19 @@ def record_fail_demo(
     config_name: str = "demo_dynamic",
     task_arg_overrides: list[str] | None = None,
     tag: str | None = None,
-    max_seconds: float = 60.0,
+    max_seconds: float | None = None,
+    max_steps: int | None = None,
     dest_dir: str | None = None,
 ) -> dict:
-    """Record a failure demo with a wall-clock render cap.
+    """Record a failure demo with a step (default) or wall-clock render cap.
 
     Plans once (saving the traj even when check_success fails), then renders
-    until ``max_seconds`` elapses. On timeout, merges whatever frames are in
-    the cache and treats the clip as a failure demo.
+    until ``max_steps`` saved frames (or ``max_seconds`` if set). On timeout,
+    merges whatever frames are in the cache and treats the clip as a failure demo.
     """
-    save_root = os.path.abspath(f"./tmp_{task_name}_failrec")
+    if max_steps is None and max_seconds is None:
+        max_steps = int(HOUSEHOLD_MAX_STEPS)
+    save_root = os.path.abspath(f"./tmp/tmp_{task_name}_failrec")
     video_dir = os.path.join(save_root, "video")
     os.makedirs(video_dir, exist_ok=True)
     _cleanup_scratch(save_root, task_name)
@@ -356,6 +365,8 @@ def record_fail_demo(
         kwags["seed"] = int(seed)
         _orig_setup(**kwags)
         configure_topdown_camera(task)
+        if task_name in HOUSEHOLD_TASKS:
+            configure_household_head_camera(task)
 
     task.setup_demo = _setup_demo
 
@@ -383,10 +394,20 @@ def record_fail_demo(
     except Exception:
         pass
 
-    # ----- render pass with wall-clock cap -----
+    # ----- render pass with step / wall-clock cap -----
+    from envs.utils.household_view import EpisodeTimeLimit
+
     render_args = deepcopy(args)
     render_args.update(need_plan=False, render_freq=0, save_data=True)
     task.setup_demo(now_ep_num=0, seed=int(seed), **render_args)
+    task._episode_timed_out = False
+    if max_steps is not None:
+        task._max_episode_steps = int(max_steps)
+        task._max_episode_seconds = None
+    elif max_seconds is not None:
+        task._max_episode_steps = None
+        task._max_episode_seconds = float(max_seconds)
+        task._episode_t0 = time.monotonic()
     traj = task.load_tran_data(0)
     render_args["left_joint_path"] = traj["left_joint_path"]
     render_args["right_joint_path"] = traj["right_joint_path"]
@@ -398,7 +419,13 @@ def record_fail_demo(
 
     def _take_picture_capped():
         nonlocal timed_out
-        if time.monotonic() - t0 >= float(max_seconds):
+        if max_steps is not None and int(getattr(task, "FRAME_IDX", 0) or 0) >= int(max_steps):
+            timed_out = True
+            raise DemoRenderTimeout(
+                f"render hit {int(max_steps)}-step cap "
+                f"(frames={getattr(task, 'FRAME_IDX', '?')})"
+            )
+        if max_seconds is not None and time.monotonic() - t0 >= float(max_seconds):
             timed_out = True
             raise DemoRenderTimeout(
                 f"render hit {max_seconds:.0f}s wall-clock cap "
@@ -407,10 +434,14 @@ def record_fail_demo(
         return _orig_take()
 
     task._take_picture = _take_picture_capped
-    print(f"[fail-demo] render seed={seed} max_seconds={max_seconds}", flush=True)
+    print(
+        f"[fail-demo] render seed={seed} max_steps={max_steps} max_seconds={max_seconds}",
+        flush=True,
+    )
     try:
         task.play_once()
-    except DemoRenderTimeout as e:
+    except (DemoRenderTimeout, EpisodeTimeLimit) as e:
+        timed_out = True
         print(f"[fail-demo] {e} — saving partial video as failure", flush=True)
     finally:
         task._take_picture = _orig_take
@@ -473,8 +504,10 @@ def record_demo(
     option: str | None = None,
     task_arg_overrides: list[str] | None = None,
     tag: str | None = None,
+    max_seconds: float | None = None,
+    max_steps: int | None = None,
 ) -> dict:
-    save_root = os.path.abspath(f"./tmp_{task_name}")
+    save_root = os.path.abspath(f"./tmp/tmp_{task_name}")
     video_dir = os.path.join(save_root, "video")
     ver = next_version(video_dir)
     # Clear condition tags go in the filename, e.g. v5_opt2_blocker_head.mp4
@@ -487,14 +520,29 @@ def record_demo(
     os.makedirs(save_root, exist_ok=True)
 
     args = build_args(task_name, config_name, save_root, option, task_arg_overrides)
+    # Household demos: keep a partial render if the step cutoff fires.
+    if task_name in HOUSEHOLD_TASKS:
+        args["check_render_success"] = False
+        if max_steps is None and max_seconds is None:
+            max_steps = int(HOUSEHOLD_MAX_STEPS)
     task = class_decorator(task_name)
 
-    # Force top-down observer framing after every setup_demo (plan + render passes).
+    # Force top-down observer + shared household head after every setup_demo.
     _orig_setup = task.setup_demo
 
     def _setup_demo(**kwags):
         _orig_setup(**kwags)
         configure_topdown_camera(task)
+        if task_name in HOUSEHOLD_TASKS:
+            configure_household_head_camera(task)
+            task._episode_timed_out = False
+            if max_steps is not None:
+                task._max_episode_steps = int(max_steps)
+                task._max_episode_seconds = None
+            elif max_seconds is not None:
+                task._max_episode_steps = None
+                task._max_episode_seconds = float(max_seconds)
+                task._episode_t0 = time.monotonic()
 
     task.setup_demo = _setup_demo
 
@@ -545,9 +593,9 @@ def main():
         "--option",
         default=None,
         help="Legacy shorthand for task_args.<task>.option "
-             "(catch_rat: 1/catch_two_mice, 2/opaque_surface; "
-             "goalkeeper: 1/players_enabled, 2/cover_enabled; "
-             "dual_hole_punch: 1/missing_tile_mode, 2/belt_continous_motion; "
+             "(catch_cuboid: 1/catch_two_cuboids, 2/opaque_surface; "
+             "save_goal: 1/players_enabled, 2/cover_enabled; "
+             "punch_dual_holes: 1/missing_tile_mode, 2/belt_continous_motion; "
              "catch_valley_ball: 1/wall_bounce_enabled, 2/enable_distractor; "
              "catch_ramp_ball: 1/wall_bounce_enabled, 2/enable_distractor; "
              "play_billiard: 1/specific_hole, 2/enable_distractors; "
@@ -578,11 +626,20 @@ def main():
         help="Force episode seed (required with --fail).",
     )
     parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Saved-frame / simulation-step render cap. Household tasks "
+             f"default to {HOUSEHOLD_MAX_STEPS}. On timeout, merge whatever "
+             "frames exist (fail demos, or success demos with "
+             "check_render_success disabled).",
+    )
+    parser.add_argument(
         "--max-seconds",
         type=float,
-        default=60.0,
-        help="Wall-clock render cap for --fail demos (default: 60). "
-             "On timeout, merge whatever frames exist and save as failure.",
+        default=None,
+        help="Optional wall-clock render cap in seconds (overrides step cap "
+             f"when set without --max-steps). Legacy; prefer --max-steps.",
     )
     parser.add_argument(
         "--dest",
@@ -595,6 +652,10 @@ def main():
     if task in ("place_block_task", "place_block"):
         print(f"Note: '{task}' -> place_block_belt")
         task = "place_block_belt"
+    max_steps = ns.max_steps
+    max_seconds = ns.max_seconds
+    if max_steps is None and max_seconds is None and task in HOUSEHOLD_TASKS:
+        max_steps = int(HOUSEHOLD_MAX_STEPS)
     if ns.fail:
         if ns.seed is None:
             parser.error("--fail requires --seed")
@@ -604,7 +665,8 @@ def main():
             config_name=ns.config,
             task_arg_overrides=ns.task_arg,
             tag=ns.tag or "fail",
-            max_seconds=ns.max_seconds,
+            max_steps=max_steps,
+            max_seconds=max_seconds,
             dest_dir=ns.dest,
         )
     else:
@@ -614,6 +676,8 @@ def main():
             option=ns.option,
             task_arg_overrides=ns.task_arg,
             tag=ns.tag,
+            max_steps=max_steps,
+            max_seconds=max_seconds,
         )
 
 

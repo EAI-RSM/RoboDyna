@@ -27,6 +27,7 @@ HOUSEHOLD_TASKS = (
     "pour_beer",
     "boil_milk",
     "cook_food",
+    "cook_food_timer",
     "make_soup",
     "measure_ingredient",
     "serve_dinner",

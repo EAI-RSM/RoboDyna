@@ -57,7 +57,8 @@ task_args:
     settle_steps: 1200          # steps for liquid to return toward baseline when off
     baseline_level: 0.35
     # Red ring mark: 100 = pot rim, 0 = pot floor. Success = reach ring, then off.
-    target_ring: 80
+    target_ring: 80             # base before jitter
+    target_ring_jitter: 0.10    # ±10% multiplicative jitter on target_ring
     shutoff_lead: 0.08          # start shutoff this far below the ring (keeps rising)
     overflow_level: 0.98        # rim; spill + fail if reached while stove on
     # force_overflow: true      # demo failure: leave burner on until spill
@@ -75,7 +76,7 @@ task_args:
   cook_food:
     scene_id: 0
     # food_type: meat | sausage | onion_half | random
-    # Food starts on a chopping board; expert places into pan, cooks via knob, then plates.
+    # Food starts on a chopping board; expert places into pan, cooks via knob, then shuts off.
     food_type: random
     randomize_layout: true
     stove_pose: random          # current | center | random
@@ -85,8 +86,8 @@ task_args:
     board_y: -0.02
     plate_y: -0.12
 
-    cook_steps: 2000            # steps for doneness 0→1 while stove is on
-    cook_speed_jitter: 0.0
+    cook_steps: 1538            # ~30% faster than prior 2000; doneness 0→1 while stove on
+    cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
     # Top-down knob shutoff is a longer reach than the old front knobs — leave
     # more lead so doneness doesn't race past the target during the twist off.
     shutoff_lead: 0.22
@@ -102,6 +103,34 @@ task_args:
     plate_scale: 0.715
     board_scale_mult: 0.0975
     knob_contact_radius: 0.06
+  cook_food_timer:
+    # Same as cook_food + pie timer that runs only while the stove is on.
+    scene_id: 0
+    food_type: random
+    randomize_layout: true
+    stove_pose: random
+    burner: random
+    range_xy: [0.10, 0.14]
+    range_center_xy: [0.0, 0.14]
+    board_y: -0.02
+    plate_y: -0.12
+    cook_steps: 1538
+    cook_speed_jitter: 0.20
+    shutoff_lead: 0.22
+    cook_intensity: 0.70
+    range_scale_mult: 1.0
+    pan_scale: 1.0
+    skillet_id: 2
+    skillet_handle_yaw: 1.5708
+    place_dx: 0.05
+    place_dy: 0.05
+    plate_scale: 0.715
+    board_scale_mult: 0.0975
+    knob_contact_radius: 0.06
+    timer_radius: 0.045
+    timer_n_sections: 24
+    timer_x: -0.36
+    timer_y: 0.28
   pour_beer:
     scene_id: 0
     randomize_layout: true

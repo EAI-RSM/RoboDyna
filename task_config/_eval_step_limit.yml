@@ -54,6 +54,7 @@ boil_milk: 1200
 catch_cup: 1200
 clean_table: 1200
 cook_food: 1200
+cook_food_timer: 1200
 fill_coffee_jar: 1200
 make_soup: 1200
 make_soup_test: 1200

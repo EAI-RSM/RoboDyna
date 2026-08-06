@@ -44,6 +44,17 @@ lerobot_chunks_size: 1000
 lerobot_task_state_dim: 32
 save_failed_cases: true       # debug: save every attempt (with its success flag) so a not-yet-fixed task's job always TERMINATES instead of looping seeds forever
 # ---------------------------------------------------------------------------
+# Interactive teleop (script_exp / script_hh_exp robot mode). Keep in sync with
+# demo_dynamic.yml interactive_params.
+# ---------------------------------------------------------------------------
+interactive_params:
+  xy_speed: 0.3456         # m/s; WASD planar teleop rate (+20%)
+  z_speed: 0.2688          # m/s; Q/E vertical teleop rate (+20%)
+  roll_speed: 1.536        # rad/s; Z/X tip about world +Y (+20%)
+  max_dt: 0.05             # s; clamp on per-frame dt
+  max_lead: 0.0528         # m; max commanded EE lead over achieved pose (+20%)
+  max_joint_speed: 4.8     # rad/s; joint slew cap near singularities (+20%)
+# ---------------------------------------------------------------------------
 # DEBUG mirror of demo_dynamic.yml: same per-task params, smaller batch + save-failed
 # so jobs terminate while tuning. Invoke as `collect_data.sh <task> debug_dynamic 0`.
 # Keep this task_args block in sync with demo_dynamic.yml.
@@ -55,7 +66,7 @@ task_args:
     plate_scale_mult: 0.65
     steamer_scale_mult: 0.10
   cook_meat:
-    cook_steps: 1000            # nominal; per-ep × U(1±cook_speed_jitter)
+    cook_steps: 769             # ~30% faster than prior 1000; per-ep × U(1±cook_speed_jitter)
     cook_speed_jitter: 0.20
     cook_button_enabled: false  # default = contact cook; Opt 1 = true
     dual_setup_enabled: false   # Opt 2: dual stations (≥10 cm clearance)
@@ -63,7 +74,7 @@ task_args:
     board_scale_mult: 0.07    # cutting board size (steak starts and finishes here)
     # plate removed: cooked steak returns to the cutting board
   cook_meat_timer:
-    cook_steps: 1000
+    cook_steps: 769
     cook_speed_jitter: 0.20
     cook_button_enabled: false
     dual_setup_enabled: false
@@ -71,6 +82,19 @@ task_args:
     board_scale_mult: 0.07
     timer_radius: 0.045
     timer_n_sections: 36
+  cook_food_timer:
+    # Debug mirror of demo_dynamic cook_food_timer (stove-gated pie timer).
+    scene_id: 0
+    food_type: meat
+    randomize_layout: false
+    stove_pose: current
+    burner: left_front
+    cook_steps: 769
+    cook_speed_jitter: 0.20
+    shutoff_lead: 0.22
+    cook_intensity: 0.70
+    timer_radius: 0.045
+    timer_n_sections: 24
   assemble_markers_cylinder:
     side_cyl_radius: 0.018
     side_cyl_half_len: 0.10
@@ -95,14 +119,15 @@ task_args:
     door_open_speed_deg: 220.0
     ball_speed: 0.18
     ball_bounce_height: 0.012
-  catch_rat:
-    # Option 1: two mice from opposite holes; success requires both held.
-    catch_two_mice: false
+    marble_protrude_frac: 0.40  # fraction of marble diameter above catch-bowl rim when settled
+  catch_cuboid:
+    # Option 1: two cuboids from opposite holes; success requires both held.
+    catch_two_cuboids: false
     # Option 2: opaque colored top lattice (false = glass / see-through).
     opaque_surface: false
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    rat_move_speed_min: 0.04
-    rat_move_speed_max: 0.10
+    cuboid_move_speed_min: 0.04
+    cuboid_move_speed_max: 0.10
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
@@ -252,7 +277,7 @@ task_args:
     net_strand_t: 0.0022        # m; strand thickness
     mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
     random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
-    ball_speed: 0.0375          # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
+    ball_speed: 0.06435         # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
     ball_speed_scale_min: 0.8
     ball_speed_scale_max: 1.2
     ball_angle_deg_min: -10.0
