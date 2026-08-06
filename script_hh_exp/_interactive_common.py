@@ -540,7 +540,8 @@ class HouseholdController:
     def _turn_cook_food_knob(self):
         """Contact grasp-and-twist the cooktop knob with the selected arm.
 
-        Same physical path as the expert / boil_milk — never a keyboard snap.
+        Interactive: only the selected arm moves — no parking the other arm,
+        no long staging path, no retreat. Stove starts on; C shuts it off.
         """
         e = self.env
         arm = _arm_tag(e)
@@ -555,14 +556,24 @@ class HouseholdController:
             * float(getattr(e, "KNOB_MAX_ANGLE", np.pi / 2))
         )
         target = float(on_angle if wanted_on else 0.0)
+        start = float(getattr(e, "knob_angle", 0.0))
         action_error = None
         try:
             e.arm = arm
             e.plan_success = True
-            if callable(getattr(e, "_set_knob_to", None)):
-                e._set_knob_to(target, approach=wanted_on, freeze_cook=True)
-            else:
-                e._turn_stove_knob(target, approach=wanted_on)
+            # Bypass ``_set_knob_to`` (it parks the unused food arm).
+            reached = e._turn_stove_knob(
+                target,
+                approach=False,
+                start_angle=start,
+                settle_steps=4,
+                after_idle=0,
+                retry_closer=True,
+                direct=True,
+                retreat=False,
+            )
+            if callable(getattr(e, "_set_knob_angle", None)):
+                e._set_knob_angle(reached)
         except Exception as exc:
             action_error = exc
         finally:
