@@ -43,6 +43,9 @@ class cook_meat(Base_Task):
           CLI: ``--task-arg dual_setup_enabled=true`` or ``--option 2``.
       Opt 1+2 — dual stations with hold-to-cook keys.
 
+    ``max_episode_steps`` (default 600) caps eval ``step_lim`` and collection
+    length for every scenario (default / Opt1 / Opt2 / Opt1+2).
+
     Keycap is green when up and red when depressed (latched ON, or held in
     Opt 1 / Opt 1+2).
     """
@@ -50,6 +53,7 @@ class cook_meat(Base_Task):
     COOK_STEPS_DEFAULT: ClassVar[int] = 549  # ~40% faster than prior 769
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
     TARGET_DONENESS_DEFAULT: ClassVar[float] = 0.5
+    MAX_EPISODE_STEPS_DEFAULT: ClassVar[int] = 600  # eval / collection episode cutoff
     COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = False  # false=latch; true=hold (Opt 1)
     DUAL_SETUP_ENABLED_DEFAULT: ClassVar[bool] = False  # Opt 2
     TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.45, 0.55)
@@ -110,6 +114,20 @@ class cook_meat(Base_Task):
         self._apply_legacy_option()
         self._ep_seed = int(kwargs.get("seed", 0))
         super()._init_task_env_(**kwargs)
+        # Base eval may overwrite step_lim from _eval_step_limit.yml after
+        # load_actors; re-apply the task_args cutoff for every scenario.
+        self._apply_max_episode_steps()
+
+    def _apply_max_episode_steps(self) -> None:
+        """Apply ``max_episode_steps`` to eval ``step_lim`` and save cutoff."""
+        limit = int(
+            getattr(self, "max_episode_steps", self.MAX_EPISODE_STEPS_DEFAULT)
+        )
+        limit = max(1, limit)
+        self.max_episode_steps = limit
+        self.step_lim = limit
+        self._max_episode_steps = limit
+        self._episode_timed_out = False
 
     def _apply_legacy_option(self) -> None:
         """Map record_demo ``--option`` / config ``option`` onto named toggles.
@@ -895,6 +913,13 @@ class cook_meat(Base_Task):
         self.dual_setup_enabled = bool(
             config.get("dual_setup_enabled", self.DUAL_SETUP_ENABLED_DEFAULT)
         )
+        self.max_episode_steps = max(
+            1,
+            int(config.get("max_episode_steps", self.MAX_EPISODE_STEPS_DEFAULT)),
+        )
+        # Provisional; setup_demo re-applies after base eval step_lim load.
+        self._max_episode_steps = int(self.max_episode_steps)
+        self._episode_timed_out = False
         self.key_offset_x = float(config.get("key_offset_x", self.KEY_OFFSET_X_DEFAULT))
         self.key_y_bias = float(config.get("key_y_bias", self.KEY_Y_BIAS_DEFAULT))
         self.key_press_depth = float(

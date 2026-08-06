@@ -454,6 +454,7 @@ task_args:
     #   dual_setup_enabled   ← Opt 2; dual stations, both arms; ≥10 cm clearance
     #   cook_steps           ← nominal cook duration (steps for doneness 0→1)
     #   cook_speed_jitter    ← per-ep ± fraction on cook_steps
+    #   max_episode_steps    ← eval / collection episode cutoff (all scenarios)
     #   key_offset_x         ← |lateral| key offset from pan (same side as station)
     #   key_y_bias           ← key y relative to pan
     #   key_press_depth      ← EE press depth onto keycap
@@ -468,6 +469,7 @@ task_args:
     #      --option 1 | --option 2
     cook_steps: 2747            # nominal steps for doneness 0→1 (~40% faster than prior 3846)
     cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
+    max_episode_steps: 600      # CHANGE: episode cutoff for default / Opt1 / Opt2 / Opt1+2
     cook_button_enabled: false  # CHANGE: Opt 1; true = hold-to-cook
     dual_setup_enabled: false  # CHANGE: Opt 2; true = dual stations (both arms)
     key_offset_x: 0.14          # CHANGE: m; |lateral| distance of key from pan center
@@ -486,6 +488,7 @@ task_args:
     # Combinations match cook_meat (default / Opt1 / Opt2 / Opt1+2).
     cook_steps: 3846
     cook_speed_jitter: 0.20
+    max_episode_steps: 600       # episode cutoff for all cook_meat_timer scenarios
     cook_button_enabled: false   # Opt1: hold-to-cook
     dual_setup_enabled: false    # Opt2 / Opt1+2
     key_offset_x: 0.14
