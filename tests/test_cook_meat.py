@@ -218,7 +218,7 @@ class CookMeatHelperTests(unittest.TestCase):
         """Metadata deduplication must preserve every template substitution."""
         task = object.__new__(cook_meat)
         task.skillet_id = 2
-        task.cook_button_enabled = True
+        task.cook_button_enabled = False
         task.dual_setup_enabled = False
         task.stations = None
 
@@ -234,27 +234,30 @@ class CookMeatHelperTests(unittest.TestCase):
             },
         )
 
+        task.cook_button_enabled = True
         info = task._task_info(ArmTag("right"))
-        self.assertEqual(info["{o}"], "default")
+        self.assertEqual(info["{o}"], "option 1")
         self.assertEqual(info["{E}"], "cook_key")
         self.assertEqual(info["{a}"], "right")
+        self.assertTrue(task.use_hold_cook)
 
         task.dual_setup_enabled = True
         info = task._task_info()
-        self.assertEqual(info["{o}"], "option 2")
+        self.assertEqual(info["{o}"], "option 1, option 2")
         self.assertEqual(info["{a}"], "both arms")
         self.assertEqual(info["{n}"], "2")
         self.assertEqual(info["{E}"], "cook_key")
         self.assertTrue(task.use_cook_button)
 
     def test_cook_keys_always_enabled(self) -> None:
-        """Cook keys are always active (default and Opt 2)."""
+        """Cook keys are always present; Opt 1 selects hold vs latch."""
         task = object.__new__(cook_meat)
         task.cook_button_enabled = False
         task.dual_setup_enabled = True
         self.assertTrue(task.use_cook_button)
-        task.dual_setup_enabled = False
-        self.assertTrue(task.use_cook_button)
+        self.assertFalse(task.use_hold_cook)
+        task.cook_button_enabled = True
+        self.assertTrue(task.use_hold_cook)
 
     def test_legacy_option_forces_cook_button(self) -> None:
         """CLI --option 1 must force-enable cook_button_enabled over yaml false."""
@@ -271,9 +274,9 @@ class CookMeatHelperTests(unittest.TestCase):
         self.assertTrue(task._cook_cfg["dual_setup_enabled"])
 
     def test_cooks_only_while_key_latched_on_and_on_pan(self) -> None:
-        """Doneness advances only while cook_on and the steak is on the pan."""
+        """Latch mode advances doneness only while cook_on and steak is on the pan."""
         task = object.__new__(cook_meat)
-        task.cook_button_enabled = True
+        task.cook_button_enabled = False
         task.cook_steps = 100
         task.doneness = 0.0
         task.max_doneness = 0.0
@@ -283,6 +286,7 @@ class CookMeatHelperTests(unittest.TestCase):
             "max_doneness": 0.0,
             "grasp_doneness": None,
             "cook_on": True,
+            "cook_phase_done": False,
             "cooking_active": False,
             "steak_shapes": [],
         }
@@ -303,6 +307,43 @@ class CookMeatHelperTests(unittest.TestCase):
         ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
             cook_meat._update_kinematic_tasks(task)
         self.assertEqual(st["doneness"], 0.0)
+
+    def test_hold_mode_cooks_only_while_pressed(self) -> None:
+        """Opt 1 advances doneness only while the key is held and steak is on the pan."""
+        task = object.__new__(cook_meat)
+        task.cook_button_enabled = True
+        task.cook_steps = 100
+        task.doneness = 0.0
+        task.max_doneness = 0.0
+        task._grasp_doneness = None
+        st = {
+            "tag": "right",
+            "doneness": 0.0,
+            "max_doneness": 0.0,
+            "grasp_doneness": None,
+            "cook_on": False,
+            "cook_phase_done": False,
+            "cooking_active": False,
+            "cook_key": object(),
+            "_expert_key_held": True,
+            "steak_shapes": [],
+        }
+        task.stations = [st]
+
+        with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
+            cook_meat, "_steak_on_pan_station", return_value=True
+        ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
+            cook_meat._update_kinematic_tasks(task)
+        self.assertAlmostEqual(st["doneness"], 0.01, places=5)
+
+        st["doneness"] = 0.0
+        st["_expert_key_held"] = False
+        with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
+            cook_meat, "_steak_on_pan_station", return_value=True
+        ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
+            cook_meat._update_kinematic_tasks(task)
+        self.assertEqual(st["doneness"], 0.0)
+        self.assertEqual(st["grasp_doneness"], 0.0)
 
     def test_key_off_latch_is_per_station(self) -> None:
         """Turning one dual-station key OFF must not freeze the other station."""
@@ -349,7 +390,7 @@ class CookMeatHelperTests(unittest.TestCase):
     def test_key_off_stops_cooking(self) -> None:
         """After the key latches OFF, doneness must not advance."""
         task = object.__new__(cook_meat)
-        task.cook_button_enabled = True
+        task.cook_button_enabled = False
         task.cook_steps = 100
         task.doneness = 0.5
         task.max_doneness = 0.5
@@ -369,6 +410,16 @@ class CookMeatHelperTests(unittest.TestCase):
         ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
             cook_meat._update_kinematic_tasks(task)
         self.assertEqual(st["doneness"], 0.5)
+
+    def test_key_color_switches_green_to_red(self) -> None:
+        """Keycap render color is green when up and red when down."""
+        task = object.__new__(cook_meat)
+        shape = _RenderShape()
+        st = {"key_shapes": [shape], "_key_color_down": None}
+        cook_meat._set_station_key_color(task, st, False)
+        self.assertEqual(shape.material.color, [0.18, 0.78, 0.28, 1.0])
+        cook_meat._set_station_key_color(task, st, True)
+        self.assertEqual(shape.material.color, [0.85, 0.10, 0.10, 1.0])
 
     def test_get_dynamic_motion_config_always_none(self) -> None:
         """Cook-meat never uses the shared moving-target workflow."""

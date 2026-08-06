@@ -28,31 +28,29 @@ AABB: TypeAlias = tuple[float, float, float, float]
 
 
 class cook_meat(Base_Task):
-    """Cook a steak into a configured doneness range via a latching cook key.
+    """Cook a steak into a configured doneness range via a cook key.
 
-    Default: place steak on the pan, press the red key to latch cooking ON
-    (key stays down), press again to latch OFF (key returns up) when doneness
-    is in range. Success is doneness-in-range at shutoff — steak may stay on
-    the pan (no board return). Cook speed samples around nominal
-    ``cook_steps`` ± jitter.
+    Default: place steak on the pan, press the key to latch cooking ON (key
+    stays down), press again to latch OFF when doneness is in range. Success
+    is doneness-in-range at shutoff — steak may stay on the pan.
 
-    Options (``task_args.cook_meat``):
+    Options (``task_args.cook_meat``; independent toggles):
+      Opt 1 — hold cook  →  ``cook_button_enabled`` (**default: false**)
+          Hold the key to cook while the steak is on the pan (springs up on
+          release). CLI: ``--task-arg cook_button_enabled=true`` / ``--option 1``.
       Opt 2 — dual setup  →  ``dual_setup_enabled`` (**default: false**)
-          Mirror a second station (pan, board, steak, cook key) with ≥10 cm
-          clearance; both arms place meats and toggle their keys together.
-          Success requires **both** steaks cooked within the target range.
+          Mirror a second station with ≥10 cm clearance; both arms cook.
           CLI: ``--task-arg dual_setup_enabled=true`` or ``--option 2``.
+      Opt 1+2 — dual stations with hold-to-cook keys.
 
-    Notes:
-      A red cook key is always present (single and dual). Legacy Opt 1 /
-      ``cook_button_enabled`` is ignored — keys use measure_ingredient-style
-      press-ON / press-OFF latching, not hold-to-cook.
+    Keycap is green when up and red when depressed (latched ON, or held in
+    Opt 1 / Opt 1+2).
     """
 
     COOK_STEPS_DEFAULT: ClassVar[int] = 549  # ~40% faster than prior 769
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
     TARGET_DONENESS_DEFAULT: ClassVar[float] = 0.5
-    COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = True  # always; contact-cook removed
+    COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = False  # false=latch; true=hold (Opt 1)
     DUAL_SETUP_ENABLED_DEFAULT: ClassVar[bool] = False  # Opt 2
     TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.45, 0.55)
     TARGET_DONENESS_RANGE_JITTER_DEFAULT: ClassVar[float] = 0.0
@@ -62,7 +60,9 @@ class cook_meat(Base_Task):
     KEY_HALF: ClassVar[tuple[float, float, float]] = (0.020, 0.020, 0.014)
     KEY_BASE_HALF: ClassVar[tuple[float, float, float]] = (0.032, 0.032, 0.005)
     KEY_BASE_COLOR: ClassVar[tuple[float, float, float]] = (0.08, 0.08, 0.08)
-    KEY_COLOR: ClassVar[tuple[float, float, float]] = (0.85, 0.10, 0.10)  # red
+    KEY_COLOR_UP: ClassVar[tuple[float, float, float]] = (0.18, 0.78, 0.28)  # green
+    KEY_COLOR_DOWN: ClassVar[tuple[float, float, float]] = (0.85, 0.10, 0.10)  # red
+    KEY_COLOR: ClassVar[tuple[float, float, float]] = (0.18, 0.78, 0.28)  # alias = up
     KEY_OFFSET_X_DEFAULT: ClassVar[float] = 0.14   # m; |lateral| offset from pan center
     KEY_Y_BIAS_DEFAULT: ClassVar[float] = -0.04    # m; toward robot (−y) from pan center
     KEY_PRESS_DEPTH_DEFAULT: ClassVar[float] = 0.055
@@ -114,7 +114,7 @@ class cook_meat(Base_Task):
     def _apply_legacy_option(self) -> None:
         """Map record_demo ``--option`` / config ``option`` onto named toggles.
 
-        1 / cook_button / button → legacy no-op (keys are always present)
+        1 / cook_button / button → Opt 1 cook_button_enabled=true (hold-to-cook)
         2 / dual / dual_setup → Opt 2 dual_setup_enabled=true
         """
         legacy = self._cook_cfg.get("option", None)
@@ -133,25 +133,32 @@ class cook_meat(Base_Task):
             "dual_setup_enabled": "dual_setup_enabled",
         }.get(legacy if not isinstance(legacy, str) else legacy.strip().lower())
         if key == "cook_button_enabled":
-            # Keys are always on; keep flag for older configs / language schema.
             self._cook_cfg["cook_button_enabled"] = True
         elif key == "dual_setup_enabled":
             self._cook_cfg["dual_setup_enabled"] = True
         else:
             raise ValueError(
-                "cook_meat option must be 1/cook_button_enabled (legacy) or "
-                "2/dual_setup_enabled (or set dual_setup_enabled directly)"
+                "cook_meat option must be 1/cook_button_enabled or "
+                "2/dual_setup_enabled (or set those keys directly)"
             )
 
     def _option_label(self) -> str:
+        parts: list[str] = []
+        if getattr(self, "cook_button_enabled", False):
+            parts.append("option 1")
         if getattr(self, "dual_setup_enabled", False):
-            return "option 2"
-        return "default"
+            parts.append("option 2")
+        return ", ".join(parts) if parts else "default"
 
     @property
     def use_cook_button(self) -> bool:
-        """Cook keys are always active (latching ON/OFF)."""
+        """Cook keys are always present (default latch or Opt 1 hold)."""
         return True
+
+    @property
+    def use_hold_cook(self) -> bool:
+        """Opt 1 / Opt 1+2: hold key to cook (vs default latch ON/OFF)."""
+        return bool(getattr(self, "cook_button_enabled", False))
 
     @staticmethod
     def _union_aabb(aabbs: Sequence[AABB]) -> AABB:
@@ -769,7 +776,7 @@ class cook_meat(Base_Task):
             self,
             pose=key_home,
             half_size=list(self.KEY_HALF),
-            color=list(self.KEY_COLOR),
+            color=list(self.KEY_COLOR_UP),
             name=f"cook_key_{tag}",
             is_static=True,
         )
@@ -788,6 +795,11 @@ class cook_meat(Base_Task):
         for c in steak.actor.get_components():
             if isinstance(c, sapien.render.RenderBodyComponent):
                 steak_shapes = list(c.render_shapes)
+        key_shapes: list[Any] = []
+        key_entity = cook_key.actor if hasattr(cook_key, "actor") else cook_key
+        for c in key_entity.get_components():
+            if isinstance(c, sapien.render.RenderBodyComponent):
+                key_shapes = list(c.render_shapes)
 
         station = {
             "tag": tag,
@@ -807,18 +819,20 @@ class cook_meat(Base_Task):
             "key_xy": key_xy,
             "key_top_z": key_top_z,
             "key_home_pose": key_home_pose if cook_key is not None else None,
+            "key_shapes": key_shapes,
+            "_key_color_down": None,  # force first color sync to green
             "steak_shapes": steak_shapes,
             "doneness": 0.0,
             "max_doneness": 0.0,
-            "grasp_doneness": None,  # doneness latched when key toggles OFF
-            "cooking_active": False,  # legacy; unused (cook_on gates cooking)
+            "grasp_doneness": None,  # doneness when cooking stopped
+            "cooking_active": False,
             "awaiting_return_grasp": False,
             "cook_phase_done": False,
-            "cook_on": False,  # latched key state (measure_ingredient-style)
+            "cook_on": False,  # latch mode: key latched ON
             "_pending_off": False,
             "_touch_latched": False,
             "_ignore_key": False,  # expert sets latch explicitly
-            "_expert_key_held": False,  # brief expert depress visual override
+            "_expert_key_held": False,  # expert depress / hold visual
         }
         self._set_station_meat_color(station, 0.0)
         # Sibling dual station only needs bowl↔bowl ≥10 cm. Board/key sit outward
@@ -874,8 +888,10 @@ class cook_meat(Base_Task):
         self.cook_doneness_tol = float(
             config.get("cook_doneness_tol", self.COOK_DONENESS_TOL_DEFAULT)
         )
-        # Cook keys are always present; legacy cook_button_enabled is ignored.
-        self.cook_button_enabled = True
+        # Opt 1: hold-to-cook. Default / Opt 2 alone: latch ON/OFF. Keys always spawn.
+        self.cook_button_enabled = bool(
+            config.get("cook_button_enabled", self.COOK_BUTTON_ENABLED_DEFAULT)
+        )
         self.dual_setup_enabled = bool(
             config.get("dual_setup_enabled", self.DUAL_SETUP_ENABLED_DEFAULT)
         )
@@ -1055,22 +1071,54 @@ class cook_meat(Base_Task):
         station["cook_phase_done"] = True
         station["cooking_active"] = False
 
-    def _button_is_pressed_station(self, station: dict[str, Any]) -> bool:
-        """True when this station's cook key is latched ON (or briefly held by expert)."""
-        if station.get("cook_key") is None:
-            return False
-        if bool(station.get("cook_on")) or bool(station.get("_expert_key_held")):
+    def _set_station_key_color(self, station: dict[str, Any], down: bool) -> None:
+        """Green when up, red when depressed."""
+        down = bool(down)
+        prev = station.get("_key_color_down")
+        if prev is not None and bool(prev) == down:
+            return
+        station["_key_color_down"] = down
+        rgb = self.KEY_COLOR_DOWN if down else self.KEY_COLOR_UP
+        color = list(rgb) + [1.0]
+        for shape in station.get("key_shapes", []) or []:
+            try:
+                shape.material.set_base_color(color)
+            except Exception:
+                pass
+
+    def _key_visually_down(self, station: dict[str, Any]) -> bool:
+        """True when the keycap is depressed (latched, held, or springing down)."""
+        if bool(station.get("_expert_key_held")):
+            return True
+        if not self.use_hold_cook and bool(station.get("cook_on")):
             return True
         bank = getattr(self, "_reactive_buttons", None)
         if bank is None:
             return False
         try:
-            return bool(bank.is_held(str(station["tag"])))
+            idx = bank.resolve_index(str(station["tag"]))
+            return float(bank.visual_depth[idx]) > 1e-4
         except Exception:
             return False
 
+    def _button_is_pressed_station(self, station: dict[str, Any]) -> bool:
+        """True when this station's key is actively cooking (latched ON or held)."""
+        if station.get("cook_key") is None:
+            return False
+        if bool(station.get("_expert_key_held")):
+            return True
+        if self.use_hold_cook:
+            bank = getattr(self, "_reactive_buttons", None)
+            if bank is None:
+                return False
+            try:
+                return bool(bank.is_held(str(station["tag"])))
+            except Exception:
+                return False
+        return bool(station.get("cook_on"))
+
     def _button_is_pressed(self) -> bool:
-        """True if any station's cook key is latched ON / held (obs / tests)."""
+        """True if any station's cook key is cooking (obs / tests)."""
         for st in getattr(self, "stations", []) or []:
             if self._button_is_pressed_station(st):
                 return True
@@ -1117,57 +1165,61 @@ class cook_meat(Base_Task):
         self._set_station_meat_color(station, station["doneness"])
 
     def _update_reactive_cook_keys(self) -> None:
-        """Animate keys and latch ON/OFF like ``measure_ingredient``.
+        """Animate keys; latch ON/OFF (default) or spring hold (Opt 1).
 
-        Press while OFF → latch ON (key stays down, cooking starts).
-        Press while ON → arm OFF; cooking continues until the tip releases,
-        then the key springs up and doneness freezes.
+        Latch: press while OFF → ON (stays down); press while ON → OFF on release.
+        Hold (Opt 1): key springs with the gripper; no latch state.
+        Keycap turns red while depressed and green when up.
         """
         bank = getattr(self, "_reactive_buttons", None)
         if bank is None:
             return
         stations = getattr(self, "stations", None) or []
+        hold = self.use_hold_cook
         for st in stations:
             tag = str(st.get("tag", ""))
             if not tag:
                 continue
-            # Key stays depressed while latched ON (or during an expert depress).
-            forced = bool(st.get("cook_on")) or bool(st.get("_expert_key_held"))
-            bank.set_forced(tag, forced)
+            if hold:
+                # Spring-only; expert hold forces the key down while cooking.
+                bank.set_forced(tag, bool(st.get("_expert_key_held")))
+            else:
+                forced = bool(st.get("cook_on")) or bool(st.get("_expert_key_held"))
+                bank.set_forced(tag, forced)
 
         triggered = set(bank.update())
 
-        for st in stations:
-            tag = str(st.get("tag", ""))
-            if not tag or st.get("_ignore_key"):
-                continue
-            touching = self._key_tip_pressing(st)
-            if not st.get("cook_on"):
-                if tag in triggered:
-                    self._set_station_cook_on(st, True)
-                    # Consume the rest of this press (measure_ingredient style).
-                    # Resetting _touch_latched here made the still-held tip look
-                    # like a second press, so lifting immediately latched OFF at
-                    # doneness ~0 and failed the episode.
-                    st["_touch_latched"] = True
-                    st["_pending_off"] = False
-                else:
-                    st["_touch_latched"] = touching
-                    st["_pending_off"] = False
-                continue
+        if not hold:
+            for st in stations:
+                tag = str(st.get("tag", ""))
+                if not tag or st.get("_ignore_key"):
+                    continue
+                touching = self._key_tip_pressing(st)
+                if not st.get("cook_on"):
+                    if tag in triggered:
+                        self._set_station_cook_on(st, True)
+                        # Keep touch latched for this press so release does not
+                        # immediately look like a second OFF press.
+                        st["_touch_latched"] = True
+                        st["_pending_off"] = False
+                    else:
+                        st["_touch_latched"] = touching
+                        st["_pending_off"] = False
+                    continue
 
-            # Latched ON: a new tip-press edge arms OFF; release after that
-            # executes shutoff (forced key does not re-fire trigger edges).
-            if touching and not st.get("_touch_latched"):
-                st["_pending_off"] = True
-            if (
-                st.get("_pending_off")
-                and not touching
-                and st.get("_touch_latched")
-            ):
-                self._set_station_cook_on(st, False)
-                st["_pending_off"] = False
-            st["_touch_latched"] = touching
+                if touching and not st.get("_touch_latched"):
+                    st["_pending_off"] = True
+                if (
+                    st.get("_pending_off")
+                    and not touching
+                    and st.get("_touch_latched")
+                ):
+                    self._set_station_cook_on(st, False)
+                    st["_pending_off"] = False
+                st["_touch_latched"] = touching
+
+        for st in stations:
+            self._set_station_key_color(st, self._key_visually_down(st))
 
     def _update_kinematic_tasks(self) -> None:
         """Advance base dynamics and per-station cooking state by one step."""
@@ -1176,10 +1228,22 @@ class cook_meat(Base_Task):
         if not stations:
             return
         self._update_reactive_cook_keys()
+        hold = self.use_hold_cook
         for st in stations:
-            # Cook only while the key is latched ON and the steak is on the pan.
-            if st.get("cook_on") and self._steak_on_pan_station(st):
-                self._advance_station_cook(st)
+            on_pan = self._steak_on_pan_station(st)
+            if hold:
+                if st.get("cook_phase_done"):
+                    continue
+                pressed = self._button_is_pressed_station(st)
+                if pressed and on_pan:
+                    self._advance_station_cook(st)
+                    st["grasp_doneness"] = None
+                elif not pressed:
+                    # Freeze score whenever the key is up (success needs shutoff).
+                    st["grasp_doneness"] = float(st["doneness"])
+            else:
+                if st.get("cook_on") and on_pan:
+                    self._advance_station_cook(st)
         # Keep primary aliases in sync for obs / success helpers.
         primary = stations[0]
         self.doneness = float(primary["doneness"])
@@ -1321,9 +1385,69 @@ class cook_meat(Base_Task):
             st["_ignore_key"] = not interactive
             st["_touch_latched"] = False
             st["_pending_off"] = False
+            self._set_station_key_color(st, self._key_visually_down(st))
+
+    def _hold_cook_buttons_until_done(self) -> None:
+        """Opt 1 / Opt 1+2: press and hold each cook key until target doneness."""
+        for st in self.stations:
+            if st["cook_key"] is None:
+                raise RuntimeError("cook_meat: cook_key missing")
+            st["_ignore_key"] = True
+
+        hover = float(getattr(self, "key_hover_dis", self.KEY_HOVER_DIS_DEFAULT))
+        press_above = max(0.0, hover - float(self.key_press_depth))
+
+        if len(self.stations) == 1:
+            st = self.stations[0]
+            arm = st["arm"]
+            self.move(self.close_gripper(arm))
+            self.move(self.move_to_pose(arm, self._cook_key_tip_pose(st, hover)))
+            self.move(self.move_to_pose(arm, self._cook_key_tip_pose(st, press_above)))
+            st["_expert_key_held"] = True
+            self._cook_idle()
+            st["cook_phase_done"] = True
+            st["grasp_doneness"] = float(st["doneness"])
+            st["_expert_key_held"] = False
+            self.move(self.move_to_pose(arm, self._cook_key_tip_pose(st, hover)))
+            self.move(self.open_gripper(arm))
+        else:
+            left = next(st for st in self.stations if st["arm"] == "left")
+            right = next(st for st in self.stations if st["arm"] == "right")
+            la, ra = left["arm"], right["arm"]
+            self.move(self.close_gripper(la), self.close_gripper(ra))
+            self.move(
+                self.move_to_pose(la, self._cook_key_tip_pose(left, hover)),
+                self.move_to_pose(ra, self._cook_key_tip_pose(right, hover)),
+            )
+            self.move(
+                self.move_to_pose(la, self._cook_key_tip_pose(left, press_above)),
+                self.move_to_pose(ra, self._cook_key_tip_pose(right, press_above)),
+            )
+            for st in self.stations:
+                st["_expert_key_held"] = True
+            self._cook_idle()
+            for st in self.stations:
+                st["cook_phase_done"] = True
+                st["grasp_doneness"] = float(st["doneness"])
+                st["_expert_key_held"] = False
+            self.move(
+                self.move_to_pose(la, self._cook_key_tip_pose(left, hover)),
+                self.move_to_pose(ra, self._cook_key_tip_pose(right, hover)),
+            )
+            self.move(self.open_gripper(la), self.open_gripper(ra))
+
+        for st in self.stations:
+            interactive = bool(getattr(self, "_interactive_robot_mode", False)) or bool(
+                getattr(self, "_interactive_universal_controls", False)
+            )
+            st["_ignore_key"] = not interactive
+            self._set_station_key_color(st, False)
 
     def _press_cook_buttons(self) -> None:
-        """Legacy alias: latch ON, cook to target, latch OFF (no board return)."""
+        """Cook via hold (Opt 1) or latch ON → wait → OFF (default / Opt 2)."""
+        if self.use_hold_cook:
+            self._hold_cook_buttons_until_done()
+            return
         self._press_cook_keys(want_on=True)
         # Park arms clear of the keys while cooking.
         if len(self.stations) == 1:
@@ -1509,11 +1633,11 @@ class cook_meat(Base_Task):
             self.move(self.move_by_displacement(arm_tag=st["arm"], z=0.08))
 
     def _pan_cook_table(self) -> None:
-        """Place steak(s) on pan(s), latch cook ON → wait → latch OFF."""
+        """Place steak(s) on pan(s), then cook via hold or latch key."""
         self._place_steaks_on_pans()
         self._dbg("place_in_pan")
         self._press_cook_buttons()
-        self._dbg("cook_key_off")
+        self._dbg("cook_done")
 
     def _task_info(self, arm_tag: ArmTag | None = None) -> dict[str, str]:
         """Build the language-template substitutions recorded for this episode."""
@@ -1588,22 +1712,25 @@ class cook_meat(Base_Task):
     def _station_success(self, station: dict[str, Any]) -> bool:
         """Return whether one steak was shut off inside the doneness range.
 
-        Cook quality uses ``grasp_doneness`` (value when the cook key latched
-        OFF). The steak may remain on the pan — board return is not required.
-        Dual episodes call this once per steak, and both must pass.
+        Cook quality uses ``grasp_doneness`` (value when cooking stopped). The
+        steak may remain on the pan — board return is not required. Dual
+        episodes call this once per steak, and both must pass.
         """
         if station.get("grasp_doneness") is None:
             return False
-        if bool(station.get("cook_on")):
+        # Cooking must be stopped: latch OFF, or hold key released / phase done.
+        if self.use_hold_cook:
+            if self._button_is_pressed_station(station):
+                return False
+        elif bool(station.get("cook_on")):
             return False
         return bool(self._doneness_in_target_range(float(station["grasp_doneness"])))
 
     def check_success(self) -> bool:
         """Return whether every steak was cooked into the target doneness range.
 
-        Single station: key OFF with ``grasp_doneness`` in ``target_doneness_range``.
-        Dual (Opt 2): **both** steaks must meet that criterion (board return not
-        required).
+        Key must be up (latch OFF or hold released) with ``grasp_doneness`` in
+        ``target_doneness_range``. Dual: both steaks must pass.
         """
         stations = getattr(self, "stations", None)
         if not stations:
@@ -1631,9 +1758,10 @@ class cook_meat(Base_Task):
                 getattr(self, "target_doneness_range_shift", 0.0)
             ),
             "cook_steps": float(getattr(self, "cook_steps", self.COOK_STEPS_DEFAULT)),
-            "cook_button_enabled": True,
+            "cook_button_enabled": bool(getattr(self, "cook_button_enabled", False)),
             "dual_setup_enabled": bool(getattr(self, "dual_setup_enabled", False)),
             "use_cook_button": True,
+            "use_hold_cook": bool(self.use_hold_cook),
             "button_pressed": bool(self._button_is_pressed()),
             "cook_on": [bool(st.get("cook_on")) for st in stations],
             "n_stations": int(len(stations)),

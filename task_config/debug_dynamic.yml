@@ -68,14 +68,14 @@ task_args:
   cook_meat:
     cook_steps: 549             # ~40% faster than prior 769; per-ep × U(1±cook_speed_jitter)
     cook_speed_jitter: 0.20
-    cook_button_enabled: true   # ignored; keys always on (latch ON/OFF)
+    cook_button_enabled: false  # Opt 1: hold-to-cook; false = latch ON/OFF
     dual_setup_enabled: false   # Opt 2: dual stations (≥10 cm clearance)
     target_doneness: 0.5
     board_scale_mult: 0.07    # cutting board size (steak starts here; may finish on pan)
   cook_meat_timer:
     cook_steps: 769
     cook_speed_jitter: 0.20
-    cook_button_enabled: true   # ignored; keys always on (latch ON/OFF)
+    cook_button_enabled: false  # Opt 1: hold-to-cook
     dual_setup_enabled: false
     target_doneness_range: [0.45, 0.55]
     board_scale_mult: 0.07

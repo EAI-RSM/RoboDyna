@@ -7,8 +7,9 @@ fills clockwise section-by-section at the cooking rate:
   * yellow — resets and fills until the upper success threshold
   * red    — stays full once overcooked; freezes when cooking stops
 
-The timer advances only while the cook key is latched ON and the steak is on
-the pan (same gate as cooking). Press OFF freezes both cooking and the timer.
+The timer advances with the same cook-key gate as cooking: latched ON
+(default / Opt 2) or held down (Opt 1 / Opt 1+2). Keys are green when up and
+red when depressed.
 """
 
 from __future__ import annotations

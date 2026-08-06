@@ -45,16 +45,19 @@ CONTROLS_KEYBOARD = """
   P                 snap steak(s) onto pan(s)
   B                 snap steak(s) back to board(s)
 
-  Press the cook key to latch ON (stays down); press again to latch OFF.
-  Pie timer (green→yellow→red) advances only while the key is ON.
+  Key is green when up, red when down.
+  Latch mode: press ON (stays down), press again OFF.
+  Hold mode (Opt 1): cooking/timer only while the key is depressed.
+  Pie timer (green→yellow→red) tracks doneness.
 """
 
 CONTROLS_ROBOT = """
   Space             toggle steak(s): board → pan, then pan → board
 
   Select an arm, move over the cook key, lower with Q to press (E to raise).
-  First press latches cooking ON; second press latches OFF.
-  Pie timer (green→yellow→red) advances only while the key is ON.
+  Key is green when up, red when down.
+  Latch: press ON/OFF. Hold (Opt 1): cook while pressed.
+  Pie timer advances with cooking.
 """
 
 

@@ -1,6 +1,6 @@
 {
-  "full_description": "default: pick up the raw meat from the cutting board, place it on the pan, press the red cook key to latch cooking on, press again to latch off at the target doneness; option 2: mirrored dual stations — both arms place both steaks and toggle each station's cook key (both steaks must be cooked properly). Meat may stay on the pan; no board return required",
-  "schema": "{A} notifies the meat, {B} notifies the pan, {C} notifies the cutting board, {E} notifies the cook key, {n} notifies dual-station count when option 2 is on, {a} notifies the arm(s) that handle the meat, {o} notifies option 2 (dual setup) when active",
+  "full_description": "default: pick up the raw meat from the cutting board, place it on the pan, press the green cook key to latch cooking on (key turns red), press again to latch off at the target doneness; option 1: hold the cook key to cook (red while pressed); option 2: mirrored dual stations with latching keys; option 1+2: dual hold-to-cook keys. Meat may stay on the pan; no board return required",
+  "schema": "{A} notifies the meat, {B} notifies the pan, {C} notifies the cutting board, {E} notifies the cook key, {n} notifies dual-station count when option 2 is on, {a} notifies the arm(s) that handle the meat, {o} notifies option 1 (hold cook) and/or option 2 (dual setup)",
   "preference": "num of words should not exceed 20. Degree of detail avg is 6",
   "seen": [
     "Pick up {A} from {C}, place on {B}, press {E} on then off when done",
@@ -9,7 +9,7 @@
     "Grill {A} on {B} using {E} until cooked",
     "Move {A} from {C} to {B}, press {E} to cook, press off",
     "Cook {A} on {B} with {E} using {a}",
-    "Fry {A} on {B} then press {E} off",
+    "Hold {E} to fry {A} on {B}",
     "With {a}, place {A} on {B} and toggle {E}",
     "Sear {A} on {B} via {E}",
     "Brown {A} on {B} with the cook key",
@@ -17,7 +17,7 @@
     "Use {a} to cook {A} on {B} with {E}",
     "Place {A} on {B}, press {E} on to cook, press off",
     "Press {E} to cook {A} on {B}, then press off",
-    "With {a}, cook {A} via {E} on {B}",
+    "With {a}, hold {E} to cook {A} on {B}",
     "Cook both steaks with {a} on dual pans using each {E}",
     "Use both arms to cook {n} steaks by toggling each cook key"
   ],
@@ -25,7 +25,7 @@
     "Heat {A} on {B} until cooked, then turn the cook key off",
     "Take {A} from {C}, cook on {B} with {E}, then latch off",
     "Cook the meat on the pan and shut off the key in range",
-    "Press the cook key on until {A} is done, then press off",
+    "Hold the cook key until {A} is done, then release",
     "Mirror-cook both sides then turn both cook keys off"
   ]
 }

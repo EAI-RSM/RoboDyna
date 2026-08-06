@@ -45,15 +45,17 @@ CONTROLS_KEYBOARD = """
   P                 snap steak(s) onto pan(s)
   B                 snap steak(s) back to board(s)
 
-  Press the cook key to latch ON (stays down); press again to latch OFF.
-  Cooking advances while ON and the steak is on the pan.
+  Key is green when up, red when down.
+  Latch mode: press ON (stays down), press again OFF.
+  Hold mode (Opt 1): cooking only while the key is depressed.
 """
 
 CONTROLS_ROBOT = """
   Space             toggle steak(s): board → pan, then pan → board
 
   Select an arm, move over the cook key, lower with Q to press (E to raise).
-  First press latches cooking ON (key stays down); second press latches OFF.
+  Key is green when up, red when down.
+  Latch: first press ON, second press OFF. Hold (Opt 1): cook while pressed.
 """
 
 
