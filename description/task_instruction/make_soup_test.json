@@ -1,24 +1,24 @@
 {
-  "full_description": "In the KitchenS scene with a flush countertop gas cooktop, lift a chopping board holding colored vegetable cubes and a tomato, carry it level over a pot of water without dropping any pieces, tip the board to pour them into the pot, then turn the top-facing stove knob on from above.",
-  "schema": "{A} notifies the chopping board, {B} notifies the pot of water, {C} notifies the countertop gas stove, {D} notifies the stove knob, {E} notifies the vegetable pieces, {a} notifies the arm used",
+  "full_description": "In the KitchenS scene with a flush countertop gas cooktop already lit, lift a chopping board holding colored vegetable cubes and a tomato, carry it level over a pot of water without dropping any pieces, and tip the board to pour them into the pot.",
+  "schema": "{A} notifies the chopping board, {B} notifies the pot of water, {C} notifies the countertop gas stove, {E} notifies the vegetable pieces, {a} notifies the arm used",
   "preference": "num of words should not exceed 25. Degree of detail avg is 6",
   "seen": [
-    "Pour {E} from {A} into {B}, then turn on {C} with {D}",
-    "Use {a} to tip {A} over {B} without dropping {E}, then twist {D} from above",
-    "Carry {A} level to {B}, pour {E} in, then turn on {C}",
-    "Dump {E} from {A} into the pot, then turn {D} on {C}",
-    "Lift {A}, pour {E} into {B}, then start {C} via {D}",
-    "With {a}, pour board vegetables into {B} and turn on the cooktop",
-    "Keep {E} on {A} until over {B}, pour them in, then turn {D}",
-    "Make soup: pour {E} into {B} from {A}, then turn on {C}",
-    "Tip {A} over {B} so {E} fall in, then twist the top knob on",
-    "Use {a} on {A} to fill {B} with {E}, then turn {D} from above"
+    "Pour {E} from {A} into {B} on the lit {C}",
+    "Use {a} to tip {A} over {B} without dropping {E}",
+    "Carry {A} level to {B} and pour {E} in",
+    "Dump {E} from {A} into the pot of water",
+    "Lift {A} and pour {E} into {B}",
+    "With {a}, pour board vegetables into {B}",
+    "Keep {E} on {A} until over {B}, then pour them in",
+    "Make soup: pour {E} into {B} from {A}",
+    "Tip {A} over {B} so {E} fall into the water",
+    "Use {a} on {A} to fill {B} with {E}"
   ],
   "unseen": [
-    "Pour the board vegetables into the pot and turn the cooktop on",
+    "Pour the board vegetables into the pot of water",
     "Do not drop any pieces while tipping them into the water",
-    "Carry the chopping board level, dump into the pot, light the burner",
-    "Fill the pot from the board then twist the top-facing knob",
-    "Tip the board carefully over the pot before starting the stove"
+    "Carry the chopping board level and dump into the pot",
+    "Fill the pot from the board on the lit cooktop",
+    "Tip the board carefully over the pot so every piece falls in"
   ]
 }

@@ -1,11 +1,11 @@
-"""Make soup: pour chopping-board vegetables into a pot of water, then turn on the stove.
+"""Make soup: pour chopping-board vegetables into a pot of water on a lit stove.
 
-KitchenS scene with a cooking range. A chopping board holds colored vegetable cubes
-(orange, green, purple) and a small red tomato. A pot of water sits on a burner.
-The robot lifts the board, carries it roughly level over the pot, tips carefully so
-the pieces fall in under physics (tilting too early / too far drops them onto the
-table), then turns the stove on. Success requires every piece in the pot, none on
-the table, and the stove on.
+KitchenS scene with a cooking range. The burner starts on (fire + knob). A chopping
+board holds colored vegetable cubes (orange, green, purple) and a small red tomato.
+A pot of water sits on the lit burner. The robot lifts the board, carries it roughly
+level over the pot, and tips carefully so the pieces fall in under physics (tilting
+too early / too far drops them onto the table). Success requires every piece in the
+pot and none on the table — no stove-turn step.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from .utils.create_actor import create_box, create_sphere, create_visual_box, Un
 
 
 class make_soup(KitchenS_base_task):
-    """Pour board vegetables into a pot of water, then turn the stove on."""
+    """Pour board vegetables into a pot of water on an already-lit stove."""
 
     EE_TO_TCP: ClassVar[float] = 0.12
     KNOB_CONTACT_RADIUS_DEFAULT: ClassVar[float] = 0.06
@@ -337,39 +337,10 @@ class make_soup(KitchenS_base_task):
         return out
 
     def _configure_head_camera(self) -> None:
-        """Closer head framing so the boil_milk-scale stove/pot read at true size."""
-        cams = getattr(self, "cameras", None)
-        if cams is None:
-            return
-        names = list(getattr(cams, "static_camera_name", []) or [])
-        clist = list(getattr(cams, "static_camera_list", []) or [])
-        if "head_camera" not in names:
-            return
-        camera = clist[names.index("head_camera")]
-        rx, ry = getattr(self, "range_xy", (0.18, 0.22))
-        # High and back far enough that the reaching arm never fills the frame
-        # (the knob twist has to stay visible), only slightly tighter than the
-        # stock KitchenS head view.
-        cam_pos = np.array([float(rx) * 0.55, -0.98, 1.74], dtype=float)
-        look_at = np.array([float(rx) * 0.70, float(ry) * 0.10, 0.83], dtype=float)
-        forward = look_at - cam_pos
-        forward /= np.linalg.norm(forward)
-        left = np.cross(np.array([0.0, 0.0, 1.0], dtype=float), forward)
-        if float(np.linalg.norm(left)) < 1e-6:
-            left = np.array([-1.0, 0.0, 0.0], dtype=float)
-        left /= np.linalg.norm(left)
-        up = np.cross(forward, left)
-        m = np.eye(4)
-        m[:3, :3] = np.stack([forward, left, up], axis=1)
-        m[:3, 3] = cam_pos
-        camera.entity.set_pose(sapien.Pose(m))
-        try:
-            camera.set_fovy(float(np.deg2rad(52)))
-        except Exception:
-            try:
-                camera.fovy = float(np.deg2rad(52))
-            except Exception:
-                pass
+        """Shared household head framing (see ``envs.utils.household_view``)."""
+        from .utils.household_view import configure_household_head_camera
+
+        configure_household_head_camera(self)
 
     # ---------------------------------------------------------------- actors
     def load_actors(self) -> None:
@@ -489,8 +460,10 @@ class make_soup(KitchenS_base_task):
             half_size=[0.010, 0.005, 0.0035],
         )
         self._rebuild_water(force=True)
-        self._set_stove_fire(False)
-        self.knob_angle = float(self.KNOB_OFF_ANGLE)
+        # Stove starts lit — the episode is only about pouring produce in.
+        self.knob_angle = float(self.KNOB_ON_ANGLE)
+        self._set_knob_joint_angle(float(self.KNOB_ON_ANGLE), hard=True)
+        self._set_stove(True)
 
         self.board = self._spawn_board(board_x, board_y, bz)
         self.add_prohibit_area(self.board, padding=0.04)
@@ -927,7 +900,46 @@ class make_soup(KitchenS_base_task):
                 return c
         return None
 
+    def _board_is_entity(self, entity: Any) -> bool:
+        if self.board is None or entity is None:
+            return False
+        if entity is self.board:
+            return True
+        board_obj = self.board.actor if hasattr(self.board, "actor") else self.board
+        obj = entity.actor if hasattr(entity, "actor") else entity
+        return obj is board_obj
+
+    def _clamp_board_pose_above_pot(self, pose: sapien.Pose) -> sapien.Pose:
+        """Stop a pose-driven board from tunneling through the pot rim.
+
+        The board is kinematic while welded / tipped, so PhysX will not resolve
+        penetration from ``set_pose``. Raise the pose so any board sample over the
+        pot footprint stays on or above the rim (contact, then stop).
+        """
+        if getattr(self, "pot", None) is None:
+            return pose
+        p = np.asarray(pose.p, dtype=float).copy()
+        R = pose.to_transformation_matrix()[:3, :3]
+        hx, hy, hz = [float(v) for v in self.board_half]
+        pot_xy = np.asarray(self.pot_xy, dtype=float)
+        pot_r = float(self.pot_radius) + 0.004
+        rim_z = float(self.pot_rim_z)
+        lift = 0.0
+        for sx in (-1.0, 0.0, 1.0):
+            for sy in (-1.0, 0.0, 1.0):
+                world = p + R @ np.array([sx * hx, sy * hy, -hz], dtype=float)
+                if float(np.linalg.norm(world[:2] - pot_xy)) >= pot_r:
+                    continue
+                if float(world[2]) < rim_z:
+                    lift = max(lift, rim_z - float(world[2]))
+        if lift <= 0.0:
+            return pose
+        p[2] += lift
+        return sapien.Pose(p.tolist(), list(pose.q))
+
     def _set_entity_pose(self, entity: Any, pose: sapien.Pose) -> None:
+        if self._board_is_entity(entity):
+            pose = self._clamp_board_pose_above_pot(pose)
         obj = entity.actor if hasattr(entity, "actor") else entity
         obj.set_pose(pose)
         rigid = self._get_rigid(entity)
@@ -1105,13 +1117,6 @@ class make_soup(KitchenS_base_task):
             pass
         self._set_collision_ignore(ents, ignore_bit, ignore_id)
 
-    def _ignore_board_pot_collision(self) -> None:
-        """Keep the kinematic board from crushing produce against the pot walls."""
-        if self.board is None or getattr(self, "pot", None) is None:
-            return
-        bit, gid = 1 << 15, 15
-        self._set_collision_ignore([self.board.actor, self.pot], bit, gid)
-
     def _ignore_board_veg_collision(self) -> None:
         """Stop the board scooping settled produce back out as it rolls level."""
         if self.board is None:
@@ -1189,16 +1194,6 @@ class make_soup(KitchenS_base_task):
                 self._take_picture()
 
     # ---------------------------------------------------------------- expert motion
-    def _turn_knob_on(self) -> None:
-        """Contact-driven cooktop knob twist (shared KitchenS helper)."""
-        self._turn_stove_knob(
-            self.KNOB_ON_ANGLE,
-            start_angle=(
-                self.KNOB_ON_ANGLE if self.stove_on else self.KNOB_OFF_ANGLE
-            ),
-            commit_stove=True,
-        )
-
     def _top_down_pose(self, tcp_xyz) -> list[float]:
         return [
             float(tcp_xyz[0]),
@@ -1430,7 +1425,7 @@ class make_soup(KitchenS_base_task):
             f"edge={float(pour_flat.p[0]) - side_sign * hx:.3f} pot={pot} arm={arm}"
         )
 
-        self._ignore_board_pot_collision()
+        # Keep board↔pot collision / rim contact so the board cannot sink through.
         self._pour_armed = True
         self._force_veg_hold = False
 
@@ -1592,7 +1587,7 @@ class make_soup(KitchenS_base_task):
             except Exception:
                 pass
 
-        # 4) Retract so the top-knob reach is clear.
+        # 4) Retract clear of the board.
         self.move(
             self.move_by_displacement(
                 arm,
@@ -1705,7 +1700,6 @@ class make_soup(KitchenS_base_task):
                 "{A}": "chopping_board",
                 "{B}": "soup_pot",
                 "{C}": "cooking_range",
-                "{D}": "stove_knob",
                 "{E}": "vegetables",
                 "{a}": str(arm),
             }
@@ -1723,12 +1717,8 @@ class make_soup(KitchenS_base_task):
                 self.plan_success = False
                 return self.info
 
-        # Board goes back on the table — never left on the pot — then stove on.
+        # Board goes back on the table — never left on the pot.
         self._place_board_on_table()
-        # Knob sits on the stove's local bottom-right; may need the other arm.
-        self.arm = getattr(self, "knob_arm", arm)
-        self._turn_knob_on()
-        self.arm = getattr(self, "board_arm", arm)
 
         if self.check_success():
             self.plan_success = True
@@ -1737,7 +1727,6 @@ class make_soup(KitchenS_base_task):
             "{A}": "chopping_board",
             "{B}": "soup_pot",
             "{C}": "cooking_range",
-            "{D}": "stove_knob",
             "{E}": "vegetables",
             "{a}": str(getattr(self, "board_arm", arm)),
         }
@@ -1746,8 +1735,7 @@ class make_soup(KitchenS_base_task):
     def check_success(self) -> bool:
         """Success = every vegetable piece is inside the pot (spill elsewhere fails).
 
-        Stove-on remains part of the expert episode, but the scored criterion is
-        produce containment: any piece that lands outside the pot fails.
+        The burner starts on; scored criterion is produce containment only.
         """
         if not getattr(self, "_loaded", False):
             return False
@@ -1756,9 +1744,6 @@ class make_soup(KitchenS_base_task):
         if self._veg_fallen:
             return False
         if not all(self._veg_in_pot(v) for v in self.veggies):
-            return False
-        # Full task still requires the burner to have been turned on.
-        if not self.stove_on or not self.turned_on_once:
             return False
         return True
 

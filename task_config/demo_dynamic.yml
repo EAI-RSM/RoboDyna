@@ -1203,9 +1203,9 @@ task_args:
     board_scale_mult: 0.091     # +30% cutting board
     microwave_scale_mult: 1.3   # +30% microwave
   make_soup:
-    # KitchenS: no microwave. Stove slot (current/top-left/top-right), board on
-    # lower half, veggies scattered on the board, pot on a random front burner,
-    # decor on empty apron cells. Arm follows board X (center → either).
+    # KitchenS: no microwave. Burner starts on. Stove slot (current/top-left/
+    # top-right), board on lower half, veggies on the board, pot on a front
+    # burner, decor on empty apron cells. Arm follows board X (center → either).
     scene_id: 0
     burner: left_front           # fallback when pin_burner / randomize_layout=false
     pin_burner: false

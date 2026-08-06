@@ -213,8 +213,8 @@ task_args:
     grasp_tcp_dz: 0.02
     post_catch_lift: 0.08
   make_soup:
-    # KitchenS: no microwave. Stove slot (current/top-left/top-right), board on
-    # lower half, veggies scattered, pot on a front burner matching the arm.
+    # KitchenS: no microwave. Burner starts on. Stove slot (current/top-left/
+    # top-right), board on lower half, veggies scattered, pot on a front burner.
     scene_id: 0
     burner: left_front
     pin_burner: false
