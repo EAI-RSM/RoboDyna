@@ -45,12 +45,6 @@ TEXT_SECONDARY = "#aebdca"
 HINT_FG = "#7fb6dc"
 RANDOM_SEED_MAX = 500
 
-# README row name → GUI task name (when they diverge).
-README_TASK_ALIASES = {
-    "catch_mouse_object_drop": "catch_cuboid_object_drop",
-}
-
-
 def load_task_descriptions(readme_path: Path = README_PATH) -> dict[str, str]:
     """Parse README household-task ``<sub>…</sub>`` blurbs into task → description."""
     if not readme_path.exists():
@@ -80,8 +74,7 @@ TASK_DESCRIPTIONS = load_task_descriptions()
 
 def task_description(task: str) -> str:
     """README blurb for ``task``, or empty if unavailable."""
-    key = README_TASK_ALIASES.get(task, task)
-    return str(TASK_DESCRIPTIONS.get(key, "") or "")
+    return str(TASK_DESCRIPTIONS.get(task, "") or "")
 
 
 def resolve_seed(value: str) -> int:

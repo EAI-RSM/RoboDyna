@@ -629,11 +629,11 @@
     <h3><code>cook_food</code> — Cook Food</h3>
     <span class="pill household">household</span>
   </header>
-  <p class="summary">Food cooked into the target doneness band after the stove is shut off; food stays in the pan.</p>
+  <p class="summary">Stove starts lit; food cooked into the target doneness band after shutoff; food stays in the pan (no plating).</p>
   <div class="cols">
     <div>
       <h4>Requires</h4>
-      <ul><li>grasp_doneness in target_doneness_range</li><li>fire ≈ off and knob ≈ 0</li><li>turned_on_once and turned_off_after_cook</li><li>Food not held</li><li>Food still in pan / bowl</li></ul>
+      <ul><li>grasp_doneness in target_doneness_range</li><li>fire ≈ off and knob ≈ 0</li><li>turned_off_after_cook</li><li>Food not held</li><li>Food still in pan / bowl</li></ul>
     </div>
     <div>
       <h4>Fails if</h4>
@@ -667,15 +667,15 @@
     <h3><code>measure_ingredient</code> — Measure Ingredient</h3>
     <span class="pill household">household</span>
   </header>
-  <p class="summary">Jar filled in [target±tol] with no spill/overflow, switch off after pour, jar on scale.</p>
+  <p class="summary">Jar pushed under the nozzle and filled in [target±tol] with no spill/overflow; switch off after pour.</p>
   <div class="cols">
     <div>
       <h4>Requires</h4>
-      <ul><li>Fill in target ± tol (≤ overflow_level)</li><li>No spill/overflow</li><li>Switch off after a pour</li><li>Jar placed on the scale</li></ul>
+      <ul><li>Fill in target ± tol (≤ overflow_level)</li><li>No spill/overflow</li><li>Switch off after a pour</li></ul>
     </div>
     <div>
       <h4>Fails if</h4>
-      <ul class="fail"><li>Wrong fill</li><li>Spill</li><li>Switch left on</li><li>Not on scale</li></ul>
+      <ul class="fail"><li>Wrong fill</li><li>Spill (missed jar mouth)</li><li>Switch left on</li></ul>
     </div>
   </div>
   <p class="src">Source: <code>envs/measure_ingredient.py</code> → <code>check_success()</code></p>
@@ -686,15 +686,15 @@
     <h3><code>make_soup</code> — Make Soup</h3>
     <span class="pill household">household</span>
   </header>
-  <p class="summary">Every vegetable piece is inside the pot and the burner has been turned on.</p>
+  <p class="summary">Every vegetable piece is inside the pot (burner starts already on; no stove-turn step).</p>
   <div class="cols">
     <div>
       <h4>Requires</h4>
-      <ul><li>All veggies in pot</li><li>No veg fallen off elsewhere</li><li>stove_on and turned_on_once</li></ul>
+      <ul><li>All veggies in pot</li><li>No veg fallen off elsewhere</li></ul>
     </div>
     <div>
       <h4>Fails if</h4>
-      <ul class="fail"><li>Any veg outside pot</li><li>Stove never turned on</li></ul>
+      <ul class="fail"><li>Any veg outside pot / on the table</li></ul>
     </div>
   </div>
   <p class="src">Source: <code>envs/make_soup.py</code> → <code>check_success()</code></p>
