@@ -42,7 +42,8 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Space             pick selected side's mallet, then strike and return to hover
+  1 / 2 / 3         select left, right, or both arms
+  Space             pick up selected mallet(s) (both together when 3), then strike
 """
 
 
@@ -117,26 +118,33 @@ class ArmGripperHighlight:
         }
 
     def set_selected(self, side):
+        if isinstance(side, str):
+            sides = (side,)
+        else:
+            sides = tuple(side)
         for material, color in self._orig.values():
             try:
                 material.set_base_color(color)
                 material.base_color = color
             except Exception:
                 pass
-        for entity in self._entities[side]:
-            for component in entity.get_components():
-                if not isinstance(component, sapien.render.RenderBodyComponent):
-                    continue
-                for shape in component.render_shapes:
-                    material = shape.material
-                    if id(material) not in self._orig:
-                        self._orig[id(material)] = (material, list(material.base_color))
-                    try:
-                        material.set_base_color_texture(None)
-                        material.set_base_color(_ARM_HIGHLIGHT[side])
-                        material.base_color = _ARM_HIGHLIGHT[side]
-                    except Exception:
-                        pass
+        for s in sides:
+            if s not in self._entities:
+                continue
+            for entity in self._entities[s]:
+                for component in entity.get_components():
+                    if not isinstance(component, sapien.render.RenderBodyComponent):
+                        continue
+                    for shape in component.render_shapes:
+                        material = shape.material
+                        if id(material) not in self._orig:
+                            self._orig[id(material)] = (material, list(material.base_color))
+                        try:
+                            material.set_base_color_texture(None)
+                            material.set_base_color(_ARM_HIGHLIGHT[s])
+                            material.base_color = _ARM_HIGHLIGHT[s]
+                        except Exception:
+                            pass
 
 
 def _arm_for_mole(env, idx, ArmTag):
@@ -333,44 +341,64 @@ class RobotMoleController:
 
     def jab(self):
         self.busy = True
-        selected = require_selected_arms(self.env, exactly_one=True)
+        selected = require_selected_arms(self.env, exactly_one=False)
         if not selected:
             self.busy = False
             return
-        self.selected_arm = selected[0]
-        arm = self._arm()
+        if len(selected) == 1:
+            self.selected_arm = selected[0]
+            self.highlight.set_selected(self.selected_arm)
         self.env.plan_success = True
-        if self.selected_arm not in self.env.hammer_cubes:
-            if self.env.pickup_mallet_to_ready(arm):
-                print(f"Picked up {self.selected_arm} mallet; it is ready at hover height.")
+
+        need_pickup = [s for s in selected if s not in self.env.hammer_cubes]
+        if need_pickup:
+            arms = tuple(self.ArmTag(s) for s in need_pickup)
+            if self.env.pickup_mallets(arms):
+                print(
+                    f"Picked up {', '.join(need_pickup)} mallet(s); "
+                    "ready at hover height."
+                )
             else:
-                action_failed(self.env, (self.selected_arm,), detail="mallet pickup failed")
+                action_failed(self.env, need_pickup, detail="mallet pickup failed")
                 self.busy = False
                 return
-        cube_p = self.env._mallet_head_center(arm)
-        idx = next(
-            (i for i, hole_idx in enumerate(self.env.mole_holes)
-             if not self.env.touched[i]
-             and float(np.linalg.norm(cube_p[:2] - self.env.holes[hole_idx][:2])) < 0.07),
-            None,
-        )
-        if idx is None:
-            action_failed(self.env, (self.selected_arm,), detail="no mole under mallet")
+
+        pressers = []
+        for side in selected:
+            if side not in self.env.hammer_cubes:
+                continue
+            arm = self.ArmTag(side)
+            cube_p = self.env._mallet_head_center(arm)
+            idx = next(
+                (
+                    i
+                    for i, hole_idx in enumerate(self.env.mole_holes)
+                    if not self.env.touched[i]
+                    and float(
+                        np.linalg.norm(cube_p[:2] - self.env.holes[hole_idx][:2])
+                    )
+                    < 0.07
+                ),
+                None,
+            )
+            if idx is not None and not any(i == idx for i, _ in pressers):
+                pressers.append((idx, arm))
+
+        if not pressers:
+            if need_pickup:
+                # Pickup-only Space press when both arms were just armed.
+                self.busy = False
+                return
+            action_failed(self.env, selected, detail="no mole under mallet")
             self.busy = False
             return
-        self.env._mole_state[idx]["freeze_bob"] = True
-        self.env.move(self.env._press_down(arm, mole_idx=idx))
-        self.env._dwell(10)
-        self.env._mole_state[idx]["freeze_bob"] = False
-        if not self.env.touched[idx] and self.env._mole_above_surface(idx):
-            hole = self.env.holes[self.env.mole_holes[idx]]
-            head_p = self.env._mallet_head_center(arm)
-            if float(np.linalg.norm(head_p[:2] - hole[:2])) < 0.08:
-                self.env._mark_touched(idx)
-        self.env.plan_success = True
-        # Every strike returns to the task's safe hover/rest height.
-        self.env.move(self.env._press_up(arm))
-        print(f"Robot jab mole {idx}: {'HIT' if self.env.touched[idx] else 'miss'}.")
+
+        self.env._strike(pressers)
+        hits = ", ".join(
+            f"mole {i} ({'HIT' if self.env.touched[i] else 'miss'})"
+            for i, _ in pressers
+        )
+        print(f"Robot jab: {hits}.")
         self.busy = False
 
     def update(self, window):
@@ -381,6 +409,9 @@ class RobotMoleController:
         if len(selected) == 1 and selected[0] != self.selected_arm:
             self.selected_arm = selected[0]
             self.highlight.set_selected(self.selected_arm)
+        elif len(selected) == 2:
+            # Both arms selected — keep highlight in sync with dual-arm mode.
+            self.highlight.set_selected(selected)
         # Universal viewer controls own arrow/E/Q motion.
         if self._space.poll(window.key_down("space")):
             self.jab()

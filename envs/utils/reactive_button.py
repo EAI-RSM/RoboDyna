@@ -19,6 +19,61 @@ from typing import Sequence
 import numpy as np
 import sapien
 
+from .create_actor import create_box
+
+# Hollow bezel defaults matching ``catch_shelf_marble`` (not a solid under-cube).
+KEY_BASE_WALL_T = 0.006
+KEY_BASE_HALF_Z = 0.004
+KEY_BASE_MARGIN = 0.008
+KEY_BASE_COLOR = (0.28, 0.28, 0.31)
+
+
+def add_key_base_border(
+    scene,
+    cx: float,
+    cy: float,
+    table_z: float,
+    key_half,
+    *,
+    wall_t: float = KEY_BASE_WALL_T,
+    half_z: float = KEY_BASE_HALF_Z,
+    margin: float = KEY_BASE_MARGIN,
+    color=KEY_BASE_COLOR,
+    name_prefix: str = "key_base",
+    is_static: bool = True,
+) -> list:
+    """Hollow dark bezel around a keycap (four walls, open center).
+
+    The keycap should sit on the table (center at ``table_z + key_half[2]``);
+    this rim frames it without a solid black cube underneath.
+    ``scene`` may be a task env or a sapien Scene (same as ``create_box``).
+    """
+    hx = float(key_half[0]) + float(margin)
+    hy = float(key_half[1]) + float(margin)
+    hz = float(half_z)
+    wt = float(wall_t)
+    z = float(table_z) + hz
+    rgba = list(color)
+    walls = [
+        ("x_pos", [cx + hx - 0.5 * wt, cy, z], [0.5 * wt, hy, hz]),
+        ("x_neg", [cx - hx + 0.5 * wt, cy, z], [0.5 * wt, hy, hz]),
+        ("y_pos", [cx, cy + hy - 0.5 * wt, z], [hx - wt, 0.5 * wt, hz]),
+        ("y_neg", [cx, cy - hy + 0.5 * wt, z], [hx - wt, 0.5 * wt, hz]),
+    ]
+    out = []
+    for name, pos, half in walls:
+        out.append(
+            create_box(
+                scene,
+                pose=sapien.Pose(list(pos)),
+                half_size=list(half),
+                color=rgba,
+                is_static=is_static,
+                name=f"{name_prefix}_{name}",
+            )
+        )
+    return out
+
 
 class ReactivePushButtons:
     """Track one or more keycaps with fill_coffee-style spring visuals."""
@@ -206,6 +261,17 @@ class ReactivePushButtons:
             return 0.0
         return float(imp / max(dt, 1e-6))
 
+    def _sides_for_button(self, idx: int) -> tuple[str, ...]:
+        """Arms that may press this key.
+
+        Left/right-labeled keys only accept the matching arm so an approaching
+        opposite gripper (or a glancing contact) cannot actuate them early.
+        """
+        button_id = self.ids[idx]
+        if button_id in ("left", "right"):
+            return (str(button_id),)
+        return ("left", "right")
+
     def _spring_depth_for_button(self, idx: int) -> tuple[float, float | None]:
         """Return (target_depth, best_tip_z) using fill_coffee spring proxy."""
         forced = self._forced_depth[idx]
@@ -218,7 +284,7 @@ class ReactivePushButtons:
         best_tip_z = None
         best_force = 0.0
         contact_force = self._contact_force(idx)
-        for side in ("left", "right"):
+        for side in self._sides_for_button(idx):
             tip = self._tip_xyz(side)
             if tip is None:
                 continue
@@ -226,17 +292,13 @@ class ReactivePushButtons:
                 continue
             tip_z = float(tip[2])
             spring_force = self.force_stiffness * max(0.0, engage_z - tip_z)
+            # Contact only counts when the tip is already over the key (XY lock).
             force = max(spring_force, contact_force)
             depth = float(np.clip(force / self.force_full * self.max_depth, 0.0, self.max_depth))
             if force >= best_force:
                 best_force = force
                 best_depth = depth
                 best_tip_z = tip_z
-        # Contact alone (no XY tip lock) can still depress if fingers are on the key.
-        if best_force <= 0.0 and contact_force > 0.0:
-            best_depth = float(
-                np.clip(contact_force / self.force_full * self.max_depth, 0.0, self.max_depth)
-            )
         return best_depth, best_tip_z
 
     def _apply_pose(self, idx: int, depth: float) -> None:
@@ -284,11 +346,12 @@ class ReactivePushButtons:
         return triggered
 
     def held_mask(self) -> list[bool]:
-        return [d > self.release_depth for d in self.visual_depth]
+        # Require a real press (past trigger depth), not a tiny approach depression.
+        return [d >= self.trigger_depth for d in self.visual_depth]
 
     def is_held(self, button_id) -> bool:
         idx = self.resolve_index(button_id)
-        return bool(self.visual_depth[idx] > self.release_depth)
+        return bool(self.visual_depth[idx] >= self.trigger_depth)
 
     def held_ids(self) -> list:
         return [self.ids[i] for i, on in enumerate(self.held_mask()) if on]

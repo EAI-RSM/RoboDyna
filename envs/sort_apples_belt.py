@@ -316,32 +316,40 @@ class sort_apples_belt(Base_Task):
         # ---- TWO side buttons ----
         btn_y = float(cfg.get("button_y", self.BUTTON_Y_DEFAULT))
         self._button_xy = {"left": (-self.BUTTON_DX, btn_y), "right": (self.BUTTON_DX, btn_y)}
-        self._button_top_z = self._z0 + 0.06
+        btn_half = [0.022, 0.022, 0.015]
+        self._button_top_z = self._z0 + 2.0 * float(btn_half[2])
         self.buttons = {}
         self._button_home = {}
         self._button_held = {"left": False, "right": False}
         self._reactive_buttons = None
         for side, (bx, by) in self._button_xy.items():
-            create_box(
-                self.scene, sapien.Pose([bx, by, self._z0 + 0.015]),
-                half_size=[0.032, 0.032, 0.015], color=[0.10, 0.10, 0.12],
-                is_static=True, name=f"button_base_{side}",
+            add_key_base_border(
+                self.scene,
+                float(bx),
+                float(by),
+                float(self._z0),
+                btn_half,
+                color=[0.10, 0.10, 0.12],
+                name_prefix=f"button_base_{side}",
             )
             btn_color = self.RED if self._side_color[side] == self.COLOR_RED else self.GREEN
-            home = sapien.Pose([bx, by, self._z0 + 0.045])
+            home = sapien.Pose([bx, by, self._z0 + float(btn_half[2])])
             self._button_home[side] = home
             self.buttons[side] = create_box(
                 self.scene, home,
-                half_size=[0.022, 0.022, 0.015], color=btn_color,
+                half_size=list(btn_half), color=btn_color,
                 is_static=True, name=f"button_{side}",
             )
         self._reactive_buttons = ReactivePushButtons(
             self,
             actors=[self.buttons[s] for s in ("left", "right")],
             home_poses=[self._button_home[s] for s in ("left", "right")],
-            max_depth=0.015,
+            max_depth=float(btn_half[2]),
             ids=["left", "right"],
             xy_tol=float(self.PRESS_XY),
+            # Only engage once the tip is near the keycap (not ~5 cm above).
+            force_engage_slack=0.012,
+            trigger_depth_frac=0.45,
         )
         self._reactive_buttons.set_tops_z([self._button_top_z, self._button_top_z])
 
