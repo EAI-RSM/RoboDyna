@@ -69,7 +69,7 @@ task_args:
     sponge_grasp_open: 1.0
     sponge_grasp_close: 0.25
     # Lower = faster spread; per-seed rate also jitters by spill_speed_jitter.
-    spill_steps: 11000
+    spill_steps: 3667
     spill_speed_jitter: 0.30         # ±30% of configured spill rate
     reach_laptop_level: 0.92
     clean_tol: 0.08

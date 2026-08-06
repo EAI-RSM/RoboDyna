@@ -42,7 +42,7 @@ class clean_table(Base_Task):
     SPILL_COLOR = [0.52, 0.34, 0.18, 0.92]
     SPONGE_COLOR = (0.95, 0.82, 0.22)
 
-    SPILL_STEPS_DEFAULT = 7500
+    SPILL_STEPS_DEFAULT = 2500  # ~3x faster than the previous 7500 default
     REACH_LAPTOP_LEVEL_DEFAULT = 0.88
     CLEAN_TOL_DEFAULT = 0.08  # fraction of spawned spots that may remain dirty
     POST_TIP_WAIT_DEFAULT = 60
@@ -393,9 +393,10 @@ class clean_table(Base_Task):
         # Local Y is up when upright.
         self.mug_height = float(world[1])
         self.mug_half_height = 0.5 * self.mug_height
+        # Outer body radius (bbox includes the handle, so use a fraction of max XY).
         self.mug_radius = 0.42 * float(max(world[0], world[2]))
-        # Keep well inside the walls so the liquid disk does not poke through.
-        self.mug_inner_r = 0.20 * float(max(world[0], world[2]))
+        # Inner cavity ≈ outer minus thin ceramic wall (~2–3 mm).
+        self.mug_inner_r = max(0.012, float(self.mug_radius) - 0.0025)
         self.cup_height = self.mug_height
         self.cup_radius = self.mug_radius
         self.cup_inner_r = self.mug_inner_r
@@ -409,17 +410,25 @@ class clean_table(Base_Task):
             self._mug_center_offset = np.zeros(3, dtype=float)
 
     def _spawn_coffee_in_mug(self):
-        """Brown disk centered inside the upright mug cavity."""
+        """Coffee surface disk sized to the mug opening, near fill level.
+
+        PartNet ``039_mug`` is a solid mesh, so only a thin disk at the
+        fill height is visible looking into the cavity — a tall column would
+        clip through the walls.
+        """
         self._coffee_entity = self._remove_entity(self._coffee_entity)
-        half_h = 0.0045
         off = np.asarray(
             getattr(self, "_mug_center_offset", np.zeros(3)), dtype=float
         )
-        # XY from mesh center; Z low in the cup (above the floor, below the rim).
+        # Match the inside opening; tiny inset so the mesh doesn't poke the rim.
+        inner_r = float(max(0.010, 0.97 * self.mug_inner_r))
+        # Surface high in the cup so it reads as filled (~78% full).
+        fill_frac = float(self._cfg.get("coffee_fill_frac", 0.78))
+        fill_frac = float(np.clip(fill_frac, 0.35, 0.92))
+        half_h = 0.0035
         cx = float(self.mug_xy[0] + off[0])
         cy = float(self.mug_xy[1] + off[1])
-        z = self.table_top + 0.010 + half_h
-        inner_r = float(min(self.mug_inner_r, 0.55 * self.mug_radius))
+        z = self.table_top + fill_frac * float(self.mug_height)
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
         mat = sapien.render.RenderMaterial(base_color=list(self.COFFEE_COLOR))
