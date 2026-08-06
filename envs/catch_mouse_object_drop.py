@@ -6,8 +6,10 @@ Lower: tissue (moved off the table) and a couple of random office props. The
 robot grasps a custom open basket at the table midline (x≈0) and pick-and-places
 it under the shelf lip. A kinematic mouse then runs a pre-planned, obstacle-free
 route, turns in behind exactly one target, and physically shoves it forward
-until it goes over the front edge. Mouse speed is sampled from mean×0.7 to
-mean×1.56 (slow −30%, fast side +20% above the old +30% cap).
+until it goes over the front edge. If a shove leaves the object on the shelf,
+the mouse backs up and pushes again (up to a few retries). Mouse speed is
+sampled from mean×0.7 to mean×1.56 (slow −30%, fast side +20% above the old
++30% cap).
 
 Everything after the basket is placed is simulated, not animated: shelf objects
 are free dynamic bodies the mouse can shove, the fall and the landing come out
@@ -45,8 +47,9 @@ class catch_mouse_object_drop(Office_base_task):
         # Realistic sizes: cup ~7 cm, wineglass ~19 cm, beer ~23 cm, wine ~24 cm
         ("021_cup", CUP_IDS, 0.80, True, "cup", "twin"),
         ("088_wineglass", WINEGLASS_IDS, 0.75, False, "wineglass", "decor"),
-        ("255_beer_bottle", None, 1.0, True, "beer_bottle", "decor"),
-        ("265_wine_bottle", None, 0.85, True, "wine_bottle", "decor"),
+        # Bottle smults are capped at spawn to fit inside the catch basket.
+        ("255_beer_bottle", None, 0.85, True, "beer_bottle", "decor"),
+        ("265_wine_bottle", None, 0.70, True, "wine_bottle", "decor"),
     ]
 
     PLANT_SCALE = 0.90          # doubled vs prior 0.45
@@ -60,6 +63,9 @@ class catch_mouse_object_drop(Office_base_task):
     MOUSE_HALF_XY = 0.020       # mouse body clearance for route planning
     MOUSE_STANDOFF = 0.012      # gap behind the target before the shove begins
     MOUSE_GRID_RES = 0.01       # route search resolution on the shelf plate
+    # If a shove leaves the target on the shelf, back up and push again.
+    MOUSE_SHOVE_RETRIES = 4     # total shove attempts (1 first + up to 3 retries)
+    MOUSE_SHOVE_OBSERVE_STEPS = 45  # wait after path end before deciding to retry
     # Clear gap between fragile footprints so the mouse can scurry between them.
     OBJ_X_GAP_MIN = 0.06
     SETTLE_STEPS = 420          # sim steps allowed for the object to come to rest
@@ -164,6 +170,8 @@ class catch_mouse_object_drop(Office_base_task):
         self._mouse_z = 0.0
         self._mouse_heading = 0.0
         self._allow_shove = False
+        self._mouse_shove_attempts = 0
+        self._shove_observe = 0
         self._mouse_obstacles = []
         self._decor_obstacles = []
         self._landing = np.zeros(3)
@@ -400,6 +408,35 @@ class catch_mouse_object_drop(Office_base_task):
         half_x = 0.5 * float(size[0])
         half_y = 0.5 * float(size[2])  # footprint along shelf depth after upright
         return height, max(0.02, radius), half_x, half_y
+
+    def _basket_inner_half_xy(self) -> tuple[float, float]:
+        """Cushion-pad half-size (same clearance as the catch volume)."""
+        hx, hy = [float(v) for v in getattr(self, "basket_half_xy", self.BASKET_HALF_XY_DEFAULT)]
+        inset = float(self.BASKET_WALL) + float(self.CUSHION_INSET)
+        return max(0.02, hx - inset), max(0.02, hy - inset)
+
+    def _scale_object_to_basket(
+        self, modelname, model_id, scale_mult: float, label: str,
+    ) -> float:
+        """Cap bottle scale so the mesh fits inside the catch basket when tipped.
+
+        Cups / glasses are left alone. Bottles are limited by the cushion pad:
+        length ≤ long inner side, diameter ≤ short inner side (with margin).
+        """
+        smult = float(scale_mult)
+        if "bottle" not in str(label):
+            return smult
+        h1, r1, _, _ = self._model_size(modelname, int(model_id), 1.0)
+        diam1 = 2.0 * float(r1)
+        ihx, ihy = self._basket_inner_half_xy()
+        margin = 0.90
+        max_len = 2.0 * max(ihx, ihy) * margin
+        max_diam = 2.0 * min(ihx, ihy) * margin
+        if h1 > 1e-6:
+            smult = min(smult, max_len / h1)
+        if diam1 > 1e-6:
+            smult = min(smult, max_diam / diam1)
+        return float(max(0.25, smult))
 
     def _footprint_ok(self, occ, cx, cy, hx, hy, pad=0.01):
         box = (cx - hx - pad, cy - hy - pad, cx + hx + pad, cy + hy + pad)
@@ -887,6 +924,7 @@ class catch_mouse_object_drop(Office_base_task):
             model_id = (
                 int(np.random.choice(id_pool)) if id_pool is not None else 0
             )
+            smult = self._scale_object_to_basket(model, model_id, smult, label)
             height, radius, hx, hy = self._model_size(model, model_id, smult)
             hx = max(hx, 0.028) + 0.012
             hy = max(hy, 0.028) + 0.012
@@ -1108,6 +1146,8 @@ class catch_mouse_object_drop(Office_base_task):
         self._holding_basket = False
         self._target_live = False
         self._allow_shove = False
+        self._mouse_shove_attempts = 0
+        self._shove_observe = 0
         self._loaded = True
 
     def _create_cushion_basket(self, pose: sapien.Pose) -> Actor:
@@ -1304,11 +1344,103 @@ class catch_mouse_object_drop(Office_base_task):
             self, "_allow_shove", True
         ):
             self._mouse_s = self._mouse_path_len
+            if self._mouse_state != "done":
+                self._mouse_shove_attempts = int(
+                    getattr(self, "_mouse_shove_attempts", 0)
+                ) + 1
+                self._shove_observe = 0
             self._mouse_state = "done"
         p, heading = self._mouse_point_at(self._mouse_s)
         self._set_mouse_pose(
             [float(p[0]), float(p[1]), self._mouse_z], heading=heading,
         )
+
+    def _target_still_on_shelf(self) -> bool:
+        """True when the knock target never left the shelf plate."""
+        if self.target is None:
+            return False
+        if self._caught or self._fell_on_table:
+            return False
+        if self._obj_state in ("falling", "caught", "fallen"):
+            return False
+        bottom = self._target_aabb_bottom()
+        if bottom < float(self.shelf_z_surf) - 0.025:
+            return False
+        p = np.asarray(self.target.get_pose().p, dtype=np.float64)
+        # Already past the front lip — treat as falling / off-shelf.
+        if float(p[1]) < float(self.shelf_front_y) - 0.015:
+            return False
+        return True
+
+    def _retry_mouse_shove(self) -> bool:
+        """Back up behind the live target pose and shove toward the lip again."""
+        if self.target is None:
+            return False
+        attempts = int(getattr(self, "_mouse_shove_attempts", 0))
+        max_tries = int(
+            getattr(self, "_cfg", {}).get(
+                "mouse_shove_retries", self.MOUSE_SHOVE_RETRIES
+            )
+        )
+        if attempts >= max_tries:
+            return False
+
+        p = np.asarray(self.target.get_pose().p, dtype=np.float64)
+        tx, ty = float(p[0]), float(p[1])
+        hy = float(self.target_info.get("hy", self.target_radius))
+        mh = float(self.MOUSE_HALF_XY)
+        y_hi = float(self.shelf_plate_ylim[1] - mh - 0.010)
+        behind_y = float(
+            min(ty + hy + mh + float(self.MOUSE_STANDOFF) + 0.020, y_hi)
+        )
+        # Push farther past the lip on retries — first shove often stops short.
+        push_y1 = float(self.shelf_front_y - 0.035)
+        mx = float(self.mouse_pos[0])
+        my = float(self.mouse_pos[1])
+        route = [
+            np.array([mx, my], dtype=np.float64),
+            np.array([mx, behind_y], dtype=np.float64),
+            np.array([tx, behind_y], dtype=np.float64),
+        ]
+        self._set_mouse_path(route, push_y1, float(self._mouse_z))
+        # Basket is already down — do not re-gate at the standoff.
+        self._mouse_shove_s = 0.0
+        self._allow_shove = True
+        self._mouse_state = "running"
+        self._shove_observe = 0
+        # Slightly harder second/third contact.
+        base = float(getattr(self, "mouse_speed_mean", self.mouse_speed))
+        self.mouse_speed = float(min(0.22, max(float(self.mouse_speed), base) * 1.35))
+        # Kill residual object velocity so the next contact is a clean push.
+        rigid = self._get_rigid(self.target)
+        if rigid is not None:
+            try:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+            except Exception:
+                pass
+        return True
+
+    def _maybe_retry_mouse_shove(self) -> None:
+        """After a finished shove, retry if the object is still on the shelf."""
+        if self._mouse_state != "done":
+            return
+        if not getattr(self, "_allow_shove", True):
+            return
+        if self._caught or self._fell_on_table:
+            return
+        if not self._target_still_on_shelf():
+            return
+        observe = int(
+            getattr(self, "_cfg", {}).get(
+                "mouse_shove_observe_steps", self.MOUSE_SHOVE_OBSERVE_STEPS
+            )
+        )
+        self._shove_observe = int(getattr(self, "_shove_observe", 0)) + 1
+        if self._shove_observe < max(1, observe):
+            return
+        self._shove_observe = 0
+        self._retry_mouse_shove()
 
     def _cushion_top_z(self):
         if self.basket is None:
@@ -1437,6 +1569,7 @@ class catch_mouse_object_drop(Office_base_task):
             self._allow_shove = True
             self._basket_placed = True
         self._advance_mouse()
+        self._maybe_retry_mouse_shove()
         self._update_catch_state()
         # Pin non-targets only while the shelf is still kinematic. After
         # _activate_target they are free dynamic bodies and must not be teleported.
@@ -1596,8 +1729,25 @@ class catch_mouse_object_drop(Office_base_task):
         dt = max(float(self.scene.get_timestep()), 1e-4)
         remain = max(0.0, self._mouse_path_len - float(self._mouse_s))
         run_steps = int(remain / max(self.mouse_speed, 1e-4) / dt) + 80
+        # Budget for back-up / re-shove passes if the first contact stalls.
+        retry_budget = int(self.MOUSE_SHOVE_RETRIES) * (
+            int(220 / max(self.mouse_speed, 1e-4) / dt) + int(self.MOUSE_SHOVE_OBSERVE_STEPS)
+        )
+        max_wait = run_steps + retry_budget
         waited = 0
-        while self._mouse_state == "running" and waited < run_steps:
+        while waited < max_wait:
+            if self._caught or self._fell_on_table:
+                break
+            if self._mouse_state == "done" and not self._target_still_on_shelf():
+                break
+            if (
+                self._mouse_state == "done"
+                and int(getattr(self, "_mouse_shove_attempts", 0))
+                >= int(self.MOUSE_SHOVE_RETRIES)
+            ):
+                break
+            if self._mouse_state not in ("running", "done"):
+                break
             self._dwell(1)
             waited += 1
 
@@ -1651,6 +1801,7 @@ class catch_mouse_object_drop(Office_base_task):
         obs["catch_mouse_object_drop"] = {
             "obj_state": str(self._obj_state),
             "mouse_state": str(self._mouse_state),
+            "mouse_shove_attempts": int(getattr(self, "_mouse_shove_attempts", 0)),
             "fell_on_table": bool(self._fell_on_table),
             "caught": bool(self._caught),
             "basket_placed": bool(self._basket_placed),

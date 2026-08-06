@@ -10,13 +10,13 @@ KEYBOARD = """
   Arrow keys        move held food in XY
   E / Q             move held food in Z
 
-  Turn the stove by closing on the cooktop knob and twisting (no keyboard snap).
+  Stove starts on. Shut it off by closing on the cooktop knob and twisting.
 """
 ROBOT = """
   Space             grasp/release food
-  C                 gripper grasp-and-twist cooktop knob
+  C                 gripper grasp-and-twist cooktop knob (shut off)
 
-  Or close on the knob and twist with teleop.
+  Stove starts on. Or close on the knob and twist with teleop.
 """
 
 if __name__ == "__main__":

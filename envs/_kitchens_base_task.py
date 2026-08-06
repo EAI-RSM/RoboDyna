@@ -47,10 +47,14 @@ class KitchenS_base_task(Base_Task):
     # 0° = off; −90° (CCW / left from above) = on.
     KNOB_OFF_ANGLE = 0.0
     KNOB_ON_ANGLE = -0.5 * np.pi
-    # Straight-down approach onto the vertical knob (tasks share this path).
+    # Approach the top-facing knob from +X/−Y, then settle overhead.
+    # A pure vertical descent from the right-apron park often fails IK when the
+    # cooktop is centered (knob near x≈0.16); the lateral staging keeps the
+    # wrist out of that singularity / collision corridor.
     TOP_KNOB_APPROACH_PATH = (
-        (0.00, 0.00, 0.22),
-        (0.00, 0.00, 0.14),
+        (0.12, -0.10, 0.28),
+        (0.08, -0.06, 0.18),
+        (0.03, -0.02, 0.12),
         (0.00, 0.00, 0.08),
     )
     KNOB_APPROACH_PATH = TOP_KNOB_APPROACH_PATH
@@ -1451,11 +1455,17 @@ class KitchenS_base_task(Base_Task):
         after_idle: int = 8,
         commit_stove: bool | None = None,
         retry_closer: bool = False,
+        direct: bool = False,
+        retreat: bool = True,
     ) -> float:
         """Contact-driven grasp-and-twist shared by all countertop stove tasks.
 
         Closes the jaws on the free revolute knob, waits for contacts, twists the
         wrist so friction torques the cap, then parks at the reached angle.
+
+        ``direct=True`` skips staging waypoints and goes straight to the grasp
+        pose (interactive shutoff when the arm is already near the knob).
+        ``retreat=False`` opens the jaws in place instead of backing out.
 
         Returns the joint angle after the turn. Burner state always follows the
         *physical* knob angle from contact — never a hard qpos snap and never a
@@ -1475,34 +1485,74 @@ class KitchenS_base_task(Base_Task):
                 start_angle = float(self.KNOB_OFF_ANGLE)
         start_angle = float(start_angle)
         target_angle = float(target_angle)
-        path = (
-            self.KNOB_APPROACH_PATH
-            if approach
-            else self.KNOB_APPROACH_PATH[-1:]
-        )
+        full_path = tuple(self.KNOB_APPROACH_PATH)
+        # Shutoff used to drop only the last (lowest) waypoint; from an apron
+        # park that single hop often fails. Keep at least two staging poses.
+        if direct:
+            path = ()
+        elif approach:
+            path = full_path
+        else:
+            path = full_path[-2:] if len(full_path) >= 2 else full_path
         standoff = float(
             getattr(self, "KNOB_GRASP_STANDOFF", self.KNOB_GRASP_STANDOFF)
         )
 
+        def _approach(waypoints) -> bool:
+            self.plan_success = True
+            self.move(self.open_gripper(arm))
+            for offset in waypoints:
+                if not self.plan_success:
+                    return False
+                self.plan_success = True
+                self.move(
+                    self.move_to_pose(arm, self._knob_pose(offset, start_angle))
+                )
+            if not self.plan_success:
+                return False
+            self.plan_success = True
+            self.move(
+                self.move_to_pose(arm, self._knob_turn_pose(standoff, start_angle))
+            )
+            return bool(self.plan_success)
+
         self._ignore_knob = True
-        self.move(self.open_gripper(arm))
-        for offset in path:
-            self.move(self.move_to_pose(arm, self._knob_pose(offset, start_angle)))
-        self.move(
-            self.move_to_pose(arm, self._knob_turn_pose(standoff, start_angle))
-        )
+        used_path = path
+        approached = _approach(path)
+        if not approached and not direct:
+            # Retry full lateral path after a short lift — recovers center-stove
+            # layouts where the right arm is parked under the knob column.
+            self.plan_success = True
+            try:
+                self.move(
+                    self.move_by_displacement(arm_tag=arm, z=0.10, move_axis="world")
+                )
+            except Exception:
+                pass
+            used_path = full_path
+            approached = _approach(full_path)
+
+        if not approached:
+            self._ignore_knob = False
+            self._prev_knob_pressed = False
+            self.plan_success = False
+            return float(self._get_knob_joint_angle())
+
         if retry_closer and hasattr(self, "_tcp_near_knob"):
             try:
                 near = bool(self._tcp_near_knob(0.055))
             except TypeError:
                 near = bool(self._tcp_near_knob())
             if not near:
+                self.plan_success = True
                 self.move(
                     self.move_to_pose(arm, self._knob_turn_pose(0.0, start_angle))
                 )
+        self.plan_success = True
         self.move(self.close_gripper(arm))
         self._begin_knob_turn()
         self._idle_steps(int(settle_steps))
+        self.plan_success = True
         self.move(
             self.move_to_pose(arm, self._knob_turn_pose(standoff, target_angle))
         )
@@ -1526,11 +1576,16 @@ class KitchenS_base_task(Base_Task):
         if after_idle:
             self._idle_steps(int(after_idle))
 
+        self.plan_success = True
         self.move(self.open_gripper(arm))
-        for offset in reversed(path):
-            self.move(
-                self.move_to_pose(arm, self._knob_pose(offset, target_angle))
-            )
+        if retreat:
+            for offset in reversed(used_path):
+                self.plan_success = True
+                self.move(
+                    self.move_to_pose(arm, self._knob_pose(offset, target_angle))
+                )
+        # Retreat failures should not erase a successful knob turn.
+        self.plan_success = True
         self._ignore_knob = False
         self._prev_knob_pressed = False
         return reached

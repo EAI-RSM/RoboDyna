@@ -1,7 +1,8 @@
 """Cook-food task with an on-table pie timer that tracks cooking progress.
 
-Same board → pan → cook → shut-off flow as ``cook_food`` (no plating), plus a
-white circular disc that fills clockwise section-by-section with doneness:
+Same board → pan → shut-off flow as ``cook_food`` (stove starts already on; no
+plating), plus a white circular disc that fills clockwise section-by-section
+with doneness:
 
   * green  — doneness 0 → lower success threshold (full pie = lower bound)
   * yellow — resets and fills until the upper success threshold

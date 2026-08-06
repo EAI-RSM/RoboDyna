@@ -10,13 +10,13 @@ KEYBOARD = """
   Arrow keys        move held food in XY
   E / Q             move held food in Z
 
-  Turn the stove by closing on the cooktop knob and twisting; the pie timer follows the stove.
+  Stove starts on. Shut it off by twisting the knob; the pie timer follows the stove.
 """
 ROBOT = """
   Space             grasp/release food
-  C                 gripper grasp-and-twist cooktop knob
+  C                 gripper grasp-and-twist cooktop knob (shut off)
 
-  Timer runs while the stove is on; or close on the knob and twist with teleop.
+  Stove starts on; timer runs while cooking. Or twist the knob with teleop.
 """
 
 if __name__ == "__main__":

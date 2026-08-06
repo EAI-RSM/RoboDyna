@@ -76,7 +76,7 @@ task_args:
   cook_food:
     scene_id: 0
     # food_type: meat | sausage | onion_half | random
-    # Food starts on a chopping board; expert places into pan, cooks via knob, then shuts off.
+    # Stove starts on. Expert places food into pan, then shuts the knob off.
     food_type: random
     randomize_layout: true
     stove_pose: random          # current | center | random
@@ -88,10 +88,9 @@ task_args:
 
     cook_steps: 1538            # ~30% faster than prior 2000; doneness 0→1 while stove on
     cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
-    # Top-down knob shutoff is a longer reach than the old front knobs — leave
-    # more lead so doneness doesn't race past the target during the twist off.
-    shutoff_lead: 0.22
-    cook_intensity: 0.70        # expert knob turn as fraction of 180°
+    # Doneness freezes before shutoff; keep lead small so the latch stays in-band.
+    shutoff_lead: 0.04
+    cook_intensity: 0.70        # initial knob-on angle as fraction of 180°
     # Same cooktop scale as the other KitchenS stove tasks.
     range_scale_mult: 1.0
     pan_scale: 1.0
@@ -104,7 +103,7 @@ task_args:
     board_scale_mult: 0.0975
     knob_contact_radius: 0.06
   cook_food_timer:
-    # Same as cook_food + pie timer that runs only while the stove is on.
+    # Same as cook_food (stove starts on) + pie timer while cooking.
     scene_id: 0
     food_type: random
     randomize_layout: true
@@ -116,7 +115,7 @@ task_args:
     plate_y: -0.12
     cook_steps: 1538
     cook_speed_jitter: 0.20
-    shutoff_lead: 0.22
+    shutoff_lead: 0.04
     cook_intensity: 0.70
     range_scale_mult: 1.0
     pan_scale: 1.0

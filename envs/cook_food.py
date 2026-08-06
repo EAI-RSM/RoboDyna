@@ -1,8 +1,8 @@
-"""Cook food on a KitchenS stove (board → pan → cook → shut off).
+"""Cook food on a KitchenS stove (board → pan → shut off).
 
-KitchenS scene (no sink/tap/microwave): stove shifted left. Raw food starts on a
-chopping board; the robot puts it in the pan, turns the stove knobs up to 180°
-(intensity), waits for a food-specific doneness, then turns the knob back to zero.
+KitchenS scene (no sink/tap/microwave). The stove starts already on (knob turned,
+fire lit). Raw food starts on a chopping board; the robot puts it in the pan,
+waits for a food-specific doneness, then turns the knob back to zero.
 Success is adequate doneness after the stove is off (food stays in the pan). A
 decorative plate of raw meat sits to the right of the stove.
 
@@ -29,14 +29,15 @@ from .utils.create_actor import create_actor, create_visual_box, UnStableError
 
 
 class cook_food(KitchenS_base_task):
-    """Cook meat, sausage, or onion on the KitchenS range (no plating step)."""
+    """Drop food into a pre-lit pan, then shut the stove off at target doneness."""
 
     COOK_STEPS_DEFAULT: ClassVar[int] = 1538  # ~30% faster than prior 2000
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
     COOK_STEPS_ONION_DEFAULT: ClassVar[int] = 846  # ~30% faster than prior 1100
     KNOB_CONTACT_RADIUS_DEFAULT: ClassVar[float] = 0.06
     EE_TO_TCP: ClassVar[float] = 0.12
-    # Straight-down approach onto the top-facing cooktop knob.
+    # Lateral then overhead approach (shared KitchenS path — straight-down
+    # from the right-apron park fails on centered cooktops).
     KNOB_APPROACH_PATH: ClassVar[tuple] = KitchenS_base_task.TOP_KNOB_APPROACH_PATH
     KNOB_GRASP_STANDOFF: ClassVar[float] = 0.012
     # Magnitude of the left turn: 0 = off (tick up), −π/2 = full fire (tick left).
@@ -565,7 +566,9 @@ class cook_food(KitchenS_base_task):
                 self._food_shapes = list(c.render_shapes)
         self._prime_food_surface()
         self._set_food_color(0.0)
-        self._set_knob_angle(0.0)
+        # Stove starts lit — expert only places food, then shuts the knob off.
+        on_angle = -float(self.cook_intensity) * self.KNOB_MAX_ANGLE
+        self._set_knob_angle(on_angle)
         if self.food_type == "onion_half":
             # Re-seat with the same jitter (don't snap back to board center).
             self._seat_food_on_board(dx=food_dx, dy=food_dy)
@@ -833,28 +836,6 @@ class cook_food(KitchenS_base_task):
         self._food_locked = True
         self._food_rel = None
 
-    def _seat_food_in_pan(self, max_d: float = 0.18) -> bool:
-        """Soft-seat meat into the bowl when a right-front place lands short."""
-        if self.food is None or getattr(self, "skillet", None) is None:
-            return False
-        bowl = np.asarray(self.skillet.get_functional_point(0), dtype=float)
-        food = np.asarray(self.food.get_pose().p, dtype=float)
-        if float(np.linalg.norm(food[:2] - bowl[:2])) > float(max_d):
-            return False
-        z = float(bowl[2]) + 0.02
-        q = list(self.food.get_pose().q)
-        self.food.actor.set_pose(
-            sapien.Pose([float(bowl[0]), float(bowl[1]), z], q)
-        )
-        if self._food_rigid is not None:
-            try:
-                self._food_rigid.set_linear_velocity(np.zeros(3))
-                self._food_rigid.set_angular_velocity(np.zeros(3))
-            except Exception:
-                pass
-        self._idle_steps(8)
-        return bool(self._food_in_bowl(require_released=False))
-
     def _unlock_food(self) -> None:
         self._food_locked = False
         self._food_rel = None
@@ -1105,9 +1086,13 @@ class cook_food(KitchenS_base_task):
             pass
         if str(arm) == "right":
             rx, _ry = getattr(self, "range_xy", self.RANGE_REL_XY)
+            kx = float(getattr(self, "knob_xy", (rx, 0.0))[0])
             ee = np.array(self.get_arm_pose(str(arm)), dtype=float)
-            # High/right over the front apron — clear of the left-arm food corridor.
-            park = [float(rx) + 0.16, -0.30, max(float(ee[2]), 0.95), *list(ee[3:7])]
+            # Stay clear of the knob's vertical approach column (center stove
+            # puts the knob near x≈0.16 — parking on that line breaks the
+            # subsequent top-down descent).
+            park_x = max(float(rx) + 0.22, kx + 0.14, 0.34)
+            park = [park_x, -0.30, max(float(ee[2]), 1.05), *list(ee[3:7])]
             self.plan_success = True
             try:
                 self.move(self.move_to_pose(arm, park))
@@ -1115,7 +1100,7 @@ class cook_food(KitchenS_base_task):
                 self.plan_success = True
                 self.move(
                     self.move_by_displacement(
-                        arm_tag=arm, x=0.10, y=-0.08, move_axis="world"
+                        arm_tag=arm, x=0.12, y=-0.08, move_axis="world"
                     )
                 )
         else:
@@ -1213,21 +1198,13 @@ class cook_food(KitchenS_base_task):
         ]
 
     def _pan_place_target(self) -> list[float]:
+        """Hover/release target above the bowl (physics drop only — no teleport)."""
         bowl = np.asarray(self.skillet.get_functional_point(0), dtype=float)
-        # Release just above the bowl floor so gravity drops the food in.
-        # Onion: dead-center, low release — let physics settle (no teleport).
-        if getattr(self, "food_type", "") == "onion_half":
-            # Low hover over bowl center — place gently, then open (no teleport).
-            return [
-                float(bowl[0]),
-                float(bowl[1]),
-                float(bowl[2]) + 0.010,
-                *self.FOOD_QPOS,
-            ]
+        z_off = 0.010 if getattr(self, "food_type", "") == "onion_half" else 0.012
         return [
-            float(bowl[0]) + self.place_dx,
-            float(bowl[1]) + self.place_dy,
-            float(bowl[2]) + 0.012,
+            float(bowl[0]) + float(getattr(self, "place_dx", 0.0)),
+            float(bowl[1]) + float(getattr(self, "place_dy", 0.0)),
+            float(bowl[2]) + z_off,
             *self.FOOD_QPOS,
         ]
 
@@ -1477,7 +1454,7 @@ class cook_food(KitchenS_base_task):
             self._pause(2 if onion else 8)
 
     def _place_food_in_pan(self) -> None:
-        """Board → pan: grasp, drop into bowl center, retreat. No teleport seat.
+        """Board → pan: grasp, open over the bowl, physics drop, retreat.
 
         Cooking must not start until the food is released and the food arm is clear.
         """
@@ -1558,22 +1535,8 @@ class cook_food(KitchenS_base_task):
         if self._food_held():
             raise UnStableError("cook_food: still holding food after pan place — skip")
         if not self._food_in_bowl():
-            # Right-front + inward handle blocks left-arm bowl entry; soft-seat
-            # near-miss meat (onion must land physically).
-            food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
-            bowl_xy = np.asarray(self.skillet.get_functional_point(0)[:2], dtype=float)
-            d_bowl = float(np.linalg.norm(food_xy - bowl_xy))
-            if (
-                self.food_type != "onion_half"
-                and getattr(self, "burner_name", "") == "right_front"
-                and d_bowl < 0.20
-                and self._seat_food_in_pan(max_d=0.20)
-            ):
-                self._dbg(f"pan_soft_seat d={d_bowl:.3f}")
-            else:
-                raise UnStableError("cook_food: food not in pan after place — skip")
+            raise UnStableError("cook_food: food not in pan after place — skip")
 
-        # Onion: settle under gravity only — never teleport/re-seat in the pan.
         if self.food_type == "onion_half":
             self._wait_food_dropped_in_bowl(steps=12)
             if not self._food_in_bowl():
@@ -1586,7 +1549,7 @@ class cook_food(KitchenS_base_task):
                 pass
             self._pause(4)
 
-        # --- 3) Confirm in pan, THEN retreat (food stays at drop pose) ---
+        # --- 3) Confirm physical drop, then retreat (no teleport / soft-seat) ---
         if bool(self._cfg.get("lock_food_in_pan", True)):
             self._lock_food_to_pan()
         self._food_in_pan = True
@@ -1594,6 +1557,8 @@ class cook_food(KitchenS_base_task):
         self._pause(4 if self.food_type == "onion_half" else 10)
         if self._food_held():
             raise UnStableError("cook_food: re-grasped food while retreating — skip")
+        if not self._food_in_bowl(require_released=True):
+            raise UnStableError("cook_food: food left pan after retreat — skip")
         self.plan_success = True
         self._dbg("food_in_pan")
 
@@ -1667,8 +1632,7 @@ class cook_food(KitchenS_base_task):
 
     # ----------------------------------------------------------- policy
     def play_once(self) -> dict[str, Any]:
-        # Strict sequence: board → drop in pan → cook → shut off (no plating).
-        # Right arm stays parked until food is released; left arm parks before knob.
+        # Stove is already on. Sequence: board → drop in pan → wait → shut off.
         # Onion demos must stay under ~60s video — keep pauses short.
         onion = self.food_type == "onion_half"
         self._pause(4 if onion else 20)
@@ -1689,26 +1653,28 @@ class cook_food(KitchenS_base_task):
                 self.plan_success = True
                 self.move(self.open_gripper(self.food_arm))
 
-        # 1) Board → pan (grasp, drop, retreat)
-        self._place_food_in_pan()
+        # 1) Board → pan (grasp, drop, retreat). Fire is already lit, but hold
+        # doneness until the food is seated so place time doesn't overcook it.
+        self._cook_hold = True
+        try:
+            self._place_food_in_pan()
+        finally:
+            self._cook_hold = False
         if not self._food_in_pan or self._food_held() or not self._food_in_bowl():
             raise UnStableError("cook_food: refuse to cook — food not seated in pan")
-        self._pause(2 if onion else 14)
-
-        # 2) Cook via knob — food must already be released in the pan
-        target_on = -float(self.cook_intensity) * self.KNOB_MAX_ANGLE
-        self._set_knob_to(target_on, approach=True)
-        self._dbg("stove_on")
         self._pause(2 if onion else 10)
 
-        # Wait to target doneness while the burner stays lit.
-        self._idle_until_doneness(self.target_doneness)
-        # Freeze doneness for the shutoff approach, then latch after the stove is off.
+        # 2) Cook on the pre-lit burner, then twist the knob off.
+        # Small lead only — doneness freezes for the shutoff approach.
+        lo, _hi = self.target_doneness_range
+        lead = min(0.06, float(getattr(self, "shutoff_lead", 0.0)))
+        shut_at = max(float(lo), float(self.target_doneness) - lead)
+        self._idle_until_doneness(shut_at)
         self._cook_phase_done = True
-        self._pause(2 if onion else 12)
+        self._pause(2 if onion else 8)
 
-        # Fire follows the knob twist off; never kill the ring early in code.
-        self._set_knob_to(0.0, approach=False)
+        # Full approach — arm has not touched the knob yet this episode.
+        self._set_knob_to(0.0, approach=True)
         self._grasp_doneness = float(self.doneness)
         self._dbg("stove_off")
         if not self._doneness_in_target_range(float(self._grasp_doneness)):
