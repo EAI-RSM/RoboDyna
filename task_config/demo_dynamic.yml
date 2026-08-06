@@ -1188,6 +1188,7 @@ task_args:
     disp_y: 0.08
     disp_y_jitter: 0.06
     jar_y: -0.06
+    jar_start_gap: 0.12
     scale_x: -0.32
     scale_y: -0.14
     scale_dist: 0.25

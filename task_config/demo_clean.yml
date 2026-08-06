@@ -71,7 +71,7 @@ task_args:
     kettle_id: -1                                # -1 = random 009_kettle
     kettle_burner: random                        # random | left_front | right_front | ...
   measure_ingredient:
-    # Pour oil to target ring, then place jar on electronic scale.
+    # Push jar under nozzle, fill to target ring (spill outside = fail).
     target_fill: 0.25
     fill_levels: [0.25, 0.50, 0.75, 1.0]
     scene_id: 0
@@ -96,6 +96,7 @@ task_args:
     disp_y: 0.08
     disp_y_jitter: 0.06
     jar_y: -0.06
+    jar_start_gap: 0.12
     scale_x: -0.32
     scale_y: -0.14
     scale_dist: 0.25

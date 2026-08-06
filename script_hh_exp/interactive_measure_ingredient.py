@@ -6,17 +6,14 @@ except ImportError:
     from _interactive_common import make_parser, print_instructions, run_task
 
 KEYBOARD = """
-  Space             hold/release jar
-  Arrow keys        move held jar in XY
-  E / Q             move held jar in Z
-
-  Lower the gripper onto the red key to latch oil ON/OFF.
+  Push the jar under the nozzle with a closed gripper (catch_cup style).
+  Lower onto the green key to latch oil ON (turns red) / OFF (turns green).
+  Success is checked only after the key turns OFF. Spill outside the jar fails.
 """
 ROBOT = """
-  Space             side-grasp / release jar
-
-  Lower onto the red key with Q to latch oil ON/OFF (press again to turn off).
-  Releasing the jar ends the episode; success requires correct fill on the scale.
+  Push the jar under the nozzle, then press the green key to fill.
+  Press again to stop at the target ring. Success is scored after OFF.
+  Spilling outside the jar fails.
 """
 
 
@@ -27,12 +24,14 @@ def _post_setup(env):
     # Viewer treats a solid transmission cylinder as a filled volume — swap to
     # a hollow glass shell so the rising oil level is visible from outside.
     env.use_viewer_hollow_jar()
+    # Unlock jar so the closed gripper can shove it under the nozzle.
+    env.enable_interactive_jar_push()
     # Expert pour_rate is tuned for fast sim idle-steps; interactive runs one
     # step per viewer frame, so bump rate so the jar visibly fills (~8–12s).
     env.pour_rate = max(float(getattr(env, "pour_rate", 0.0)), 0.00085)
     print_instructions(
         f"[measure_ingredient] interactive pour_rate={env.pour_rate:.6g} "
-        f"(Z-press red key; Space grasps jar)"
+        f"(push jar under nozzle; Z-press green key)"
     )
 
 

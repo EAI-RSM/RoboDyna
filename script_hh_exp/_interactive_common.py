@@ -204,8 +204,8 @@ class HouseholdController:
             elif t == "measure_ingredient":
                 # No C/keyboard proxy — oil key is pressed by lowering the gripper.
                 print(
-                    "[measure_ingredient] press the red key with the gripper (Z); "
-                    "Space grasps/releases the jar"
+                    "[measure_ingredient] push jar under nozzle, then press the "
+                    "green key (ON/OFF); success is checked after OFF"
                 )
             elif t == "make_soup":
                 if not bool(e.stove_on):
@@ -411,8 +411,8 @@ class HouseholdController:
             elif t == "measure_ingredient":
                 # No C assist — oil key is pressed by lowering the closed gripper.
                 print(
-                    "[measure_ingredient] lower the closed gripper onto the red key; "
-                    "Space grasps/releases the jar"
+                    "[measure_ingredient] push jar under nozzle, then lower onto "
+                    "the green key; success is checked after the key turns OFF"
                 )
             elif t == "make_soup":
                 if not bool(e.stove_on):
@@ -974,16 +974,21 @@ def _terminal_failure(env, task):
         if task == "measure_ingredient":
             if float(getattr(env, "spill_amount", 0.0)) > 1e-4:
                 return "ingredient spilled"
-            # Any post-grasp release ends the episode; success is only via check_success.
-            if bool(getattr(env, "_episode_jar_released", False)):
+            # Score only after the nozzle key is turned OFF (success is checked
+            # first in the viewer loop; this path is the fail branch).
+            if bool(getattr(env, "closed_after_pour", False)):
                 lvl = float(getattr(env, "liquid_level", 0.0))
                 tgt = float(getattr(env, "target_fill", 0.0))
                 tol = float(getattr(env, "fill_tol", 0.05))
+                try:
+                    under = bool(env._jar_under_nozzle())
+                except Exception:
+                    under = False
+                if not under:
+                    return "switch turned off with jar not under the nozzle"
                 if lvl + 1e-3 < tgt - tol or lvl - 1e-3 > tgt + tol:
-                    return "jar released with incorrect fill level"
-                if not bool(getattr(env, "jar_on_scale", False)):
-                    return "jar released off the scale"
-                return "jar released without meeting success criteria"
+                    return "switch turned off with incorrect fill level"
+                return "switch turned off without meeting success criteria"
     elif task == "fill_coffee_jar":
         try:
             _lo, hi = env._fill_band()

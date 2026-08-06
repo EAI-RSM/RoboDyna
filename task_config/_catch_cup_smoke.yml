@@ -903,8 +903,13 @@ task_args:
     station_x: -0.08
     disp_y: 0.08
     jar_y: -0.06
+    jar_start_gap: 0.12
     scale_x: -0.32
     scale_y: -0.14
+    scale_dist: 0.25
+    scale_dist_jitter: 0.10
+    scale_near_dx_range: [-0.28, -0.16]
+    scale_near_dy_range: [-0.12, -0.02]
     chips_xy: [0.16, 0.08]
   make_soup:
     # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
