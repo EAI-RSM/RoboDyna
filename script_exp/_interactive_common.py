@@ -575,6 +575,37 @@ class ViewerViewToggle:
                 return pose
         return pose
 
+    def _gripper_viewer_pose(self, pose):
+        """Keep wrist look direction; roll so screen axes match world teleop.
+
+        Arrow keys are world-fixed (right=+X, up=+Y). Roll the gripper camera
+        about its look (+X) so screen-up ≈ world +Y when possible.
+        """
+        import sapien
+        from transforms3d.quaternions import mat2quat, quat2mat
+
+        R = np.asarray(quat2mat(pose.q), dtype=np.float64)
+        look = R[:, 0].copy()
+        look_n = float(np.linalg.norm(look))
+        if look_n < 1e-9:
+            return pose
+        look /= look_n
+
+        # Prefer world +Y as screen-up (same as arrow-up).
+        ref_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        up = ref_up - look * float(np.dot(ref_up, look))
+        if float(np.linalg.norm(up)) < 1e-6:
+            ref_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            up = ref_up - look * float(np.dot(ref_up, look))
+        up /= float(np.linalg.norm(up)) + 1e-12
+        # FPS convention: left = cross(up, forward).
+        left = np.cross(up, look)
+        left /= float(np.linalg.norm(left)) + 1e-12
+        up = np.cross(look, left)
+        up /= float(np.linalg.norm(up)) + 1e-12
+        R_new = np.column_stack((look, left, up))
+        return sapien.Pose(p=pose.p, q=mat2quat(R_new))
+
     def _gripper_fovy(self, side: str) -> float:
         render_cam = resolve_wrist_render_camera(self.env, side)
         if render_cam is not None:
@@ -590,7 +621,7 @@ class ViewerViewToggle:
                     print(f"View: {side} gripper unavailable; staying put.")
                 return
             self._set_fovy(self._gripper_fovy(side))
-            self._set_viewer_pose(pose)
+            self._set_viewer_pose(self._gripper_viewer_pose(pose))
             if announce:
                 print(f"View: {side} gripper")
             return
@@ -703,7 +734,7 @@ class ViewerViewToggle:
             if side is not None:
                 pose = self._wrist_pose(side)
                 if pose is not None:
-                    self._set_viewer_pose(pose)
+                    self._set_viewer_pose(self._gripper_viewer_pose(pose))
 
 
 def make_viewer_view_toggle(
