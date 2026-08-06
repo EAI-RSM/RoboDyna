@@ -1,5 +1,5 @@
 {
-  "full_description": "In the KitchenS bar scene, pull the beer tap lever by hand to pour into the beer mug under the spout. Flow and foam rise with how far the lever is open. Partially close to settle foam, then finish, close fully, and wait for the tap to stop before done. Overflow fails.",
+  "full_description": "In the KitchenS bar scene, pull the beer tap lever by hand to pour into the beer mug under the spout. Flow follows lever angle; foaminess of the stream rises the longer the tap stays open and resets when closed then reopened. Pause to settle foam, then finish, close fully, and wait for the tap to stop before done. Overflow fails.",
   "schema": "{A} is the beer tap, {B} is the beer mug, {C} is the tap lever, {a} is the arm used",
   "preference": "num of words should not exceed 20. Degree of detail avg is 6",
   "seen": [

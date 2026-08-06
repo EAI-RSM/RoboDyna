@@ -917,6 +917,37 @@ class HouseholdController:
             print("[trap_bug] trap landed; pose frozen as-is")
 
 
+def _fill_level_detail(env, task: str) -> str:
+    """Compact fill readout for terminal SUCCESS/FAILURE lines."""
+    if task == "pour_beer":
+        liq = 100.0 * float(getattr(env, "liquid_level", 0.0))
+        foam = 100.0 * float(getattr(env, "foam_level", 0.0))
+        try:
+            total = 100.0 * float(env._total_fill())
+        except Exception:
+            total = liq + foam
+        tgt = 100.0 * float(getattr(env, "target_liquid", 0.90))
+        tol = 100.0 * float(getattr(env, "full_liquid_tol", 0.05))
+        band = f"target={tgt - tol:.0f}–{tgt + tol:.0f}%"
+        if bool(getattr(env, "overflowed", False)):
+            return f"OVERFLOW beer={liq:.0f}% foam={foam:.0f}% total={total:.0f}%"
+        return f"beer={liq:.0f}% foam={foam:.0f}% total={total:.0f}% {band}"
+    if task == "boil_milk":
+        lvl = 100.0 * float(getattr(env, "liquid_level", 0.0))
+        tgt = 100.0 * float(getattr(env, "target_level", 1.0))
+        if bool(getattr(env, "overflowed", False)):
+            return f"OVERFLOW level={lvl:.0f}%"
+        return f"level={lvl:.0f}% target={tgt:.0f}%"
+    if task == "measure_ingredient":
+        lvl = 100.0 * float(getattr(env, "liquid_level", 0.0))
+        tgt = 100.0 * float(getattr(env, "target_fill", 0.0))
+        tol = 100.0 * float(getattr(env, "fill_tol", 0.05))
+        if bool(getattr(env, "overflowed", False)):
+            return f"OVERFLOW fill={lvl:.0f}%"
+        return f"fill={lvl:.0f}% target={tgt - tol:.0f}–{tgt + tol:.0f}%"
+    return ""
+
+
 def _terminal_failure(env, task):
     """Return an irreversible task failure reason, or ``None`` while playable."""
     if task == "trap_bug":
@@ -927,6 +958,11 @@ def _terminal_failure(env, task):
     elif task in ("boil_milk", "pour_beer", "measure_ingredient"):
         if bool(getattr(env, "overflowed", False)):
             return "liquid overflowed"
+        # pour_beer: >5s closed since last opening → end and score (success
+        # is checked first in the viewer loop; this path is the fail branch).
+        if task == "pour_beer" and bool(getattr(env, "_pour_gap_timed_out", False)):
+            gap_s = float(getattr(env, "open_gap_timeout_sec", 5.0))
+            return f"tap closed >{gap_s:.0f}s without reopening"
         if task == "boil_milk":
             turned_on = bool(getattr(env, "turned_on_once", False))
             stove_off = not bool(getattr(env, "stove_on", False))
@@ -1029,6 +1065,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     rendered_frames = 0
     terminal_result = None  # True=success, False=failure, None=manual close/smoke
     terminal_started_at = None
+    terminal_fill_detail = ""
     # Match script_exp run_viewer_loop: one teleop update → kinematics → step → render.
     # Success checks every few frames keep kitchen eval cost off the teleop hot path.
     SUCCESS_CHECK_EVERY = 5
@@ -1068,12 +1105,27 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                     print_failure(f"[{task}] success check failed: {exc}")
                     succeeded = False
                 failure = None if succeeded else _terminal_failure(env, task)
+                fill = _fill_level_detail(env, task)
+                if fill:
+                    terminal_fill_detail = fill
                 if succeeded:
-                    print_success(f"[{task}] terminal result: SUCCESS")
+                    msg = f"[{task}] terminal result: SUCCESS"
+                    if fill:
+                        msg = f"{msg} ({fill})"
+                    print_success(msg)
                     terminal_result = True
                     terminal_started_at = time.perf_counter()
                 if failure is not None:
-                    print_failure(f"[{task}] terminal result: FAILURE ({failure})")
+                    # Failure reasons from _terminal_failure already embed fill
+                    # for overflow / open-gap; append otherwise.
+                    if fill and fill not in failure:
+                        print_failure(
+                            f"[{task}] terminal result: FAILURE ({failure}; {fill})"
+                        )
+                    else:
+                        print_failure(
+                            f"[{task}] terminal result: FAILURE ({failure})"
+                        )
                     terminal_result = False
                     terminal_started_at = time.perf_counter()
             remaining = float(env.scene.get_timestep()) - (
@@ -1083,7 +1135,11 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                 time.sleep(remaining)
     finally:
         try:
-            report_task_result(env)
+            if not terminal_fill_detail:
+                terminal_fill_detail = _fill_level_detail(env, task)
+            report_task_result(
+                env, detail=terminal_fill_detail or None
+            )
         finally:
             try:
                 viewer.close()

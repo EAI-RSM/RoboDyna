@@ -1,17 +1,20 @@
 """Pour beer from a bar tap into a beer mug (KitchenS).
 
-Chrome draft tower with a springy wooden lever. The handle only moves when the
-robot gripper presses the knob along the hinge arc; releasing contact lets a
-spring return it upright. Beer stream thickness and fill/foam rates scale with
-how far the handle is turned. Overflow fails with a yellow stain.
+Chrome draft tower with a low-resistance wooden lever. The handle has collision
+so the gripper can press the knob; while contacted it free-follows the hand,
+and a soft spring returns it upright only when free. Beer stream thickness and
+fill rate scale with how far the handle is turned. Foaminess of the stream
+ramps up the longer the tap stays open in one continuous pour, and resets when
+the tap is closed then reopened. Overflow fails with a yellow stain.
 
-The drinking vessel is a procedural glass beer mug (body + D-handle). Glass
-materials mirror ``measure_ingredient``'s jar: transmission cylinder for demo
-cameras, hollow alpha shell for the interactive SAPIEN viewer.
+The drinking vessel is a simple procedural glass beer mug (body + D-handle).
+Demo cameras use transmission glass; the interactive viewer uses a hollow
+alpha shell so beer composites through the walls.
 
 Episode randomization (task_args.pour_beer):
   - ``randomize_layout``: cup/tap station + bar props with AABB non-overlap
-  - ``randomize_rates`` / ``pour_rate_range`` / ``foam_gain_range``: fill & foam speed
+  - ``randomize_rates`` / ``pour_rate_range`` / ``foam_gain_range``: fill & peak foam %
+  - ``foam_gain_start`` / ``foam_ramp_steps``: stream foam % ramp over open time
 """
 from __future__ import annotations
 
@@ -38,17 +41,17 @@ class pour_beer(KitchenS_base_task):
     UPRIGHT_CYL_Q = [0.70710678, 0.0, -0.70710678, 0.0]
     VERTICAL_CYL_Q = [0.70710678, 0.0, 0.70710678, 0.0]
 
-    # Procedural beer-mug geometry (meters). Reference: classic seidel mug —
-    # tall body, thick foot slightly wider than the rim, D-handle on +X.
+    # Procedural beer-mug geometry (meters) — simplified seidel mug:
+    # smooth body, thin floor, D-handle. No facet panels / stacked foot.
     MUG_INNER_R = 0.034
     MUG_WALL_T = 0.0035
     MUG_HEIGHT = 0.135
-    MUG_BOTTOM_T = 0.014
-    MUG_BASE_R = 0.042
-    MUG_RIM_LIP = 0.0025
-    MUG_HANDLE_REACH = 0.034
-    MUG_HANDLE_THICK = 0.010
-    MUG_FACET_FRAC = 0.62  # vertical panels cover lower ~2/3 of the wall
+    MUG_BOTTOM_T = 0.008
+    MUG_BASE_R = 0.040
+    MUG_RIM_LIP = 0.0020
+    MUG_HANDLE_REACH = 0.032
+    MUG_HANDLE_THICK = 0.009
+    MUG_FACET_FRAC = 0.0  # no seidel panels (reduced detail)
 
     # Tap tower geometry (meters).
     TOWER_R = 0.018
@@ -63,14 +66,23 @@ class pour_beer(KitchenS_base_task):
     LEVER_OPEN_RAD = 0.55 * np.pi  # ~99° forward (−Y) when fully open
     LEVER_DEADZONE = 0.03  # rad — small; past this, flow starts promptly
     LEVER_OPEN_THRESH = 0.18  # rad — counts as "opened" for success
-    # Spring return (rad/tick) when the gripper is not pressing the knob.
-    LEVER_RETURN_STEP = 0.055
+    # Soft spring return (rad/tick) — only when the gripper is NOT contacting.
+    LEVER_RETURN_STEP = 0.012
     # Gripper↔knob engagement (pressure proxy + contact).
-    LEVER_ARC_RADIAL_TOL = 0.045  # m; |r_yz − LEVER_LEN|
-    LEVER_ARC_X_TOL = 0.040  # m; lateral off the hinge plane
-    LEVER_CONTACT_R = 0.055  # m; TCP near current tip also counts
-    LEVER_TRACK_STEP = 0.10  # rad/tick while pressed (follows hand)
-    LEVER_CONTACT_FORCE_GAIN = 0.002  # rad boost per Newton of contact
+    # Keep engage tight; release radius is larger so the spring doesn't flick
+    # back into the hand from brief proximity gaps (that shoved the arm).
+    LEVER_ARC_RADIAL_TOL = 0.016  # m; |r_yz − LEVER_LEN| (~lever radius + slack)
+    LEVER_ARC_X_TOL = 0.016  # m; lateral off the hinge plane
+    LEVER_CONTACT_R = 0.022  # m; must be near the current tip to engage
+    LEVER_RELEASE_R = 0.055  # m; stay engaged until this far from the tip
+    LEVER_CONTACT_FORCE_N = 1.2  # N; light finger contact on the knob engages
+    LEVER_HOLD_FORCE_N = 0.4  # N; residual contact keeps hold (no spring)
+    LEVER_PRESS_LOST_GRACE = 50  # ~0.2s at 250Hz before spring return
+    # Slow track + hold deadband: stable TCP must freeze the lever (no bounce).
+    LEVER_TRACK_STEP = 0.028  # rad/tick while pressed (~1.6°/tick)
+    LEVER_HOLD_DEADBAND = 0.035  # rad; |target−cur| below this → hold pose
+    LEVER_TARGET_EMA = 0.22  # blend toward new TCP angle while pressed
+    LEVER_CONTACT_FORCE_GAIN = 0.0  # disabled — impulse spikes caused bounce
     # Flow vs open fraction: near-linear (exp≈1). Mild floor so the first
     # meaningful crack of the tap already pours instead of a long dead start.
     FLOW_START_FRAC = 0.22
@@ -89,24 +101,31 @@ class pour_beer(KitchenS_base_task):
     # Max rate at full open (per physics step); scales with lever angle.
     # Keep modest — long IK arcs while open still advance fill every tick.
     POUR_RATE = 0.00055
-    # Keep foam below beer so amber level is visible early (not foam-only).
-    # Slightly higher gain → hits pause sooner → more stop-and-pour cycles.
-    FOAM_GAIN = 0.60
+    # Foam % of the stream ramps with continuous open time (resets on close).
+    # Start low so a fresh crack is mostly beer; peak encourages pause-and-pour.
+    FOAM_GAIN_START = 0.18
+    FOAM_GAIN = 0.85  # peak foam fraction after FOAM_RAMP_STEPS of continuous flow
+    FOAM_RAMP_STEPS = 70  # sim steps of continuous pour to reach peak foam %
     FOAM_DECAY = 0.0045
     # Fraction of collapsing foam that becomes beer (modest — no end surge).
     FOAM_TO_LIQUID = 0.28
     # Per-episode sample ranges when randomize_rates / [lo,hi] yaml values are used.
     POUR_RATE_RANGE = (0.00040, 0.00075)
-    FOAM_GAIN_RANGE = (0.45, 0.80)
+    FOAM_GAIN_RANGE = (0.65, 1.05)  # peak foam % range when randomize_rates
+    FOAM_GAIN_START_RANGE = (0.10, 0.28)
+    FOAM_RAMP_STEPS_RANGE = (50, 100)
     FOAM_DECAY_RANGE = (0.0035, 0.0060)
     OVERFLOW_LEVEL = 1.0
     EXPERT_FOAM_PAUSE = 0.16
     EXPERT_FOAM_RESUME = 0.09
     SAFE_TOTAL = 0.90
-    # Tap must sit idle this many consecutive sim steps before success.
-    # Long enough that mid-pour foam pauses (spring-shut) don't latch success
-    # the instant liquid briefly sits in-band while foam is still collapsing.
-    TAP_SETTLE_STEPS = 36
+    # Tap must stay fully idle this long before success can pass.
+    # 1s gap avoids mid-pour / spring-return flicker latching success while the
+    # lever still looks open or foam is still collapsing into beer.
+    TAP_SETTLE_SEC = 1.0
+    # If the tap stays closed this long after an opening (no reopen), end the
+    # episode and score via check_success (success if criteria met, else fail).
+    OPEN_GAP_TIMEOUT_SEC = 5.0
     TAP_IDLE_ANGLE = 0.02  # rad — upright enough to count as closed
     TAP_IDLE_VEL = 0.012  # rad/step — not still springing
     # Liquid must not rise more than this while idle (blocks foam→beer "filling").
@@ -165,6 +184,7 @@ class pour_beer(KitchenS_base_task):
         self.closed_after_pour = False
         self.liquid_level = 0.0
         self.foam_level = 0.0
+        self._foam_open_steps = 0
         self._liquid_entity = None
         self._foam_entity = None
         self._stream_entity = None
@@ -180,11 +200,15 @@ class pour_beer(KitchenS_base_task):
         self._lever_held = False
         self._lever_pressed = False
         self._lever_inhibit_press = False
+        self._lever_press_lost_steps = 0
         self._lever_ang_vel = 0.0
+        self._lever_target_filt = None
         self._tap_idle_steps = 0
         self._liquid_stable_steps = 0
         self._liquid_level_prev = 0.0
         self._stream_frac_cached = -1.0
+        self._closed_since_open_steps = 0
+        self._pour_gap_timed_out = False
         self.spill_amount = 0.0
         self.cup = None
         self.mug_visual = None
@@ -403,25 +427,22 @@ class pour_beer(KitchenS_base_task):
         return list(self.FOAM_COLOR)
 
     def _mug_glass_material(self, viewer_shell: bool = False):
-        """Glass for the beer mug — measure_ingredient jar structure, darker blue tint.
+        """Glass for the procedural beer mug (measure_ingredient jar structure).
 
-        Demo cameras use transmission glass. The interactive SAPIEN viewer does
-        not composite opaque beer behind transmission materials, so the viewer
-        shell uses plain alpha glass — same trick as the measure jar / trap_bug.
+        Demo cameras use transmission glass. The interactive SAPIEN viewer uses
+        plain alpha glass so opaque beer composites through the walls.
         """
         if viewer_shell:
-            # Hollow viewer shell: darker / bluer than the jar default, slightly
-            # higher alpha so the mug reads clearly against the bar.
             glass = sapien.render.RenderMaterial(
-                base_color=[0.685, 0.804, 0.958, 0.28]
+                base_color=[0.78, 0.88, 0.96, 0.22]
             )
             try:
                 glass.set_transmission(0.0)
                 glass.set_transmission_roughness(1.0)
-                glass.set_roughness(0.10)
+                glass.set_roughness(0.08)
                 glass.set_metallic(0.0)
             except Exception:
-                glass.roughness = 0.10
+                glass.roughness = 0.08
                 glass.metallic = 0.0
             try:
                 glass.set_ior(1.0)
@@ -429,8 +450,7 @@ class pour_beer(KitchenS_base_task):
                 pass
             return glass
 
-        # Expert / demo transmission glass — darker blue tint, a bit more presence.
-        glass = sapien.render.RenderMaterial(base_color=[0.734, 0.846, 0.972, 0.14])
+        glass = sapien.render.RenderMaterial(base_color=[0.82, 0.90, 0.98, 0.12])
         try:
             glass.set_transmission(1.0)
             glass.set_transmission_roughness(0.0)
@@ -710,10 +730,21 @@ class pour_beer(KitchenS_base_task):
             cfg, "pour_rate", self.POUR_RATE, rng,
             range_key="pour_rate_range", range_default=self.POUR_RATE_RANGE,
         )
+        # foam_gain = peak foam % of stream after a continuous open pour.
         self.foam_gain = self._sample_scalar_or_range(
             cfg, "foam_gain", self.FOAM_GAIN, rng,
             range_key="foam_gain_range", range_default=self.FOAM_GAIN_RANGE,
         )
+        self.foam_gain_start = self._sample_scalar_or_range(
+            cfg, "foam_gain_start", self.FOAM_GAIN_START, rng,
+            range_key="foam_gain_start_range",
+            range_default=self.FOAM_GAIN_START_RANGE,
+        )
+        self.foam_ramp_steps = int(round(self._sample_scalar_or_range(
+            cfg, "foam_ramp_steps", self.FOAM_RAMP_STEPS, rng,
+            range_key="foam_ramp_steps_range",
+            range_default=self.FOAM_RAMP_STEPS_RANGE,
+        )))
         self.foam_decay = self._sample_scalar_or_range(
             cfg, "foam_decay", self.FOAM_DECAY, rng,
             range_key="foam_decay_range", range_default=self.FOAM_DECAY_RANGE,
@@ -721,6 +752,8 @@ class pour_beer(KitchenS_base_task):
         # Clamp to safe positive bounds.
         self.pour_rate = float(np.clip(self.pour_rate, 1e-5, 0.005))
         self.foam_gain = float(np.clip(self.foam_gain, 0.05, 2.5))
+        self.foam_gain_start = float(np.clip(self.foam_gain_start, 0.0, self.foam_gain))
+        self.foam_ramp_steps = int(np.clip(self.foam_ramp_steps, 1, 2000))
         self.foam_decay = float(np.clip(self.foam_decay, 1e-4, 0.05))
 
     # ------------------------------------------------------------------ actors
@@ -738,6 +771,12 @@ class pour_beer(KitchenS_base_task):
         self.safe_total = float(cfg.get("safe_total", self.SAFE_TOTAL))
         self.lever_open_rad = float(cfg.get("lever_open_rad", self.LEVER_OPEN_RAD))
         self.flow_rate_scale = float(cfg.get("flow_rate_scale", self.FLOW_RATE_SCALE))
+        self.tap_settle_sec = float(cfg.get("tap_settle_sec", self.TAP_SETTLE_SEC))
+        self.tap_settle_sec = float(np.clip(self.tap_settle_sec, 0.05, 10.0))
+        self.open_gap_timeout_sec = float(
+            cfg.get("open_gap_timeout_sec", self.OPEN_GAP_TIMEOUT_SEC)
+        )
+        self.open_gap_timeout_sec = float(np.clip(self.open_gap_timeout_sec, 0.5, 60.0))
 
         side, cup_y, tap_dy = self._resolve_station_layout(cfg, rng)
         self.arm = ArmTag("right" if side >= 0 else "left")
@@ -749,6 +788,7 @@ class pour_beer(KitchenS_base_task):
 
         self.liquid_level = 0.0
         self.foam_level = 0.0
+        self._foam_open_steps = 0
         self.lever_angle = 0.0
         self._lever_angle_max = 0.0
         self.overflowed = False
@@ -768,18 +808,28 @@ class pour_beer(KitchenS_base_task):
         self._lever_held = False
         self._lever_pressed = False
         self._lever_inhibit_press = False
+        self._lever_press_lost_steps = 0
         self._lever_ang_vel = 0.0
+        self._lever_target_filt = None
         self._tap_idle_steps = 0
         self._liquid_stable_steps = 0
         self._liquid_level_prev = 0.0
+        self._closed_since_open_steps = 0
+        self._pour_gap_timed_out = False
         self.spill_amount = 0.0
         self._bar_props = []
         self._prop_footprints = []
-        self.mug_visual = self._remove_entity(getattr(self, "mug_visual", None))
+        # mug_visual may alias the cup Actor — only remove a separate visual entity.
+        mv = getattr(self, "mug_visual", None)
+        cup = getattr(self, "cup", None)
+        cup_ent = cup.actor if cup is not None and hasattr(cup, "actor") else cup
+        if mv is not None and mv is not cup and mv is not cup_ent:
+            self._remove_entity(mv)
+        self.mug_visual = None
         self._mug_visual_hollow = False
-        if getattr(self, "cup", None) is not None:
+        if cup is not None:
             try:
-                self.scene.remove_entity(self.cup.actor if hasattr(self.cup, "actor") else self.cup)
+                self.scene.remove_entity(cup_ent)
             except Exception:
                 pass
             self.cup = None
@@ -799,7 +849,8 @@ class pour_beer(KitchenS_base_task):
             f"[pour_beer] tap scene={self.scene_id} arm={self.arm} seed={self._layout_seed} "
             f"cup={self.cup_xy} tap={self.tap_xy} spout={self.nozzle_outlet_xyz} "
             f"pivot={self.lever_pivot_xyz} target={self.target_liquid:.2f} "
-            f"pour_rate={self.pour_rate:.5f} foam_gain={self.foam_gain:.2f} "
+            f"pour_rate={self.pour_rate:.5f} foam_gain={self.foam_gain_start:.2f}→"
+            f"{self.foam_gain:.2f}/{self.foam_ramp_steps}steps "
             f"foam_decay={self.foam_decay:.4f} bar_props={len(self._bar_props)}"
         )
 
@@ -980,7 +1031,12 @@ class pour_beer(KitchenS_base_task):
                 self.GLASS_UPRIGHT_Q,
             )
             coaster = create_actor(
-                self, pose=pose, modelname="019_coaster", model_id=0, convex=True, is_static=True
+                self,
+                pose=pose,
+                modelname="019_coaster",
+                model_id=0,
+                convex=True,
+                is_static=True,
             )
             coaster.set_name("glass_coaster")
             cfg = getattr(coaster, "config", {}) or {}
@@ -995,26 +1051,22 @@ class pour_beer(KitchenS_base_task):
         return float(self.MUG_INNER_R + self.MUG_WALL_T)
 
     def _attach_mug_handle(self, render_body, glass, outer_r, h, bottom_t):
-        """D-shaped glass handle on +X (visual only — no collision)."""
+        """Simple D-handle on +X (visual only — no corner knobs)."""
         thick = float(self.MUG_HANDLE_THICK)
         reach = float(self.MUG_HANDLE_REACH)
-        # Attach just below rim and just above the thick foot.
         z_top = float(h) - 0.016
-        z_bot = float(bottom_t) + 0.018
+        z_bot = float(bottom_t) + 0.016
         z_mid = 0.5 * (z_top + z_bot)
         half_v = 0.5 * max(0.02, z_top - z_bot)
         x0 = float(outer_r) - 0.001
         x1 = float(outer_r) + reach
 
-        # Top / bottom stubs into the wall + outer vertical post.
-        for z, name_half in ((z_top, 0.5 * thick), (z_bot, 0.5 * thick)):
+        for z in (z_top, z_bot):
             stub = sapien.render.RenderShapeBox(
-                [0.5 * reach, 0.5 * thick, name_half],
+                [0.5 * reach, 0.5 * thick, 0.5 * thick],
                 glass,
             )
-            stub.set_local_pose(
-                sapien.Pose([x0 + 0.5 * reach, 0.0, z])
-            )
+            stub.set_local_pose(sapien.Pose([x0 + 0.5 * reach, 0.0, z]))
             render_body.attach(stub)
 
         post = sapien.render.RenderShapeBox(
@@ -1024,51 +1076,8 @@ class pour_beer(KitchenS_base_task):
         post.set_local_pose(sapien.Pose([x1, 0.0, z_mid]))
         render_body.attach(post)
 
-        # Mild outer rounding at the corners of the D.
-        for z in (z_top, z_bot):
-            knob = sapien.render.RenderShapeSphere(0.55 * thick, glass)
-            knob.set_local_pose(sapien.Pose([x1, 0.0, z]))
-            render_body.attach(knob)
-
-    def _attach_mug_facets(self, render_body, glass, outer_r, h, bottom_t):
-        """Subtle vertical seidel panels on the lower body (visual only)."""
-        facet_h = float(self.MUG_FACET_FRAC) * (float(h) - float(bottom_t))
-        if facet_h < 0.02:
-            return
-        wall_half = 0.5 * facet_h
-        wall_z = float(bottom_t) + wall_half
-        n_seg = 10
-        wall_t = 0.0012
-        wall_radius = float(outer_r) + 0.0006
-        tangent_half = wall_radius * np.tan(np.pi / n_seg) * 0.72
-        for ang in np.linspace(0.0, 2.0 * np.pi, n_seg, endpoint=False):
-            # Leave a gap around the +X handle attachment.
-            if abs(((ang + np.pi) % (2.0 * np.pi)) - np.pi) < 0.55:
-                continue
-            px = float(wall_radius * np.cos(ang))
-            py = float(wall_radius * np.sin(ang))
-            yaw = float(ang + 0.5 * np.pi)
-            q = [
-                float(np.cos(0.5 * yaw)),
-                0.0,
-                0.0,
-                float(np.sin(0.5 * yaw)),
-            ]
-            panel = sapien.render.RenderShapeBox(
-                [float(tangent_half), float(0.5 * wall_t), float(wall_half)],
-                glass,
-            )
-            panel.set_local_pose(sapien.Pose([px, py, wall_z], q))
-            render_body.attach(panel)
-
     def _build_mug_visual(self, hollow: bool = False):
-        """Beer-mug visual. ``hollow=True`` for SAPIEN viewer (open interior).
-
-        Camera / expert demos keep the smooth solid transmission cylinder (looks
-        correct in offline render). The interactive viewer treats that cylinder
-        as an opaque volume, so viewer mode uses a thin alpha-glass shell instead
-        — same pattern as ``measure_ingredient._build_jar_visual``.
-        """
+        """Simplified procedural mug: floor + body + rim + handle (no facets)."""
         self.mug_visual = self._remove_entity(getattr(self, "mug_visual", None))
         if self.cup is None:
             return
@@ -1077,7 +1086,6 @@ class pour_beer(KitchenS_base_task):
         inner_r = float(self.MUG_INNER_R)
         h = float(self.MUG_HEIGHT)
         bottom_t = float(self.MUG_BOTTOM_T)
-        base_r = float(self.MUG_BASE_R)
         upright_q = list(self.UPRIGHT_CYL_Q)
         wall_h = h - bottom_t
         wall_half = wall_h * 0.5
@@ -1090,31 +1098,19 @@ class pour_beer(KitchenS_base_task):
         vis.set_pose(pose)
         render_body = sapien.render.RenderBodyComponent()
 
-        # Thick foot — slightly wider than the body (classic mug base).
-        foot = sapien.render.RenderShapeCylinder(
-            radius=base_r,
-            half_length=max(0.002, bottom_t * 0.45),
-            material=glass,
-        )
-        foot.set_local_pose(
-            sapien.Pose([0.0, 0.0, bottom_t * 0.45], upright_q)
-        )
-        render_body.attach(foot)
-
+        # Single thin floor (no stacked thick foot — that darkened the base).
+        floor_half = max(0.0015, 0.5 * bottom_t)
         floor = sapien.render.RenderShapeCylinder(
             radius=outer_r * 0.98,
-            half_length=max(0.0015, bottom_t * 0.35),
+            half_length=floor_half,
             material=glass,
         )
-        floor.set_local_pose(
-            sapien.Pose([0.0, 0.0, bottom_t * 0.55], upright_q)
-        )
+        floor.set_local_pose(sapien.Pose([0.0, 0.0, floor_half], upright_q))
         render_body.attach(floor)
 
         if hollow:
-            # Thin faceted glass shell — empty inside so beer level is visible.
             wall_t = 0.0024
-            n_seg = 36
+            n_seg = 28
             wall_radius = outer_r - 0.5 * wall_t
             tangent_half = wall_radius * np.tan(np.pi / n_seg) * 1.03
             for ang in np.linspace(0.0, 2.0 * np.pi, n_seg, endpoint=False):
@@ -1142,23 +1138,20 @@ class pour_beer(KitchenS_base_task):
             wall.set_local_pose(sapien.Pose([0.0, 0.0, wall_z], upright_q))
             render_body.attach(wall)
 
-        # Slight rim lip.
         rim = sapien.render.RenderShapeCylinder(
             radius=outer_r + float(self.MUG_RIM_LIP),
-            half_length=0.0022,
+            half_length=0.0018,
             material=glass,
         )
-        rim.set_local_pose(sapien.Pose([0.0, 0.0, h - 0.0022], upright_q))
+        rim.set_local_pose(sapien.Pose([0.0, 0.0, h - 0.0018], upright_q))
         render_body.attach(rim)
 
-        self._attach_mug_facets(render_body, glass, outer_r, h, bottom_t)
         self._attach_mug_handle(render_body, glass, outer_r, h, bottom_t)
 
         vis.add_component(render_body)
         self.scene.add_entity(vis)
         self.mug_visual = vis
         self._mug_visual_hollow = bool(hollow)
-        # Keep cup_inner_r in sync for fluid / spill helpers.
         self.cup_outer_r = outer_r
         self.cup_inner_r = inner_r
 
@@ -1172,20 +1165,13 @@ class pour_beer(KitchenS_base_task):
         )
 
     def _spawn_glass(self):
-        """Procedural glass beer mug on the coaster (collision + glass visual).
-
-        Default visual is the smooth transmission cylinder (demo cameras).
-        Interactive viewer calls ``use_viewer_hollow_mug()`` after setup —
-        same path as ``measure_ingredient`` / ``interactive_measure_ingredient``.
-        """
+        """Procedural glass beer mug on the coaster (collision + glass visual)."""
         x, y = float(self.cup_xy[0]), float(self.cup_xy[1])
         z0 = float(getattr(self, "coaster_top_z", self.table_top)) + 0.001
         outer_r = self._mug_outer_r()
         h = float(self.MUG_HEIGHT)
         bottom_t = float(self.MUG_BOTTOM_T)
 
-        # Solid cylinder collision (handle is visual-only so pour clearance
-        # and stream aiming stay clean).
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
         builder.add_cylinder_collision(
@@ -1194,7 +1180,6 @@ class pour_beer(KitchenS_base_task):
             half_length=float(h * 0.5),
             material=self.scene.default_physical_material,
         )
-        # Wider foot collision so the thick base sits stably on the coaster.
         builder.add_cylinder_collision(
             pose=sapien.Pose(
                 [0.0, 0.0, bottom_t * 0.45], self.VERTICAL_CYL_Q
@@ -1210,7 +1195,6 @@ class pour_beer(KitchenS_base_task):
         except Exception:
             pass
 
-        # Lightweight Actor-like holder so existing get_pose / set_name call sites work.
         class _MugActor:
             def __init__(self, ent):
                 self.actor = ent
@@ -1366,17 +1350,29 @@ class pour_beer(KitchenS_base_task):
         return float(np.clip(start + (1.0 - start) * shaped, 0.0, 1.0))
 
     def _spawn_lever(self):
-        """Kinematic wooden handle hinged at the faucet head (pose updated each step)."""
+        """Kinematic wooden handle hinged at the faucet head (pose updated each step).
+
+        Collision is enabled so gripper fingers contact the knob (shaft + tip
+        ball). Motion is still soft free-follow while pressed and a gentle
+        spring only when free, so the kinematic body does not shove the arm.
+        """
         self._lever_entity = self._remove_entity(self._lever_entity)
         self._lever_comp = None
         wood = self._opaque_material(self.WOOD)
         length = float(self.LEVER_LEN)
+        tip_r = float(self.LEVER_R) * 1.35
         builder = self.scene.create_actor_builder()
+        # Dynamic + set_kinematic: PhysX contacts with the gripper work reliably.
         builder.set_physx_body_type("dynamic")
         builder.add_cylinder_collision(
             pose=sapien.Pose(),
             radius=self.LEVER_R,
             half_length=0.5 * length,
+            material=self.scene.default_physical_material,
+        )
+        builder.add_sphere_collision(
+            pose=sapien.Pose([0.5 * length, 0.0, 0.0]),
+            radius=tip_r,
             material=self.scene.default_physical_material,
         )
         builder.add_cylinder_visual(
@@ -1387,7 +1383,7 @@ class pour_beer(KitchenS_base_task):
         )
         builder.add_sphere_visual(
             pose=sapien.Pose([0.5 * length, 0.0, 0.0]),
-            radius=self.LEVER_R * 1.35,
+            radius=tip_r,
             material=wood,
         )
         tip0 = self._lever_tip_xyz(0.0)
@@ -1521,9 +1517,10 @@ class pour_beer(KitchenS_base_task):
     def _lever_press_signal(self):
         """Best gripper press on the knob/arc — drives the spring lever.
 
-        The handle is kinematic; pressure is a proximity proxy along the hinge
-        arc (same pattern as fill_coffee_jar's spring key) plus optional PhysX
-        contact force on ``beer_tap_lever``.
+        Engagement is tip proximity and/or PhysX contact on the lever collider.
+        Release radius is larger than engage radius so brief gaps don't drop
+        contact into spring-return. While already pressed, residual contact
+        alone keeps engagement even if the tip briefly leaves the engage ball.
         """
         if self.overflowed or not hasattr(self, "robot"):
             return None
@@ -1532,6 +1529,12 @@ class pour_beer(KitchenS_base_task):
         pivot = np.asarray(self.lever_pivot_xyz, dtype=float)
         tip = self._lever_tip_xyz()
         contact_n = self._lever_contact_force()
+        engage_r = float(self.LEVER_CONTACT_R)
+        release_r = float(getattr(self, "LEVER_RELEASE_R", engage_r * 2.0))
+        tip_r = release_r if bool(getattr(self, "_lever_pressed", False)) else engage_r
+        hold_n = float(getattr(self, "LEVER_HOLD_FORCE_N", 0.4))
+        force_n = float(getattr(self, "LEVER_CONTACT_FORCE_N", 2.5))
+        pressed = bool(getattr(self, "_lever_pressed", False))
         sides = []
         try:
             sides.append(self.arm)
@@ -1556,16 +1559,29 @@ class pour_beer(KitchenS_base_task):
                 and x_err <= float(self.LEVER_ARC_X_TOL)
                 and float(v[2]) > -0.02
             )
-            near_tip = tip_dist <= float(self.LEVER_CONTACT_R)
-            if not (on_arc or near_tip or contact_n > 1.5):
+            near_tip = tip_dist <= tip_r
+            # Engage: near tip or firm contact. Stay: near tip OR any hold force.
+            if pressed:
+                engaged = near_tip or contact_n > hold_n
+            else:
+                engaged = near_tip or contact_n > force_n
+            if not engaged:
                 continue
-            ang = self._angle_from_tip_point(tcp)
-            # Stronger engagement when closer to the arc / tip, or with contact.
+            # If only contact is keeping us engaged (TCP far from tip), freeze at
+            # the current hinge angle so kinematic tip motion can't chase itself.
+            if near_tip or on_arc:
+                ang = self._angle_from_tip_point(tcp)
+                follow = True
+            else:
+                ang = float(self.lever_angle)
+                follow = False
             score = (
                 -abs(r_yz - float(self.LEVER_LEN))
                 - 0.5 * x_err
                 - 0.35 * tip_dist
                 + 0.001 * contact_n
+                + (0.01 if on_arc else 0.0)
+                + (0.02 if near_tip else 0.0)
             )
             cand = {
                 "arm": arm,
@@ -1573,53 +1589,94 @@ class pour_beer(KitchenS_base_task):
                 "angle": ang,
                 "score": score,
                 "contact_n": contact_n,
+                "follow": follow,
             }
             if best is None or cand["score"] > best["score"]:
                 best = cand
         return best
 
     def _update_lever_from_pressure(self):
-        """Spring lever: track gripper pressure on the knob; return when free."""
+        """Hold while gripper presses; spring only when free.
+
+        Stable TCP ⇒ lever freezes at the commanded angle (hold deadband + EMA).
+        No spring while contacted / in grace, so flow does not flicker.
+        """
         if self.overflowed:
             # Snap shut after a spill so the stream cuts immediately.
             if self.lever_angle > 1e-4:
                 self._apply_lever_pose(0.0)
             self._lever_pressed = False
+            self._lever_press_lost_steps = 0
+            self._lever_target_filt = None
             return
 
+        contact_n = self._lever_contact_force()
+        hold_n = float(getattr(self, "LEVER_HOLD_FORCE_N", 0.4))
+        still_touching = contact_n > hold_n
         sig = self._lever_press_signal()
-        if sig is not None:
+
+        if sig is not None or (
+            bool(getattr(self, "_lever_pressed", False)) and still_touching
+        ):
             self._lever_pressed = True
-            target = float(sig["angle"])
-            # Contact force nudges the handle a bit further open.
-            target = float(
-                np.clip(
-                    target
-                    + float(self.LEVER_CONTACT_FORCE_GAIN)
-                    * min(float(sig.get("contact_n", 0.0)), 40.0),
-                    0.0,
-                    float(self.lever_open_rad),
-                )
-            )
+            self._lever_press_lost_steps = 0
             cur = float(self.lever_angle)
-            step = float(self.LEVER_TRACK_STEP)
-            if abs(target - cur) <= step:
-                self._apply_lever_pose(target)
+            if sig is not None and bool(sig.get("follow", True)):
+                raw = float(
+                    np.clip(
+                        float(sig["angle"])
+                        + float(self.LEVER_CONTACT_FORCE_GAIN)
+                        * min(float(sig.get("contact_n", 0.0)), 40.0),
+                        0.0,
+                        float(self.lever_open_rad),
+                    )
+                )
+                alpha = float(getattr(self, "LEVER_TARGET_EMA", 0.22))
+                prev = getattr(self, "_lever_target_filt", None)
+                if prev is None:
+                    self._lever_target_filt = raw
+                else:
+                    self._lever_target_filt = (1.0 - alpha) * float(prev) + alpha * raw
+                target = float(self._lever_target_filt)
             else:
-                self._apply_lever_pose(cur + step * np.sign(target - cur))
+                # Contact hold without a reliable TCP arc reading — freeze.
+                target = cur
+                if getattr(self, "_lever_target_filt", None) is None:
+                    self._lever_target_filt = cur
+
+            dead = float(getattr(self, "LEVER_HOLD_DEADBAND", 0.035))
+            err = target - cur
+            if abs(err) <= dead:
+                # Arm stable → lever stable (zero hinge velocity, keep pose).
+                self._lever_ang_vel = 0.0
+                return
+            step = float(self.LEVER_TRACK_STEP)
+            self._apply_lever_pose(cur + float(np.clip(err, -step, step)))
             return
 
-        # No gripper pressure → spring back to upright.
+        # Lost signal: hold briefly so tip motion / teleop jitter doesn't spring
+        # the handle back into the hand.
+        if bool(getattr(self, "_lever_pressed", False)):
+            grace = int(getattr(self, "LEVER_PRESS_LOST_GRACE", 50))
+            self._lever_press_lost_steps = int(
+                getattr(self, "_lever_press_lost_steps", 0)
+            ) + 1
+            if self._lever_press_lost_steps < grace or still_touching:
+                self._lever_ang_vel = 0.0
+                return
+
+        # Truly free → soft spring back to upright.
         self._lever_pressed = False
+        self._lever_press_lost_steps = 0
+        self._lever_target_filt = None
         if self.lever_angle <= 1e-4:
-            # Stay at rest; clear residual spring delta so idle settle can latch.
             self._lever_ang_vel = 0.0
             return
         cur = float(self.lever_angle)
         span = max(self.lever_open_rad, 1e-6)
         rate = max(
-            0.014,
-            float(self.LEVER_RETURN_STEP) * (0.40 + 0.60 * cur / span),
+            0.004,
+            float(self.LEVER_RETURN_STEP) * (0.35 + 0.65 * cur / span),
         )
         self._apply_lever_pose(max(0.0, cur - rate))
 
@@ -1822,16 +1879,40 @@ class pour_beer(KitchenS_base_task):
             # Cut the tap once it crests — spring / force-cut shuts the handle.
             self._lever_held = False
             self._lever_pressed = False
+            self._lever_target_filt = None
             self._apply_lever_pose(0.0)
 
+    def _effective_foam_gain(self) -> float:
+        """Foam % of the current stream; ramps with continuous open time.
+
+        Starts at ``foam_gain_start`` when the tap just begins flowing and
+        linearly reaches peak ``foam_gain`` after ``foam_ramp_steps`` of
+        continuous pour. Closing the tap (no flow) zeros the open-step
+        counter so the next open starts low again.
+        """
+        start = float(getattr(self, "foam_gain_start", self.FOAM_GAIN_START))
+        peak = float(getattr(self, "foam_gain", self.FOAM_GAIN))
+        ramp = max(1, int(getattr(self, "foam_ramp_steps", self.FOAM_RAMP_STEPS)))
+        t = min(1.0, float(getattr(self, "_foam_open_steps", 0)) / float(ramp))
+        return float(start + (peak - start) * t)
+
     def _step_fluids(self):
-        """Bottle-like fill: while lever open, beer+foam rise with rate∝handle angle."""
+        """Bottle-like fill: while lever open, beer+foam rise with rate∝handle angle.
+
+        Foam fraction of the stream grows with how long the tap has been open
+        continuously; it resets whenever flow stops.
+        """
         frac = self._flow_frac()
+        if frac > 1e-4:
+            self._foam_open_steps = int(getattr(self, "_foam_open_steps", 0)) + 1
+        else:
+            self._foam_open_steps = 0
+        foam_gain = self._effective_foam_gain()
         if frac > 1e-4 and not self.overflowed:
             scale = float(getattr(self, "flow_rate_scale", self.FLOW_RATE_SCALE))
             d = float(self.pour_rate) * frac * scale
             add_liq = d
-            add_foam = d * self.foam_gain
+            add_foam = d * foam_gain
             new_liq = float(self.liquid_level) + add_liq
             new_foam = float(self.foam_level) + add_foam
             if new_liq + new_foam >= float(self.overflow_level) - 1e-6:
@@ -1849,7 +1930,7 @@ class pour_beer(KitchenS_base_task):
             # Extra beer after crest keeps growing the counter puddle.
             scale = float(getattr(self, "flow_rate_scale", self.FLOW_RATE_SCALE))
             d = float(self.pour_rate) * frac * scale
-            self.spill_amount = float(self.spill_amount) + d * (1.0 + self.foam_gain)
+            self.spill_amount = float(self.spill_amount) + d * (1.0 + foam_gain)
             self._rebuild_spill_puddle()
         elif (not self.overflowed) and self.foam_level > 1e-6:
             # Collapse foam into a little beer (not 1:1 — avoids an end surge).
@@ -1864,6 +1945,24 @@ class pour_beer(KitchenS_base_task):
         self._rebuild_fluids(force=False)
         self._sync_stream(force=False)
 
+    def _tap_settle_steps(self) -> int:
+        """Consecutive idle sim steps required before success (~TAP_SETTLE_SEC)."""
+        sec = float(getattr(self, "tap_settle_sec", self.TAP_SETTLE_SEC))
+        dt = max(1e-6, float(self._sim_dt()))
+        return max(1, int(round(sec / dt)))
+
+    def _open_gap_timeout_steps(self) -> int:
+        """Closed steps after an opening before forced episode scoring."""
+        sec = float(
+            getattr(self, "open_gap_timeout_sec", self.OPEN_GAP_TIMEOUT_SEC)
+        )
+        dt = max(1e-6, float(self._sim_dt()))
+        return max(1, int(round(sec / dt)))
+
+    def _tap_is_flowing(self) -> bool:
+        """True while the lever is open enough to count as a tap opening."""
+        return bool(self.tab_open) or float(self._flow_frac()) > 1e-4
+
     def _tap_is_idle_instant(self) -> bool:
         """Tap not open/pressed, upright, no flow, not still moving."""
         ang = float(self.lever_angle)
@@ -1877,15 +1976,13 @@ class pour_beer(KitchenS_base_task):
         )
 
     def _tap_fully_stopped(self) -> bool:
-        """Require idle for several consecutive sim steps (settle)."""
-        return int(getattr(self, "_tap_idle_steps", 0)) >= int(
-            getattr(self, "TAP_SETTLE_STEPS", 36)
-        )
+        """Require idle for TAP_SETTLE_SEC of consecutive sim time."""
+        return int(getattr(self, "_tap_idle_steps", 0)) >= int(self._tap_settle_steps())
 
     def _liquid_fully_stable(self) -> bool:
-        """Liquid has not risen for TAP_SETTLE_STEPS while the tap is idle."""
+        """Liquid has not risen for TAP_SETTLE_SEC while the tap is idle."""
         return int(getattr(self, "_liquid_stable_steps", 0)) >= int(
-            getattr(self, "TAP_SETTLE_STEPS", 36)
+            self._tap_settle_steps()
         )
 
     def _update_kinematic_tasks(self):
@@ -1915,6 +2012,37 @@ class pour_beer(KitchenS_base_task):
         else:
             self._liquid_stable_steps = 0
         self._liquid_level_prev = liq
+        self._update_open_gap_timeout()
+
+    def _update_open_gap_timeout(self):
+        """End episode if tap stays closed >OPEN_GAP_TIMEOUT_SEC after an opening."""
+        if bool(getattr(self, "_pour_gap_timed_out", False)):
+            return
+        if self._tap_is_flowing():
+            self._closed_since_open_steps = 0
+            return
+        if not bool(getattr(self, "opened_once", False)):
+            return
+        self._closed_since_open_steps = int(
+            getattr(self, "_closed_since_open_steps", 0)
+        ) + 1
+        if self._closed_since_open_steps < int(self._open_gap_timeout_steps()):
+            return
+        self._pour_gap_timed_out = True
+        gap_s = float(
+            getattr(self, "open_gap_timeout_sec", self.OPEN_GAP_TIMEOUT_SEC)
+        )
+        print(
+            f"[pour_beer] tap closed >{gap_s:.0f}s since last opening — "
+            "scoring episode",
+            flush=True,
+        )
+        # Latch eval success immediately when criteria already hold.
+        try:
+            if self.check_success():
+                self.eval_success = True
+        except Exception:
+            pass
 
     def _idle_steps(self, n_steps: int, until=None):
         save_freq = self.save_freq if self.save_freq is not None else 15
@@ -2133,9 +2261,9 @@ class pour_beer(KitchenS_base_task):
 
         # 3) Lift off — spring returns the handle to upright; wait until settled.
         self._release_lever(arm)
-        settle_need = int(getattr(self, "TAP_SETTLE_STEPS", 36))
+        settle_need = int(self._tap_settle_steps())
         self._idle_steps(
-            max(220, settle_need * 6),
+            max(settle_need + 50, settle_need * 2),
             until=lambda: (
                 self.overflowed
                 or (
@@ -2167,7 +2295,8 @@ class pour_beer(KitchenS_base_task):
         if not self.opened_once:
             return False
         # Hard gate: never succeed while tap is open, flowing, or pressed.
-        # Mid-pour spring-shut foam pauses must not count until fully settled.
+        # Also require ~1s continuous idle (TAP_SETTLE_SEC) so brief spring-shut
+        # / contact flicker cannot latch success mid-pour.
         if (
             bool(self.tab_open)
             or float(self._flow_frac()) > 1e-4
@@ -2213,10 +2342,31 @@ class pour_beer(KitchenS_base_task):
             "closed_after_pour": bool(self.closed_after_pour),
             "tap_fully_stopped": bool(self._tap_fully_stopped()),
             "tap_idle_steps": int(getattr(self, "_tap_idle_steps", 0)),
+            "tap_settle_steps": int(self._tap_settle_steps()),
+            "tap_settle_sec": float(
+                getattr(self, "tap_settle_sec", self.TAP_SETTLE_SEC)
+            ),
+            "open_gap_timeout_sec": float(
+                getattr(self, "open_gap_timeout_sec", self.OPEN_GAP_TIMEOUT_SEC)
+            ),
+            "closed_since_open_steps": int(
+                getattr(self, "_closed_since_open_steps", 0)
+            ),
+            "pour_gap_timed_out": bool(
+                getattr(self, "_pour_gap_timed_out", False)
+            ),
             "liquid_stable_steps": int(getattr(self, "_liquid_stable_steps", 0)),
             "liquid_fully_stable": bool(self._liquid_fully_stable()),
             "pour_rate": float(getattr(self, "pour_rate", self.POUR_RATE)),
             "foam_gain": float(getattr(self, "foam_gain", self.FOAM_GAIN)),
+            "foam_gain_start": float(
+                getattr(self, "foam_gain_start", self.FOAM_GAIN_START)
+            ),
+            "foam_ramp_steps": int(
+                getattr(self, "foam_ramp_steps", self.FOAM_RAMP_STEPS)
+            ),
+            "foam_open_steps": int(getattr(self, "_foam_open_steps", 0)),
+            "effective_foam_gain": float(self._effective_foam_gain()),
             "foam_decay": float(getattr(self, "foam_decay", self.FOAM_DECAY)),
             "cup_xy": np.asarray(self.cup_xy, dtype=float).tolist(),
             "tap_xy": np.asarray(self.tap_xy, dtype=float).tolist(),
