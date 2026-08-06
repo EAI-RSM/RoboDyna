@@ -672,6 +672,9 @@ class HouseholdController:
                         )
                         return
                     grasped = bool(self.env._grasp_sponge())
+                elif self.task == "catch_mouse_object_drop":
+                    # grasp_actor's constrained descent cannot reach the handle.
+                    grasped = bool(self.env.interactive_grasp_basket(arm))
                 else:
                     # Always grasp with the highlighted gripper — never a
                     # reachability-based other arm (e.g. cook_food.food_arm).
@@ -705,6 +708,16 @@ class HouseholdController:
                         detail="could not grasp (out of reach or plan failed)",
                     )
             else:
+                if self.task == "catch_mouse_object_drop":
+                    released = bool(self.env.interactive_release_basket(arm))
+                    if not released:
+                        action_failed(
+                            self.env, (str(arm),),
+                            detail="release failed",
+                        )
+                        return
+                    self.holding = False
+                    return
                 self.env.plan_success = True
                 moved = self.env.move(self.env.open_gripper(arm))
                 released = moved is not False and bool(

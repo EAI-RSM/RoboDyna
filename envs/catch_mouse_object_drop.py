@@ -1616,6 +1616,58 @@ class catch_mouse_object_drop(Office_base_task):
         )
         return np.array(pose[:3], dtype=np.float64)
 
+    def interactive_grasp_basket(self, arm_tag) -> bool:
+        """Interactive Space: grasp the basket handle with unconstrained moves.
+
+        ``grasp_actor`` inserts a straight-line constrained descent that the
+        planner cannot solve onto this handle, so the arm stalls at pre-grasp
+        and the gripper shuts on air (first Space press fails / flashes red).
+        Matching the expert path — two plain ``move_to_pose`` steps — makes the
+        first press succeed.
+        """
+        if self.basket is None:
+            return False
+        self.plan_success = True
+        pre_pose, grasp_pose = self.choose_grasp_pose(
+            self.basket,
+            arm_tag=arm_tag,
+            pre_dis=0.10,
+            target_dis=0.0,
+            contact_point_id=[0, 1],
+        )
+        if pre_pose is None or grasp_pose is None:
+            self.plan_success = False
+            return False
+
+        self.plan_success = True
+        self.move(self.open_gripper(arm_tag))
+        self.plan_success = True
+        moved = self.move(self.move_to_pose(arm_tag, pre_pose))
+        if moved is False or not bool(self.plan_success):
+            return False
+        self.plan_success = True
+        moved = self.move(self.move_to_pose(arm_tag, grasp_pose))
+        if moved is False or not bool(self.plan_success):
+            return False
+
+        self.plan_success = True
+        moved = self.move(self.close_gripper(arm_tag, pos=0.0))
+        if moved is False or not bool(self.plan_success):
+            return False
+        self._holding_basket = True
+        print(f"[catch_mouse_object_drop] basket handle grasped ({arm_tag})")
+        return True
+
+    def interactive_release_basket(self, arm_tag) -> bool:
+        """Interactive Space: open gripper and drop the basket in place."""
+        self.plan_success = True
+        moved = self.move(self.open_gripper(arm_tag))
+        ok = moved is not False and bool(self.plan_success)
+        if ok:
+            self._holding_basket = False
+            print("[catch_mouse_object_drop] basket released")
+        return ok
+
     def _pick_place_basket_to_landing(self, arm_tag):
         """Grasp the basket's handle and set it down under the landing.
 
@@ -1632,25 +1684,8 @@ class catch_mouse_object_drop(Office_base_task):
         hz = float(getattr(self, "basket_hz", 0.5 * self.basket_height))
         place_z = self.table_top + hz
 
-        self.plan_success = True
-        pre_pose, grasp_pose = self.choose_grasp_pose(
-            self.basket,
-            arm_tag=arm_tag,
-            pre_dis=0.10,
-            target_dis=0.0,
-            contact_point_id=[0, 1],
-        )
-        if pre_pose is None or grasp_pose is None:
-            raise UnStableError("catch_mouse_object_drop: no basket handle grasp pose")
-
-        self.plan_success = True
-        self.move(self.move_to_pose(arm_tag, pre_pose))
-        self.plan_success = True
-        self.move(self.move_to_pose(arm_tag, grasp_pose))
-
-        self._holding_basket = True
-        self.plan_success = True
-        self.move(self.close_gripper(arm_tag, pos=0.0))
+        if not self.interactive_grasp_basket(arm_tag):
+            raise UnStableError("catch_mouse_object_drop: basket handle grasp failed")
 
         # Lift clear of the table.
         self.plan_success = True
