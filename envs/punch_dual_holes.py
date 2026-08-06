@@ -86,6 +86,12 @@ class punch_dual_holes(Base_Task):
     PAGE_EXIT_MARGIN = 0.002
     HIDE_Z = -10.0
     PUNCH_REST_Z_EXTRA = 0.03
+    # Stamp image: create_box texture_id → assets/background_texture/<id>.png
+    # (cube-UV atlas with the robot head in the +Z/-Z tiles). Sized to sit on
+    # the card face (slightly inset from PAGE_HALF).
+    PUNCH_MARK_TEXTURE_ID = "custom/robot_head_punch"
+    STAMP_HALF = (0.020, 0.020, 0.0015)  # ~paper face, slightly inset
+    STAMP_Z_EPS = 0.003
 
     def setup_demo(self, **kwags):
         # capture task-scoped params from the (general) config's task_args block
@@ -323,6 +329,8 @@ class punch_dual_holes(Base_Task):
         self._button_top_z = {}
         self._reactive_buttons = None
         self.pages = {}           # side -> list[Actor]
+        self.page_stamped_actors = {}  # side -> list[Actor|None] prebuilt stamped twins
+        self.page_stamps = {}     # side -> list[bool]  (True = swapped to stamped twin)
         self.page_target_x = {}   # side -> list[float]  (target punch x for each page)
         self.page_start_x = {}    # side -> list[float]
         self.page_punched = {}    # side -> list[bool]
@@ -400,21 +408,20 @@ class punch_dual_holes(Base_Task):
             self.punch_head[side] = head
             self._punch_press[side] = 0
 
-            # action keys: colored keycap on a thin black base (marble-task style), in the
+            # action keys: colored keycap in a hollow bezel (shelf-marble style), in the
             # arm's near reach (outer, in front of the belt).
             button_x = sign * 0.26
             button_y = self.BELT_Y + 0.13
-            base_hz = float(self.KEY_BASE_HALF[2])
             cap_hz = float(self.BUTTON_HALF[2])
-            base_z = z0 + base_hz
-            cap_z = z0 + 2.0 * base_hz + cap_hz
-            button_base = create_box(
+            cap_z = z0 + cap_hz
+            button_base = add_key_base_border(
                 self,
-                pose=sapien.Pose([button_x, button_y, base_z], [1, 0, 0, 0]),
-                half_size=self.KEY_BASE_HALF,
-                color=self.KEY_BASE_COLOR,
-                name=f"button_base_{side}",
-                is_static=True,
+                float(button_x),
+                float(button_y),
+                float(z0),
+                self.BUTTON_HALF,
+                color=list(self.KEY_BASE_COLOR),
+                name_prefix=f"button_base_{side}",
             )
             button_home = sapien.Pose([button_x, button_y, cap_z], [1, 0, 0, 0])
             button = create_box(
@@ -434,6 +441,7 @@ class punch_dual_holes(Base_Task):
             # is nearest the head (arrives first); each higher-index page uses the configured
             # placement interval pattern, so they reach the head in index order k = 0, 1, 2, ...
             pages = []
+            stamped_pages = []
             tx_list = []
             sx_list = []
             for k, offset in enumerate(self.aligned_square_offsets[side]):
@@ -443,12 +451,10 @@ class punch_dual_holes(Base_Task):
                 tx = punch_x + toff
                 missing = bool(self.page_missing[side][k])
                 page_z = self.HIDE_Z if missing else belt_top_z + self.PAGE_HALF[2]
+                page_q = [1, 0, 0, 0]
                 page = create_box(
                     self,
-                    pose=sapien.Pose(
-                        [sx, self.BELT_Y, page_z],
-                        [1, 0, 0, 0],
-                    ),
+                    pose=sapien.Pose([sx, self.BELT_Y, page_z], page_q),
                     half_size=self.PAGE_HALF,
                     color=(0.93, 0.93, 0.88),
                     name=f"page_{side}_{k}",
@@ -456,10 +462,26 @@ class punch_dual_holes(Base_Task):
                 )
                 self._make_kinematic(page)
                 pages.append(page)
+                # Pre-build textured stamp overlay off-stage (revealed on punch).
+                stamped = None
+                if not missing:
+                    stamped = create_box(
+                        self,
+                        pose=sapien.Pose([sx, self.BELT_Y, self.HIDE_Z], page_q),
+                        half_size=self.STAMP_HALF,
+                        color=(1.0, 1.0, 1.0),
+                        name=f"page_{side}_{k}_stamped",
+                        is_static=False,
+                        texture_id=self.PUNCH_MARK_TEXTURE_ID,
+                    )
+                    self._make_kinematic(stamped)
+                stamped_pages.append(stamped)
                 tx_list.append(tx)
                 sx_list.append(sx)
 
             self.pages[side] = pages
+            self.page_stamped_actors[side] = stamped_pages
+            self.page_stamps[side] = [False] * self.n_pages  # True once swapped to stamped twin
             self.page_target_x[side] = tx_list
             self.page_start_x[side] = sx_list
             self.page_punched[side] = [bool(v) for v in self.page_missing[side]]
@@ -470,7 +492,8 @@ class punch_dual_holes(Base_Task):
 
             # reserve space so clutter / randomizers stay clear
             self.add_prohibit_area(belt, padding=0.02)
-            self.add_prohibit_area(button_base, padding=0.03)
+            for wall in button_base:
+                self.add_prohibit_area(wall, padding=0.03)
             self.add_prohibit_area(button, padding=0.03)
 
         # belt simulation clock (shared step counter; each belt reads its own phase/speed)
@@ -535,16 +558,37 @@ class punch_dual_holes(Base_Task):
         eff = max(0, step - self.belt_phase[side])
         return self.page_start_x[side][k] - sign * self.belt_speed[side] * eff
 
+    def _stamp_pose_for_page(self, page_pose):
+        p = page_pose.p
+        return sapien.Pose(
+            [
+                float(p[0]),
+                float(p[1]),
+                float(p[2]) + self.PAGE_HALF[2] + self.STAMP_HALF[2] + self.STAMP_Z_EPS,
+            ],
+            page_pose.q,
+        )
+
     def _set_page_pose(self, side, k, x):
         p = self.pages[side][k]
         cur = p.get_pose()
-        p.actor.set_pose(sapien.Pose([x, cur.p[1], cur.p[2]], cur.q))
+        pose = sapien.Pose([x, cur.p[1], cur.p[2]], cur.q)
+        p.actor.set_pose(pose)
+        # Keep revealed stamp overlays glued to their page.
+        if self.page_stamps[side][k]:
+            stamp = self.page_stamped_actors[side][k]
+            if stamp is not None:
+                stamp.actor.set_pose(self._stamp_pose_for_page(pose))
 
     def _hide_page(self, side, k):
         if self.page_hidden[side][k]:
             return
         p = self.pages[side][k].get_pose()
-        self.pages[side][k].actor.set_pose(sapien.Pose([p.p[0], p.p[1], self.HIDE_Z], p.q))
+        hide = sapien.Pose([p.p[0], p.p[1], self.HIDE_Z], p.q)
+        self.pages[side][k].actor.set_pose(hide)
+        stamp = self.page_stamped_actors[side][k]
+        if stamp is not None and self.page_stamps[side][k]:
+            stamp.actor.set_pose(self._stamp_pose_for_page(hide))
         self.page_hidden[side][k] = True
 
     def _move_with_belt_motion(self, action1, action2=None, advance_belts=False):
@@ -570,8 +614,16 @@ class punch_dual_holes(Base_Task):
                 if self.page_hidden[side][k]:
                     continue
                 x = self._page_x_at(side, k, self._belt_step)
+                # Keep punched (stamped) cards on the belt so the robot-head mark
+                # stays visible; only hide once they are well past the inner edge.
                 if self.page_punched[side][k] and self._page_has_exited_belt(side, x):
-                    self._hide_page(side, k)
+                    # Delay hide: travel an extra card-width past the exit line.
+                    sign = self._sides[side]
+                    extra = 2.0 * self.PAGE_HALF[0]
+                    if sign * (x - self.belt_inner_edge_x[side]) <= -(self.PAGE_HALF[0] + self.PAGE_EXIT_MARGIN + extra):
+                        self._hide_page(side, k)
+                    else:
+                        self._set_page_pose(side, k, x)
                     continue
                 self._set_page_pose(side, k, x)
                 if self.page_punched[side][k]:
@@ -641,6 +693,8 @@ class punch_dual_holes(Base_Task):
             return
         self.page_missed[side][k] = True
         self.page_punched[side][k] = True
+        # Still stamp the visual so interactive teleop gets clear punch feedback.
+        self._apply_punch_mark(side, k)
         if os.environ.get("DHP_DEBUG"):
             print(f"[dhp] MISS {side} page{k} step={self._belt_step}", flush=True)
 
@@ -665,14 +719,24 @@ class punch_dual_holes(Base_Task):
         self.page_offset[side][k] = float(off)
         if os.environ.get("DHP_DEBUG"):
             print(f"[dhp] FIRE {side} page{k} off={off:.4f} step={self._belt_step}", flush=True)
-        # mark the punched page with a dark hole-ish recolor for visibility
-        for c in self.pages[side][k].actor.get_components():
-            if isinstance(c, sapien.render.RenderBodyComponent):
-                for s in c.render_shapes:
-                    try:
-                        s.material.set_base_color([0.45, 0.42, 0.40, 1.0])
-                    except Exception:
-                        pass
+        self._apply_punch_mark(side, k)
+
+    def _apply_punch_mark(self, side, k):
+        """Reveal the prebuilt textured stamp overlay on top of page (side, k)."""
+        if self.page_stamps[side][k]:
+            return
+        stamped = self.page_stamped_actors[side][k]
+        if stamped is None:
+            return
+        page_pose = self.pages[side][k].get_pose()
+        stamped.actor.set_pose(self._stamp_pose_for_page(page_pose))
+        self.page_stamps[side][k] = True
+        if os.environ.get("DHP_DEBUG"):
+            p = stamped.get_pose().p
+            print(
+                f"[dhp] STAMP {side} page{k} pose=({p[0]:.3f},{p[1]:.3f},{p[2]:.3f})",
+                flush=True,
+            )
 
     def _belt_idle(self, steps, advance_belts=True):
         """Dwell for `steps` physics steps while optionally advancing the belts."""
