@@ -31,11 +31,11 @@ class punch_dual_holes(Base_Task):
               tile_pause_s (default 2.0 s); unpressed ready tiles are marked missed
               when the pause expires, then the belts resume.
           true / "continuous" = belts never stop; press while the tile overlaps the stamp.
-              Continuous belt speed is belt_speed × belt_continuous_speed_scale (default 2×).
+              Continuous belt speed is belt_speed × belt_continuous_speed_scale (default 1.6×).
           CLI: --task-arg belt_continous_motion=true   or   --option 2
 
-    A press only counts as a stamp when at least ``STAMP_OVERLAP_MIN`` of the punch-head
-    footprint lands on the card; anything less marks that card missed.
+    A press only counts as a stamp when at least ``STAMP_OVERLAP_MIN`` (30%) of the
+    punch-head footprint lands on the card; anything less marks that card missed.
 
     Tile spacing is always variable for now (random gaps in [square_gap_min,
     square_gap_max]); equal_tile_spacing is not exposed as an option.
@@ -55,11 +55,12 @@ class punch_dual_holes(Base_Task):
     KEY_BASE_COLOR = (0.08, 0.08, 0.08)
     LEFT_BUTTON_COLOR = (0.20, 0.70, 0.35)
     RIGHT_BUTTON_COLOR = (0.18, 0.48, 0.82)
-    PUNCH_HALF = (0.02, 0.02, 0.05)     # gantry punch-head half-extents
+    PUNCH_HALF = (0.026, 0.026, 0.065)  # gantry punch-head half-extents (+30% vs 0.02/0.05)
+    PUNCH_SCALE_MULT = 1.3              # visual/collision scale on 100_seal
     # Fraction of the punch-head footprint that must land on a card. MIN is what counts
     # as stamped; READY is the margin the expert waits for before committing a tap.
-    STAMP_OVERLAP_MIN = 0.5
-    STAMP_OVERLAP_READY = 0.6
+    STAMP_OVERLAP_MIN = 0.3
+    STAMP_OVERLAP_READY = 0.4
     PUNCH_MODEL = "100_seal"
     PUNCH_MODEL_IDS = (2, 3, 4)
     PUNCH_Q = [0.5, 0.5, 0.5, 0.5]
@@ -73,7 +74,7 @@ class punch_dual_holes(Base_Task):
     SQUARE_PLACEMENT_MODE_DEFAULT = "variable"  # always variable for now (not an option)
     MISSING_TILE_MODE_DEFAULT = "none"
     BELT_CONTINOUS_MOTION_DEFAULT = False   # Opt 2 default: discrete stop-per-tile
-    BELT_CONTINUOUS_SPEED_SCALE_DEFAULT = 2.0  # Opt 2: multiply belt_speed when continuous
+    BELT_CONTINUOUS_SPEED_SCALE_DEFAULT = 1.6  # Opt 2: multiply belt_speed when continuous
     BELT_SPEED_MIN_DEFAULT = 0.0016
     BELT_SPEED_MAX_DEFAULT = 0.0028
 
@@ -287,7 +288,7 @@ class punch_dual_holes(Base_Task):
             speed_lo = min(speed_min, speed_max)
             speed_hi = max(speed_min, speed_max)
             speed = float(np.random.uniform(speed_lo, speed_hi))
-        # Opt 2 continuous runs at a higher surface speed (default 2×) so tiles don't crawl.
+        # Opt 2 continuous runs at a higher surface speed (default 1.6×) so tiles don't crawl.
         continuous = bool(getattr(self, "belt_continous_motion", False))
         if continuous:
             scale = float(
@@ -392,6 +393,7 @@ class punch_dual_holes(Base_Task):
                 model_id=self.punch_model_id,
                 convex=True,
                 is_static=False,
+                scale_mult=self.PUNCH_SCALE_MULT,
             )
             self._make_kinematic(head)
             head.set_name(f"punch_{side}")
@@ -736,9 +738,8 @@ class punch_dual_holes(Base_Task):
     def _stamp_overlap_ratio(self, side, k):
         """Fraction of the punch-head footprint that lies on page ``k``.
 
-        Normalized by the head, not the card: the head is the smaller of the two, so
-        dividing by the card area would cap the ratio below 1 and make the threshold
-        mean something other than "half the head is on the paper".
+        Normalized by the head area (not the card). With the enlarged stamp the head is
+        larger than the card, so the ratio caps below 1 even when fully covering the page.
         """
         page_x = self._page_x_at(side, k, self._belt_step)
         punch_x = self._punch_x[side]

@@ -39,7 +39,7 @@ class save_goal(Base_Task):
 
     BALL_RADIUS_DEFAULT = 0.018
     # Nominal ball speed; each episode samples ±20% by default (scale 0.8–1.2).
-    BALL_SPEED_DEFAULT = 0.0375
+    BALL_SPEED_DEFAULT = 0.06435  # +10% vs 0.0585; episode still samples ±20%
     BALL_SPEED_SCALE_MIN_DEFAULT = 0.8
     BALL_SPEED_SCALE_MAX_DEFAULT = 1.2
     BALL_START_X_DEFAULT = 0.24
@@ -746,6 +746,21 @@ class save_goal(Base_Task):
         self._freeze_keeper_in_place()
         self._keeper_deployed = True
 
+    def _retreat_arm_home(self, arm_tag: ArmTag, lift_z: float = 0.08):
+        """After releasing the keeper, clear the goal then return the arm home.
+
+        Forces ``plan_success`` so a failed place step cannot skip the retreat.
+        A failed home plan does not invalidate an already-deployed save.
+        """
+        deployed = bool(getattr(self, "_keeper_deployed", False))
+        self.plan_success = True
+        if lift_z and abs(float(lift_z)) > 1e-4:
+            self.move(self.move_by_displacement(arm_tag=arm_tag, z=float(lift_z), move_axis="arm"))
+            self.plan_success = True
+        self.move(self.back_to_origin(arm_tag))
+        if deployed:
+            self.plan_success = True
+
     def _freeze_keeper_in_place(self):
         """Hold the square at its current pose after the drop (never snap elsewhere)."""
         if getattr(self, "goalkeeper", None) is None:
@@ -1187,8 +1202,8 @@ class save_goal(Base_Task):
         )
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.12, move_axis="arm"))
         self._place_keeper_from_top(arm_tag)
-        self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.08, move_axis="arm"))
-        self.move(self.back_to_origin(arm_tag))
+        # After the yellow cube is dropped, always return the arm to its origin pose.
+        self._retreat_arm_home(arm_tag, lift_z=0.08)
         # Do not re-set the cube pose after retreat (that caused a visible teleport).
         # Only re-assert kinematic so contacts cannot drag it.
         self._hold_keeper_kinematic()

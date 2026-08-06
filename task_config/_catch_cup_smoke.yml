@@ -429,7 +429,7 @@ task_args:
     #   Opt 2 — continuous belt vs discrete stop-per-tile → belt_continous_motion
     #     DEFAULT false = discrete: tiles STOP under stamps so both arms press together.
     #     Pause under stamp capped by tile_pause_s (2.0 s). true = never stop.
-    #     Continuous uses belt_speed × belt_continuous_speed_scale (default 2×).
+    #     Continuous uses belt_speed × belt_continuous_speed_scale (default 1.6×).
     #     CLI: --task-arg belt_continous_motion=true   or   --option 2
     # Tile spacing is always variable (not an option); gaps ~ U(square_gap_min, square_gap_max).
     n_pages: 4                  # tiles/pages per side
@@ -440,7 +440,7 @@ task_args:
     belt_continous_motion: true # Opt 2: false = discrete stop-per-tile (default); true = continuous
     tile_pause_s: 2.0           # Opt 2 discrete: seconds the tile holds under the stamp
     belt_speed: 0.0002          # m per physics step (discrete); continuous uses × scale below
-    belt_continuous_speed_scale: 2.0  # Opt 2: multiply belt_speed when continuous
+    belt_continuous_speed_scale: 1.6  # Opt 2: multiply belt_speed when continuous
     square_gap_min: 0.010       # m; variable-spacing min gap
     square_gap_max: 0.030       # m; variable-spacing max gap
   save_goal:
@@ -478,7 +478,7 @@ task_args:
     net_strand_t: 0.0022        # m; strand thickness
     mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
     random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
-    ball_speed: 0.0375          # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
+    ball_speed: 0.06435         # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
     ball_speed_scale_min: 0.8   # low scale vs ball_speed
     ball_speed_scale_max: 1.2   # high scale vs ball_speed
     ball_angle_deg_min: -10.0   # deg; path angle vs goal-axis min (straight-shot mode)
