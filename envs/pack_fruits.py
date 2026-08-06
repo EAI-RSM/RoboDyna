@@ -1578,6 +1578,92 @@ class pack_fruits(Base_Task):
         self.plan_success = True
         return True
 
+    def _carry_and_drop_pair(
+        self, idx_l, arm_l, target_l, idx_r, arm_r, target_r, resend_on_miss=True,
+    ):
+        """Raise, slide, and release both fruits over their baskets together.
+
+        Returns ``(released_l, released_r)`` — True when that fruit was opened
+        over its basket (vs aborted back onto the belt).
+        """
+        import os
+        dbg = bool(os.environ.get("PACKING_DEBUG"))
+
+        # 1) raise both grippers +Z in place (IK-driven, not trajopt)
+        self._raise_along_z(idx_l, arm_l, lift_z=self.pick_lift)
+        self._raise_along_z(idx_r, arm_r, lift_z=self.pick_lift)
+        hover_z_l = float(self.items[idx_l].get_pose().p[2])
+        hover_z_r = float(self.items[idx_r].get_pose().p[2])
+
+        # 2) slide horizontally over each basket at the raised height
+        for _try in range(3):
+            fp_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
+            fp_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
+            tgt_l = np.array(
+                [float(target_l[0]), float(target_l[1]), hover_z_l], dtype=float
+            )
+            tgt_r = np.array(
+                [float(target_r[0]), float(target_r[1]), hover_z_r], dtype=float
+            )
+            gl = float(np.hypot(tgt_l[0] - fp_l[0], tgt_l[1] - fp_l[1]))
+            gr = float(np.hypot(tgt_r[0] - fp_r[0], tgt_r[1] - fp_r[1]))
+            if dbg:
+                print(
+                    f"[pack_fruits]  pair slide try={_try} gap_l={gl:.4f} gap_r={gr:.4f}",
+                    flush=True,
+                )
+            if gl < 0.03 and gr < 0.03:
+                break
+            self.plan_success = True
+            self.move(
+                self.move_to_pose(arm_l, self._weld_target_ee_pose(idx_l, tgt_l)),
+                self.move_to_pose(arm_r, self._weld_target_ee_pose(idx_r, tgt_r)),
+            )
+            self.plan_success = True
+
+        if dbg:
+            fp_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
+            fp_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
+            print(
+                f"[pack_fruits]  pair slide residual_xy "
+                f"l={np.hypot(target_l[0] - fp_l[0], target_l[1] - fp_l[1]):.4f} "
+                f"r={np.hypot(target_r[0] - fp_r[0], target_r[1] - fp_r[1]):.4f} "
+                f"fruit_z l={fp_l[2]:.3f} r={fp_r[2]:.3f}",
+                flush=True,
+            )
+
+        over_l = self._ensure_over_basket(idx_l, arm_l, target_l)
+        over_r = self._ensure_over_basket(idx_r, arm_r, target_r)
+        self._over_basket[idx_l] = bool(over_l)
+        self._over_basket[idx_r] = bool(over_r)
+
+        if not over_l:
+            self._abort_drop_to_belt(idx_l, arm_l)
+        if not over_r:
+            self._abort_drop_to_belt(idx_r, arm_r)
+
+        drop = [
+            (i, a, t)
+            for i, a, t, ok in (
+                (idx_l, arm_l, target_l, over_l),
+                (idx_r, arm_r, target_r, over_r),
+            )
+            if ok
+        ]
+        if drop:
+            self.plan_success = True
+            self.move(*[self.open_gripper(a) for _i, a, _t in drop])
+            for i, _a, _t in drop:
+                self._release_fruit(i)
+            self._belt_dwell(80)
+            for i, _a, t in drop:
+                self._settle_after_drop(i, t, resend_on_miss=resend_on_miss)
+
+        self.plan_success = True
+        self.move(self.back_to_origin(arm_l), self.back_to_origin(arm_r))
+        self.plan_success = True
+        return bool(over_l), bool(over_r)
+
     def _pack_item(self, idx):
         """Intercept one still-moving fruit → weld → carry → release."""
         import os
@@ -1721,63 +1807,9 @@ class pack_fruits(Base_Task):
             if dbg:
                 print("[pack_fruits]  pair: both attached", flush=True)
 
-            # 1) raise both grippers +Z in place (IK-driven, not trajopt)
-            self._raise_along_z(idx_l, left, lift_z=self.pick_lift)
-            self._raise_along_z(idx_r, right, lift_z=self.pick_lift)
-            hover_z_l = float(self.items[idx_l].get_pose().p[2])
-            hover_z_r = float(self.items[idx_r].get_pose().p[2])
-
-            # 2) slide horizontally over each basket at the raised height
-            for _try in range(3):
-                fp_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
-                fp_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
-                tgt_l = np.array([float(target_l[0]), float(target_l[1]), hover_z_l], dtype=float)
-                tgt_r = np.array([float(target_r[0]), float(target_r[1]), hover_z_r], dtype=float)
-                gl = float(np.hypot(tgt_l[0] - fp_l[0], tgt_l[1] - fp_l[1]))
-                gr = float(np.hypot(tgt_r[0] - fp_r[0], tgt_r[1] - fp_r[1]))
-                if dbg:
-                    print(f"[pack_fruits]  pair slide try={_try} gap_l={gl:.4f} gap_r={gr:.4f}", flush=True)
-                if gl < 0.03 and gr < 0.03:
-                    break
-                self.plan_success = True
-                self.move(
-                    self.move_to_pose(left, self._weld_target_ee_pose(idx_l, tgt_l)),
-                    self.move_to_pose(right, self._weld_target_ee_pose(idx_r, tgt_r)),
-                )
-                self.plan_success = True
-
-            if dbg:
-                fp_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
-                fp_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
-                print(f"[pack_fruits]  pair slide residual_xy "
-                      f"l={np.hypot(target_l[0] - fp_l[0], target_l[1] - fp_l[1]):.4f} "
-                      f"r={np.hypot(target_r[0] - fp_r[0], target_r[1] - fp_r[1]):.4f} "
-                      f"fruit_z l={fp_l[2]:.3f} r={fp_r[2]:.3f}", flush=True)
-            over_l = self._ensure_over_basket(idx_l, left, target_l)
-            over_r = self._ensure_over_basket(idx_r, right, target_r)
-            self._over_basket[idx_l] = bool(over_l)
-            self._over_basket[idx_r] = bool(over_r)
-
-            if not over_l:
-                self._abort_drop_to_belt(idx_l, left)
-            if not over_r:
-                self._abort_drop_to_belt(idx_r, right)
-
-            drop = [(i, a) for i, a, ok in
-                    ((idx_l, left, over_l), (idx_r, right, over_r)) if ok]
-            if drop:
-                self.plan_success = True
-                self.move(*[self.open_gripper(a) for _i, a in drop])
-                for i, _a in drop:
-                    self._release_fruit(i)
-                self._belt_dwell(80)
-                if over_l:
-                    self._settle_after_drop(idx_l, target_l)
-                if over_r:
-                    self._settle_after_drop(idx_r, target_r)
-
-            self.move(self.back_to_origin(left), self.back_to_origin(right))
-            self.plan_success = True
+            self._carry_and_drop_pair(
+                idx_l, left, target_l, idx_r, right, target_r,
+            )
         finally:
             self._grasping_idxs.discard(idx_l)
             self._grasping_idxs.discard(idx_r)

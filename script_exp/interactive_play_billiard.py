@@ -40,22 +40,11 @@ CONTROLS_KEYBOARD = """
   Left / Right      rotate aim direction
   Up / Down         slide tip along aim (approach / retreat)
   Space             fire strike impulse along aim
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Success: red ball in an allowed pocket; no distractor sink
 """
 
 CONTROLS_ROBOT = """
   R / T             rotate gripper clockwise / counter-clockwise
   Space             pick up cue, then strike in the cue's current direction
-  V                 toggle view: top-down ↔ head_camera
-  G                 gripper view (cycle L/R when both arms active)
-  Escape             quit
-------------------------------------------------------------
-  Success: red ball in an allowed pocket; no distractor sink
-  --robot-motion planner|interpolate
 """
 
 
@@ -268,11 +257,21 @@ class RobotCueController:
             self.busy = False
             return
         self.ready = True
-        print("Cue picked up. Position it with arrows/E/Q and rotate it with G/F; Space strikes.")
+        print("Cue picked up. Position it with arrows/E/Q and rotate it with R/T; Space strikes.")
         self.busy = False
 
     def _move_gripper(self, x=0.0, y=0.0, z=0.0, quat=None):
         """Execute one small world-space manual motion without queued auto-aim."""
+        # Block planned -Z once the welded cue is already on the felt.
+        if float(z) < 0.0 and getattr(self.env, "_cue_welded", False):
+            ee = np.asarray(self.env.get_arm_pose(str(self.arm)), dtype=float)
+            trial = ee.copy()
+            trial[2] += float(z)
+            z_floor = self.env.interactive_ee_z_floor(str(self.arm), trial)
+            if z_floor is not None:
+                z = max(float(z), float(z_floor) - float(ee[2]))
+                if z >= -1e-5:
+                    return False
         self.env.plan_success = True
         ok = self.env.move(self.env.move_by_displacement(
             self.arm, x=x, y=y, z=z, quat=quat, move_axis="world",
@@ -281,7 +280,25 @@ class RobotCueController:
             print("Requested gripper motion is unreachable.")
             self.env.plan_success = True
             return False
+        self._lift_arm_off_felt_if_needed()
         return True
+
+    def _lift_arm_off_felt_if_needed(self):
+        """If a rotate/slide dipped the cue into the felt, raise the arm with it."""
+        if not getattr(self.env, "_cue_welded", False):
+            return
+        ee = np.asarray(self.env.get_arm_pose(str(self.arm)), dtype=float)
+        z_floor = self.env.interactive_ee_z_floor(str(self.arm), ee)
+        if z_floor is None:
+            return
+        dz = float(z_floor) - float(ee[2])
+        if dz <= 1e-4:
+            return
+        self.env.plan_success = True
+        self.env.move(self.env.move_by_displacement(
+            self.arm, z=dz, move_axis="world",
+        ))
+        self.env.plan_success = True
 
     def _rotate_gripper(self, yaw):
         import transforms3d as t3d

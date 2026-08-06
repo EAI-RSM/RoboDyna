@@ -47,6 +47,10 @@ class play_billiard(Base_Task):
     WALL_T = 0.012                  # wall thickness of the hollow box
     FLOOR_HALF_Z = 0.005            # thin inner floor so pocketed balls rest inside
     LID_HALF_Z = 0.003              # thin green lid (with real pocket openings)
+    # Invisible collision slab under the felt (top flush with felt_top). Thick
+    # enough that a held/kinematic cue cannot tunnel into the hollow box; same
+    # pocket cutouts so balls still fall through.
+    FELT_COLLISION_HALF_Z = 0.016
     RAIL_HALF_H = 0.002             # very low cushion so the cue clears it
     RAIL_HALF_T = 0.006
     # Pocket diameter = 1.2 × ball diameter ⇒ radius = 1.2 × ball radius.
@@ -324,10 +328,9 @@ class play_billiard(Base_Task):
         )
         builder.build_static(name=f"pocket_floor_well_{index}")
 
-    def _build_felt_lid_with_holes(self, cx, cy, hl, hw):
-        """Single green felt lid mesh with true circular pocket openings."""
+    def _felt_polygon_with_pockets(self, cx, cy, hl, hw):
+        """Table-top polygon in lid-local XY with circular pocket holes cut out."""
         pr = float(self.pocket_radius)
-        thickness = 2.0 * self.LID_HALF_Z
         poly = Polygon([(-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw)])
         for p in self._pocket_centers:
             local = Point(float(p[0] - cx), float(p[1] - cy))
@@ -336,24 +339,57 @@ class play_billiard(Base_Task):
             raise RuntimeError("pocket cutouts removed the entire felt lid")
         if poly.geom_type == "MultiPolygon":
             poly = max(poly.geoms, key=lambda g: g.area)
+        return poly
 
-        mesh = extrude_polygon(poly, height=thickness)
-        mesh.apply_translation([0.0, 0.0, -0.5 * thickness])
+    def _export_extruded_lid_mesh(self, poly, thickness, path):
+        mesh = extrude_polygon(poly, height=float(thickness))
+        mesh.apply_translation([0.0, 0.0, -0.5 * float(thickness)])
         try:
             mesh.fix_normals()
         except Exception:
             pass
+        mesh.export(path)
+        return path
 
-        lid_path = os.path.join(tempfile.gettempdir(), "play_billiard_felt_lid.obj")
-        mesh.export(lid_path)
+    def _build_felt_lid_with_holes(self, cx, cy, hl, hw):
+        """Green felt lid visual + thicker static collision (same pocket openings).
 
+        The held cue is kinematic/welded, so thin triangle meshes alone are easy
+        to tunnel through. A thicker collision slab (top flush with ``felt_top``)
+        gives the table a solid playing surface while preserving pocket holes.
+        """
+        poly = self._felt_polygon_with_pockets(cx, cy, hl, hw)
+        tmp = tempfile.gettempdir()
+
+        # Thin green visual (matches prior look / felt_top height).
+        vis_thickness = 2.0 * self.LID_HALF_Z
+        vis_path = os.path.join(tmp, "play_billiard_felt_lid_vis.obj")
+        self._export_extruded_lid_mesh(poly, vis_thickness, vis_path)
         felt_mat = sapien.render.RenderMaterial(base_color=[*self.FELT_COLOR, 1.0])
-        builder = self.scene.create_actor_builder()
-        builder.set_physx_body_type("static")
-        builder.add_nonconvex_collision_from_file(filename=lid_path)
-        builder.add_visual_from_file(filename=lid_path, material=felt_mat)
-        builder.set_initial_pose(sapien.Pose([cx, cy, self._lid_z], [1, 0, 0, 0]))
-        builder.build_static(name="felt_lid")
+        vis_builder = self.scene.create_actor_builder()
+        vis_builder.set_physx_body_type("static")
+        vis_builder.add_visual_from_file(filename=vis_path, material=felt_mat)
+        # Keep a thin collision on the visual too (balls rest right at felt_top).
+        vis_builder.add_nonconvex_collision_from_file(filename=vis_path)
+        vis_builder.set_initial_pose(
+            sapien.Pose([cx, cy, self._lid_z], [1, 0, 0, 0])
+        )
+        vis_builder.build_static(name="felt_lid")
+
+        # Thicker invisible collision slab: top face at felt_top, extends downward
+        # into the hollow box so the cue cannot sink inside the table.
+        coll_half = float(self.FELT_COLLISION_HALF_Z)
+        coll_thickness = 2.0 * coll_half
+        coll_path = os.path.join(tmp, "play_billiard_felt_lid_coll.obj")
+        self._export_extruded_lid_mesh(poly, coll_thickness, coll_path)
+        coll_z = float(self.felt_top - coll_half)
+        coll_builder = self.scene.create_actor_builder()
+        coll_builder.set_physx_body_type("static")
+        coll_builder.add_nonconvex_collision_from_file(filename=coll_path)
+        coll_builder.set_initial_pose(
+            sapien.Pose([cx, cy, coll_z], [1, 0, 0, 0])
+        )
+        coll_builder.build_static(name="felt_lid_collision")
 
     def _build_hollow_box(self, cx, cy, hl, hw):
         """10 cm hollow wood box: floor + four walls (empty interior)."""
@@ -1008,7 +1044,7 @@ class play_billiard(Base_Task):
             lift_world = np.array([0.0, 0.0, float(lift_z)], dtype=np.float64)
             self._cue_ee_T[:3, 3] += ee_T[:3, :3].T @ lift_world
         self._cue_arm = str(arm_tag)
-        seated = self._mat_to_pose(ee_T @ self._cue_ee_T)
+        seated = self._clamp_cue_pose_above_felt(self._mat_to_pose(ee_T @ self._cue_ee_T))
         self.cue.actor.set_pose(seated)
         rigid = self._get_rigid(self.cue)
         if rigid is not None:
@@ -1144,12 +1180,75 @@ class play_billiard(Base_Task):
             pass
         return False
 
+    def _cue_min_z(self, pose):
+        """Lowest world-Z of the cue capsule (shaft + tip/butt spheres)."""
+        p = np.asarray(pose.p, dtype=np.float64)
+        R = t3d.quaternions.quat2mat(np.asarray(pose.q, dtype=np.float64))
+        axis_z = float(R[2, 0])  # local +X tip axis, world Z component
+        half = float(self.CUE_HALF_LEN)
+        r = float(self.CUE_RADIUS)
+        # Segment extent along Z, then radial extent of the capsule.
+        seg_min = float(p[2]) - half * abs(axis_z)
+        radial = r * float(np.sqrt(max(0.0, 1.0 - axis_z * axis_z)))
+        return seg_min - radial
+
+    def _felt_contact_z(self):
+        """World-Z floor for the cue capsule resting on the playing surface."""
+        return float(self.felt_top) + 5e-4
+
+    def _clamp_cue_pose_above_felt(self, pose):
+        """Raise ``pose`` so the cue capsule cannot enter the hollow table.
+
+        Welded cues are kinematic and pose-driven, so PhysX will not stop them
+        from tunneling a thin lid — this keeps the stick on the playing surface.
+        """
+        floor = self._felt_contact_z()
+        min_z = self._cue_min_z(pose)
+        if min_z >= floor:
+            return pose
+        p = np.asarray(pose.p, dtype=np.float64).copy()
+        p[2] += floor - min_z
+        return sapien.Pose(p.tolist(), list(pose.q))
+
+    def cue_resting_on_felt(self, tol=0.003):
+        """True when the welded cue capsule is already on the playing surface."""
+        if not getattr(self, "_cue_welded", False) or self.cue is None:
+            return False
+        try:
+            min_z = self._cue_min_z(self.cue.get_pose())
+        except Exception:
+            return False
+        return bool(min_z <= self._felt_contact_z() + float(tol))
+
+    def interactive_ee_z_floor(self, side, ee_pose):
+        """Lowest allowed EE Z while the welded cue is on / would enter the felt.
+
+        Used by ``UniversalRobotControls`` so Q/-Z teleop stops when the stick
+        contacts the table instead of driving the arm through the surface.
+        """
+        if not getattr(self, "_cue_welded", False):
+            return None
+        if str(side) != str(getattr(self, "_cue_arm", "")):
+            return None
+        if getattr(self, "_cue_ee_T", None) is None:
+            return None
+        ee = np.asarray(ee_pose, dtype=np.float64).reshape(-1)
+        if ee.size < 7:
+            return None
+        floor = self._felt_contact_z()
+        cue_pose = self._mat_to_pose(self._pose_to_mat(ee) @ self._cue_ee_T)
+        min_z = self._cue_min_z(cue_pose)
+        if min_z < floor - 1e-6:
+            # World +Z on the EE raises the welded cue by the same amount.
+            return float(ee[2]) + (floor - min_z)
+        return None
+
     def _update_welded_cue(self):
         if not self._cue_welded:
             return
         ee = np.asarray(self.get_arm_pose(self._cue_arm), dtype=np.float64)
         cue_T = self._pose_to_mat(ee) @ self._cue_ee_T
-        pose = self._mat_to_pose(cue_T)
+        pose = self._clamp_cue_pose_above_felt(self._mat_to_pose(cue_T))
         self.cue.actor.set_pose(pose)
         rigid = self._get_rigid(self.cue)
         if rigid is not None:

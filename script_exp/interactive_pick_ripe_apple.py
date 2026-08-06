@@ -120,30 +120,53 @@ def _arm_for_good(env):
     return ArmTag("left" if env.apple_side < 0 else "right")
 
 
-def _do_grasp(env, arm):
-    """Trigger the frozen front-grasp + clear/lift immediately on Space."""
-    tol = float(getattr(env, "red_tol", env.RED_TOLERANCE_DEFAULT))
-    in_window = abs(float(env.ripeness) - float(env.red_window)) <= tol
-    print(
-        f"Grasping good apple at ripeness={env.ripeness:.3f} "
-        f"(window={env.red_window:.3f}±{tol:.3f}, "
-        f"{'in window' if in_window else 'OUTSIDE window — will fail'})…"
-    )
+def _side_for_arm(arm_name: str) -> float:
+    return -1.0 if str(arm_name) == "left" else 1.0
+
+
+def _apple_kind(env, side: float) -> str:
+    if abs(float(side) - float(env.apple_side)) < 0.5:
+        return "good"
+    return "spoiled"
+
+
+def _do_grasp(env, arm, side: float):
+    """Trigger the frozen front-grasp + clear/lift on that side's apple."""
+    kind = _apple_kind(env, side)
+    side_name = "left" if side < 0 else "right"
+    if kind == "good":
+        tol = float(getattr(env, "red_tol", env.RED_TOLERANCE_DEFAULT))
+        in_window = abs(float(env.ripeness) - float(env.red_window)) <= tol
+        print(
+            f"Grasping good ({side_name}) apple at ripeness={env.ripeness:.3f} "
+            f"(window={env.red_window:.3f}±{tol:.3f}, "
+            f"{'in window' if in_window else 'OUTSIDE window — will fail'})…"
+        )
+    else:
+        print(
+            f"Grasping spoiled ({side_name}) apple at "
+            f"ripeness={env.spoiled_ripeness:.3f} — will fail if put in basket…"
+        )
+
     env.move(env.open_gripper(arm))
     env.plan_success = True
-    if not env._try_front_grasp(arm, grasp_dis=env.FRONT_GRASP_DIS, gripper_pos=0.0):
+    if not env._try_front_grasp(
+        arm, grasp_dis=env.FRONT_GRASP_DIS, gripper_pos=0.0, side=side,
+    ):
         action_failed(env, (str(arm),), detail="grasp failed")
         return False
 
-    # Frozen clear-then-lift (same as play_once).
-    clear_x = float(env.CLEAR_LATERAL * env.apple_side)
+    # Frozen clear-then-lift (same as play_once), outward from this apple's side.
+    clear_x = float(env.CLEAR_LATERAL * side)
     env.move(env.move_by_displacement(arm_tag=arm, x=clear_x, move_axis="world"))
     env.move(env.move_by_displacement(arm_tag=arm, z=env.CLEAR_LIFT_Z, move_axis="world"))
 
     env._interactive_arm = arm
+    env._interactive_held_side = float(side)
+    env._interactive_held_apple = env.apples[float(side)]
     env._interactive_phase = "hold"
     print(
-        f"Holding apple (r_grasp={env.r_grasp}). "
+        f"Holding {kind} apple (r_grasp={env.r_grasp}). "
         "Use arrows to carry it over the basket, then press Space to drop."
     )
     return True
@@ -151,7 +174,8 @@ def _do_grasp(env, arm):
 
 def _do_drop(env):
     arm = getattr(env, "_interactive_arm", None) or _arm_for_good(env)
-    hold_x = float(env.apple.get_pose().p[0])
+    held = getattr(env, "_interactive_held_apple", None) or env.apple
+    hold_x = float(held.get_pose().p[0])
     if getattr(env, "basket_move_enabled", False):
         aligned = env._wait_basket_align(hold_x)
         print(f"Basket align={'ok' if aligned else 'timeout'}; opening gripper.")
@@ -211,11 +235,11 @@ def main():
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: pinch the GOOD (red-path) apple near peak red; drop in the basket.",
             "      Do NOT pick the spoiled/yellow apple (Opt1).",
-            "1 / 2 / 3 — select left / right / both arms",
+            "1 / 2 — select left / right arm (each arm only picks its own side)",
+            "      Single apple: the empty-side arm flashes red and does nothing.",
             "Space — (1) grasp immediately   (2) drop when over the basket",
             "Arrows — move the held apple/arm in world XY over the basket",
-            "V — toggle view: top-down ↔ head_camera",
-            "G — gripper view (cycle L/R when both arms active)",
+            "V — cycle view: head_camera ↔ gripper(s)",
             "Esc — close the viewer window to quit",
             "Grasp / hang / clear geometry is FROZEN — Space only triggers existing motions.",
             "Success needs BOTH: grasp inside the ripeness window AND apple in the basket.",
@@ -227,9 +251,15 @@ def main():
             "Note: --robot-motion interpolate uses planner motions for this teleop task "
             "(key-press sandboxes use joint interpolation)."
         )
+    n_apples = len(getattr(env, "apples", {}) or {})
     print(
         f"Good side={'left' if env.apple_side < 0 else 'right'}  "
-        f"red_window={env.red_window:.3f}"
+        f"apples={n_apples}"
+        + (
+            f"  spoiled_side={'left' if env.spoiled_side < 0 else 'right'}"
+            if n_apples > 1 else ""
+        )
+        + f"  red_window={env.red_window:.3f}"
         f"±{float(getattr(env, 'red_tol', env.RED_TOLERANCE_DEFAULT)):.3f}  "
         f"ripen_steps={env.ripen_steps}"
     )
@@ -252,7 +282,17 @@ def main():
                 selected = require_selected_arms(env, exactly_one=True)
                 if not selected:
                     return
-                _do_grasp(env, ArmTag(selected[0]))
+                arm_name = selected[0]
+                side = _side_for_arm(arm_name)
+                # One apple → only that side's arm works; two apples (Opt1) →
+                # each arm may only pick the fruit hanging on its own side.
+                if side not in getattr(env, "apples", {}):
+                    action_failed(
+                        env, (arm_name,),
+                        detail="no apple on this side",
+                    )
+                    return
+                _do_grasp(env, ArmTag(arm_name), side)
             elif env._interactive_phase == "hold":
                 _do_drop(env)
                 highlight.clear()

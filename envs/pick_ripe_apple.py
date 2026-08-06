@@ -452,38 +452,51 @@ class pick_ripe_apple(Base_Task):
              else self.robot.get_right_tcp_pose())
         return np.array(p[:3], dtype=float)
 
-    def _enable_apple_dynamic(self, gravity=False):
-        """Make the apple a free rigid body (contact/friction grasp, no EE weld)."""
-        if self._apple_rigid is None:
+    def _enable_apple_dynamic(self, gravity=False, rigid=None):
+        """Make an apple a free rigid body (contact/friction grasp, no EE weld)."""
+        body = self._apple_rigid if rigid is None else rigid
+        if body is None:
             return
         try:
-            self._apple_rigid.set_kinematic(False)
-            self._apple_rigid.set_disable_gravity(not bool(gravity))
-            self._apple_rigid.set_linear_velocity(np.zeros(3))
-            self._apple_rigid.set_angular_velocity(np.zeros(3))
+            body.set_kinematic(False)
+            body.set_disable_gravity(not bool(gravity))
+            body.set_linear_velocity(np.zeros(3))
+            body.set_angular_velocity(np.zeros(3))
             # Light damping: stable enough in a pinch, still drops promptly.
-            self._apple_rigid.set_linear_damping(0.8)
-            self._apple_rigid.set_angular_damping(4.0)
+            body.set_linear_damping(0.8)
+            body.set_angular_damping(4.0)
         except Exception:
             pass
 
-    def _detach_apple(self):
-        """Break the tree attachment and free the apple for a physical gripper hold."""
-        if self._apple_attached:
-            self._apple_attached = False
-            if self.r_grasp is None:
-                self.r_grasp = float(self.ripeness)
-            self._set_apple_color(self.ripeness)   # freeze visual at current ripeness
-        # Float in place until the jaws finish closing, then gravity comes back on.
-        self._enable_apple_dynamic(gravity=False)
+    def _detach_apple(self, side=None):
+        """Break the tree attachment and free that side's apple for a physical hold.
 
-    def _enable_held_apple_gravity(self):
+        Default ``side`` is the good (red-path) apple. Detaching the spoiled
+        apple clears ``_spoiled_attached`` only — it does not latch ``r_grasp``.
+        """
+        side = float(self.apple_side if side is None else side)
+        rigid = self._apple_rigids.get(side)
+        if abs(side - float(self.apple_side)) < 0.5:
+            if self._apple_attached:
+                self._apple_attached = False
+                if self.r_grasp is None:
+                    self.r_grasp = float(self.ripeness)
+                self._set_apple_color(self.ripeness)   # freeze visual at current ripeness
+        else:
+            if getattr(self, "_spoiled_attached", False):
+                self._spoiled_attached = False
+                self._set_spoiled_color(self.spoiled_ripeness)
+        # Float in place until the jaws finish closing, then gravity comes back on.
+        self._enable_apple_dynamic(gravity=False, rigid=rigid)
+
+    def _enable_held_apple_gravity(self, rigid=None):
         """Turn gravity on so the closed gripper must hold the apple by contact."""
-        if self._apple_rigid is None:
+        body = self._apple_rigid if rigid is None else rigid
+        if body is None:
             return
         try:
-            self._apple_rigid.set_kinematic(False)
-            self._apple_rigid.set_disable_gravity(False)
+            body.set_kinematic(False)
+            body.set_disable_gravity(False)
         except Exception:
             pass
 
@@ -649,11 +662,12 @@ class pick_ripe_apple(Base_Task):
     DROP_SETTLE_STEPS = 80
     GRASP_SETTLE_STEPS = 25
 
-    def _apple_grasp_center(self):
-        """World-space geometric center of the hanging apple (scaled mesh center)."""
-        pose = self.apple.get_pose()
-        scale = np.asarray(self.apple.config["scale"], dtype=np.float64)
-        center_local = np.asarray(self.apple.config["center"], dtype=np.float64) * scale
+    def _apple_grasp_center(self, apple=None):
+        """World-space geometric center of a hanging apple (scaled mesh center)."""
+        fruit = self.apple if apple is None else apple
+        pose = fruit.get_pose()
+        scale = np.asarray(fruit.config["scale"], dtype=np.float64)
+        center_local = np.asarray(fruit.config["center"], dtype=np.float64) * scale
         R = t3d.quaternions.quat2mat(np.asarray(pose.q, dtype=np.float64))
         return np.asarray(pose.p, dtype=np.float64) + R @ center_local
 
@@ -681,16 +695,28 @@ class pick_ripe_apple(Base_Task):
             [-(self.EE_TO_PINCH + float(pre_dis)), 0.0, 0.0], dtype=np.float64)
         return list(p) + list(quat)
 
-    def _try_front_grasp(self, arm_tag, pre_grasp_dis=None, grasp_dis=None, gripper_pos=0.0):
+    def _try_front_grasp(
+        self, arm_tag, pre_grasp_dis=None, grasp_dis=None, gripper_pos=0.0, side=None,
+    ):
         """Reach from the front (-Y), pinch the apple, close the gripper.
 
         Tries arm-preferred front quats and a few pre-distances. Rejects plans
         whose achieved TCP is far from the apple center (right-arm ``front``
         false-success). Detaches the apple to a dynamic body just before close
         so the jaws hold it by contact/friction — no EE weld.
+
+        ``side`` selects which hanging apple (−1 left / +1 right); default is
+        the good (red-path) apple. Grasp geometry / clear strategy is unchanged.
         """
+        side = float(self.apple_side if side is None else side)
+        apple = self.apples.get(side)
+        rigid = self._apple_rigids.get(side)
+        if apple is None or rigid is None:
+            self.plan_success = False
+            return False
+
         g_dis = self.FRONT_GRASP_DIS if grasp_dis is None else float(grasp_dis)
-        center = self._apple_grasp_center()
+        center = self._apple_grasp_center(apple)
         pre_list = (
             (float(pre_grasp_dis),)
             if pre_grasp_dis is not None
@@ -704,7 +730,7 @@ class pick_ripe_apple(Base_Task):
                 grasp_pose = self._ee_pose_front(center, quat, g_dis)
                 if os.environ.get("PRA_DEBUG"):
                     print(f"[PRA] try front quat={key} pre={pre_dis:.2f} "
-                          f"center={np.round(center, 3)} "
+                          f"side={side:+.0f} center={np.round(center, 3)} "
                           f"pre_y={pre_pose[1]:.3f} grasp_y={grasp_pose[1]:.3f}",
                           flush=True)
 
@@ -738,7 +764,7 @@ class pick_ripe_apple(Base_Task):
                     continue
 
                 # Free apple from the stem so fingers can pinch a dynamic body.
-                self._detach_apple()
+                self._detach_apple(side=side)
                 self.move(self.close_gripper(arm_tag, pos=gripper_pos))
                 if not self.plan_success:
                     # Apple is already free; do not hunt another IK with it floating.
@@ -751,7 +777,7 @@ class pick_ripe_apple(Base_Task):
                     self.scene.step()
                     if self.save_freq and (j % self.save_freq == 0):
                         self._take_picture()
-                self._enable_held_apple_gravity()
+                self._enable_held_apple_gravity(rigid=rigid)
                 for j in range(10):
                     self._update_kinematic_tasks()
                     self.scene.step()

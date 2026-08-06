@@ -992,12 +992,29 @@ class UniversalRobotControls:
             self._command[side] = state
 
         pose = state["pose"].copy()
+        prev_z = float(pose[2])
         pose[:3] += step
+        # World-Y tip (Z/X): rotate the commanded gripper orientation in place.
+        if abs(float(roll)) > 1e-9:
+            dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
+            pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
         # Once a reactive key is pressed, block further -Z while over it so the
         # gripper cannot drive through the keycap and ruin the arm pose.
         bank = getattr(self.env, "_reactive_buttons", None)
         if bank is not None and hasattr(bank, "min_ee_z_over_pressed"):
             z_floor = bank.min_ee_z_over_pressed(pose[:2])
+            if z_floor is not None and float(pose[2]) < float(z_floor):
+                pose[2] = float(z_floor)
+        # Billiard / tool-on-surface: if the held cue is already on the felt,
+        # reject further -Z on that arm so it stops with the stick.
+        if float(step[2]) < -1e-9:
+            resting = getattr(self.env, "cue_resting_on_felt", None)
+            cue_arm = str(getattr(self.env, "_cue_arm", "") or "")
+            if cue_arm == side and callable(resting) and resting():
+                pose[2] = prev_z
+        floor_fn = getattr(self.env, "interactive_ee_z_floor", None)
+        if callable(floor_fn):
+            z_floor = floor_fn(side, pose)
             if z_floor is not None and float(pose[2]) < float(z_floor):
                 pose[2] = float(z_floor)
         # Keep the command within reach of the achieved pose: a blocked or
@@ -1006,10 +1023,6 @@ class UniversalRobotControls:
         distance = float(np.linalg.norm(lead))
         if distance > self.MAX_LEAD:
             pose[:3] = achieved[:3] + lead * (self.MAX_LEAD / distance)
-        # World-Y tip (Z/X): rotate the commanded gripper orientation in place.
-        if abs(float(roll)) > 1e-9:
-            dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
-            pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
 
         solution = solver.solve(pose, seed=state["seed"])
         if solution is None:
