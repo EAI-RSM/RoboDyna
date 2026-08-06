@@ -424,9 +424,8 @@ def toggle_selected_grippers(env, *, fallback=("left", "right"), threshold: floa
 class ViewerViewToggle:
     """V cycles head_camera ↔ gripper/wrist views (no top-down).
 
-    F (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
-    G is ignored for camera switching (kept as a no-op edge so old muscle
-    memory does not jump into a leftover top-down path).
+    G (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
+    F is kept as an alias for the same action. Camera switching is V-only.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
     (``_handle_focused_camera`` commented out), so we copy the active camera
@@ -679,15 +678,11 @@ class ViewerViewToggle:
             self.robot_controls.update(window)
         elif self.env is not None:
             # Restore red failure tint when UniversalRobotControls is absent
-            # (keyboard mode still uses Space / F action paths).
+            # (keyboard mode still uses Space / G action paths).
             gripper_failure_feedback(self.env).update()
-        # F: open/close selected gripper(s). Independent of Space grasp helpers.
-        if self._f_pressed(window) and self.env is not None:
+        # G (F alias): open/close selected gripper(s). Independent of Space helpers.
+        if self.env is not None and (self._g_pressed(window) or self._f_pressed(window)):
             toggle_selected_grippers(self.env)
-            return
-        # Consume G so it no longer jumps to a separate camera path.
-        if self._g_pressed(window):
-            return
         if self._v_pressed(window):
             self._cycle_view()
             return
@@ -826,8 +821,8 @@ class UniversalRobotControls:
     unseeded and returns elbow/wrist flips that are unusable for teleop.
 
     Z / X tip the gripper about world +Y (left / right) for pour-style motions.
-    F (open/close selected gripper) is handled by ``ViewerViewToggle`` so it
-    also works when teleop is not attached.
+    G (open/close selected gripper; F alias) is handled by ``ViewerViewToggle``
+    so it also works when teleop is not attached.
     """
 
     # Interactive teleop rates (m/s). 20% slower than the prior snappy sandbox
@@ -1139,7 +1134,7 @@ def _line_documents_key(lines: list[str], key: str) -> bool:
             return True
         if f"{key}                 " in ln or f"{key}: " in ln:
             return True
-        # Compact banners: "V: camera | G: gripper | F: open/close | Escape"
+        # Compact banners: "V: camera | G: open/close | Escape"
         if f"{key}:" in s or f"| {key}:" in s or f"|{key}:" in s:
             return True
     return False
@@ -1149,19 +1144,33 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
     """Print only the help block for the selected ``--control`` mode."""
     body = (robot if mode == "robot" else keyboard).strip("\n")
     if mode == "robot":
-        # Shared teleop keys; skip F here when the task banner already lists it.
+        # Shared teleop keys; skip G here when the task banner already lists it.
         shared = (
             "  Arrow keys        move selected arm(s) in world XY\n"
             "  E / Q             raise / lower selected arm(s)\n"
             "  Z / X             tip gripper left / right (world Y)\n"
             "  1 / 2 / 3         select left / right / both arms\n"
         )
-        if not _line_documents_key(body.splitlines(), "F"):
-            shared += "  F                 open / close selected gripper(s)\n"
+        if not _line_documents_key(body.splitlines(), "G"):
+            shared += "  G                 open / close selected gripper(s)\n"
         body = shared + body
     lines = _normalize_view_help_lines(body.splitlines())
-    # Inject F (gripper open/close) when missing (keyboard banners, or custom text).
-    if not _line_documents_key(lines, "F"):
+    # Rewrite stale F gripper-toggle help to G; inject G when missing.
+    rewritten = []
+    for ln in lines:
+        s = ln.strip()
+        if (
+            (s.startswith("F ") or s.startswith("F:") or s.startswith("F\t"))
+            and "open" in ln.lower()
+            and "close" in ln.lower()
+            and "gripper" in ln.lower()
+        ):
+            indent = ln[: len(ln) - len(ln.lstrip(" "))]
+            rewritten.append(f"{indent}G                 open / close selected gripper(s)")
+        else:
+            rewritten.append(ln)
+    lines = rewritten
+    if not _line_documents_key(lines, "G"):
         inserted = False
         for i, ln in enumerate(lines):
             if (
@@ -1174,12 +1183,12 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
                 indent = ln[: len(ln) - len(ln.lstrip(" "))]
                 lines.insert(
                     i + 1,
-                    f"{indent}F                 open / close selected gripper(s)",
+                    f"{indent}G                 open / close selected gripper(s)",
                 )
                 inserted = True
                 break
         if not inserted:
-            lines.append("  F                 open / close selected gripper(s)")
+            lines.append("  G                 open / close selected gripper(s)")
     body = "\n".join(lines)
     bar = "=" * 60
     print_instructions(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
