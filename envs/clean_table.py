@@ -393,41 +393,51 @@ class clean_table(Base_Task):
         # Local Y is up when upright.
         self.mug_height = float(world[1])
         self.mug_half_height = 0.5 * self.mug_height
-        # Outer body radius (bbox includes the handle, so use a fraction of max XY).
+        # Outer body radius (bbox includes the handle).
         self.mug_radius = 0.42 * float(max(world[0], world[2]))
-        # Inner cavity ≈ outer minus thin ceramic wall (~2–3 mm).
-        self.mug_inner_r = max(0.012, float(self.mug_radius) - 0.0025)
+        # Cup-head opening (not the handle). Pose origin is the cup bottom
+        # (functional point 1); AABB/mesh "center" is pulled toward the handle.
+        self.mug_inner_r = 0.19 * float(max(world[0], world[2]))
+        self._mug_center_offset = np.zeros(3, dtype=float)
+        self._mug_cavity_offset = np.zeros(3, dtype=float)
+        # Nudge coffee into the cup head, opposite the handle functional point.
+        try:
+            fmat = cfg.get("functional_matrix") or []
+            if fmat:
+                h = np.array(fmat[0], dtype=float)[:3, 3] * sc
+                R = t3d.quaternions.quat2mat(
+                    np.asarray(self.MUG_UPRIGHT_Q, dtype=float)
+                )
+                h_xy = (R @ h)[:2]
+                n = float(np.linalg.norm(h_xy))
+                if n > 1e-6:
+                    # Away from handle, ~25% of inner radius into the cup head.
+                    away = -h_xy / n
+                    self._mug_cavity_offset[:2] = away * (0.25 * self.mug_inner_r)
+        except Exception:
+            pass
         self.cup_height = self.mug_height
         self.cup_radius = self.mug_radius
         self.cup_inner_r = self.mug_inner_r
-        # Mesh geometric center (scaled) → world offset with upright quat.
-        # Needed because 039_mug's origin is not the cavity center.
-        try:
-            center = np.array(cfg.get("center", [0.0, 0.0, 0.0]), dtype=float) * sc
-            R = t3d.quaternions.quat2mat(np.asarray(self.MUG_UPRIGHT_Q, dtype=float))
-            self._mug_center_offset = (R @ center).astype(float)
-        except Exception:
-            self._mug_center_offset = np.zeros(3, dtype=float)
 
     def _spawn_coffee_in_mug(self):
-        """Coffee surface disk sized to the mug opening, near fill level.
+        """Coffee disk in the cup head opening (~40% full), not the handle.
 
-        PartNet ``039_mug`` is a solid mesh, so only a thin disk at the
-        fill height is visible looking into the cavity — a tall column would
-        clip through the walls.
+        PartNet ``039_mug`` pose origin is the cup bottom; the handle sticks out
+        sideways. Place a thin disk on that cup axis so it stays in the head.
         """
         self._coffee_entity = self._remove_entity(self._coffee_entity)
         off = np.asarray(
-            getattr(self, "_mug_center_offset", np.zeros(3)), dtype=float
+            getattr(self, "_mug_cavity_offset", np.zeros(3)), dtype=float
         )
-        # Match the inside opening; tiny inset so the mesh doesn't poke the rim.
-        inner_r = float(max(0.010, 0.97 * self.mug_inner_r))
-        # Surface high in the cup so it reads as filled (~78% full).
-        fill_frac = float(self._cfg.get("coffee_fill_frac", 0.78))
-        fill_frac = float(np.clip(fill_frac, 0.35, 0.92))
+        # Slightly under the measured inner lip so the disk never clips the rim.
+        inner_r = float(max(0.008, 0.88 * self.mug_inner_r))
+        fill_frac = float(self._cfg.get("coffee_fill_frac", 0.40))
+        fill_frac = float(np.clip(fill_frac, 0.15, 0.92))
         half_h = 0.0035
-        cx = float(self.mug_xy[0] + off[0])
-        cy = float(self.mug_xy[1] + off[1])
+        pose_p = np.asarray(self._mug_upright_pose.p, dtype=float)
+        cx = float(pose_p[0] + off[0])
+        cy = float(pose_p[1] + off[1])
         z = self.table_top + fill_frac * float(self.mug_height)
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
