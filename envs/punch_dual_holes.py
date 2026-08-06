@@ -693,8 +693,7 @@ class punch_dual_holes(Base_Task):
             return
         self.page_missed[side][k] = True
         self.page_punched[side][k] = True
-        # Still stamp the visual so interactive teleop gets clear punch feedback.
-        self._apply_punch_mark(side, k)
+        # No robot-head mark on misses — only successful stamp contact shows it.
         if os.environ.get("DHP_DEBUG"):
             print(f"[dhp] MISS {side} page{k} step={self._belt_step}", flush=True)
 
