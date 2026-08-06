@@ -64,7 +64,7 @@ class control_quality(Base_Task):
     HIDE_Z = -10.0
     TILE_EXIT_MARGIN = 0.01
 
-    KEY_X = 0.20
+    KEY_X = 0.22                              # ±x from belt center (+2 cm vs 0.20)
     KEY_Y = -0.18
     KEY_HALF = [0.025, 0.025, 0.016]          # colored keycap
     # Larger, thinner black base under each key (matches catch_marbles_trapdoors look).
@@ -73,6 +73,11 @@ class control_quality(Base_Task):
     KEY_HOVER_DIS = 0.06
     KEY_PRESS_DEPTH = 0.065
     EE_TO_TCP = 0.12
+    # Success stamp: create_box texture_id → assets/background_texture/<id>.png
+    # (cube-UV atlas with "Robo"/"Dyna" in the +Z/-Z tiles). Slightly inset on the tile.
+    STAMP_MARK_TEXTURE_ID = "custom/robodyna_stamp"
+    STAMP_MARK_HALF = (0.024, 0.028, 0.0015)
+    STAMP_MARK_Z_EPS = 0.003
 
     LIGHT_COLORS = {
         "red":   [0.95, 0.45, 0.45],
@@ -245,19 +250,19 @@ class control_quality(Base_Task):
         self._key_home = {}
         self._key_top_z = {}
         self._reactive_buttons = None
-        base_hz = float(self.KEY_BASE_HALF[2])
         cap_hz = float(self.KEY_HALF[2])
         for color, sign in (("red", -1.0), ("green", 1.0)):
             kx = sign * self.KEY_X
-            base_z = z0 + base_hz
-            cap_z = z0 + 2.0 * base_hz + cap_hz
-            base = create_box(
-                scene=self,
-                pose=sapien.Pose([kx, self.KEY_Y, base_z], [1, 0, 0, 0]),
-                half_size=list(self.KEY_BASE_HALF),
+            # Keycap on the table inside a hollow bezel (not a solid under-cube).
+            cap_z = z0 + cap_hz
+            walls = add_key_base_border(
+                self,
+                float(kx),
+                float(self.KEY_Y),
+                float(z0),
+                self.KEY_HALF,
                 color=list(self.KEY_BASE_COLOR),
-                name=f"key_base_{color}",
-                is_static=True,
+                name_prefix=f"key_base_{color}",
             )
             key_home = sapien.Pose([kx, self.KEY_Y, cap_z], [1, 0, 0, 0])
             key = create_box(
@@ -268,17 +273,20 @@ class control_quality(Base_Task):
                 name=f"key_{color}",
                 is_static=True,
             )
-            self.key_bases[color] = base
+            self.key_bases[color] = walls
             self.keys[color] = key
             self._key_home[color] = key_home
             self._key_top_z[color] = float(cap_z + cap_hz)
-            self.add_prohibit_area(base, padding=0.05)
+            for wall in walls:
+                self.add_prohibit_area(wall, padding=0.05)
             self.add_prohibit_area(key, padding=0.05)
 
         # ---- tiles (red / green / black) ----
         self.tile_gaps, self.tile_ys = self._sample_tile_layout(self.n_tiles)
         self.tile_colors = self._sample_tile_colors(self.n_tiles)
         self.tiles = []
+        self.tile_mark_actors = []  # prebuilt RoboDyna overlays (revealed on success)
+        self.tile_stamped = []      # True once success overlay is shown
         self.tile_marked = []       # stamped (red/green) or incorrectly pressed
         self.tile_correct = []      # correct stamp for red/green
         self.tile_skipped = []      # black tile correctly passed without a press
@@ -286,13 +294,14 @@ class control_quality(Base_Task):
         self.tile_hidden = []
         self.tile_shapes = []
         self._tile_ride_z = self.belt_top_z + self.TILE_HALF[2]
+        tile_q = [1, 0, 0, 0]
         for i in range(self.n_tiles):
             color_name = self.tile_colors[i]
             t = create_box(
                 scene=self,
                 pose=sapien.Pose(
                     [self.BELT_X, self.tile_ys[i], self._tile_ride_z],
-                    [1, 0, 0, 0],
+                    tile_q,
                 ),
                 half_size=self.TILE_HALF,
                 color=self.LIGHT_COLORS[color_name],
@@ -301,6 +310,19 @@ class control_quality(Base_Task):
             )
             self._make_kinematic(t)
             self.tiles.append(t)
+            # Pre-build textured stamp overlay off-stage (revealed on correct stamp).
+            mark = create_box(
+                scene=self,
+                pose=sapien.Pose([self.BELT_X, self.tile_ys[i], self.HIDE_Z], tile_q),
+                half_size=list(self.STAMP_MARK_HALF),
+                color=(1.0, 1.0, 1.0),
+                name=f"tile_{i}_stamp_mark",
+                is_static=False,
+                texture_id=self.STAMP_MARK_TEXTURE_ID,
+            )
+            self._make_kinematic(mark)
+            self.tile_mark_actors.append(mark)
+            self.tile_stamped.append(False)
             self.tile_marked.append(False)
             self.tile_correct.append(False)
             self.tile_skipped.append(False)
@@ -403,10 +425,50 @@ class control_quality(Base_Task):
                 except Exception:
                     pass
 
+    def _stamp_mark_pose_for_tile(self, tile_pose):
+        p = tile_pose.p
+        return sapien.Pose(
+            [
+                float(p[0]),
+                float(p[1]),
+                float(p[2])
+                + self.TILE_HALF[2]
+                + self.STAMP_MARK_HALF[2]
+                + self.STAMP_MARK_Z_EPS,
+            ],
+            tile_pose.q,
+        )
+
+    def _set_tile_pose(self, i, pose):
+        self.tiles[i].actor.set_pose(pose)
+        if self.tile_stamped[i]:
+            mark = self.tile_mark_actors[i]
+            if mark is not None:
+                mark.actor.set_pose(self._stamp_mark_pose_for_tile(pose))
+
+    def _apply_stamp_mark(self, i):
+        """Reveal the RoboDyna overlay on tile i (correct stamp only)."""
+        if self.tile_stamped[i]:
+            return
+        mark = self.tile_mark_actors[i]
+        if mark is None:
+            return
+        mark.actor.set_pose(self._stamp_mark_pose_for_tile(self.tiles[i].get_pose()))
+        self.tile_stamped[i] = True
+
+    def _hide_stamp_mark(self, i):
+        mark = self.tile_mark_actors[i]
+        if mark is None:
+            return
+        p = self.tiles[i].get_pose()
+        mark.actor.set_pose(sapien.Pose([p.p[0], p.p[1], self.HIDE_Z], p.q))
+        self.tile_stamped[i] = False
+
     def _reset_belt(self):
-        for t, pose in zip(self.tiles, self._tile_init_poses):
-            t.actor.set_pose(pose)
-        for i in range(self.n_tiles):
+        for i, pose in enumerate(self._tile_init_poses):
+            self.tile_stamped[i] = False
+            self._set_tile_pose(i, pose)
+            self._hide_stamp_mark(i)
             self._paint_tile(i, self._tile_base_color(i))
         self.tile_marked = [False] * self.n_tiles
         self.tile_correct = [False] * self.n_tiles
@@ -428,9 +490,12 @@ class control_quality(Base_Task):
         if self.tile_hidden[i]:
             return
         p = self.tiles[i].get_pose()
-        self.tiles[i].actor.set_pose(
-            sapien.Pose([p.p[0], p.p[1], self.HIDE_Z], p.q)
-        )
+        hide = sapien.Pose([p.p[0], p.p[1], self.HIDE_Z], p.q)
+        self.tiles[i].actor.set_pose(hide)
+        if self.tile_stamped[i]:
+            mark = self.tile_mark_actors[i]
+            if mark is not None:
+                mark.actor.set_pose(self._stamp_mark_pose_for_tile(hide))
         self.tile_hidden[i] = True
 
     def _tile_has_exited_belt(self, y, done=False):
@@ -487,7 +552,9 @@ class control_quality(Base_Task):
             if self._tile_has_exited_belt(ny, done=done):
                 self._hide_tile(i)
                 continue
-            t.actor.set_pose(sapien.Pose([p.p[0], ny, self._tile_ride_z], p.q))
+            self._set_tile_pose(
+                i, sapien.Pose([p.p[0], ny, self._tile_ride_z], p.q)
+            )
 
         if self._interactive_tile_pause:
             under = self._tile_under_stamp(require_unhandled=True)
@@ -498,9 +565,12 @@ class control_quality(Base_Task):
                 # its center onto the stamp before beginning the dwell so every
                 # interactive stop has the same, gap-free alignment.
                 pose = self.tiles[under].get_pose()
-                self.tiles[under].actor.set_pose(sapien.Pose(
-                    [self.stamp_x, self.stamp_y, self._tile_ride_z], pose.q
-                ))
+                self._set_tile_pose(
+                    under,
+                    sapien.Pose(
+                        [self.stamp_x, self.stamp_y, self._tile_ride_z], pose.q
+                    ),
+                )
                 self._interactive_pause_tile = under
                 self._interactive_pause_steps = 0
 
@@ -571,7 +641,8 @@ class control_quality(Base_Task):
         self.tile_marked[best_i] = True
         self.tile_correct[best_i] = correct
         if correct:
-            self._paint_tile(best_i, self.DARK_COLORS[tile_color])
+            # Keep the light tile color; RoboDyna overlay marks the success.
+            self._apply_stamp_mark(best_i)
         else:
             self._paint_tile(best_i, self.BLACK_COLOR)
             self.tile_missed[best_i] = True
@@ -744,8 +815,8 @@ class control_quality(Base_Task):
     def _key_tip_pose(self, color, tip_z_above_top):
         sign = -1.0 if color == "red" else 1.0
         z0 = 0.74 + self.table_z_bias
-        # Cap sits on the thin black base.
-        key_top_z = z0 + 2.0 * float(self.KEY_BASE_HALF[2]) + 2.0 * float(self.KEY_HALF[2])
+        # Cap sits on the table inside a hollow bezel.
+        key_top_z = z0 + 2.0 * float(self.KEY_HALF[2])
         tcp_z = key_top_z + tip_z_above_top
         ee_z = tcp_z + self.EE_TO_TCP
         quat = GRASP_DIRECTION_DIC["top_down"]
@@ -755,17 +826,24 @@ class control_quality(Base_Task):
         arm = ArmTag("left" if color == "red" else "right")
         return self.move_to_pose(arm, self._key_tip_pose(color, self.KEY_HOVER_DIS))
 
+    def _move_arms_to_ready(self):
+        """Close grippers and park both arms above the red/green keys.
+
+        Call before belt motion so the first tile's pause window is not burned
+        while the arms travel from the home pose.
+        """
+        left = ArmTag("left")
+        right = ArmTag("right")
+        self.move(self.close_gripper(left), self.close_gripper(right))
+        self.move(self._hover_key("red"), self._hover_key("green"))
+
     def play_once(self):
         import os
         dbg = bool(os.environ.get("QC_DEBUG") or os.environ.get("STAMP_DEBUG"))
-        left = ArmTag("left")
-        right = ArmTag("right")
 
         self._reset_belt()
         self._belt_running = False
-
-        self.move(self.close_gripper(left), self.close_gripper(right))
-        self.move(self._hover_key("red"), self._hover_key("green"))
+        self._move_arms_to_ready()
 
         if dbg:
             print(f"[qc] tile_colors={self.tile_colors} "

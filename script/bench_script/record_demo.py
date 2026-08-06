@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""Standard dual-view demo recorder for RoboDyna / DOMINO tasks.
+"""Standard head-view demo recorder for RoboDyna / DOMINO tasks.
 
-Records ONE successful expert rollout and writes two MP4s:
+Records ONE successful expert rollout and writes a single MP4:
   - robot head  -> ``head_camera``  (elevated training cam)
-  - top-down    -> ``observer_camera`` reframed as a bird's-eye nadir view
 
 Output layout (under ``tmp/``, versioned, never overwrites prior demos)::
 
     ./tmp/tmp_<task>/video/vN_head.mp4
-    ./tmp/tmp_<task>/video/vN_topdown.mp4
-    ./tmp/tmp_<task>/video/vN_sidebyside.mp4   # convenience montage
 
 Usage (from repo root, with the robodyna / domino env active)::
 
@@ -20,7 +17,7 @@ Usage (from repo root, with the robodyna / domino env active)::
     # legacy shorthand still works: --option 1 (catch_two_cuboids) / --option 2 (opaque_surface)
 
 Agents MUST use this script for task demo videos (not ad-hoc record_*_demo.py
-copies, and not the training ``head_camera``-only collector preview).
+copies, and not the training collector preview).
 """
 from __future__ import annotations
 
@@ -131,7 +128,25 @@ def _resize_to_height(frame: np.ndarray, height: int) -> np.ndarray:
     return out
 
 
+def encode_head_video(cache_dir: str, out_head: str, fps: float) -> None:
+    """Encode ``head_camera`` frames from a pkl cache into one MP4."""
+    pkls = sorted(
+        glob.glob(os.path.join(cache_dir, "*.pkl")),
+        key=lambda p: int(re.search(r"(\d+)", os.path.basename(p)).group(1)),
+    )
+    head_frames = []
+    for p in pkls:
+        data = load_pkl_file(p)
+        obs = data.get("observation", {})
+        if "head_camera" in obs and "rgb" in obs["head_camera"]:
+            head_frames.append(np.asarray(obs["head_camera"]["rgb"]))
+    if not head_frames:
+        raise RuntimeError(f"No head_camera frames in {cache_dir}")
+    _encode_mp4(head_frames, out_head, fps)
+
+
 def merge_dual_view_videos(cache_dir: str, out_head: str, out_topdown: str, out_side: str, fps: float) -> None:
+    """Legacy dual-view encoder kept for older per-task export scripts."""
     pkls = sorted(
         glob.glob(os.path.join(cache_dir, "*.pkl")),
         key=lambda p: int(re.search(r"(\d+)", os.path.basename(p)).group(1)),
@@ -254,7 +269,9 @@ def build_args(
 
     args.setdefault("data_type", {})
     args["data_type"]["rgb"] = True
-    args["data_type"]["third_view"] = True  # observer -> third_view_rgb (our top-down)
+    # Default keeps third_view for legacy dual-view export scripts. The
+    # standard record_demo / record_fail_demo paths turn it off (head-only).
+    args["data_type"]["third_view"] = True
 
     args.setdefault("task_args", {}).setdefault(task_name, {})
     if option is not None:
@@ -351,12 +368,11 @@ def record_fail_demo(
     args["episode_num"] = 1
     args["collect_data"] = True
     args["use_seed"] = False
+    args.setdefault("data_type", {})["third_view"] = False  # head-only
 
     ver = next_version(video_dir)
     stem = f"v{ver}_{tag}" if tag else f"v{ver}_fail"
     out_head = os.path.join(video_dir, f"{stem}_head.mp4")
-    out_topdown = os.path.join(video_dir, f"{stem}_topdown.mp4")
-    out_side = os.path.join(video_dir, f"{stem}_sidebyside.mp4")
 
     task = class_decorator(task_name)
     _orig_setup = task.setup_demo
@@ -364,7 +380,6 @@ def record_fail_demo(
     def _setup_demo(**kwags):
         kwags["seed"] = int(seed)
         _orig_setup(**kwags)
-        configure_topdown_camera(task)
         if task_name in HOUSEHOLD_TASKS:
             configure_household_head_camera(task)
 
@@ -452,7 +467,7 @@ def record_fail_demo(
     print(f"[fail-demo] merge {n_frames} frames from {cache_path}", flush=True)
     if n_frames == 0:
         raise RuntimeError(f"No frames saved before timeout for {task_name} seed={seed}")
-    merge_dual_view_videos(cache_path, out_head, out_topdown, out_side, fps=fps)
+    encode_head_video(cache_path, out_head, fps=fps)
 
     try:
         task.close_env(clear_cache=True)
@@ -466,17 +481,12 @@ def record_fail_demo(
     copied = {}
     if dest_dir:
         os.makedirs(dest_dir, exist_ok=True)
-        for view, src in (
-            ("head", out_head),
-            ("topdown", out_topdown),
-            ("sidebyside", out_side),
-        ):
-            if os.path.isfile(src):
-                name = f"{tag or 'fail'}_seed{seed}_{view}.mp4"
-                dst = os.path.join(dest_dir, name)
-                shutil.copy2(src, dst)
-                copied[view] = dst
-                print(f"[fail-demo] COPIED {dst}", flush=True)
+        if os.path.isfile(out_head):
+            name = f"{tag or 'fail'}_seed{seed}_head.mp4"
+            dst = os.path.join(dest_dir, name)
+            shutil.copy2(out_head, dst)
+            copied["head"] = dst
+            print(f"[fail-demo] COPIED {dst}", flush=True)
 
     _cleanup_scratch(save_root, task_name)
     print(
@@ -491,8 +501,6 @@ def record_fail_demo(
         "timed_out": timed_out,
         "plan_ok": plan_ok,
         "head": out_head,
-        "topdown": out_topdown,
-        "sidebyside": out_side,
         "copied": copied,
         "n_frames": n_frames,
     }
@@ -513,13 +521,12 @@ def record_demo(
     # Clear condition tags go in the filename, e.g. v5_opt2_blocker_head.mp4
     stem = f"v{ver}_{tag}" if tag else f"v{ver}"
     out_head = os.path.join(video_dir, f"{stem}_head.mp4")
-    out_topdown = os.path.join(video_dir, f"{stem}_topdown.mp4")
-    out_side = os.path.join(video_dir, f"{stem}_sidebyside.mp4")
 
     _cleanup_scratch(save_root, task_name)
     os.makedirs(save_root, exist_ok=True)
 
     args = build_args(task_name, config_name, save_root, option, task_arg_overrides)
+    args.setdefault("data_type", {})["third_view"] = False  # head-only
     # Household demos: keep a partial render if the step cutoff fires.
     if task_name in HOUSEHOLD_TASKS:
         args["check_render_success"] = False
@@ -527,12 +534,11 @@ def record_demo(
             max_steps = int(HOUSEHOLD_MAX_STEPS)
     task = class_decorator(task_name)
 
-    # Force top-down observer + shared household head after every setup_demo.
+    # Shared household head framing after every setup_demo.
     _orig_setup = task.setup_demo
 
     def _setup_demo(**kwags):
         _orig_setup(**kwags)
-        configure_topdown_camera(task)
         if task_name in HOUSEHOLD_TASKS:
             configure_household_head_camera(task)
             task._episode_timed_out = False
@@ -546,14 +552,14 @@ def record_demo(
 
     task.setup_demo = _setup_demo
 
-    def _merge_dual(self):
+    def _merge_head(self):
         if not self.save_data:
             return
         cache_path = f"{self.save_dir}/.cache/episode{self.ep_num}/"
         fps = 250.0 / float(self.save_freq) if self.save_freq else 15.0
-        merge_dual_view_videos(cache_path, out_head, out_topdown, out_side, fps=fps)
+        encode_head_video(cache_path, out_head, fps=fps)
 
-    task.merge_pkl_to_hdf5_video = _merge_dual.__get__(task, task.__class__)
+    task.merge_pkl_to_hdf5_video = _merge_head.__get__(task, task.__class__)
 
     run(task, args)
     _cleanup_scratch(save_root, task_name)
@@ -570,19 +576,15 @@ def record_demo(
     if tag:
         print("  tag      :", tag)
     print("  head     :", out_head)
-    print("  top-down :", out_topdown)
-    print("  side-by-side:", out_side)
     return {
         "version": ver,
         "tag": tag,
         "head": out_head,
-        "topdown": out_topdown,
-        "sidebyside": out_side,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Record standard head + top-down demo videos.")
+    parser = argparse.ArgumentParser(description="Record standard head-view demo videos.")
     parser.add_argument("task", help="Task name (envs/<task>.py class name), e.g. place_block_belt")
     parser.add_argument(
         "--config",

@@ -136,17 +136,7 @@ class KeyboardStampController:
                 side, self.env._key_tip_pose(color, press_above), last_qpos=hover_q
             )
 
-        self.env.move(
-            self.env.close_gripper(self.arm_tag("left")),
-            self.env.close_gripper(self.arm_tag("right")),
-        )
-        self.env.move(
-            self.env.move_to_pose(self.arm_tag("left"), self.env._key_tip_pose("red", hover)),
-            self.env.move_to_pose(self.arm_tag("right"), self.env._key_tip_pose("green", hover)),
-        )
-        if not self.env.plan_success:
-            detail = getattr(self.env, "_last_plan_fail", None) or "unknown planner failure"
-            raise RuntimeError(f"Could not prepare quality-control key hover poses: {detail}")
+        # Ready hover is applied once before the belt starts (see main).
         self.hover_qpos["red"] = self._drive_qpos("left")
         self.hover_qpos["green"] = self._drive_qpos("right")
         print("Arrow-key stamp arms ready; each press animates a smooth key tap.")
@@ -224,6 +214,15 @@ class ArrowPresses:
             self._previous[key] = down
 
 
+def _move_arms_to_ready(env):
+    """Park both grippers above the keys before the belt starts rolling."""
+    env._move_arms_to_ready()
+    if not env.plan_success:
+        detail = getattr(env, "_last_plan_fail", None) or "unknown planner failure"
+        raise RuntimeError(f"Could not reach quality-control key ready pose: {detail}")
+    print("Arms ready above the quality-control keys.")
+
+
 def _start_belt(env):
     env._belt_running = True
     env._stamp_active = True
@@ -283,10 +282,10 @@ def main():
     env._interactive_robot_mode = True
     # Arrow presses / gripper teleop need planner support.
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    env.together_close_gripper(save_freq=None)
     env.enable_interactive_tile_pause()
     # Keep the belt frozen while arms move to the key hover poses. Starting it
     # earlier burns the first tile's pause window before the operator can act.
+    _move_arms_to_ready(env)
 
     stamp_controller = None
     arrow_presses = None
@@ -301,7 +300,7 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
     if views.robot_controls is None:
         views.robot_controls = UniversalRobotControls(env)
-    # Start the first tile's approach/pause clock only once that is visible.
+    # Start rolling only after both grippers are parked above the keys.
     _start_belt(env)
     last_frame_start = time.perf_counter()
     simulation_credit = 0.0
