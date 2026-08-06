@@ -4,7 +4,8 @@ The household environments deliberately keep their normal physics and success
 checks.  This module only adds the same viewer/arm teleoperation used by
 ``script_exp``: arrows move the selected end-effector in XY, Q/E move it in Z,
 Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
-G opens/closes the selected gripper(s) (shared ``ViewerViewToggle`` handler).
+F opens/closes the selected gripper(s); V cycles head_camera ↔ gripper views
+(shared ``ViewerViewToggle`` handler; top-down is not available).
 Space grasps/releases the task's primary prop and C invokes a task-specific
 control where needed (cook_food / make_soup burner and pour sequence).
 """

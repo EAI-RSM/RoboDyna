@@ -54,10 +54,10 @@ the same controls as the interactive examples in `script_exp`:
 --control robot (default): 1/2/3 selects left/right/both arms
                            arrows move selected arm(s) in XY
                            Q/E move selected arm(s) in Z
-                           G opens/closes selected gripper(s)
+                           F opens/closes selected gripper(s)
 --control keyboard:        Space and arrows move the task prop directly
 V                          cycle head_camera ↔ gripper / wrist view(s)
-G                          open / close selected gripper(s)
+F                          open / close selected gripper(s)
 C                          task-specific action (cook_food*: gripper knob twist; make_soup burner)
 Escape                     quit
 ```
