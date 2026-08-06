@@ -28,32 +28,31 @@ AABB: TypeAlias = tuple[float, float, float, float]
 
 
 class cook_meat(Base_Task):
-    """Cook a steak into a configured doneness range and return it to the board.
+    """Cook a steak into a configured doneness range via a latching cook key.
 
-    Default: place steak on the pan; it cooks on contact while waiting, then
-    return it to the cutting board. Cook speed samples around nominal
+    Default: place steak on the pan, press the red key to latch cooking ON
+    (key stays down), press again to latch OFF (key returns up) when doneness
+    is in range. Success is doneness-in-range at shutoff — steak may stay on
+    the pan (no board return). Cook speed samples around nominal
     ``cook_steps`` ± jitter.
 
-    Options (``task_args.cook_meat``; independent toggles):
-      Opt 1 — cook button  →  ``cook_button_enabled`` (**default: false**)
-          Red keycap on a thin black base; hold to cook while the steak is on
-          the pan. Key sits on the same lateral side as the station (left of
-          pan when the station is left; right of pan when right).
-          CLI: ``--task-arg cook_button_enabled=true`` / ``--option 1``.
+    Options (``task_args.cook_meat``):
       Opt 2 — dual setup  →  ``dual_setup_enabled`` (**default: false**)
-          Mirror a second station (pan, board, steak) with ≥10 cm clearance
-          between setups; both arms place and pick up meats together.
+          Mirror a second station (pan, board, steak, cook key) with ≥10 cm
+          clearance; both arms place meats and toggle their keys together.
           Success requires **both** steaks cooked within the target range.
           CLI: ``--task-arg dual_setup_enabled=true`` or ``--option 2``.
-      Opt 1+2 — dual stations each with their own cook key; color advances
-          only while that station's key is pressed and its steak is on the pan.
-          Success still requires both steaks cooked within the target range.
+
+    Notes:
+      A red cook key is always present (single and dual). Legacy Opt 1 /
+      ``cook_button_enabled`` is ignored — keys use measure_ingredient-style
+      press-ON / press-OFF latching, not hold-to-cook.
     """
 
-    COOK_STEPS_DEFAULT: ClassVar[int] = 769  # ~30% faster than prior 1000
+    COOK_STEPS_DEFAULT: ClassVar[int] = 549  # ~40% faster than prior 769
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
     TARGET_DONENESS_DEFAULT: ClassVar[float] = 0.5
-    COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = False  # default = contact cook
+    COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = True  # always; contact-cook removed
     DUAL_SETUP_ENABLED_DEFAULT: ClassVar[bool] = False  # Opt 2
     TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.45, 0.55)
     TARGET_DONENESS_RANGE_JITTER_DEFAULT: ClassVar[float] = 0.0
@@ -115,7 +114,7 @@ class cook_meat(Base_Task):
     def _apply_legacy_option(self) -> None:
         """Map record_demo ``--option`` / config ``option`` onto named toggles.
 
-        1 / cook_button / button → Opt 1 cook_button_enabled=true
+        1 / cook_button / button → legacy no-op (keys are always present)
         2 / dual / dual_setup → Opt 2 dual_setup_enabled=true
         """
         legacy = self._cook_cfg.get("option", None)
@@ -134,27 +133,25 @@ class cook_meat(Base_Task):
             "dual_setup_enabled": "dual_setup_enabled",
         }.get(legacy if not isinstance(legacy, str) else legacy.strip().lower())
         if key == "cook_button_enabled":
+            # Keys are always on; keep flag for older configs / language schema.
             self._cook_cfg["cook_button_enabled"] = True
         elif key == "dual_setup_enabled":
             self._cook_cfg["dual_setup_enabled"] = True
         else:
             raise ValueError(
-                "cook_meat option must be 1/cook_button_enabled or "
-                "2/dual_setup_enabled (or set those keys directly)"
+                "cook_meat option must be 1/cook_button_enabled (legacy) or "
+                "2/dual_setup_enabled (or set dual_setup_enabled directly)"
             )
 
     def _option_label(self) -> str:
-        parts: list[str] = []
-        if getattr(self, "cook_button_enabled", False):
-            parts.append("option 1")
         if getattr(self, "dual_setup_enabled", False):
-            parts.append("option 2")
-        return ", ".join(parts) if parts else "default"
+            return "option 2"
+        return "default"
 
     @property
     def use_cook_button(self) -> bool:
-        """Whether cook keys are active (Opt 1 and Opt 1+2)."""
-        return bool(getattr(self, "cook_button_enabled", False))
+        """Cook keys are always active (latching ON/OFF)."""
+        return True
 
     @staticmethod
     def _union_aabb(aabbs: Sequence[AABB]) -> AABB:
@@ -523,7 +520,7 @@ class cook_meat(Base_Task):
         avoid_aabbs: list[AABB],
         bz: float,
     ) -> tuple[dict[str, Any], list[AABB]]:
-        """Spawn one cook station (pan, optional key, board, steak) on ``side``.
+        """Spawn one cook station (pan, cook key, board, steak) on ``side``.
 
         Layout is authored for the right side and mirrored for the left (Opt 2).
         Pan and board each get small XY jitter and a random Z yaw. Cook keys sit
@@ -702,87 +699,86 @@ class cook_meat(Base_Task):
         key_xy = None
         key_top_z = None
         key_aabb: AABB | None = None
-        if self.cook_button_enabled:
-            pan_xy = np.asarray(skillet_pose.p[:2], dtype=np.float64)
-            hx, hy, _ = self.KEY_BASE_HALF
-            clear_r = float(self.KEY_PAN_CLEAR_HALF)
-            key_gap = float(self.KEY_MIN_GAP)
-            lat_sign = -1.0 if side < 0 else 1.0
-            lat0 = max(clear_r + hx + key_gap, abs(self.key_offset_x))
-            # Clear the bowl rim; board already sits in ``avoid``.
-            key_avoid = list(avoid) + [
-                (
-                    float(pan_xy[0] - clear_r),
-                    float(pan_xy[1] - clear_r),
-                    float(pan_xy[0] + clear_r),
-                    float(pan_xy[1] + clear_r),
-                )
-            ]
-            found = False
-            key_x = key_y = 0.0
-            # Search outward (±x) and toward the robot (−y). Do not require head-cam
-            # containment for the key — left-side outer slots often leave the frame
-            # and were rejecting every dual+button seed.
-            dx_vals = list(np.linspace(lat0, lat0 + 0.18, 12))
-            dy_vals = list(np.linspace(float(self.key_y_bias), float(self.key_y_bias) - 0.16, 10))
-            # Also try near pan y if the board blocks the −y corridor.
-            dy_vals += list(np.linspace(0.02, -0.06, 5))
-            for require_view in (True, False):
-                for dx in dx_vals:
-                    for dy in dy_vals:
-                        kx = float(pan_xy[0] + lat_sign * dx)
-                        ky = float(pan_xy[1] + dy)
-                        # Keep key on the table footprint.
-                        if abs(kx) > 0.42 or ky < -0.28 or ky > 0.22:
-                            continue
-                        cand: AABB = (kx - hx, ky - hy, kx + hx, ky + hy)
-                        gap = min(
-                            (self._aabb_gap(cand, other) for other in key_avoid),
-                            default=float("inf"),
-                        )
-                        if gap <= key_gap:
-                            continue
-                        if require_view and not self._footprint_in_head_view(cand, bz):
-                            continue
-                        key_x, key_y = kx, ky
-                        key_aabb = cand
-                        found = True
-                        break
-                    if found:
-                        break
+        pan_xy = np.asarray(skillet_pose.p[:2], dtype=np.float64)
+        hx, hy, _ = self.KEY_BASE_HALF
+        clear_r = float(self.KEY_PAN_CLEAR_HALF)
+        key_gap = float(self.KEY_MIN_GAP)
+        lat_sign = -1.0 if side < 0 else 1.0
+        lat0 = max(clear_r + hx + key_gap, abs(self.key_offset_x))
+        # Clear the bowl rim; board already sits in ``avoid``.
+        key_avoid = list(avoid) + [
+            (
+                float(pan_xy[0] - clear_r),
+                float(pan_xy[1] - clear_r),
+                float(pan_xy[0] + clear_r),
+                float(pan_xy[1] + clear_r),
+            )
+        ]
+        found = False
+        key_x = key_y = 0.0
+        # Search outward (±x) and toward the robot (−y). Do not require head-cam
+        # containment for the key — left-side outer slots often leave the frame
+        # and were rejecting every dual+button seed.
+        dx_vals = list(np.linspace(lat0, lat0 + 0.18, 12))
+        dy_vals = list(np.linspace(float(self.key_y_bias), float(self.key_y_bias) - 0.16, 10))
+        # Also try near pan y if the board blocks the −y corridor.
+        dy_vals += list(np.linspace(0.02, -0.06, 5))
+        for require_view in (True, False):
+            for dx in dx_vals:
+                for dy in dy_vals:
+                    kx = float(pan_xy[0] + lat_sign * dx)
+                    ky = float(pan_xy[1] + dy)
+                    # Keep key on the table footprint.
+                    if abs(kx) > 0.42 or ky < -0.28 or ky > 0.22:
+                        continue
+                    cand: AABB = (kx - hx, ky - hy, kx + hx, ky + hy)
+                    gap = min(
+                        (self._aabb_gap(cand, other) for other in key_avoid),
+                        default=float("inf"),
+                    )
+                    if gap <= key_gap:
+                        continue
+                    if require_view and not self._footprint_in_head_view(cand, bz):
+                        continue
+                    key_x, key_y = kx, ky
+                    key_aabb = cand
+                    found = True
+                    break
                 if found:
                     break
-            if not found or key_aabb is None:
-                raise UnStableError(
-                    f"cook_meat: cook key not placeable ({tag}, seed {self._ep_seed}) -- skip"
-                )
-            base_hz = float(self.KEY_BASE_HALF[2])
-            cap_hz = float(self.KEY_HALF[2])
-            base_z = bz + base_hz
-            cap_z = bz + 2.0 * base_hz + cap_hz
-            cook_key_base = create_box(
-                self,
-                pose=sapien.Pose([key_x, key_y, base_z], [1, 0, 0, 0]),
-                half_size=list(self.KEY_BASE_HALF),
-                color=list(self.KEY_BASE_COLOR),
-                name=f"cook_key_base_{tag}",
-                is_static=True,
+            if found:
+                break
+        if not found or key_aabb is None:
+            raise UnStableError(
+                f"cook_meat: cook key not placeable ({tag}, seed {self._ep_seed}) -- skip"
             )
-            key_home = sapien.Pose([key_x, key_y, cap_z], [1, 0, 0, 0])
-            cook_key = create_box(
-                self,
-                pose=key_home,
-                half_size=list(self.KEY_HALF),
-                color=list(self.KEY_COLOR),
-                name=f"cook_key_{tag}",
-                is_static=True,
-            )
-            key_xy = (key_x, key_y)
-            key_top_z = float(bz + 2.0 * base_hz + 2.0 * cap_hz)
-            key_home_pose = key_home
-            avoid.append(self._expand_aabb(key_aabb, key_gap))
-            self.add_prohibit_area(cook_key_base, padding=0.02)
-            self.add_prohibit_area(cook_key, padding=0.02)
+        base_hz = float(self.KEY_BASE_HALF[2])
+        cap_hz = float(self.KEY_HALF[2])
+        base_z = bz + base_hz
+        cap_z = bz + 2.0 * base_hz + cap_hz
+        cook_key_base = create_box(
+            self,
+            pose=sapien.Pose([key_x, key_y, base_z], [1, 0, 0, 0]),
+            half_size=list(self.KEY_BASE_HALF),
+            color=list(self.KEY_BASE_COLOR),
+            name=f"cook_key_base_{tag}",
+            is_static=True,
+        )
+        key_home = sapien.Pose([key_x, key_y, cap_z], [1, 0, 0, 0])
+        cook_key = create_box(
+            self,
+            pose=key_home,
+            half_size=list(self.KEY_HALF),
+            color=list(self.KEY_COLOR),
+            name=f"cook_key_{tag}",
+            is_static=True,
+        )
+        key_xy = (key_x, key_y)
+        key_top_z = float(bz + 2.0 * base_hz + 2.0 * cap_hz)
+        key_home_pose = key_home
+        avoid.append(self._expand_aabb(key_aabb, key_gap))
+        self.add_prohibit_area(cook_key_base, padding=0.02)
+        self.add_prohibit_area(cook_key, padding=0.02)
 
         self.add_prohibit_area(skillet, padding=0.05)
         self.add_prohibit_area(board, padding=0.03)
@@ -814,11 +810,15 @@ class cook_meat(Base_Task):
             "steak_shapes": steak_shapes,
             "doneness": 0.0,
             "max_doneness": 0.0,
-            "grasp_doneness": None,
-            "cooking_active": False,
+            "grasp_doneness": None,  # doneness latched when key toggles OFF
+            "cooking_active": False,  # legacy; unused (cook_on gates cooking)
             "awaiting_return_grasp": False,
             "cook_phase_done": False,
-            "_expert_key_held": False,  # interactive / scripted cook-key latch
+            "cook_on": False,  # latched key state (measure_ingredient-style)
+            "_pending_off": False,
+            "_touch_latched": False,
+            "_ignore_key": False,  # expert sets latch explicitly
+            "_expert_key_held": False,  # brief expert depress visual override
         }
         self._set_station_meat_color(station, 0.0)
         # Sibling dual station only needs bowl↔bowl ≥10 cm. Board/key sit outward
@@ -874,9 +874,8 @@ class cook_meat(Base_Task):
         self.cook_doneness_tol = float(
             config.get("cook_doneness_tol", self.COOK_DONENESS_TOL_DEFAULT)
         )
-        self.cook_button_enabled = bool(
-            config.get("cook_button_enabled", self.COOK_BUTTON_ENABLED_DEFAULT)
-        )
+        # Cook keys are always present; legacy cook_button_enabled is ignored.
+        self.cook_button_enabled = True
         self.dual_setup_enabled = bool(
             config.get("dual_setup_enabled", self.DUAL_SETUP_ENABLED_DEFAULT)
         )
@@ -940,10 +939,8 @@ class cook_meat(Base_Task):
         self._init_reactive_cook_keys()
 
     def _init_reactive_cook_keys(self) -> None:
-        """Spring-back cook keys (gripper-Z), fill_coffee style."""
+        """Spring cook keys with measure_ingredient-style ON/OFF latch visuals."""
         self._reactive_buttons = None
-        if not self.use_cook_button:
-            return
         actors, homes, tops, ids = [], [], [], []
         for st in self.stations:
             key = st.get("cook_key")
@@ -1024,11 +1021,13 @@ class cook_meat(Base_Task):
             return False
 
     def _latch_grasp_doneness(self, station: dict[str, Any], *, force: bool = False) -> None:
-        """Freeze this station's cook state once its steak is actually grasped.
+        """Freeze this station's cook quality (legacy helper / interactive board snap).
 
-        Per-station: grasping one dual-station steak must not freeze the other.
+        Preferred path is ``_set_station_cook_on(st, False)``, which latches
+        doneness when the key toggles OFF. This remains for interactive board
+        snaps and older call sites.
         """
-        if station.get("grasp_doneness") is not None:
+        if station.get("grasp_doneness") is not None and not force:
             return
         if not force and not self._steak_held(station):
             return
@@ -1036,12 +1035,31 @@ class cook_meat(Base_Task):
         station["cooking_active"] = False
         station["awaiting_return_grasp"] = False
         station["cook_phase_done"] = True
+        station["cook_on"] = False
+        station["_pending_off"] = False
+
+    def _set_station_cook_on(self, station: dict[str, Any], on: bool) -> None:
+        """Latch cook key ON (cooking) or OFF (freeze doneness at shutoff)."""
+        on = bool(on)
+        was = bool(station.get("cook_on", False))
+        station["cook_on"] = on
+        station["_pending_off"] = False
+        if on:
+            station["grasp_doneness"] = None
+            station["cook_phase_done"] = False
+            station["cooking_active"] = False
+            return
+        if was or station.get("grasp_doneness") is None:
+            # Shutoff freezes the cook score used by check_success.
+            station["grasp_doneness"] = float(station["doneness"])
+        station["cook_phase_done"] = True
+        station["cooking_active"] = False
 
     def _button_is_pressed_station(self, station: dict[str, Any]) -> bool:
-        """True when this station's cook key is held down (gripper-Z or expert latch)."""
-        if not self.use_cook_button or station.get("cook_key") is None:
+        """True when this station's cook key is latched ON (or briefly held by expert)."""
+        if station.get("cook_key") is None:
             return False
-        if bool(station.get("_expert_key_held")):
+        if bool(station.get("cook_on")) or bool(station.get("_expert_key_held")):
             return True
         bank = getattr(self, "_reactive_buttons", None)
         if bank is None:
@@ -1052,13 +1070,41 @@ class cook_meat(Base_Task):
             return False
 
     def _button_is_pressed(self) -> bool:
-        """True if any station's cook key is pressed (obs / tests)."""
-        if not self.use_cook_button:
-            return False
+        """True if any station's cook key is latched ON / held (obs / tests)."""
         for st in getattr(self, "stations", []) or []:
             if self._button_is_pressed_station(st):
                 return True
         return False
+
+    def _key_tip_pressing(self, station: dict[str, Any]) -> bool:
+        """True when a gripper tip is pressing this station's key (force proxy)."""
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is None:
+            return False
+        try:
+            idx = bank.resolve_index(str(station["tag"]))
+        except Exception:
+            return False
+        tip = None
+        for side in bank._sides_for_button(idx):
+            candidate = bank._tip_xyz(side)
+            if candidate is None:
+                continue
+            home_xy = np.asarray(bank.home_poses[idx].p[:2], dtype=float)
+            if float(np.linalg.norm(candidate[:2] - home_xy)) > float(bank.xy_tol):
+                continue
+            tip = candidate
+            break
+        if tip is None:
+            return False
+        top_z = float(bank.tops_z[idx])
+        force = float(bank.force_stiffness) * max(
+            0.0, top_z + float(bank.force_engage_slack) - float(tip[2])
+        )
+        engage = float(bank.force_full) * (
+            float(bank.trigger_depth) / max(float(bank.max_depth), 1e-6)
+        )
+        return force >= engage
 
     def _advance_station_cook(self, station: dict[str, Any]) -> None:
         """Advance one station's doneness by one cook tick and recolor."""
@@ -1071,14 +1117,57 @@ class cook_meat(Base_Task):
         self._set_station_meat_color(station, station["doneness"])
 
     def _update_reactive_cook_keys(self) -> None:
+        """Animate keys and latch ON/OFF like ``measure_ingredient``.
+
+        Press while OFF → latch ON (key stays down, cooking starts).
+        Press while ON → arm OFF; cooking continues until the tip releases,
+        then the key springs up and doneness freezes.
+        """
         bank = getattr(self, "_reactive_buttons", None)
         if bank is None:
             return
-        for st in getattr(self, "stations", None) or []:
+        stations = getattr(self, "stations", None) or []
+        for st in stations:
             tag = str(st.get("tag", ""))
-            if tag:
-                bank.set_forced(tag, bool(st.get("_expert_key_held")))
-        bank.update()
+            if not tag:
+                continue
+            # Key stays depressed while latched ON (or during an expert depress).
+            forced = bool(st.get("cook_on")) or bool(st.get("_expert_key_held"))
+            bank.set_forced(tag, forced)
+
+        triggered = set(bank.update())
+
+        for st in stations:
+            tag = str(st.get("tag", ""))
+            if not tag or st.get("_ignore_key"):
+                continue
+            touching = self._key_tip_pressing(st)
+            if not st.get("cook_on"):
+                if tag in triggered:
+                    self._set_station_cook_on(st, True)
+                    # Consume the rest of this press (measure_ingredient style).
+                    # Resetting _touch_latched here made the still-held tip look
+                    # like a second press, so lifting immediately latched OFF at
+                    # doneness ~0 and failed the episode.
+                    st["_touch_latched"] = True
+                    st["_pending_off"] = False
+                else:
+                    st["_touch_latched"] = touching
+                    st["_pending_off"] = False
+                continue
+
+            # Latched ON: a new tip-press edge arms OFF; release after that
+            # executes shutoff (forced key does not re-fire trigger edges).
+            if touching and not st.get("_touch_latched"):
+                st["_pending_off"] = True
+            if (
+                st.get("_pending_off")
+                and not touching
+                and st.get("_touch_latched")
+            ):
+                self._set_station_cook_on(st, False)
+                st["_pending_off"] = False
+            st["_touch_latched"] = touching
 
     def _update_kinematic_tasks(self) -> None:
         """Advance base dynamics and per-station cooking state by one step."""
@@ -1088,25 +1177,9 @@ class cook_meat(Base_Task):
             return
         self._update_reactive_cook_keys()
         for st in stations:
-            # Latch cook freeze only when THIS steak is actually held (not on approach).
-            if (
-                st.get("awaiting_return_grasp")
-                and st.get("grasp_doneness") is None
-                and self._steak_held(st)
-            ):
-                self._latch_grasp_doneness(st, force=True)
-            if st.get("grasp_doneness") is not None:
-                continue
-            # After the cook wait finishes, freeze further doneness changes until
-            # THIS steak is grasped (stops lingering key contact from overcooking).
-            if st.get("cook_phase_done"):
-                continue
-            if self.use_cook_button:
-                if self._button_is_pressed_station(st) and self._steak_on_pan_station(st):
-                    self._advance_station_cook(st)
-            elif st.get("cooking_active"):
-                if self._steak_on_pan_station(st):
-                    self._advance_station_cook(st)
+            # Cook only while the key is latched ON and the steak is on the pan.
+            if st.get("cook_on") and self._steak_on_pan_station(st):
+                self._advance_station_cook(st)
         # Keep primary aliases in sync for obs / success helpers.
         primary = stations[0]
         self.doneness = float(primary["doneness"])
@@ -1165,62 +1238,105 @@ class cook_meat(Base_Task):
             )
         return self.grasp_actor(actor, arm_tag=arm_tag, **kwargs)
 
-    def _press_cook_buttons(self) -> None:
-        """Press and hold each station's cook key until target doneness, then release.
+    def _press_cook_keys(self, want_on: bool) -> None:
+        """Press each station's cook key to latch ON or OFF (measure_ingredient style).
 
-        Uses absolute ``move_to_pose`` hover/press targets (not ``grasp_actor``).
-        CuRobo often stops a few cm above the key mesh; press detection uses a
-        generous ``key_press_dz`` so a near-contact EE still counts as held.
+        ON: cooking starts at depress; key stays down after the EE lifts.
+        OFF: cooking continues through the press; freeze only after release when
+        the key returns up. Uses absolute ``move_to_pose`` hover/press targets.
         """
         for st in self.stations:
             if st["cook_key"] is None:
-                raise RuntimeError("cook_meat: cook_key missing while button mode on")
+                raise RuntimeError("cook_meat: cook_key missing")
+            st["_ignore_key"] = True
+            st["_pending_off"] = False
 
         hover = float(getattr(self, "key_hover_dis", self.KEY_HOVER_DIS_DEFAULT))
         # Target TCP near the key top; EE frame is EE_TO_TCP above TCP.
         press_above = max(0.0, hover - float(self.key_press_depth))
+        want_on = bool(want_on)
+
+        def _press_pair(left_st, right_st=None) -> None:
+            if right_st is None:
+                arm = left_st["arm"]
+                self.move(self.close_gripper(arm))
+                self.move(self.move_to_pose(arm, self._cook_key_tip_pose(left_st, hover)))
+                self.move(
+                    self.move_to_pose(arm, self._cook_key_tip_pose(left_st, press_above))
+                )
+                left_st["_expert_key_held"] = True
+                if want_on:
+                    self._set_station_cook_on(left_st, True)
+                # Brief dwell at bottom so the depress is visible in demos.
+                for _ in range(4):
+                    self._update_kinematic_tasks()
+                    self.scene.step()
+                self.move(self.move_to_pose(arm, self._cook_key_tip_pose(left_st, hover)))
+                left_st["_expert_key_held"] = False
+                if not want_on:
+                    # OFF applies on release (key springs up).
+                    self._set_station_cook_on(left_st, False)
+                self.move(self.open_gripper(arm))
+                return
+
+            la, ra = left_st["arm"], right_st["arm"]
+            self.move(self.close_gripper(la), self.close_gripper(ra))
+            self.move(
+                self.move_to_pose(la, self._cook_key_tip_pose(left_st, hover)),
+                self.move_to_pose(ra, self._cook_key_tip_pose(right_st, hover)),
+            )
+            self.move(
+                self.move_to_pose(la, self._cook_key_tip_pose(left_st, press_above)),
+                self.move_to_pose(ra, self._cook_key_tip_pose(right_st, press_above)),
+            )
+            for st in (left_st, right_st):
+                st["_expert_key_held"] = True
+                if want_on:
+                    self._set_station_cook_on(st, True)
+            for _ in range(4):
+                self._update_kinematic_tasks()
+                self.scene.step()
+            self.move(
+                self.move_to_pose(la, self._cook_key_tip_pose(left_st, hover)),
+                self.move_to_pose(ra, self._cook_key_tip_pose(right_st, hover)),
+            )
+            for st in (left_st, right_st):
+                st["_expert_key_held"] = False
+                if not want_on:
+                    self._set_station_cook_on(st, False)
+            self.move(self.open_gripper(la), self.open_gripper(ra))
 
         if len(self.stations) == 1:
-            st = self.stations[0]
-            arm = st["arm"]
-            self.move(self.close_gripper(arm))
-            self.move(self.move_to_pose(arm, self._cook_key_tip_pose(st, hover)))
-            self.move(self.move_to_pose(arm, self._cook_key_tip_pose(st, press_above)))
-            # Always latch expert hold for the cook wait (EE may sit slightly above key).
-            st["_expert_key_held"] = True
-            self._cook_idle()
-            # Freeze cooking before releasing the key / moving away.
-            st["cook_phase_done"] = True
-            st["awaiting_return_grasp"] = True
-            st["_expert_key_held"] = False
-            self.move(self.move_to_pose(arm, self._cook_key_tip_pose(st, hover)))
-            self.move(self.open_gripper(arm))
-            return
+            _press_pair(self.stations[0])
+        else:
+            left = next(st for st in self.stations if st["arm"] == "left")
+            right = next(st for st in self.stations if st["arm"] == "right")
+            _press_pair(left, right)
 
-        left = next(st for st in self.stations if st["arm"] == "left")
-        right = next(st for st in self.stations if st["arm"] == "right")
-        la, ra = left["arm"], right["arm"]
-        self.move(self.close_gripper(la), self.close_gripper(ra))
-        self.move(
-            self.move_to_pose(la, self._cook_key_tip_pose(left, hover)),
-            self.move_to_pose(ra, self._cook_key_tip_pose(right, hover)),
-        )
-        self.move(
-            self.move_to_pose(la, self._cook_key_tip_pose(left, press_above)),
-            self.move_to_pose(ra, self._cook_key_tip_pose(right, press_above)),
-        )
         for st in self.stations:
-            st["_expert_key_held"] = True
+            # Keep ignore during scripted expert; interactive clears on load.
+            interactive = bool(getattr(self, "_interactive_robot_mode", False)) or bool(
+                getattr(self, "_interactive_universal_controls", False)
+            )
+            st["_ignore_key"] = not interactive
+            st["_touch_latched"] = False
+            st["_pending_off"] = False
+
+    def _press_cook_buttons(self) -> None:
+        """Legacy alias: latch ON, cook to target, latch OFF (no board return)."""
+        self._press_cook_keys(want_on=True)
+        # Park arms clear of the keys while cooking.
+        if len(self.stations) == 1:
+            self.move(self.back_to_origin(self.stations[0]["arm"]))
+        else:
+            left = next(st for st in self.stations if st["arm"] == "left")
+            right = next(st for st in self.stations if st["arm"] == "right")
+            self.move(
+                self.back_to_origin(left["arm"]),
+                self.back_to_origin(right["arm"]),
+            )
         self._cook_idle()
-        for st in self.stations:
-            st["cook_phase_done"] = True
-            st["awaiting_return_grasp"] = True
-            st["_expert_key_held"] = False
-        self.move(
-            self.move_to_pose(la, self._cook_key_tip_pose(left, hover)),
-            self.move_to_pose(ra, self._cook_key_tip_pose(right, hover)),
-        )
-        self.move(self.open_gripper(la), self.open_gripper(ra))
+        self._press_cook_keys(want_on=False)
 
     # ------------------------------------------------------------- policy
     def _dbg(self, tag: str) -> None:
@@ -1231,9 +1347,9 @@ class cook_meat(Base_Task):
     def play_once(self) -> dict[str, Any]:
         """Run the expert trajectory for one episode.
 
-        The steak is always a stationary target (options only add a cook key
-        and/or a second station). Never use the base-task moving-target
-        workflow even when the shared config sets ``use_dynamic: true``.
+        The steak is always a stationary target (options only add a second
+        station). Never use the base-task moving-target workflow even when the
+        shared config sets ``use_dynamic: true``.
         """
         return self._play_once_static()
 
@@ -1393,29 +1509,11 @@ class cook_meat(Base_Task):
             self.move(self.move_by_displacement(arm_tag=st["arm"], z=0.08))
 
     def _pan_cook_table(self) -> None:
-        """Cook held steak(s) on pan(s), then return them to the cutting board(s)."""
+        """Place steak(s) on pan(s), latch cook ON → wait → latch OFF."""
         self._place_steaks_on_pans()
         self._dbg("place_in_pan")
-
-        if self.use_cook_button:
-            self._press_cook_buttons()
-        else:
-            if len(self.stations) == 1:
-                self.move(self.back_to_origin(self.stations[0]["arm"]))
-            else:
-                left = next(st for st in self.stations if st["arm"] == "left")
-                right = next(st for st in self.stations if st["arm"] == "right")
-                self.move(self.back_to_origin(left["arm"]), self.back_to_origin(right["arm"]))
-            for st in self.stations:
-                st["cooking_active"] = True
-            self._cook_idle()
-            for st in self.stations:
-                st["cook_phase_done"] = True
-                st["awaiting_return_grasp"] = True
-            # grasp_doneness latches per-station when each steak is actually grasped.
-
-        self._return_steaks_to_boards()
-        self._dbg("returned_to_board")
+        self._press_cook_buttons()
+        self._dbg("cook_key_off")
 
     def _task_info(self, arm_tag: ArmTag | None = None) -> dict[str, str]:
         """Build the language-template substitutions recorded for this episode."""
@@ -1438,11 +1536,10 @@ class cook_meat(Base_Task):
             "{A}": "200_steak/base0",
             "{B}": f"106_skillet/base{skillet_id}",
             "{C}": "104_board/base0",
+            "{E}": "cook_key",
             "{a}": arm_str,
             "{o}": self._option_label(),
         }
-        if self.use_cook_button:
-            info["{E}"] = "cook_key"
         if self.dual_setup_enabled:
             info["{n}"] = "2"
         return info
@@ -1489,55 +1586,31 @@ class cook_meat(Base_Task):
         return abs(float(doneness) - float(self.target_doneness)) <= tol
 
     def _station_success(self, station: dict[str, Any]) -> bool:
-        """Return whether one steak is on its board within the doneness range.
+        """Return whether one steak was shut off inside the doneness range.
 
-        Cook quality uses ``grasp_doneness`` (value when cooking stopped) and
-        the inclusive ``target_doneness_range``. Dual episodes call this once
-        per steak, and both must pass.
+        Cook quality uses ``grasp_doneness`` (value when the cook key latched
+        OFF). The steak may remain on the pan — board return is not required.
+        Dual episodes call this once per steak, and both must pass.
         """
         if station.get("grasp_doneness") is None:
             return False
-        g = float(station["grasp_doneness"])
-        cooked_ok = self._doneness_in_target_range(g)
-        steak_p = station["steak"].get_pose().p
-        steak_z = float(steak_p[2])
-        steak_xy = np.array(steak_p[:2])
-        board_xy = np.array(station.get("board_xy", station["board"].get_pose().p[:2]), dtype=float)
-        pan_xy = np.array(station["skillet"].get_functional_point(0)[:2])
-        d_board = float(np.linalg.norm(steak_xy - board_xy))
-        d_pan = float(np.linalg.norm(steak_xy - pan_xy))
-        on_board = d_board < 0.12
-        off_pan = d_board < d_pan
-        board_top = float(station.get("board_top", 0.74 + self.table_z_bias))
-        above_board = steak_z > (board_top - 0.02)
-        return bool(cooked_ok and on_board and off_pan and above_board)
+        if bool(station.get("cook_on")):
+            return False
+        return bool(self._doneness_in_target_range(float(station["grasp_doneness"])))
 
     def check_success(self) -> bool:
-        """Return whether every steak is correctly cooked and back on its board.
+        """Return whether every steak was cooked into the target doneness range.
 
-        Single station: one steak in the doneness band, on the board, off the pan.
-        Dual (Opt 2 / Opt 1+2): **both** steaks must have ``grasp_doneness``
-        inside ``target_doneness_range`` and be returned to their own boards.
+        Single station: key OFF with ``grasp_doneness`` in ``target_doneness_range``.
+        Dual (Opt 2): **both** steaks must meet that criterion (board return not
+        required).
         """
         stations = getattr(self, "stations", None)
         if not stations:
             # Unit-test path that builds a bare task without load_actors.
             if self._grasp_doneness is None:
                 return False
-            cooked_ok = self._doneness_in_target_range(float(self._grasp_doneness))
-            steak_p = self.steak.get_pose().p
-            steak_z = float(steak_p[2])
-            steak_xy = np.array(steak_p[:2])
-            board_xy = np.array(self.board.get_pose().p[:2])
-            pan_xy = np.array(self.skillet.get_functional_point(0)[:2])
-            d_board = float(np.linalg.norm(steak_xy - board_xy))
-            d_pan = float(np.linalg.norm(steak_xy - pan_xy))
-            return bool(
-                cooked_ok
-                and d_board < 0.12
-                and d_board < d_pan
-                and steak_z > (0.73 + self.table_z_bias)
-            )
+            return bool(self._doneness_in_target_range(float(self._grasp_doneness)))
         if bool(getattr(self, "dual_setup_enabled", False)) and len(stations) != 2:
             return False
         return all(self._station_success(st) for st in stations)
@@ -1558,10 +1631,11 @@ class cook_meat(Base_Task):
                 getattr(self, "target_doneness_range_shift", 0.0)
             ),
             "cook_steps": float(getattr(self, "cook_steps", self.COOK_STEPS_DEFAULT)),
-            "cook_button_enabled": bool(getattr(self, "cook_button_enabled", False)),
+            "cook_button_enabled": True,
             "dual_setup_enabled": bool(getattr(self, "dual_setup_enabled", False)),
-            "use_cook_button": bool(self.use_cook_button),
-            "button_pressed": bool(self._button_is_pressed()) if self.use_cook_button else False,
+            "use_cook_button": True,
+            "button_pressed": bool(self._button_is_pressed()),
+            "cook_on": [bool(st.get("cook_on")) for st in stations],
             "n_stations": int(len(stations)),
             "station_doneness": [float(st["doneness"]) for st in stations],
         }

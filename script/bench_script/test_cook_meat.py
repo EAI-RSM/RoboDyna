@@ -2,23 +2,18 @@
 """Full controller test + tagged demos for cook_meat.
 
 Conditions (5 episodes each):
-  default : cook_button_enabled=false, dual_setup_enabled=false
-            single station; contact cook while steak is on the pan
-  opt1    : cook_button_enabled=true,  dual_setup_enabled=false
-            single station; hold red cook key while steak is on the pan
-  opt2    : cook_button_enabled=false, dual_setup_enabled=true
-            dual stations (≥10 cm clearance); both arms; contact cook (no keys)
-  opt1+2  : cook_button_enabled=true,  dual_setup_enabled=true
-            dual stations; each side has its own cook key (hold to cook)
-Success: every station's steak returned to its cutting board off the pan with
-         grasp_doneness inside target_doneness_range (inclusive)
-         (not under-cooked and not over-cooked).
-         Dual (opt2 / opt1+2): **both** steaks must be cooked properly —
+  default : dual_setup_enabled=false
+            single station; press cook key ON → cook → press OFF
+  opt2    : dual_setup_enabled=true
+            dual stations (≥10 cm clearance); both arms; each has a latching key
+Success: every station's cook key latched OFF with grasp_doneness inside
+         target_doneness_range (inclusive). Board return is not required.
+         Dual (opt2): **both** steaks must be cooked properly —
          one bad doneness fails the episode.
 
 Demos land in:
   final_task_demos/cook_meat/<tag>_sidebyside.mp4
-  with tags: default, opt1, opt2, opt1+2
+  with tags: default, opt2
 """
 from __future__ import annotations
 
@@ -50,28 +45,16 @@ DEMO_TIMEOUT_S = 600  # per-condition demo recording hard cap
 
 CONDITIONS = {
     "default": {
-        "cook_button_enabled": False,
-        "dual_setup_enabled": False,
-    },
-    "opt1": {
-        "cook_button_enabled": True,
         "dual_setup_enabled": False,
     },
     "opt2": {
-        "cook_button_enabled": False,
-        "dual_setup_enabled": True,
-    },
-    "opt1+2": {
-        "cook_button_enabled": True,
         "dual_setup_enabled": True,
     },
 }
 
 DEMO_FILE_TAGS = {
     "default": "default",
-    "opt1": "opt1",
     "opt2": "opt2",
-    "opt1+2": "opt1+2",
 }
 
 
@@ -110,7 +93,6 @@ def _snapshot(env) -> dict:
             ((steak_xy[0] - pan_xy[0]) ** 2 + (steak_xy[1] - pan_xy[1]) ** 2) ** 0.5
         )
         grasp = st.get("grasp_doneness")
-        board_top = float(st.get("board_top", 0.74))
         station_rows.append(
             {
                 "tag": str(st.get("tag")),
@@ -118,6 +100,7 @@ def _snapshot(env) -> dict:
                 "grasp_doneness": None if grasp is None else float(grasp),
                 "doneness": float(st.get("doneness", 0.0)),
                 "max_doneness": float(st.get("max_doneness", 0.0)),
+                "cook_on": bool(st.get("cook_on", False)),
                 "d_board": d_board,
                 "d_pan": d_pan,
                 "steak_z": float(steak_p[2]),
@@ -126,13 +109,12 @@ def _snapshot(env) -> dict:
                     if grasp is None
                     else target_range[0] <= float(grasp) <= target_range[1]
                 ),
-                "on_board": d_board < 0.12 and d_board < d_pan and float(steak_p[2]) > (board_top - 0.02),
             }
         )
     return {
-        "cook_button_enabled": bool(getattr(env, "cook_button_enabled", False)),
+        "cook_button_enabled": True,
         "dual_setup_enabled": bool(getattr(env, "dual_setup_enabled", False)),
-        "use_cook_button": bool(getattr(env, "use_cook_button", False)),
+        "use_cook_button": True,
         "target_doneness": target,
         "target_doneness_range": list(target_range),
         "cook_steps": int(getattr(env, "cook_steps", COOK_STEPS)),
@@ -145,10 +127,10 @@ def _snapshot(env) -> dict:
 
 
 def _criteria_ok(snap: dict) -> bool:
-    """Independent success: every steak cooked in-band and back on its board.
+    """Independent success: every steak shut off in-band (board return optional).
 
     Dual setups must report exactly two stations, and **both** steaks need
-    ``grasp_doneness`` within tol of the shared target (one miss fails).
+    ``grasp_doneness`` within the shared target range (one miss fails).
     """
     if snap["n_stations"] < 1:
         return False
@@ -160,9 +142,9 @@ def _criteria_ok(snap: dict) -> bool:
         g = st["grasp_doneness"]
         if g is None:
             return False
-        if not target_min <= float(g) <= target_max:
+        if st.get("cook_on"):
             return False
-        if not st["on_board"]:
+        if not target_min <= float(g) <= target_max:
             return False
         if not st.get("in_band", False):
             return False
@@ -171,13 +153,9 @@ def _criteria_ok(snap: dict) -> bool:
 
 def _condition_shape_ok(condition: str, snap: dict) -> bool:
     cfg = CONDITIONS[condition]
-    if bool(snap["cook_button_enabled"]) != bool(cfg["cook_button_enabled"]):
-        return False
     if bool(snap["dual_setup_enabled"]) != bool(cfg["dual_setup_enabled"]):
         return False
-    # Opt 1 and Opt 1+2 both use cook keys.
-    expect_button = bool(cfg["cook_button_enabled"])
-    if bool(snap["use_cook_button"]) != expect_button:
+    if not bool(snap["use_cook_button"]):
         return False
     expect_n = 2 if cfg["dual_setup_enabled"] else 1
     if int(snap["n_stations"]) != expect_n:
@@ -372,25 +350,21 @@ def record_and_export_demos():
     with open(os.path.join(out_dir, "CONDITIONS.txt"), "w", encoding="utf-8") as f:
         f.write(
             f"{TASK} — expert controller demos\n\n"
-            "default  : cook_button_enabled=false, dual_setup_enabled=false\n"
-            "           single station; contact cook on pan (no key)\n"
-            "opt1     : cook_button_enabled=true,  dual_setup_enabled=false\n"
-            "           single station; hold red cook key while steak is on pan\n"
-            "opt2     : cook_button_enabled=false, dual_setup_enabled=true\n"
-            "           dual stations (≥10 cm clearance); both arms; contact cook; no keys\n"
-            "opt1+2   : cook_button_enabled=true,  dual_setup_enabled=true\n"
-            "           dual stations; each side has its own cook key (hold to cook)\n\n"
-            "Success: every station steak returned to its cutting board off the pan with\n"
+            "default  : dual_setup_enabled=false\n"
+            "           single station; press cook key ON → cook → press OFF\n"
+            "opt2     : dual_setup_enabled=true\n"
+            "           dual stations (≥10 cm clearance); both arms; each has a latching key\n\n"
+            "Success: every station cook key latched OFF with\n"
             f"         {TARGET_DONENESS_RANGE[0]} ≤ grasp_doneness ≤ "
             f"{TARGET_DONENESS_RANGE[1]}\n"
             "         (rejects under-cooked and over-cooked meat).\n"
-            "         Dual (opt2 / opt1+2): both steaks must be cooked properly;\n"
+            "         Board return is not required.\n"
+            "         Dual (opt2): both steaks must be cooked properly;\n"
             "         one under-/over-cooked steak fails the episode.\n\n"
             "Files (side-by-side is the primary deliverable):\n"
-            "  default_sidebyside.mp4   opt1_sidebyside.mp4\n"
-            "  opt2_sidebyside.mp4      opt1+2_sidebyside.mp4\n"
+            "  default_sidebyside.mp4   opt2_sidebyside.mp4\n"
             "Also: <tag>_head.mp4, <tag>_topdown.mp4\n"
-            "Tags: default | opt1 | opt2 | opt1+2\n"
+            "Tags: default | opt2\n"
         )
     return exported
 
@@ -398,7 +372,7 @@ def record_and_export_demos():
 def main():
     all_results = {}
     abort_demos = False
-    for cond in ("default", "opt1", "opt2", "opt1+2"):
+    for cond in ("default", "opt2"):
         rows = run_condition(cond, n=N_PER_CONDITION)
         all_results[cond] = rows
         n_ok = sum(1 for r in rows if r["success"])
@@ -454,8 +428,8 @@ def main():
         "demos": exported,
         "success_criterion": (
             f"{TARGET_DONENESS_RANGE[0]} ≤ grasp_doneness ≤ "
-            f"{TARGET_DONENESS_RANGE[1]} for every steak; "
-            "each steak returned to its cutting board off the pan; "
+            f"{TARGET_DONENESS_RANGE[1]} for every steak at key OFF; "
+            "board return not required; "
             "dual (2 steaks) requires both cooked properly"
         ),
     }

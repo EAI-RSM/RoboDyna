@@ -218,7 +218,7 @@ class CookMeatHelperTests(unittest.TestCase):
         """Metadata deduplication must preserve every template substitution."""
         task = object.__new__(cook_meat)
         task.skillet_id = 2
-        task.cook_button_enabled = False
+        task.cook_button_enabled = True
         task.dual_setup_enabled = False
         task.stations = None
 
@@ -228,35 +228,32 @@ class CookMeatHelperTests(unittest.TestCase):
                 "{A}": "200_steak/base0",
                 "{B}": "106_skillet/base2",
                 "{C}": "104_board/base0",
+                "{E}": "cook_key",
                 "{a}": "left",
                 "{o}": "default",
             },
         )
 
-        task.cook_button_enabled = True
         info = task._task_info(ArmTag("right"))
-        self.assertEqual(info["{o}"], "option 1")
+        self.assertEqual(info["{o}"], "default")
         self.assertEqual(info["{E}"], "cook_key")
         self.assertEqual(info["{a}"], "right")
 
         task.dual_setup_enabled = True
         info = task._task_info()
-        self.assertEqual(info["{o}"], "option 1, option 2")
+        self.assertEqual(info["{o}"], "option 2")
         self.assertEqual(info["{a}"], "both arms")
         self.assertEqual(info["{n}"], "2")
-        self.assertEqual(info["{E}"], "cook_key")  # Opt 1+2: keys on both stations
+        self.assertEqual(info["{E}"], "cook_key")
         self.assertTrue(task.use_cook_button)
 
-    def test_opt1_plus_2_keeps_cook_button(self) -> None:
-        """Opt 1+2 keeps cook keys; Opt 2 alone does not."""
+    def test_cook_keys_always_enabled(self) -> None:
+        """Cook keys are always active (default and Opt 2)."""
         task = object.__new__(cook_meat)
-        task.cook_button_enabled = True
+        task.cook_button_enabled = False
         task.dual_setup_enabled = True
         self.assertTrue(task.use_cook_button)
-        task.cook_button_enabled = False
-        self.assertFalse(task.use_cook_button)
         task.dual_setup_enabled = False
-        task.cook_button_enabled = True
         self.assertTrue(task.use_cook_button)
 
     def test_legacy_option_forces_cook_button(self) -> None:
@@ -273,8 +270,8 @@ class CookMeatHelperTests(unittest.TestCase):
         task._apply_legacy_option()
         self.assertTrue(task._cook_cfg["dual_setup_enabled"])
 
-    def test_button_mode_cooks_only_while_pressed_on_pan(self) -> None:
-        """Opt 1 advances doneness only when the key is pressed and steak is on the pan."""
+    def test_cooks_only_while_key_latched_on_and_on_pan(self) -> None:
+        """Doneness advances only while cook_on and the steak is on the pan."""
         task = object.__new__(cook_meat)
         task.cook_button_enabled = True
         task.cook_steps = 100
@@ -285,12 +282,13 @@ class CookMeatHelperTests(unittest.TestCase):
             "doneness": 0.0,
             "max_doneness": 0.0,
             "grasp_doneness": None,
+            "cook_on": True,
             "cooking_active": False,
             "steak_shapes": [],
         }
         task.stations = [st]
 
-        with patch.object(cook_meat, "_button_is_pressed_station", return_value=True), patch.object(
+        with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
             cook_meat, "_steak_on_pan_station", return_value=True
         ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
             cook_meat._update_kinematic_tasks(task)
@@ -299,26 +297,16 @@ class CookMeatHelperTests(unittest.TestCase):
 
         st["doneness"] = 0.0
         task.doneness = 0.0
-        with patch.object(cook_meat, "_button_is_pressed_station", return_value=False), patch.object(
+        st["cook_on"] = False
+        with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
             cook_meat, "_steak_on_pan_station", return_value=True
         ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
             cook_meat._update_kinematic_tasks(task)
         self.assertEqual(st["doneness"], 0.0)
 
-        # After grasp_doneness is committed, further presses must not overcook.
-        st["grasp_doneness"] = 0.5
-        st["doneness"] = 0.5
-        task.doneness = 0.5
-        with patch.object(cook_meat, "_button_is_pressed_station", return_value=True), patch.object(
-            cook_meat, "_steak_on_pan_station", return_value=True
-        ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
-            cook_meat._update_kinematic_tasks(task)
-        self.assertEqual(st["doneness"], 0.5)
-
-    def test_grasp_latch_is_per_station(self) -> None:
-        """Grasping one dual-station steak must not freeze the other station's cook."""
+    def test_key_off_latch_is_per_station(self) -> None:
+        """Turning one dual-station key OFF must not freeze the other station."""
         task = object.__new__(cook_meat)
-        task.cook_button_enabled = False
         task.cook_steps = 100
         task.target_doneness = 0.5
         task.doneness = 0.0
@@ -328,8 +316,8 @@ class CookMeatHelperTests(unittest.TestCase):
             "doneness": 0.4,
             "max_doneness": 0.4,
             "grasp_doneness": None,
-            "cooking_active": True,
-            "awaiting_return_grasp": True,
+            "cook_on": True,
+            "cooking_active": False,
             "cook_phase_done": False,
             "steak_shapes": [],
             "steak_name": "200_steak_left",
@@ -338,29 +326,28 @@ class CookMeatHelperTests(unittest.TestCase):
             "doneness": 0.4,
             "max_doneness": 0.4,
             "grasp_doneness": None,
-            "cooking_active": True,
-            "awaiting_return_grasp": False,
+            "cook_on": True,
+            "cooking_active": False,
             "cook_phase_done": False,
             "steak_shapes": [],
             "steak_name": "200_steak_right",
         }
         task.stations = [left, right]
+        cook_meat._set_station_cook_on(task, left, False)
+        self.assertEqual(left["grasp_doneness"], 0.4)
+        self.assertFalse(left["cook_on"])
+        self.assertIsNone(right["grasp_doneness"])
+        self.assertTrue(right["cook_on"])
 
-        def _held(self, station):
-            return station["steak_name"] == "200_steak_left"
-
-        with patch.object(cook_meat, "_steak_held", _held), patch.object(
+        with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
             cook_meat, "_steak_on_pan_station", return_value=True
         ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
             cook_meat._update_kinematic_tasks(task)
-        self.assertEqual(left["grasp_doneness"], 0.4)
-        self.assertFalse(left["cooking_active"])
-        self.assertIsNone(right["grasp_doneness"])
-        self.assertTrue(right["cooking_active"])
+        self.assertEqual(left["doneness"], 0.4)
         self.assertAlmostEqual(right["doneness"], 0.41, places=5)
 
-    def test_cook_phase_done_freezes_button_cooking(self) -> None:
-        """After cook wait, lingering key contact must not overcook."""
+    def test_key_off_stops_cooking(self) -> None:
+        """After the key latches OFF, doneness must not advance."""
         task = object.__new__(cook_meat)
         task.cook_button_enabled = True
         task.cook_steps = 100
@@ -370,23 +357,21 @@ class CookMeatHelperTests(unittest.TestCase):
         st = {
             "doneness": 0.5,
             "max_doneness": 0.5,
-            "grasp_doneness": None,
+            "grasp_doneness": 0.5,
+            "cook_on": False,
             "cooking_active": False,
-            "awaiting_return_grasp": True,
             "cook_phase_done": True,
             "steak_shapes": [],
         }
         task.stations = [st]
-        with patch.object(cook_meat, "_button_is_pressed_station", return_value=True), patch.object(
+        with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
             cook_meat, "_steak_on_pan_station", return_value=True
-        ), patch.object(cook_meat, "_steak_held", return_value=False), patch(
-            "envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None
-        ):
+        ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
             cook_meat._update_kinematic_tasks(task)
         self.assertEqual(st["doneness"], 0.5)
 
-    def test_get_dynamic_motion_config_respects_flags(self) -> None:
-        """Dynamic configuration should be absent for static mode and complete otherwise."""
+    def test_get_dynamic_motion_config_always_none(self) -> None:
+        """Cook-meat never uses the shared moving-target workflow."""
         task = object.__new__(cook_meat)
         task.steak = _Actor((0.1, 0.2, 0.8))
         task.use_dynamic = False
@@ -394,17 +379,13 @@ class CookMeatHelperTests(unittest.TestCase):
         self.assertIsNone(task.get_dynamic_motion_config())
 
         task.use_dynamic = True
-        config = task.get_dynamic_motion_config()
-        self.assertIsNotNone(config)
-        assert config is not None
-        self.assertIs(config["target_actor"], task.steak)
-        np.testing.assert_allclose(config["end_position"], [0.1, 0.2, 0.8])
+        self.assertIsNone(task.get_dynamic_motion_config())
 
         task.dual_setup_enabled = True
         self.assertIsNone(task.get_dynamic_motion_config())
 
-    def test_success_requires_cooked_steak_on_board_and_off_pan(self) -> None:
-        """Success should require in-band doneness, board proximity, and off-pan."""
+    def test_success_requires_cooked_doneness_at_key_off(self) -> None:
+        """Success should require in-band shutoff doneness (board return not required)."""
         task = object.__new__(cook_meat)
         task.stations = None
         task._grasp_doneness = 0.5
@@ -412,7 +393,7 @@ class CookMeatHelperTests(unittest.TestCase):
         task.target_doneness = 0.5
         task.cook_doneness_tol = 0.08
         task.table_z_bias = 0.0
-        task.steak = _Actor((0.01, 0.0, 0.75))
+        task.steak = _Actor((0.2, 0.0, 0.75))  # still on pan is fine
         task.board = _Actor((0.0, 0.0, 0.74))
         task.skillet = _Actor((0.2, 0.0, 0.74))
 
@@ -422,27 +403,15 @@ class CookMeatHelperTests(unittest.TestCase):
         self.assertFalse(task.check_success())
         task._grasp_doneness = 0.5
 
-        # Under-cooked at grasp time.
+        # Under-cooked at shutoff.
         task._grasp_doneness = 0.35
         self.assertFalse(task.check_success())
-        # Over-cooked at grasp time.
+        # Over-cooked at shutoff.
         task._grasp_doneness = 0.70
-        self.assertFalse(task.check_success())
-        task._grasp_doneness = 0.5
-
-        task.steak = _Actor((0.13, 0.0, 0.75))
-        self.assertFalse(task.check_success())
-
-        task.steak = _Actor((0.01, 0.0, 0.75))
-        task.skillet = _Actor((0.005, 0.0, 0.74))
-        self.assertFalse(task.check_success())
-
-        task.skillet = _Actor((0.2, 0.0, 0.74))
-        task.steak = _Actor((0.01, 0.0, 0.73))
         self.assertFalse(task.check_success())
 
     def test_dual_success_requires_both_stations(self) -> None:
-        """Opt 2 success requires every station's steak cooked and back on its board."""
+        """Opt 2 success requires every station's steak cooked (key OFF in range)."""
         task = object.__new__(cook_meat)
         task.dual_setup_enabled = True
         task.target_doneness = 0.5
@@ -451,9 +420,10 @@ class CookMeatHelperTests(unittest.TestCase):
         good = {
             "grasp_doneness": 0.5,
             "max_doneness": 0.5,
+            "cook_on": False,
             "board_xy": (0.0, 0.0),
             "board_top": 0.75,
-            "steak": _Actor((0.01, 0.0, 0.76)),
+            "steak": _Actor((0.2, 0.0, 0.76)),
             "board": _Actor((0.0, 0.0, 0.74)),
             "skillet": _Actor((0.2, 0.0, 0.74)),
         }
@@ -463,7 +433,12 @@ class CookMeatHelperTests(unittest.TestCase):
         self.assertFalse(task.check_success())
         task.stations = [good, dict(good)]
         self.assertTrue(task.check_success())
-        # Overcooked grasp on one station fails the episode.
+        # Still ON fails even with a latched score.
+        still_on = dict(good)
+        still_on["cook_on"] = True
+        task.stations = [good, still_on]
+        self.assertFalse(task.check_success())
+        # Overcooked shutoff on one station fails the episode.
         over = dict(good)
         over["grasp_doneness"] = 0.75
         task.stations = [good, over]

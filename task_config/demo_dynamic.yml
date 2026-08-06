@@ -450,7 +450,6 @@ task_args:
     pour_every: 3               # pour bowl→bin after this many catches
   cook_meat:
     # ---- knobs (change these) ----
-    #   cook_button_enabled  ← Opt 1 (default false = contact cook, no key)
     #   dual_setup_enabled   ← Opt 2; dual stations, both arms; ≥10 cm clearance
     #   cook_steps           ← nominal cook duration (steps for doneness 0→1)
     #   cook_speed_jitter    ← per-ep ± fraction on cook_steps
@@ -460,15 +459,13 @@ task_args:
     #   target_doneness_range ← base inclusive success interval; expert aims at midpoint
     #   target_doneness_range_jitter ← uniform per-episode shift applied to both limits
     # Combinations:
-    #   Default            : single + contact cook (no key)
-    #   Opt1               : single + red key hold-to-cook
-    #   Opt2               : dual stations, contact cook (no keys); both steaks cooked
-    #   Opt1+2             : dual stations, each with its own cook key; both steaks cooked
-    # CLI: --task-arg cook_button_enabled=... / dual_setup_enabled=...
-    #      --option 1 | --option 2
-    cook_steps: 3846            # nominal steps for doneness 0→1 (~30% faster than prior 5000)
+    #   Default            : single + red key latch ON/OFF to cook (no board return)
+    #   Opt2               : dual stations, each with its own latching cook key
+    # cook_button_enabled is ignored (keys always present; measure_ingredient-style latch).
+    # CLI: --task-arg dual_setup_enabled=... / --option 2
+    cook_steps: 2747            # nominal steps for doneness 0→1 (~40% faster than prior 3846)
     cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
-    cook_button_enabled: true  # CHANGE: Opt 1; true = hold red key to cook
+    cook_button_enabled: true   # ignored; keys always on (latch ON/OFF)
     dual_setup_enabled: True   # CHANGE: Opt 2; true = dual stations (both arms)
     key_offset_x: 0.14          # CHANGE: m; |lateral| distance of key from pan center
     key_y_bias: -0.04           # CHANGE: m; key y relative to pan (toward robot)
@@ -479,16 +476,15 @@ task_args:
     target_doneness_range_jitter: 0.05   # sample one shift U(-0.05,+0.05) per episode
     place_dx: 0.0             # nudge from the measured bowl center (mirrored on the left pan)
     place_dy: 0.0             # nudge from the measured bowl center (+y = away from robot)
-    board_scale_mult: 0.075 # cutting board size (steak starts and finishes here)
-    # plate removed: cooked steak returns to the cutting board
+    board_scale_mult: 0.075 # cutting board size (steak starts here; may finish on pan)
   cook_meat_timer:
     # Same knobs as cook_meat, plus a per-station pie timer (green→yellow→red).
     #   timer_radius / timer_n_sections  ← pie disc size / angular sections
-    # Combinations match cook_meat (default / Opt1 / Opt2 / Opt1+2).
+    # Combinations match cook_meat (default / Opt2).
     cook_steps: 3846
     cook_speed_jitter: 0.20
-    cook_button_enabled: false   # default = contact cook; Opt1 sets true
-    dual_setup_enabled: false    # Opt2 / Opt1+2
+    cook_button_enabled: true    # ignored; keys always on (latch ON/OFF)
+    dual_setup_enabled: false    # Opt2
     key_offset_x: 0.14
     key_y_bias: -0.04
     key_press_depth: 0.055

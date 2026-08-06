@@ -6,10 +6,10 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat_timer.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat_timer.py --control robot
 
-Respects ``cook_button_enabled`` from the selected config. When enabled, cooking
-advances when a gripper lowers onto the cook key (ReactivePushButtons). Space
-toggles steak board ↔ pan transfer — no ``_expert_key_held`` latching from the
-interactive script.
+Cooking uses a measure_ingredient-style latching cook key: press to latch ON
+(key stays down, cooking/timer start while steak is on the pan), press again to
+latch OFF (key returns up, doneness freezes). Space toggles steak board ↔ pan
+transfer. Success is doneness-in-range at shutoff (board return not required).
 """
 
 import argparse
@@ -45,14 +45,16 @@ CONTROLS_KEYBOARD = """
   P                 snap steak(s) onto pan(s)
   B                 snap steak(s) back to board(s)
 
-  Pie timer (green→yellow→red) tracks doneness; with a cook key it advances only while held.
+  Press the cook key to latch ON (stays down); press again to latch OFF.
+  Pie timer (green→yellow→red) advances only while the key is ON.
 """
 
 CONTROLS_ROBOT = """
   Space             toggle steak(s): board → pan, then pan → board
 
   Select an arm, move over the cook key, lower with Q to press (E to raise).
-  Pie timer (green→yellow→red) tracks doneness; with a cook key it advances only while held.
+  First press latches cooking ON; second press latches OFF.
+  Pie timer (green→yellow→red) advances only while the key is ON.
 """
 
 
@@ -109,6 +111,7 @@ def _stations_by_arm(env):
 def _clear_cook_latches(env):
     for st in getattr(env, "stations", []) or []:
         st["_expert_key_held"] = False
+        st["_ignore_key"] = False
 
 
 def _active_stations(env, mode):
@@ -151,12 +154,7 @@ def _snap_steaks_to_pans(env):
                 rigid.set_angular_velocity([0, 0, 0])
         except Exception:
             pass
-        if not env.use_cook_button:
-            st["cooking_active"] = True
-    if env.use_cook_button:
-        print("Snapped steak(s) onto pan(s). Lower gripper with Q onto the cook key.")
-    else:
-        print("Snapped steak(s) onto pan(s); contact cooking is active.")
+    print("Snapped steak(s) onto pan(s). Press the cook key to latch cooking ON.")
 
 
 def _snap_steaks_to_boards(env):
@@ -338,9 +336,6 @@ def _toggle_steak_transfer(env, *, robot: bool):
     if not ok or not env.plan_success:
         action_failed(env, arms, detail="could not place steak(s) on pan(s)")
         return
-    if not env.use_cook_button:
-        for st in stations:
-            st["cooking_active"] = True
     print(f"Robot moved steak(s) to pan(s) with {'+'.join(arms)} arm(s).")
 
 
@@ -370,12 +365,12 @@ class KeyboardState:
 
 
 def _station_cook_finished(env, st):
-    """True once this station's steak has been grasped for its board return."""
-    return st.get("grasp_doneness") is not None
+    """True once this station's cook key has latched OFF (doneness frozen)."""
+    return st.get("grasp_doneness") is not None and not bool(st.get("cook_on"))
 
 
 def _episode_done(env):
-    """Finish after all steaks return, or immediately on definite overcooking."""
+    """Finish after all keys latch OFF, or immediately on definite overcooking."""
     stations = getattr(env, "stations", None) or []
     if not stations:
         return False, None
@@ -385,7 +380,7 @@ def _episode_done(env):
         for st in stations
     ]
     detail = (
-        f"doneness={doneness} grasp={grasps} "
+        f"doneness={doneness} shutoff={grasps} "
         f"target={float(env.target_doneness_range[0]):.2f}-"
         f"{float(env.target_doneness_range[1]):.2f}"
     )
@@ -575,8 +570,6 @@ def main():
     # Match the main cook_meat_timer rollout: open fingers before approaching steak.
     env.together_open_gripper(save_freq=None)
     _clear_cook_latches(env)
-    if not env.use_cook_button:
-        print("cook_button_enabled=false: no cook button; meat cooks by pan contact.")
 
     # Keyboard sandbox starts with steaks on pans so gripper-Z can cook immediately.
     if args.control == "keyboard":
@@ -593,8 +586,8 @@ def main():
 
     n = len(env.stations)
     print_instructions(
-        f"Cook-button sandbox ready ({n} station(s)). "
-        "Select an arm, move over the cook key, lower with Q to press. "
+        f"Cook-key sandbox ready ({n} station(s)). "
+        "Select an arm, press the cook key to latch ON, press again to latch OFF. "
         "Space toggles steak board ↔ pan."
     )
 

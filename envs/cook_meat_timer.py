@@ -7,8 +7,8 @@ fills clockwise section-by-section at the cooking rate:
   * yellow — resets and fills until the upper success threshold
   * red    — stays full once overcooked; freezes when cooking stops
 
-Opt 1 / Opt 1+2: the timer advances only while the cook key is held (same gate
-as cooking). Contact-cook modes advance while the steak is on the pan.
+The timer advances only while the cook key is latched ON and the steak is on
+the pan (same gate as cooking). Press OFF freezes both cooking and the timer.
 """
 
 from __future__ import annotations
