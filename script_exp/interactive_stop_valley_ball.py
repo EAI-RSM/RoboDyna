@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     action_failed,
+    try_interactive_grasp,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
@@ -268,10 +269,9 @@ class RobotBatController:
             return
         # Preserve the task's normal grasp sequence; it establishes the weld
         # offset used by the held-bat controller.
-        self.env.move(self.env.grasp_actor(
-            self.env.panel, arm_tag=self.arm, pre_grasp_dis=0.025, grasp_dis=0.025,
-        ))
-        if self.env.plan_success:
+        if try_interactive_grasp(
+            self.env, self.env.panel, self.arm, pre_grasp_dis=0.025, grasp_dis=0.025,
+        ):
             self.env._weld_bowl_to_end_effector(self.arm)
             self.holding = True
             self.env._bowl_ready = True
@@ -280,8 +280,6 @@ class RobotBatController:
             # Clear the holder/table, then leave all lateral placement to teleop.
             self.motion.move_bat_to(panel[0], panel[1], panel[2] + 0.10)
             print(f"Picked up bat with {self.arm} arm. Use arrows/E/Q to adjust it.")
-        else:
-            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def nudge(self, window):

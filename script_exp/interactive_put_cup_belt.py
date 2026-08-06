@@ -36,6 +36,7 @@ from _interactive_common import (  # noqa: E402
     print_mode_controls,
     report_task_result,
     resolve_action_arm,
+    try_interactive_grasp,
 )
 
 
@@ -388,11 +389,10 @@ class RobotCupController:
             self.busy = False
             return
         self.env.move(self.env.close_gripper(self.arm, pos=0.6))
-        self.env.move(self.env.grasp_actor(
-            self.env.cup, arm_tag=self.arm, pre_grasp_dis=pre,
+        if try_interactive_grasp(
+            self.env, self.env.cup, self.arm, pre_grasp_dis=pre,
             gripper_pos=0.0, contact_point_id=contact_id,
-        ))
-        if self.env.plan_success:
+        ):
             half = 0.5 * float(self.env.lift_z)
             self.env.move(self.env.move_by_displacement(self.arm, z=half))
             self.env.move(self.env.move_by_displacement(self.arm, z=self.env.lift_z - half))
@@ -404,8 +404,6 @@ class RobotCupController:
                 f"Grasped cup with {self.arm}. Use arrows for X/Y, E/Q for Z; "
                 "Space releases here."
             )
-        else:
-            action_failed(self.env, (self.side,), detail="grasp failed")
         self.busy = False
 
     def place(self):

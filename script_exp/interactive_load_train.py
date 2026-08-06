@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     action_failed,
+    try_interactive_grasp,
     add_robot_motion_arg,
     arrow_nudge_xy,
     bootstrap_repo,
@@ -73,10 +74,7 @@ def _prepare_robot_hold(env, selected_arm=None):
     env.selected_arm = arm_name
     z = _release_z(env)
 
-    env.plan_success = True
-    env.move(env.grasp_actor(env.ball, arm_tag=arm_tag, pre_grasp_dis=0.1))
-    if not env.plan_success:
-        action_failed(env, (arm_name,), detail="grasp failed")
+    if not try_interactive_grasp(env, env.ball, arm_tag, pre_grasp_dis=0.1):
         env._interactive_holding = False
         return False
     env._move_ball_to_height(arm_tag=arm_tag, target_z=z)

@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     action_failed,
+    try_interactive_grasp,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
@@ -207,19 +208,17 @@ class RobotKeeperController:
             self.busy = False
             return
         self.env.move(self.env.close_gripper(self.arm, pos=0.6))
-        self.env.move(self.env.grasp_actor(
+        if try_interactive_grasp(
+            self.env,
             self.env.goalkeeper,
-            arm_tag=self.arm,
+            self.arm,
             pre_grasp_dis=0.10,
             grasp_dis=0.0,
             contact_point_id=[0, 1, 2, 3],
-        ))
-        if self.env.plan_success:
+        ):
             self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
             self.holding = True
             print(f"Grasped keeper with {self.arm} arm. Arrows nudge; Space releases.")
-        else:
-            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def release(self):

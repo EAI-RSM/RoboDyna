@@ -677,9 +677,14 @@ class ViewerViewToggle:
     def update(self, window):
         if self.robot_controls is not None:
             self.robot_controls.update(window)
+        elif self.env is not None:
+            # Restore red failure tint when UniversalRobotControls is absent
+            # (keyboard mode still uses Space / F action paths).
+            gripper_failure_feedback(self.env).update()
         # F: open/close selected gripper(s). Independent of Space grasp helpers.
         if self._f_pressed(window) and self.env is not None:
             toggle_selected_grippers(self.env)
+            return
         # Consume G so it no longer jumps to a separate camera path.
         if self._g_pressed(window):
             return
@@ -1206,7 +1211,8 @@ def require_selected_arms(env, *, exactly_one: bool = False):
     """Return currently highlighted arms, or ``()`` when the action must not run.
 
     Unselected grippers never act. When ``exactly_one`` is set, both-arms (3)
-    is also rejected so the caller can require a single highlighted gripper.
+    is also rejected so the caller can require a single highlighted gripper;
+    both selected grippers flash red as the error cue.
     """
     selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
     if not selected:
@@ -1214,7 +1220,11 @@ def require_selected_arms(env, *, exactly_one: bool = False):
               + ("" if exactly_one else " [or 3 for both]") + ".")
         return ()
     if exactly_one and len(selected) != 1:
-        print("Select exactly one arm with 1 (left) or 2 (right).")
+        action_failed(
+            env,
+            selected,
+            detail="select exactly one arm (1 left / 2 right)",
+        )
         return ()
     return selected
 
@@ -1324,6 +1334,23 @@ def action_failed(env, arms, detail: str = "action failed") -> bool:
     except Exception:
         pass
     return False
+
+
+def try_interactive_grasp(env, actor, arm_tag, *, detail: str = "unreachable / grasp failed", **grasp_kwargs) -> bool:
+    """Run ``grasp_actor`` + ``move`` without crashing on an unreachable arm.
+
+    Returns True on success. On failure (no pose, plan fail, or legacy
+    ``target_pose is None`` assert), flashes the arm red and returns False.
+    """
+    side = str(arm_tag)
+    try:
+        env.plan_success = True
+        env.move(env.grasp_actor(actor, arm_tag=arm_tag, **grasp_kwargs))
+    except AssertionError:
+        env.plan_success = False
+    if not env.plan_success:
+        return action_failed(env, (side,), detail=detail)
+    return True
 
 
 class RobotButtonController:

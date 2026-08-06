@@ -1809,6 +1809,11 @@ class Base_Task(gym.Env):
             target_dis=grasp_dis,
             contact_point_id=contact_point_id,
         )
+        # Unreachable / unplannable grasp for this arm: fail the plan instead of
+        # constructing Action(move, target_pose=None) which asserts.
+        if pre_grasp_pose is None or grasp_pose is None:
+            self.plan_success = False
+            return arm_tag, []
         if pre_grasp_pose == grasp_pose:
             return arm_tag, [
                 Action(arm_tag, "move", target_pose=pre_grasp_pose),

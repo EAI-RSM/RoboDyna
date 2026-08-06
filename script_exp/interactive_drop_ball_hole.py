@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     action_failed,
+    try_interactive_grasp,
     add_robot_motion_arg,
     bootstrap_repo,
     configure_task,
@@ -78,8 +79,7 @@ def _prepare_robot_hold(env, selected_arm):
     arm_tag = ArmTag(arm_name)
     env.selected_arm = arm_name
     env._cap_tracking = True
-    env.move(env.grasp_actor(env.ball, arm_tag=arm_tag, pre_grasp_dis=0.08))
-    if not env.plan_success:
+    if not try_interactive_grasp(env, env.ball, arm_tag, pre_grasp_dis=0.08):
         return False
     # Clear the container before translating, then stage just beside it. Do
     # not pre-align to the moving hole: the user positions the ball with keys.
@@ -249,8 +249,6 @@ def main():
                     if _prepare_robot_hold(env, selected[0]):
                         hold_motion = RobotHoldMotion(env, env._interactive_arm, args.robot_motion)
                         print("Holding ball. Use arrows/E/Q to position it; Space releases.")
-                    else:
-                        action_failed(env, (selected[0],), detail="grasp failed")
                 else:
                     _prepare_keyboard_hold(env)
                     print("Holding ball. Use arrows/E/Q to position it; Space releases.")

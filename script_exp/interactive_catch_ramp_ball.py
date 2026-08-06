@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     action_failed,
+    try_interactive_grasp,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
@@ -182,13 +183,10 @@ class RobotCupController:
         if self.arm is None:
             self.busy = False
             return
-        self.env.move(self.env.grasp_actor(self.env.cup, arm_tag=self.arm, pre_grasp_dis=0.08))
-        if self.env.plan_success:
+        if try_interactive_grasp(self.env, self.env.cup, self.arm, pre_grasp_dis=0.08):
             self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
             self.holding = True
             print(f"Picked up cup with {self.arm} arm. Move, then Space to drop.")
-        else:
-            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def drop(self):

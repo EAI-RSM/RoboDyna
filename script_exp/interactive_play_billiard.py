@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     action_failed,
+    try_interactive_grasp,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
@@ -252,7 +253,12 @@ class RobotCueController:
         )
         self.env.CUE_TIP_GRASP_CLEARANCE = tip_clearance
         self.env.CUE_FINGER_EE_Z = pad_to_ee_z + tip_clearance
-        if not self.env._pick_up_cue(self.arm):
+        try:
+            picked = bool(self.env._pick_up_cue(self.arm))
+        except AssertionError:
+            picked = False
+            self.env.plan_success = False
+        if not picked:
             action_failed(self.env, (str(self.arm),), detail="cue pickup failed")
             self.busy = False
             return

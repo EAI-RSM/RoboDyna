@@ -30,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     action_failed,
+    try_interactive_grasp,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
@@ -201,10 +202,9 @@ class RobotDartController:
         if self.arm is None:
             self.busy = False
             return
-        self.env.move(self.env.grasp_actor(
-            self.env.dart, arm_tag=self.arm, pre_grasp_dis=0.08, contact_point_id=0,
-        ))
-        if self.env.plan_success:
+        if try_interactive_grasp(
+            self.env, self.env.dart, self.arm, pre_grasp_dis=0.08, contact_point_id=0,
+        ):
             # Match hit_target's main rollout: rotate the wrist around world Z
             # while lifting so the side-spawned dart tip faces the board (+Y).
             cur_q = np.asarray(self.env.get_arm_pose(str(self.arm))[3:], dtype=np.float64)
@@ -218,8 +218,6 @@ class RobotDartController:
             ))
             self.holding = True
             print(f"Grasped dart with {self.arm}. Arrows/E/Q aim; Space jabs.")
-        else:
-            action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
 
     def jab(self):

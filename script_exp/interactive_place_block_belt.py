@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     action_failed,
+    try_interactive_grasp,
     add_robot_motion_arg,
     arrow_nudge_xy,
     bootstrap_repo,
@@ -83,8 +84,7 @@ def _prepare_keyboard_hold(env):
 def _prepare_robot_hold(env, arm_tag):
     """Pick the block, then carry it to the normal belt hover position."""
     match_dist, hover_x, release_x, lane_y = _match_geometry(env)
-    env.move(env.grasp_actor(env.block, arm_tag=arm_tag, pre_grasp_dis=0.1))
-    if not env.plan_success:
+    if not try_interactive_grasp(env, env.block, arm_tag, pre_grasp_dis=0.1):
         return False
     env.move(env.move_by_displacement(arm_tag=arm_tag, z=0.14, move_axis="arm"))
     dx = hover_x - float(env.block.get_pose().p[0])
@@ -216,8 +216,6 @@ def main():
                     print(f"Robot: picking with {selected_arm} arm and lifting over the belt…")
                     if _prepare_robot_hold(env, ArmTag(selected_arm)):
                         print("Holding above the belt. Nudge with arrows, then press Space to release.")
-                    else:
-                        action_failed(env, (selected_arm,), detail="grasp failed")
                 else:
                     _prepare_keyboard_hold(env)
                     print("Holding above the belt. Nudge with arrows, then press Space to release.")
