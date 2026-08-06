@@ -45,7 +45,7 @@ TASK = "pick_ripe_apple"
 CONFIG = "demo_dynamic"
 N_PER_CONDITION = 5
 OUT = os.path.abspath(f"./final_task_demos/{TASK}")
-SAVE_ROOT = os.path.abspath(f"./tmp_{TASK}_suite")
+SAVE_ROOT = os.path.abspath(f"./tmp/tmp_{TASK}_suite")
 VIDEO_DIR = os.path.join(SAVE_ROOT, "video")
 
 CONDITIONS = {
@@ -155,7 +155,7 @@ def _shape_ok(snap: dict, condition: str) -> bool:
 
 def _run_episode(overrides: list[str], seed: int, label: str, condition: str) -> dict:
     """Headless expert episode (no video)."""
-    save_root = os.path.abspath(f"./tmp_{TASK}_test")
+    save_root = os.path.abspath(f"./tmp/tmp_{TASK}_test")
     os.makedirs(save_root, exist_ok=True)
     args = build_args(TASK, CONFIG, save_root, option=None, task_arg_overrides=overrides)
     args["collect_data"] = False

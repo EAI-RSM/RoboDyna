@@ -146,7 +146,7 @@ def _spawn_seed(seed: int, out_dir: Path) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", default="11,23,37,41,59")
-    parser.add_argument("--out", default="tmp_catch_mouse_object_drop/eval")
+    parser.add_argument("--out", default="tmp/tmp_catch_mouse_object_drop/eval")
     parser.add_argument("--worker", type=int, default=None)
     parser.add_argument("--worker-out", default=None)
     ns = parser.parse_args()

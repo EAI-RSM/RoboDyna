@@ -175,7 +175,7 @@ def _wait_for_gpu(need_mib: float = 4800.0, poll_s: float = 25.0):
 
 def _run_episode(task_args_overrides: list[str], seed: int, label: str, condition: str) -> dict:
     _wait_for_gpu(4800.0)
-    save_root = os.path.abspath(f"./tmp_{TASK}_test")
+    save_root = os.path.abspath(f"./tmp/tmp_{TASK}_test")
     os.makedirs(save_root, exist_ok=True)
     args = build_args(TASK, CONFIG, save_root, option=None, task_arg_overrides=task_args_overrides)
     args["collect_data"] = False

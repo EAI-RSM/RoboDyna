@@ -28,7 +28,7 @@ INSTANCE_IDS = (0, 2, 3, 6)
 
 TMP_OUT = "/tmp/robodyna_demos"
 REPO_OUT = os.path.abspath("final_task_demos/sort_apples_belt")
-SAVE_ROOT = os.path.abspath(f"./tmp_{TASK}_plasticbox_snap")
+SAVE_ROOT = os.path.abspath(f"./tmp/tmp_{TASK}_plasticbox_snap")
 
 
 def _force_choice(forced_id: int):

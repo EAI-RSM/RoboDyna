@@ -22,7 +22,7 @@ from record_demo import (
 
 
 def record_seed(task_name: str, seed: int, config_name: str = "demo_dynamic") -> dict:
-    save_root = os.path.abspath(f"./tmp_{task_name}")
+    save_root = os.path.abspath(f"./tmp/tmp_{task_name}")
     video_dir = os.path.join(save_root, "video")
     os.makedirs(video_dir, exist_ok=True)
     ver = next_version(video_dir)

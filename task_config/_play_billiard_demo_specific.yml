@@ -35,7 +35,7 @@ data_type:
   actor_segmentation: false
 pcd_down_sample_num: 1024
 pcd_crop: true
-save_path: ./tmp_play_billiard
+save_path: ./tmp/tmp_play_billiard
 clear_cache_freq: 5
 collect_data: true
 eval_video_log: true

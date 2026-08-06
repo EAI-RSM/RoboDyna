@@ -34,7 +34,7 @@ CONFIG = "demo_dynamic"
 
 
 def run_seed(task_name: str, seed: int) -> dict:
-    save_root = os.path.abspath(f"./tmp_{task_name}_hh_sweep")
+    save_root = os.path.abspath(f"./tmp/tmp_{task_name}_hh_sweep")
     os.makedirs(save_root, exist_ok=True)
     args = build_args(task_name, CONFIG, save_root, option=None, task_arg_overrides=[])
     args["collect_data"] = False

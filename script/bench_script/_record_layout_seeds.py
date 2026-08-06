@@ -22,7 +22,7 @@ from script.collect_data import class_decorator
 
 
 def record_one(task: str, seed: int, config: str = "demo_dynamic", save_freq: int = 8) -> dict:
-    save_root = os.path.abspath(f"./tmp_{task}")
+    save_root = os.path.abspath(f"./tmp/tmp_{task}")
     video_dir = os.path.join(save_root, "video")
     os.makedirs(video_dir, exist_ok=True)
     ver = next_version(video_dir)

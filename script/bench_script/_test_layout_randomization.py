@@ -16,7 +16,7 @@ from script.collect_data import class_decorator
 
 
 def run_seed(task: str, seed: int, config: str = "demo_dynamic") -> dict:
-    save_root = os.path.abspath(f"./tmp_{task}_layout_test")
+    save_root = os.path.abspath(f"./tmp/tmp_{task}_layout_test")
     os.makedirs(save_root, exist_ok=True)
     args = build_args(task, config, save_root, option=None, task_arg_overrides=[])
     args["collect_data"] = False

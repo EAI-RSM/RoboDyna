@@ -32,7 +32,7 @@ data_type:
   actor_segmentation: false
 pcd_down_sample_num: 1024
 pcd_crop: true
-save_path: ./tmp_marble_shelf_maze
+save_path: ./tmp/tmp_marble_shelf_maze
 clear_cache_freq: 1
 collect_data: true
 eval_video_log: true

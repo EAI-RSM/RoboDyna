@@ -19,7 +19,7 @@ CONFIG = "demo_kitchens"
 
 
 def run_seed(seed: int) -> dict:
-    save_root = os.path.abspath(f"./tmp_{TASK}_test")
+    save_root = os.path.abspath(f"./tmp/tmp_{TASK}_test")
     os.makedirs(save_root, exist_ok=True)
     args = build_args(TASK, CONFIG, save_root, option=None, task_arg_overrides=[])
     args["collect_data"] = False

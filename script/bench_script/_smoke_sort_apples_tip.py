@@ -34,7 +34,7 @@ def build_base_args():
     args["task_name"] = TASK
     args["task_config"] = CONFIG
     args["episode_num"] = 1
-    args["save_path"] = os.path.abspath("./tmp_sort_apples_tip_smoke")
+    args["save_path"] = os.path.abspath("./tmp/tmp_sort_apples_tip_smoke")
     args["collect_data"] = False
     args["eval_video_log"] = False
     args["save_failed_cases"] = False
@@ -214,7 +214,7 @@ def print_result(label: str, r: dict):
 
 
 def main():
-    os.makedirs("./tmp_sort_apples_tip_smoke", exist_ok=True)
+    os.makedirs("./tmp/tmp_sort_apples_tip_smoke", exist_ok=True)
     base = build_base_args()
     task = class_decorator(TASK)
 

@@ -98,7 +98,7 @@ def layout_detail(task: str, env) -> dict:
 
 
 def run_seed(task: str, seed: int) -> dict:
-    save_root = os.path.abspath(f"./tmp_{task}_layout_test")
+    save_root = os.path.abspath(f"./tmp/tmp_{task}_layout_test")
     os.makedirs(save_root, exist_ok=True)
     args = build_args(task, CONFIG, save_root, None, ["randomize_layout=true"])
     args.update(
@@ -152,7 +152,7 @@ def run_seed(task: str, seed: int) -> dict:
 
 def record_with_seed(task: str, seed: int, tag: str) -> dict:
     """Record one dual-view demo at a fixed seed via the standard collector."""
-    save_root = os.path.abspath(f"./tmp_{task}")
+    save_root = os.path.abspath(f"./tmp/tmp_{task}")
     video_dir = os.path.join(save_root, "video")
     ver = next_version(video_dir)
     stem = f"v{ver}_{tag}"
@@ -274,7 +274,7 @@ def main() -> int:
                 extra += 1
             demo_results[task] = record_task_demos(task, pick, n_ok=ns.n_demos)
 
-    out_path = os.path.abspath("./tmp_layout_random_three_tasks_summary.json")
+    out_path = os.path.abspath("./tmp/tmp_layout_random_three_tasks_summary.json")
     with open(out_path, "w") as f:
         json.dump({"tests": all_results, "demos": demo_results}, f, indent=2, default=str)
     print(f"\nWrote {out_path}", flush=True)

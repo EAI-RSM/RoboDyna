@@ -235,17 +235,17 @@ python script/bench_script/record_demo.py <task>
 
 Outputs (auto-versioned `vN`, never overwrites prior demos):
 
-- `./tmp_<task>/video/vN_head.mp4` — robot `head_camera`
-- `./tmp_<task>/video/vN_topdown.mp4` — bird's-eye top-down (`observer_camera` reframed)
-- `./tmp_<task>/video/vN_sidebyside.mp4` — convenience montage
+- `./tmp/tmp_<task>/video/vN_head.mp4` — robot `head_camera`
+- `./tmp/tmp_<task>/video/vN_topdown.mp4` — bird's-eye top-down (`observer_camera` reframed)
+- `./tmp/tmp_<task>/video/vN_sidebyside.mp4` — convenience montage
 
 For chat embeds (mp4 won't inline), convert **both** views to GIF:
 
 ```bash
 mkdir -p /tmp/robodyna_demos
-ffmpeg -y -i tmp_<task>/video/v<N>_head.mp4 \
+ffmpeg -y -i tmp/tmp_<task>/video/v<N>_head.mp4 \
   -vf "fps=10,scale=480:-1:flags=lanczos" -loop 0 /tmp/robodyna_demos/<task>_v<N>_head.gif
-ffmpeg -y -i tmp_<task>/video/v<N>_topdown.mp4 \
+ffmpeg -y -i tmp/tmp_<task>/video/v<N>_topdown.mp4 \
   -vf "fps=10,scale=480:-1:flags=lanczos" -loop 0 /tmp/robodyna_demos/<task>_v<N>_topdown.gif
 ```
 

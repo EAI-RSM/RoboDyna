@@ -35,9 +35,9 @@ One successful expert episode → two required videos (+ a montage):
 
 | File | Camera | Meaning |
 |------|--------|---------|
-| `tmp_<task>/video/vN_head.mp4` | `head_camera` | Robot head / elevated training view |
-| `tmp_<task>/video/vN_topdown.mp4` | `observer_camera` (reframed nadir) | Top-down bird's-eye |
-| `tmp_<task>/video/vN_sidebyside.mp4` | both | Convenience montage (head \| top-down) |
+| `tmp/tmp_<task>/video/vN_head.mp4` | `head_camera` | Robot head / elevated training view |
+| `tmp/tmp_<task>/video/vN_topdown.mp4` | `observer_camera` (reframed nadir) | Top-down bird's-eye |
+| `tmp/tmp_<task>/video/vN_sidebyside.mp4` | both | Convenience montage (head \| top-down) |
 
 - Version tag `vN` auto-increments; never overwrite prior demos.
 - Pass `save_path` via `run()` directly (script already does) — not `collect_data.py` `main()`, which nests `<task>/<config>`.
@@ -50,10 +50,10 @@ Chat cannot inline mp4. Convert both views to GIF and embed:
 mkdir -p /tmp/robodyna_demos
 N=<version>
 TASK=<task>
-ffmpeg -y -i tmp_${TASK}/video/v${N}_head.mp4 \
+ffmpeg -y -i tmp/tmp_${TASK}/video/v${N}_head.mp4 \
   -vf "fps=10,scale=480:-1:flags=lanczos" -loop 0 \
   /tmp/robodyna_demos/${TASK}_v${N}_head.gif
-ffmpeg -y -i tmp_${TASK}/video/v${N}_topdown.mp4 \
+ffmpeg -y -i tmp/tmp_${TASK}/video/v${N}_topdown.mp4 \
   -vf "fps=10,scale=480:-1:flags=lanczos" -loop 0 \
   /tmp/robodyna_demos/${TASK}_v${N}_topdown.gif
 ```

@@ -18,7 +18,7 @@ from envs.utils.images_to_video import images_to_video
 
 TASK_NAME = "load_train"
 CONFIG_NAME = "_load_train_smoke"
-SAVE_ROOT = os.path.abspath("./tmp_load_train")
+SAVE_ROOT = os.path.abspath("./tmp/tmp_load_train")
 
 
 def next_version(video_dir: str) -> int:

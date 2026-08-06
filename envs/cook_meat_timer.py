@@ -31,9 +31,9 @@ class cook_meat_timer(cook_meat):
     TIMER_HALF_H: ClassVar[float] = 0.0025
     TIMER_N_SECTIONS: ClassVar[int] = 24
     TIMER_RIM_WIDTH: ClassVar[float] = 0.007
-    # Outer-lateral of the pan, slightly toward +y (board) — clear of bowl/key.
-    TIMER_OFF_X: ClassVar[float] = 0.18
-    TIMER_OFF_Y: ClassVar[float] = 0.06
+    # North (+y) of the cutting board — top of the table from the robot's view.
+    TIMER_OFF_X: ClassVar[float] = 0.0
+    TIMER_OFF_Y: ClassVar[float] = 0.14  # board center → timer center along +y
     TIMER_Z_LIFT: ClassVar[float] = 0.006  # above table top (table-frame)
 
     COLOR_DISC: ClassVar[list[float]] = [0.96, 0.96, 0.96]
@@ -100,13 +100,20 @@ class cook_meat_timer(cook_meat):
         """Build a white disc + N fill/rim wedges via visual-only boxes."""
         # create_visual_box(self, ...) adds table_z_bias — pass table-frame Z.
         table_z = 0.74
-        side = float(station.get("side", 1.0))
-        lat = 1.0 if side > 0 else -1.0
-        pan_xy = np.asarray(station["skillet"].get_pose().p[:2], dtype=float)
-        cx = float(pan_xy[0] + lat * self.TIMER_OFF_X)
-        cy = float(pan_xy[1] + self.TIMER_OFF_Y)
+        board_xy = station.get("board_xy")
+        if board_xy is not None:
+            # Prefer the cutting board: same X, further +y (north / top of table).
+            cx = float(board_xy[0]) + float(self.TIMER_OFF_X)
+            cy = float(board_xy[1]) + float(self.TIMER_OFF_Y)
+        else:
+            # Fallback if a station has no board yet.
+            side = float(station.get("side", 1.0))
+            lat = 1.0 if side > 0 else -1.0
+            pan_xy = np.asarray(station["skillet"].get_pose().p[:2], dtype=float)
+            cx = float(pan_xy[0] + lat * 0.18)
+            cy = float(pan_xy[1] + 0.28)
         cx = float(np.clip(cx, -0.40, 0.40))
-        cy = float(np.clip(cy, -0.22, 0.30))
+        cy = float(np.clip(cy, -0.22, 0.32))
 
         radius = float(self.timer_radius)
         n = int(self.timer_n_sections)

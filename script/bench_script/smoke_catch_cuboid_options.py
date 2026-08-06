@@ -31,7 +31,7 @@ def build_base_args():
     args["task_name"] = TASK
     args["task_config"] = CONFIG
     args["episode_num"] = 1
-    args["save_path"] = os.path.abspath("./tmp_catch_rat_smoke")
+    args["save_path"] = os.path.abspath("./tmp/tmp_catch_rat_smoke")
     args["collect_data"] = False
     args["eval_video_log"] = False
     args["save_failed_cases"] = False
@@ -118,7 +118,7 @@ def run_one(task, args, seed: int, flags: dict) -> dict:
 
 
 def main():
-    os.makedirs("./tmp_catch_rat_smoke", exist_ok=True)
+    os.makedirs("./tmp/tmp_catch_rat_smoke", exist_ok=True)
     base = build_base_args()
     task = class_decorator(TASK)
     summary = []

@@ -25,6 +25,11 @@ logs/*
 # eval result
 eval_result/
 
+# Local task scratch (demos, sweeps, snapshots, probes)
+tmp/*
+!tmp/.gitkeep
+
+
 # Code Generation — stock RoboTwin trees stay ignored (HF download);
 # custom task assets below are whitelisted for tracking.
 assets/*

@@ -33,7 +33,7 @@ OUT_ROOT = os.path.abspath("./rand_demos")
 
 
 def record_fail(task: str, seed: int, tag: str, task_args: list[str]) -> str:
-    save_root = os.path.abspath(f"./tmp_{task}")
+    save_root = os.path.abspath(f"./tmp/tmp_{task}")
     video_dir = os.path.join(save_root, "video")
     ver = next_version(video_dir)
     stem = f"v{ver}_{tag}"
