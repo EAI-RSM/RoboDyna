@@ -1217,10 +1217,10 @@ task_args:
     clean_background_rate: 0.0
     water_level: 0.45
     # Original two-handled pot, sized to the boil_milk saucepan.
-    pot_radius: 0.058
+    pot_radius: 0.06786          # prior 0.0754 × 0.9
     pot_height: 0.0735
     pot_wall: 0.005
-    board_half: [0.095, 0.065, 0.010]
+    board_half: [0.095, 0.052, 0.010]  # y prior 0.065 × 0.8
     handle_half: [0.022, 0.024, 0.022]
     board_x: 0.16                # fallback / mean when randomize_layout=false
     board_y: -0.14
@@ -1250,10 +1250,10 @@ task_args:
     range_scale_mult: 1.0
     microwave_scale_mult: 1.3
     water_level: 0.45
-    pot_radius: 0.058
+    pot_radius: 0.06786          # prior 0.0754 × 0.9
     pot_height: 0.0735
     pot_wall: 0.005
-    board_half: [0.095, 0.065, 0.010]
+    board_half: [0.095, 0.052, 0.010]  # y prior 0.065 × 0.8
     handle_half: [0.022, 0.024, 0.022]
     board_x: 0.16
     board_y: -0.14

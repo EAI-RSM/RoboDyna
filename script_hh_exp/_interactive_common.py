@@ -648,13 +648,20 @@ class HouseholdController:
             if not self.holding:
                 self.env.plan_success = True
                 if self.task == "make_soup":
-                    # Force the selected arm into the task helper (no food_arm fallback).
+                    # Grasp with the highlighted gripper. Keep env.arm on that
+                    # hand after success — restoring the layout arm made the
+                    # board weld sync to the other EE (left grasp → right hand).
                     previous_arm = getattr(self.env, "arm", None)
+                    grasped = False
                     try:
                         self.env.arm = arm
                         grasped = bool(self.env._grasp_board())
                     finally:
-                        self.env.arm = previous_arm
+                        if grasped:
+                            self.env.arm = arm
+                            self.env.board_arm = arm
+                        else:
+                            self.env.arm = previous_arm
                     if grasped:
                         # Allow PhysX release once the board tips past the hold angle.
                         self.env._pour_armed = True

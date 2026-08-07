@@ -51,7 +51,7 @@ class make_soup(KitchenS_base_task):
     LAYOUT_MARGIN: ClassVar[float] = 0.03
     # Original thick-walled soup pot, sized to the boil_milk saucepan
     # (same height, matching inner mouth once the 5 mm wall is accounted for).
-    POT_RADIUS: ClassVar[float] = 0.058
+    POT_RADIUS: ClassVar[float] = 0.06786  # prior 0.0754 × 0.9
     POT_HEIGHT: ClassVar[float] = 0.0735
     POT_WALL: ClassVar[float] = 0.005
     GLASS_SCALE: ClassVar[float] = 0.585  # prior 0.45 × 1.3
@@ -60,7 +60,7 @@ class make_soup(KitchenS_base_task):
     WINE_HALF_XY: ClassVar[tuple[float, float]] = (0.035, 0.035)
     GLASS_HALF_XY: ClassVar[tuple[float, float]] = (0.030, 0.030)
 
-    BOARD_HALF: ClassVar[tuple[float, float, float]] = (0.095, 0.065, 0.010)
+    BOARD_HALF: ClassVar[tuple[float, float, float]] = (0.095, 0.052, 0.010)  # y prior 0.065 × 0.8
     # Grasping block on the robot-facing (−Y) end of the board.
     HANDLE_HALF: ClassVar[tuple[float, float, float]] = (0.022, 0.024, 0.022)
     BOARD_COLOR: ClassVar[tuple[float, float, float]] = (0.55, 0.38, 0.22)
@@ -125,6 +125,7 @@ class make_soup(KitchenS_base_task):
         self._prev_knob_pressed = False
         self._board_welded = False
         self._board_weld_offset = None
+        self._board_weld_arm = None
         self._veg_released = False
         self._veg_fallen = False
         self._pour_armed = False
@@ -371,6 +372,7 @@ class make_soup(KitchenS_base_task):
         self._prev_knob_pressed = False
         self._board_welded = False
         self._board_weld_offset = None
+        self._board_weld_arm = None
         self._veg_released = False
         self._veg_fallen = False
         self._pour_armed = False
@@ -1028,6 +1030,13 @@ class make_soup(KitchenS_base_task):
         p = self.get_arm_pose(str(arm))
         return sapien.Pose(list(p[:3]), list(p[3:7]))
 
+    def _board_hold_arm(self) -> ArmTag | None:
+        """Arm the board is welded to (not the layout-picked ``self.arm``)."""
+        arm = getattr(self, "_board_weld_arm", None)
+        if arm is not None:
+            return arm
+        return getattr(self, "arm", None)
+
     def _weld_board_to_ee(self, arm: ArmTag) -> None:
         if self.board is None:
             return
@@ -1038,13 +1047,18 @@ class make_soup(KitchenS_base_task):
             except Exception:
                 pass
         self._board_weld_offset = self._ee_pose(arm).inv() * self.board.get_pose()
+        self._board_weld_arm = arm
         self._board_welded = True
+        # Keep task helpers (pour / place) on the hand that actually holds the board.
+        self.arm = arm
+        self.board_arm = arm
         self._ignore_board_robot_collision()
         self._capture_veg_offsets()
 
     def _release_board_weld(self) -> None:
         self._board_welded = False
         self._board_weld_offset = None
+        self._board_weld_arm = None
         if self._board_rigid is not None:
             try:
                 self._board_rigid.set_kinematic(False)
@@ -1054,16 +1068,22 @@ class make_soup(KitchenS_base_task):
 
     def _sync_board_to_ee(self) -> None:
         """Keep the board fixed in the grasping hand (single arm, no reparent)."""
-        if not self._board_welded or self._board_weld_offset is None:
+        arm = self._board_hold_arm()
+        if (
+            not self._board_welded
+            or self._board_weld_offset is None
+            or arm is None
+        ):
             return
-        pose = self._ee_pose(self.arm) * self._board_weld_offset
+        pose = self._ee_pose(arm) * self._board_weld_offset
         self._set_entity_pose(self.board, pose)
 
     def _set_board_pose_keep_weld(self, pose: sapien.Pose) -> None:
         """Set board pose and rebuild the weld so it stays in the same hand."""
         self._set_entity_pose(self.board, pose)
-        if self._board_welded:
-            self._board_weld_offset = self._ee_pose(self.arm).inv() * self.board.get_pose()
+        arm = self._board_hold_arm()
+        if self._board_welded and arm is not None:
+            self._board_weld_offset = self._ee_pose(arm).inv() * self.board.get_pose()
 
     def _set_collision_ignore(self, entities: list[Any], ignore_bit: int, ignore_id: int) -> None:
         for ent in entities:
@@ -1292,9 +1312,10 @@ class make_soup(KitchenS_base_task):
 
     def _seat_board_in_hand(self) -> None:
         """Level board with handle under the TCP of the grasping arm."""
-        if self.board is None or not self._board_welded:
+        arm = self._board_hold_arm()
+        if self.board is None or not self._board_welded or arm is None:
             return
-        tcp = self._tcp_pos(self.arm)
+        tcp = self._tcp_pos(arm)
         local = np.asarray(self._handle_local, dtype=float) + np.array(
             [0.0, 0.0, float(self.handle_half[2])], dtype=float
         )
