@@ -396,8 +396,10 @@ class clean_table(Base_Task):
         # Outer body radius (bbox includes the handle).
         self.mug_radius = 0.42 * float(max(world[0], world[2]))
         # Cup-head opening (not the handle). Pose origin is the cup bottom
-        # (functional point 1); AABB/mesh "center" is pulled toward the handle.
-        self.mug_inner_r = 0.19 * float(max(world[0], world[2]))
+        # (functional point 1); AABB includes the handle so inner radius and
+        # cavity offset are fit to the circular body (~mesh-measured).
+        wmax = float(max(world[0], world[2]))
+        self.mug_inner_r = 0.26 * wmax
         self._mug_center_offset = np.zeros(3, dtype=float)
         self._mug_cavity_offset = np.zeros(3, dtype=float)
         # Nudge coffee into the cup head, opposite the handle functional point.
@@ -411,9 +413,9 @@ class clean_table(Base_Task):
                 h_xy = (R @ h)[:2]
                 n = float(np.linalg.norm(h_xy))
                 if n > 1e-6:
-                    # Away from handle, ~25% of inner radius into the cup head.
+                    # Away from handle into the cup head (~0.12 × AABB width).
                     away = -h_xy / n
-                    self._mug_cavity_offset[:2] = away * (0.25 * self.mug_inner_r)
+                    self._mug_cavity_offset[:2] = away * (0.12 * wmax)
         except Exception:
             pass
         self.cup_height = self.mug_height
@@ -421,40 +423,44 @@ class clean_table(Base_Task):
         self.cup_inner_r = self.mug_inner_r
 
     def _spawn_coffee_in_mug(self):
-        """Coffee disk in the cup head opening (~40% full), not the handle.
+        """Coffee column filling the cup-head opening (~40% full).
 
         PartNet ``039_mug`` pose origin is the cup bottom; the handle sticks out
-        sideways. Place a thin disk on that cup axis so it stays in the head.
+        sideways. Place an opaque column on the cavity axis so the surface
+        matches the inner circle of the mug.
         """
         self._coffee_entity = self._remove_entity(self._coffee_entity)
         off = np.asarray(
             getattr(self, "_mug_cavity_offset", np.zeros(3)), dtype=float
         )
-        # Slightly under the measured inner lip so the disk never clips the rim.
-        inner_r = float(max(0.008, 0.88 * self.mug_inner_r))
+        inner_r = float(max(0.008, self.mug_inner_r))
         fill_frac = float(self._cfg.get("coffee_fill_frac", 0.40))
         fill_frac = float(np.clip(fill_frac, 0.15, 0.92))
-        half_h = 0.0035
         pose_p = np.asarray(self._mug_upright_pose.p, dtype=float)
         cx = float(pose_p[0] + off[0])
         cy = float(pose_p[1] + off[1])
-        z = self.table_top + fill_frac * float(self.mug_height)
+        z_bottom = float(self.table_top) + 0.08 * float(self.mug_height)
+        z_top = float(self.table_top) + fill_frac * float(self.mug_height)
+        half_h = max(0.0025, 0.5 * (z_top - z_bottom))
+        z_c = z_bottom + half_h
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
         mat = sapien.render.RenderMaterial(base_color=list(self.COFFEE_COLOR))
         try:
             mat.set_roughness(0.35)
             mat.set_metallic(0.0)
+            mat.set_transmission(0.0)
         except Exception:
             mat.roughness = 0.35
+            mat.metallic = 0.0
         builder.add_cylinder_visual(
             pose=sapien.Pose([0, 0, 0], self.VERTICAL_CYL_Q),
             radius=inner_r,
             half_length=half_h,
             material=mat,
         )
-        builder.set_initial_pose(sapien.Pose(p=[cx, cy, z]))
-        self._coffee_entity = builder.build(name="coffee_disk")
+        builder.set_initial_pose(sapien.Pose(p=[cx, cy, z_c]))
+        self._coffee_entity = builder.build(name="coffee_column")
 
     def _spawn_laptop(self):
         """Real PartNet ``015_laptop`` articulation, root fixed on the table."""
