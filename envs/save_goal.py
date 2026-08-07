@@ -39,7 +39,7 @@ class save_goal(Base_Task):
 
     BALL_RADIUS_DEFAULT = 0.018
     # Nominal ball speed; each episode samples ±20% by default (scale 0.8–1.2).
-    BALL_SPEED_DEFAULT = 0.06435  # +10% vs 0.0585; episode still samples ±20%
+    BALL_SPEED_DEFAULT = 0.05470  # -15% vs 0.06435; episode still samples ±20%
     BALL_SPEED_SCALE_MIN_DEFAULT = 0.8
     BALL_SPEED_SCALE_MAX_DEFAULT = 1.2
     BALL_START_X_DEFAULT = 0.24

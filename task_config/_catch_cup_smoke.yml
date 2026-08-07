@@ -478,7 +478,7 @@ task_args:
     net_strand_t: 0.0022        # m; strand thickness
     mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
     random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
-    ball_speed: 0.06435         # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
+    ball_speed: 0.05470         # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
     ball_speed_scale_min: 0.8   # low scale vs ball_speed
     ball_speed_scale_max: 1.2   # high scale vs ball_speed
     ball_angle_deg_min: -10.0   # deg; path angle vs goal-axis min (straight-shot mode)
