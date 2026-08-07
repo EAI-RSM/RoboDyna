@@ -3,7 +3,6 @@ from .utils import *
 import sapien
 import sapien.physx
 import numpy as np
-import transforms3d as t3d
 import pickle
 import os
 from .utils.dynamic_utils import DynamicMotionHelper, StepCounter
@@ -13,14 +12,15 @@ from .utils.save_file import save_pkl
 class catch_marbles_trapdoors(Base_Task):
     """Press a colored button to open the matching trapdoor and catch the target marble.
 
-    A shallow catch bowl sits under a trapdoor platform at the table centre (corner posts bridge
-    the gap). Four colored button cubes sit in front of the fixture. The upper floor has four
-    middle trapdoor tiles matching the button colors. Pressing a button opens the matching door.
-    A settled marble sticks partly out of the bowl rim (``marble_protrude_frac``).
+    A catch bowl sits under a trapdoor platform at the table centre (corner posts bridge the
+    gap). Four colored button cubes sit in front of the fixture. The upper floor has four
+    middle sliding trapdoor tiles matching the button colors. Pressing a button slides the
+    matching tile +Y to open the lane (then it slides closed). Lower-bowl walls are raised
+    +5 cm over the protrude-based default so dropped marbles stay in.
 
-    A colored target marble travels left-to-right in the upper box. Success requires dropping it
-    only through the trapdoor whose color matches the marble (below the trapdoor level, inside
-    the lower box — settle/speed not required).
+    A colored target marble travels left-to-right in the upper box. Success requires the matching
+    trapdoor to have been opened and the target marble to pass below the closed trapdoor floor
+    (latched — a later bounce back onto the upper floor still counts).
 
     Config options (task_args.catch_marbles_trapdoors):
       default — each door may open/close up to ``door_open_max`` times (default 3), then locks.
@@ -67,11 +67,15 @@ class catch_marbles_trapdoors(Base_Task):
 
     FLOOR_TILE_COUNT_DEFAULT = 6
     DOOR_WIDTH_DEFAULT = 0.10
-    DOOR_OPEN_ANGLE_DEG_DEFAULT = 95.0
-    DOOR_OPEN_SPEED_DEG_DEFAULT = 220.0
+    # Sliding trapdoors: tile translates +Y to clear the lane (meters / m/s).
+    DOOR_SLIDE_TRAVEL_DEFAULT = None  # None → auto 2*door_half_y + margin
+    DOOR_SLIDE_SPEED_DEFAULT = 0.40
     DOOR_OPEN_DURATION_SEC_DEFAULT = 0.5
     DOOR_OPEN_ONCE_DEFAULT = False
     DOOR_OPEN_MAX_DEFAULT = 3  # open/close cycles per door (door_open_once forces 1)
+    # Legacy hinge keys still accepted but ignored (slide replaces swing).
+    DOOR_OPEN_ANGLE_DEG_DEFAULT = 95.0
+    DOOR_OPEN_SPEED_DEG_DEFAULT = 220.0
 
     BALL_RADIUS_DEFAULT = 0.012
     BALL_SPEED_DEFAULT = 0.18
@@ -81,7 +85,7 @@ class catch_marbles_trapdoors(Base_Task):
     BALL_BOUNCE_HEIGHT_DEFAULT = 0.012
     BALL_BOUNCE_FREQ_DEFAULT = 8.0
     BALL_Y_OFFSET_DEFAULT = 0.0
-    BALL_DROP_SETTLE_STEPS_DEFAULT = 80
+    BALL_DROP_SETTLE_STEPS_DEFAULT = 240  # post-drop wait before check_success (~1s @ 250Hz)
 
     ENABLE_DISTRACTOR_DEFAULT = False
     DISTRACTOR_COLOR_DEFAULT = [0.05, 0.05, 0.05]
@@ -108,19 +112,19 @@ class catch_marbles_trapdoors(Base_Task):
         self._button_pressed = []
         self._door_open = []
         self._door_open_with_ball_over = []
-        self._door_angle_deg = []
-        self._door_target_angle_deg = []
+        self._door_slide = []  # meters along +Y from closed pose
+        self._door_target_slide = []
         self._door_open_time_left = []
         self._door_open_count = []
         self._door_locked_closed = []
         self._door_x_bounds = []
-        self._door_hinge_y = 0.0
         self._door_half_y = 0.0
         self._door_half_x = 0.0
         self._door_floor_z = 0.0
+        self._door_rest_y = 0.0
         self.door_width = float(self.DOOR_WIDTH_DEFAULT)
-        self.door_open_angle_deg = float(self.DOOR_OPEN_ANGLE_DEG_DEFAULT)
-        self.door_open_speed_deg = float(self.DOOR_OPEN_SPEED_DEG_DEFAULT)
+        self.door_slide_travel = 0.0
+        self.door_slide_speed = float(self.DOOR_SLIDE_SPEED_DEFAULT)
         self.door_open_duration_sec = float(self.DOOR_OPEN_DURATION_SEC_DEFAULT)
         self.door_open_once = bool(self.DOOR_OPEN_ONCE_DEFAULT)
         self.door_open_max = int(self.DOOR_OPEN_MAX_DEFAULT)
@@ -131,6 +135,7 @@ class catch_marbles_trapdoors(Base_Task):
         self._buttons_held = set()
         self._reactive_buttons = None
         self._mutex_violation = False
+        self._success_latched = False
         self.shuffle_colors = bool(self.SHUFFLE_COLORS_DEFAULT)
         self.key_base_half = list(self.KEY_BASE_HALF_DEFAULT)
         self.key_base_color = list(self.KEY_BASE_COLOR_DEFAULT)
@@ -196,9 +201,16 @@ class catch_marbles_trapdoors(Base_Task):
 
         self.floor_tile_count = int(c.get("floor_tile_count", self.FLOOR_TILE_COUNT_DEFAULT))
         self.door_width = float(c.get("door_width", self.DOOR_WIDTH_DEFAULT))
-        self.door_open_angle_deg = float(c.get("door_open_angle_deg", self.DOOR_OPEN_ANGLE_DEG_DEFAULT))
-        self.door_open_speed_deg = float(c.get("door_open_speed_deg", self.DOOR_OPEN_SPEED_DEG_DEFAULT))
+        # Slide doors (+Y). Legacy angle/speed keys are ignored if present.
+        self._door_slide_travel_cfg = c.get("door_slide_travel", self.DOOR_SLIDE_TRAVEL_DEFAULT)
+        self.door_slide_speed = float(
+            c.get("door_slide_speed", c.get("door_open_speed_deg", self.DOOR_SLIDE_SPEED_DEFAULT))
+        )
+        # If caller still passes the old deg/s default (~220), map to a sane m/s.
+        if self.door_slide_speed > 5.0:
+            self.door_slide_speed = float(self.DOOR_SLIDE_SPEED_DEFAULT)
         self.door_open_duration_sec = float(c.get("door_open_duration_sec", self.DOOR_OPEN_DURATION_SEC_DEFAULT))
+        self.door_slide_travel = 0.0  # resolved after door half-size is known
         self.door_open_once = self._parse_bool(
             c.get("door_open_once", c.get("opt1", self.DOOR_OPEN_ONCE_DEFAULT)),
             default=self.DOOR_OPEN_ONCE_DEFAULT,
@@ -210,7 +222,7 @@ class catch_marbles_trapdoors(Base_Task):
         self.button_x = list(button_x_cfg) if button_x_cfg is not None else self._aligned_button_x_positions()
 
         self.ball_radius = float(np.clip(float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT)), 0.008, 0.03))
-        # Shallow catch bowl: rim low enough that part of a settled marble sticks out.
+        # Catch bowl: base height from protrude fraction, plus optional wall raise.
         protrude = float(np.clip(
             float(c.get("marble_protrude_frac", self.MARBLE_PROTRUDE_FRAC_DEFAULT)),
             0.15,
@@ -219,7 +231,7 @@ class catch_marbles_trapdoors(Base_Task):
         self.marble_protrude_frac = protrude
         default_lower_h = float(
             self.box_wall_t / 2.0 + 2.0 * self.ball_radius * (1.0 - protrude)
-        )
+        ) + 0.05  # +5 cm wall height so dropped marbles stay contained
         self.lower_box_wall_h = float(c.get("lower_box_wall_h", default_lower_h))
         # Keep the trapdoor floor just above a protruding marble (unless overridden).
         marble_top_from_floor_z = float(self.box_wall_t / 2.0 + 2.0 * self.ball_radius)
@@ -337,8 +349,8 @@ class catch_marbles_trapdoors(Base_Task):
         self._button_pressed = [False] * self.n_buttons
         self._door_open = [False] * self.n_buttons
         self._door_open_with_ball_over = [False] * self.n_buttons
-        self._door_angle_deg = [0.0] * self.n_buttons
-        self._door_target_angle_deg = [0.0] * self.n_buttons
+        self._door_slide = [0.0] * self.n_buttons
+        self._door_target_slide = [0.0] * self.n_buttons
         self._door_open_time_left = [0.0] * self.n_buttons
         self._door_open_count = [0] * self.n_buttons
         self._door_locked_closed = [False] * self.n_buttons
@@ -411,6 +423,8 @@ class catch_marbles_trapdoors(Base_Task):
         self._ball_mode = "track"
         self._ball_drop_door_idx = -1
         self._press_lead_steps = 0
+        # Latch once the marble is below the closed trapdoor plane (may bounce back up).
+        self._success_latched = False
 
         for btn in self.buttons:
             self.add_prohibit_area(btn, padding=0.03)
@@ -620,8 +634,14 @@ class catch_marbles_trapdoors(Base_Task):
         tile_half_z = self.box_wall_t / 2.0
         self._door_half_x = tile_half_x
         self._door_half_y = tile_half_y
-        self._door_hinge_y = self.box_y + tile_half_y
+        self._door_rest_y = float(self.box_y)
         self._door_floor_z = floor_z
+        # Fully clear the lane (+Y), with a small margin past the tile extent.
+        auto_travel = float(2.0 * tile_half_y + 0.008)
+        if self._door_slide_travel_cfg is None:
+            self.door_slide_travel = auto_travel
+        else:
+            self.door_slide_travel = max(auto_travel * 0.5, float(self._door_slide_travel_cfg))
         neutral_color = [0.42, 0.34, 0.28]
 
         middle_start = (tile_count - self.n_buttons) // 2
@@ -665,20 +685,25 @@ class catch_marbles_trapdoors(Base_Task):
                 return component
         return None
 
-    def _set_door_pose(self, idx: int, angle_deg: float):
+    def _set_door_pose(self, idx: int, slide_m: float):
+        """Place trapdoor tile: closed at rest Y, open slides +Y (meters)."""
         if idx < 0 or idx >= len(self.door_tiles):
             return
         door = self.door_tiles[idx]
         cx = 0.5 * (self._door_x_bounds[idx][0] + self._door_x_bounds[idx][1])
-        theta = float(np.deg2rad(angle_deg))
-        offset = np.array([0.0, -self._door_half_y, 0.0], dtype=np.float64)
-        rot = t3d.axangles.axangle2mat([1.0, 0.0, 0.0], theta)
-        local_center = rot @ offset
-        hinge = np.array([cx, self._door_hinge_y, self._door_floor_z], dtype=np.float64)
-        center = hinge + local_center
-        quat = t3d.quaternions.axangle2quat([1.0, 0.0, 0.0], theta)
-        door.actor.set_pose(sapien.Pose(center.tolist(), quat.tolist()))
-        self._door_angle_deg[idx] = float(angle_deg)
+        slide = float(np.clip(slide_m, 0.0, max(self.door_slide_travel, 0.0)))
+        cy = float(self._door_rest_y + slide)
+        door.actor.set_pose(
+            sapien.Pose([cx, cy, float(self._door_floor_z)], [1.0, 0.0, 0.0, 0.0])
+        )
+        self._door_slide[idx] = slide
+
+    def _door_enough_open(self, idx: int) -> bool:
+        """True when the sliding tile has cleared enough of the marble lane."""
+        if idx < 0 or idx >= len(self._door_slide):
+            return False
+        # Bottom edge of the tile is above box_y once slide > half_y.
+        return float(self._door_slide[idx]) >= (0.85 * float(self._door_half_y))
 
     def _marble_in_box(self, marble, z_lo: float, z_hi: float):
         if marble is None:
@@ -712,13 +737,24 @@ class catch_marbles_trapdoors(Base_Task):
         )
 
     def _ball_in_lower_box(self):
-        """Target catch: inside the box XY and below the closed trapdoor floor level.
-
-        No settle / low-speed requirement — dropping below the original upper-floor
-        plane into the catch volume is enough.
-        """
+        """Target in the lower catch volume (below the trapdoor floor). Diagnostic only."""
         z_lo, z_hi = self._lower_box_z_bounds()
         return self._marble_in_box(self.ball, z_lo, z_hi)
+
+    def _ball_in_box(self):
+        """Target inside fixture walls XY and below the closed trapdoor floor Z.
+
+        Trapdoor Z is the upper-floor plane before any door opens
+        (``_upper_box_floor_z``). Marble center must be strictly below that.
+        """
+        if self.ball is None:
+            return False
+        p = np.array(self.ball.get_pose().p, dtype=np.float64)
+        in_x = abs(p[0] - self.box_center[0]) <= (self.box_half_w - self.box_wall_t)
+        in_y = abs(p[1] - self.box_center[1]) <= (self.box_half_d - self.box_wall_t)
+        trap_z = float(self._upper_box_floor_z)
+        in_z = float(p[2]) < trap_z - 1e-4
+        return bool(in_x and in_y and in_z)
 
     def _distractor_in_lower_box(self):
         # Any presence in the lower volume counts as a distractor failure (including mid-fall).
@@ -732,23 +768,23 @@ class catch_marbles_trapdoors(Base_Task):
 
     def _advance_doors(self):
         dt = float(self.scene.get_timestep())
-        step = abs(self.door_open_speed_deg) * dt
+        step = abs(self.door_slide_speed) * dt
         for idx in range(len(self.door_tiles)):
             if self._door_open[idx] and not self._door_locked_closed[idx]:
                 self._door_open_time_left[idx] = max(0.0, float(self._door_open_time_left[idx]) - dt)
                 if self._door_open_time_left[idx] <= 1e-9:
-                    self._door_target_angle_deg[idx] = 0.0
+                    self._door_target_slide[idx] = 0.0
                     # Lock after the final allowed open/close cycle finishes.
                     if self._door_at_open_limit(idx):
                         self._door_locked_closed[idx] = True
-            cur = float(self._door_angle_deg[idx])
-            tgt = float(self._door_target_angle_deg[idx])
-            if abs(cur - tgt) <= 1e-3:
+            cur = float(self._door_slide[idx])
+            tgt = float(self._door_target_slide[idx])
+            if abs(cur - tgt) <= 1e-4:
                 # Fully closed again: allow reopening until the per-door open limit.
                 if (
                     self._door_open[idx]
-                    and abs(cur) <= 1e-3
-                    and abs(tgt) <= 1e-3
+                    and abs(cur) <= 1e-4
+                    and abs(tgt) <= 1e-4
                     and not self._door_locked_closed[idx]
                     and not self._door_at_open_limit(idx)
                 ):
@@ -899,7 +935,7 @@ class catch_marbles_trapdoors(Base_Task):
             dropped = False
             near_floor = next_z <= (self._ball_z_base + drop_z_slack)
             for idx, is_open in enumerate(self._door_open):
-                if not is_open or self._door_angle_deg[idx] < 15.0:
+                if not is_open or not self._door_enough_open(idx):
                     continue
                 x0, x1 = self._door_x_bounds[idx]
                 if (
@@ -923,7 +959,7 @@ class catch_marbles_trapdoors(Base_Task):
             dropped = False
             near_floor = next_z <= (self._distractor_z_base + drop_z_slack)
             for idx, is_open in enumerate(self._door_open):
-                if not is_open or self._door_angle_deg[idx] < 15.0:
+                if not is_open or not self._door_enough_open(idx):
                     continue
                 x0, x1 = self._door_x_bounds[idx]
                 if (
@@ -993,6 +1029,41 @@ class catch_marbles_trapdoors(Base_Task):
             self._mutex_violation = True
         self._advance_doors()
         self._advance_ball_motion()
+        self._maybe_latch_success()
+
+    def _maybe_latch_success(self) -> None:
+        """Latch success the first time the marble is below the closed trapdoor.
+
+        PhysX often bounces the marble back onto the upper floor after a real
+        drop; end-of-episode pose alone would then false-fail a correct catch.
+        """
+        if self._success_latched or self._mutex_violation:
+            return
+        target_valid = 0 <= self.target_button_idx < len(self._door_open)
+        if not target_valid:
+            return
+        target_door_opened = bool(
+            self._door_open[self.target_button_idx]
+            or self._button_pressed[self.target_button_idx]
+            or self._ball_drop_door_idx == self.target_button_idx
+        )
+        if not target_door_opened or not self._ball_in_box():
+            return
+        ball_dropped = bool(self._ball_mode != "track")
+        used_matching = bool(self._ball_drop_door_idx == self.target_button_idx)
+        used_wrong = bool(ball_dropped and self._ball_drop_door_idx >= 0 and not used_matching)
+        if used_wrong:
+            return
+        if self.enable_distractor and self._distractor_in_lower_box():
+            return
+        if (
+            self.enable_distractor
+            and self.distractor is not None
+            and self._distractor_mode != "track"
+            and self._distractor_drop_door_idx >= 0
+        ):
+            return
+        self._success_latched = True
 
     # --------------------------------------------------------- press helpers
     def _dwell(self, steps: int):
@@ -1151,7 +1222,7 @@ class catch_marbles_trapdoors(Base_Task):
         )
         # Fresh edge → fresh open window (hold does not keep refreshing this).
         self._door_open_time_left[btn_idx] = max(0.0, float(self.door_open_duration_sec))
-        self._door_target_angle_deg[btn_idx] = self.door_open_angle_deg
+        self._door_target_slide[btn_idx] = float(self.door_slide_travel)
         return True
 
     def _press_button(self, arm_tag: ArmTag, btn_idx: int):
@@ -1159,7 +1230,7 @@ class catch_marbles_trapdoors(Base_Task):
             return
         if self._door_locked_closed[btn_idx]:
             return
-        if self._door_open[btn_idx] and self._door_angle_deg[btn_idx] > 5.0:
+        if self._door_open[btn_idx] and float(self._door_slide[btn_idx]) > 0.002:
             return
         if self._door_at_open_limit(btn_idx):
             return
@@ -1231,18 +1302,17 @@ class catch_marbles_trapdoors(Base_Task):
 
     # ----------------------------------------------------------- metric/obs
     def check_success(self):
-        """Success iff the target marble fell through the matching door into the box.
+        """Success iff the matching door was opened and the target is below it in the box.
 
         Required:
-          - target was released through the matching-color trapdoor
-          - target is inside the box and below the original trapdoor floor level
-
-        Opening the matching door under the marble is NOT enough — the marble must
-        actually drop below the upper-floor plane. Settle / low speed is not required.
-        ``target_opened_when_ball_over`` is logged for diagnostics only.
+          - matching-color trapdoor was opened (press / latch / drop through that door)
+          - target marble XY inside the fixture walls
+          - target marble Z strictly below the closed trapdoor floor (pre-open upper plane)
 
         Failures:
-          - target still on the upper surface / never dropped / sailed over the opening
+          - target still at/above the trapdoor floor (upper lane)
+          - target outside the box footprint
+          - matching door never opened
           - target went through a differently colored trapdoor
           - distractor (if present) went through any trapdoor into the lower box
         """
@@ -1250,8 +1320,9 @@ class catch_marbles_trapdoors(Base_Task):
         ball_dropped = bool(self._ball_mode != "track")
         used_matching_door = bool(target_valid and self._ball_drop_door_idx == self.target_button_idx)
         used_wrong_door = bool(ball_dropped and self._ball_drop_door_idx >= 0 and not used_matching_door)
-        ball_inside = self._ball_in_lower_box()
-        ball_still_on_top = bool(self._ball_in_upper_box() and not ball_inside)
+        ball_in_lower = self._ball_in_lower_box()
+        ball_in_box = self._ball_in_box()
+        ball_still_on_top = bool(self._ball_in_upper_box() and not ball_in_lower)
         distractor_dropped = bool(
             self.enable_distractor
             and self.distractor is not None
@@ -1290,9 +1361,11 @@ class catch_marbles_trapdoors(Base_Task):
         self.info["ball_dropped"] = ball_dropped
         self.info["used_matching_door"] = used_matching_door
         self.info["used_wrong_door"] = used_wrong_door
-        self.info["ball_in_lower_box"] = ball_inside
+        self.info["ball_in_lower_box"] = ball_in_lower
+        self.info["ball_in_box"] = ball_in_box
         self.info["ball_still_on_top"] = ball_still_on_top
         self.info["wrong_door_opened"] = wrong_door_opened
+        self.info["target_door_opened"] = target_door_opened
         self.info["distractor_through_any"] = distractor_through_any
         self.info["distractor_in_lower_box"] = distractor_inside
         self.info["door_open_once"] = bool(self.door_open_once)
@@ -1302,15 +1375,15 @@ class catch_marbles_trapdoors(Base_Task):
         self.info["enable_distractor"] = bool(self.enable_distractor)
         self.info["distractor_collide"] = bool(self.distractor_collide)
         self.info["mutex_violation"] = bool(self._mutex_violation)
+        self.info["success_latched"] = bool(self._success_latched)
 
-        # Deliberately ignore opened_when_ball_over / target_door_opened here: door timing
-        # alone must not succeed if the marble never drops below the trapdoor level.
+        # Prefer latch: marble may bounce back above the trapdoor after a real drop.
+        if self._success_latched and not self._mutex_violation and not distractor_through_any:
+            return True
         return bool(
             target_valid
-            and ball_dropped
-            and used_matching_door
-            and ball_inside
-            and not ball_still_on_top
+            and target_door_opened
+            and ball_in_box
             and not used_wrong_door
             and not distractor_through_any
             and not distractor_inside
@@ -1324,7 +1397,9 @@ class catch_marbles_trapdoors(Base_Task):
             "button_pressed": list(self._button_pressed),
             "door_open": list(self._door_open),
             "door_open_with_ball_over": list(self._door_open_with_ball_over),
-            "door_angle_deg": list(self._door_angle_deg),
+            "door_slide": list(map(float, self._door_slide)),
+            "door_slide_travel": float(self.door_slide_travel),
+            "door_slide_speed": float(self.door_slide_speed),
             "door_open_time_left": list(map(float, self._door_open_time_left)),
             "door_locked_closed": list(self._door_locked_closed),
             "door_open_once": bool(self.door_open_once),
@@ -1348,6 +1423,15 @@ class catch_marbles_trapdoors(Base_Task):
             "ball_mode": str(self._ball_mode),
             "ball_in_upper_box": bool(self._ball_in_upper_box()),
             "ball_in_lower_box": bool(self._ball_in_lower_box()),
+            "ball_in_box": bool(self._ball_in_box()),
+            "target_door_opened": bool(
+                0 <= self.target_button_idx < len(self._door_open)
+                and (
+                    self._door_open[self.target_button_idx]
+                    or self._button_pressed[self.target_button_idx]
+                    or self._ball_drop_door_idx == self.target_button_idx
+                )
+            ),
             "enable_distractor": bool(self.enable_distractor),
             "distractor_collide": bool(self.distractor_collide),
             "distractor_speed": float(self._distractor_speed),

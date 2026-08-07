@@ -110,16 +110,17 @@ def _run_episode(task_args_overrides: list[str], seed: int, label: str) -> dict:
                 "used_matching_door": info.get("used_matching_door", False),
                 "used_wrong_door": info.get("used_wrong_door", False),
                 "ball_in_lower_box": info.get("ball_in_lower_box", False),
+                "ball_in_box": info.get("ball_in_box", False),
+                "target_door_opened": info.get("target_door_opened", False),
                 "ball_still_on_top": info.get("ball_still_on_top", False),
                 "distractor_through_any": info.get("distractor_through_any", False),
                 "distractor_in_lower_box": info.get("distractor_in_lower_box", False),
                 "door_open_once": info.get("door_open_once", None),
                 "enable_distractor": info.get("enable_distractor", None),
                 "metric_ok": bool(
-                    info.get("ball_in_lower_box")
-                    and info.get("used_matching_door")
+                    info.get("ball_in_box")
+                    and info.get("target_door_opened")
                     and not info.get("used_wrong_door")
-                    and not info.get("ball_still_on_top")
                     and not info.get("distractor_through_any")
                     and not info.get("distractor_in_lower_box")
                 ),
