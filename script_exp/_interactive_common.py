@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -11,6 +12,10 @@ import numpy as np
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# When set by interactive_task_gui / household_task_gui, report_task_result
+# writes {"ok": bool, "detail": str} here so the launcher can show failure reasons.
+TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"
 
 # ANSI colors for interactive CLI (TTY only; respect NO_COLOR / FORCE_COLOR).
 _ANSI_BLUE = "\033[34m"
@@ -261,6 +266,7 @@ def release_dynamic(rigid):
 # Last interactive result for GUI exit codes (household_task_gui convention):
 #   0 = SUCCESS, 10 = FAILURE, 2 = closed before a result.
 _LAST_TASK_RESULT: bool | None = None
+_LAST_TASK_DETAIL: str | None = None
 
 
 def task_result_exit_code(ok: bool | None = None) -> int:
@@ -274,21 +280,47 @@ def task_result_exit_code(ok: bool | None = None) -> int:
     return 2
 
 
+def _normalize_result_detail(detail: str | None) -> str | None:
+    if detail is None:
+        return None
+    text = str(detail).strip()
+    return text or None
+
+
+def _persist_task_result(ok: bool | None, detail: str | None) -> None:
+    """Write the latest result for a parent GUI launcher, if requested."""
+    path = os.environ.get(TASK_RESULT_ENV)
+    if not path:
+        return
+    try:
+        Path(path).write_text(
+            json.dumps({"ok": ok, "detail": detail or ""}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 def report_task_result(env, detail: str | None = None) -> bool:
     """Print ``Task complete: SUCCESS|FAILURE`` from ``check_success``; return success.
 
     Also stores the result for ``task_result_exit_code()`` so ``interactive_task_gui``
-    can show SUCCESS/FAILURE like ``household_task_gui``.
+    can show SUCCESS/FAILURE like ``household_task_gui``. When ``ROBODYNA_TASK_RESULT_FILE``
+    is set, persists ``ok`` + failure/success ``detail`` for the GUI status line.
     """
-    global _LAST_TASK_RESULT
+    global _LAST_TASK_RESULT, _LAST_TASK_DETAIL
     try:
         ok = bool(env.check_success())
     except Exception as exc:
-        print_failure(f"Task complete: FAILURE (check_success error: {exc})")
+        detail = _normalize_result_detail(f"check_success error: {exc}")
+        print_failure(f"Task complete: FAILURE ({detail})")
         _LAST_TASK_RESULT = False
+        _LAST_TASK_DETAIL = detail
+        _persist_task_result(False, detail)
         return False
+    detail = _normalize_result_detail(detail)
     if detail is None and not ok:
-        detail = getattr(env, "_last_fail_reason", None) or None
+        detail = _normalize_result_detail(getattr(env, "_last_fail_reason", None))
     status = "SUCCESS" if ok else "FAILURE"
     msg = f"Task complete: {status}" + (f" ({detail})" if detail else "")
     if ok:
@@ -296,6 +328,8 @@ def report_task_result(env, detail: str | None = None) -> bool:
     else:
         print_failure(msg)
     _LAST_TASK_RESULT = bool(ok)
+    _LAST_TASK_DETAIL = detail
+    _persist_task_result(_LAST_TASK_RESULT, detail)
     return ok
 
 
@@ -1053,8 +1087,9 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     Starts on head_camera; press V to cycle head ↔ gripper/wrist view(s).
     ``overhead`` is accepted for API compat but ignored (top-down removed).
     """
-    global _LAST_TASK_RESULT
+    global _LAST_TASK_RESULT, _LAST_TASK_DETAIL
     _LAST_TASK_RESULT = None
+    _LAST_TASK_DETAIL = None
     del overhead  # legacy kwarg; interactive views no longer use top-down
     viewer = env.viewer
     if viewer is None:

@@ -1102,6 +1102,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     terminal_result = None  # True=success, False=failure, None=manual close/smoke
     terminal_started_at = None
     terminal_fill_detail = ""
+    terminal_failure_reason = None
     # Match script_exp run_viewer_loop: one teleop update → kinematics → step → render.
     # Success checks every few frames keep kitchen eval cost off the teleop hot path.
     SUCCESS_CHECK_EVERY = 5
@@ -1155,13 +1156,12 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                     # Failure reasons from _terminal_failure already embed fill
                     # for overflow / open-gap; append otherwise.
                     if fill and fill not in failure:
-                        print_failure(
-                            f"[{task}] terminal result: FAILURE ({failure}; {fill})"
-                        )
+                        terminal_failure_reason = f"{failure}; {fill}"
                     else:
-                        print_failure(
-                            f"[{task}] terminal result: FAILURE ({failure})"
-                        )
+                        terminal_failure_reason = failure
+                    print_failure(
+                        f"[{task}] terminal result: FAILURE ({terminal_failure_reason})"
+                    )
                     terminal_result = False
                     terminal_started_at = time.perf_counter()
             remaining = float(env.scene.get_timestep()) - (
@@ -1173,9 +1173,11 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
         try:
             if not terminal_fill_detail:
                 terminal_fill_detail = _fill_level_detail(env, task)
-            report_task_result(
-                env, detail=terminal_fill_detail or None
-            )
+            if terminal_result is False:
+                detail = terminal_failure_reason or terminal_fill_detail or None
+            else:
+                detail = terminal_fill_detail or None
+            report_task_result(env, detail=detail)
         finally:
             try:
                 viewer.close()

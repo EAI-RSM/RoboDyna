@@ -2,12 +2,14 @@
 """Scrollable graphical launcher for the household interactive tasks."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
 import signal
 import subprocess
 import sys
+import tempfile
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -19,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEMO_DIR = ROOT / "final_task_demos"
 README_PATH = ROOT / "README.md"
+# Must match script_exp._interactive_common.TASK_RESULT_ENV
+TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"
 
 TASKS = (
     ("Trap Bug", "trap_bug", "interactive_trap_bug.py"),
@@ -211,6 +215,7 @@ class HouseholdTaskLauncher(tk.Tk):
 
         self.child: subprocess.Popen | None = None
         self.active_index: int | None = None
+        self.result_file: Path | None = None
         self.preview_photos: list[ImageTk.PhotoImage | None] = []
         self.task_buttons: list[RoundedButton] = []
         self._idle_status = f"{len(TASKS)} scenarios available  |  Select a task and press Play."
@@ -324,6 +329,8 @@ class HouseholdTaskLauncher(tk.Tk):
             bg=PAGE_BG,
             fg=self._idle_status_fg,
             anchor="w",
+            justify="left",
+            wraplength=1460,
             font=("Sans", 21),
         )
         self.status.pack(fill="x", padx=34, pady=(2, 12))
@@ -522,8 +529,14 @@ class HouseholdTaskLauncher(tk.Tk):
             self.control.get(),
         ]
         try:
-            self.child = subprocess.Popen(command, cwd=ROOT, start_new_session=True)
+            self._prepare_result_file()
+            child_env = os.environ.copy()
+            child_env[TASK_RESULT_ENV] = str(self.result_file)
+            self.child = subprocess.Popen(
+                command, cwd=ROOT, start_new_session=True, env=child_env
+            )
         except Exception as exc:
+            self._remove_result_file()
             messagebox.showerror("Could not start task", str(exc))
             self.child = None
             return
@@ -545,6 +558,8 @@ class HouseholdTaskLauncher(tk.Tk):
             if code is not None:
                 self.child = None
                 self.active_index = None
+                reason = self._read_result_detail()
+                self._remove_result_file()
                 self._reset_task_buttons()
                 if code == 0:
                     self._set_status(
@@ -553,8 +568,11 @@ class HouseholdTaskLauncher(tk.Tk):
                         sticky=True,
                     )
                 elif code == 10:
+                    msg = "Task result: FAILURE"
+                    if reason:
+                        msg = f"{msg} ({reason})"
                     self._set_status(
-                        "Task result: FAILURE. Select another task below.",
+                        f"{msg}. Select another task below.",
                         "#e6a15c",
                         sticky=True,
                     )
@@ -578,9 +596,44 @@ class HouseholdTaskLauncher(tk.Tk):
         for button in self.task_buttons:
             button.configure(state="normal", text="Play", bg=PLAY_BLUE, activebackground=PLAY_BLUE_ACTIVE)
 
+    def _prepare_result_file(self):
+        self._remove_result_file()
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            prefix="robodyna_household_result_",
+            delete=False,
+        )
+        handle.close()
+        self.result_file = Path(handle.name)
+
+    def _read_result_detail(self) -> str | None:
+        path = self.result_file
+        if path is None or not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            return None
+        detail = data.get("detail") if isinstance(data, dict) else None
+        if isinstance(detail, str):
+            detail = detail.strip()
+            return detail or None
+        return None
+
+    def _remove_result_file(self):
+        path = self.result_file
+        self.result_file = None
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _stop_task(self, status=None):
         child = self.child
         if child is None:
+            self._remove_result_file()
             return
         try:
             os.killpg(child.pid, signal.SIGTERM)
@@ -593,6 +646,7 @@ class HouseholdTaskLauncher(tk.Tk):
         finally:
             self.child = None
             self.active_index = None
+            self._remove_result_file()
             self._reset_task_buttons()
         if status:
             self._set_status(status, "#e6a15c", sticky=True)

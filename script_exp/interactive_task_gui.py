@@ -2,6 +2,7 @@
 """Scrollable graphical launcher for the dynamic interactive tasks."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -22,6 +23,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = ROOT / "task_config"
 DEMO_DIR = ROOT / "final_task_demos"
 README_PATH = ROOT / "README.md"
+# Must match script_exp._interactive_common.TASK_RESULT_ENV
+TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"
 
 TASKS = (
     ("Catch Marbles Trapdoors", "catch_marbles_trapdoors"),
@@ -399,6 +402,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.child: subprocess.Popen | None = None
         self.active_selection: tuple[int, str] | None = None
         self.temporary_config: Path | None = None
+        self.result_file: Path | None = None
         # Per task: one source/photo/label per scenario (Default / Opt1 / Opt2 / Opt1+2).
         self.preview_sources: list[list[Image.Image | None]] = []
         self.preview_photos: list[list[ImageTk.PhotoImage | None]] = []
@@ -517,6 +521,8 @@ class InteractiveTaskLauncher(tk.Tk):
             bg=PAGE_BG,
             fg=self._idle_status_fg,
             anchor="w",
+            justify="left",
+            wraplength=1500,
             font=("Sans", 19),
         )
         self.status.pack(fill="x", padx=34, pady=(2, 12))
@@ -813,11 +819,14 @@ class InteractiveTaskLauncher(tk.Tk):
                 "PYTHONWARNINGS",
                 "ignore::UserWarning,ignore::FutureWarning,ignore::DeprecationWarning",
             )
+            self._prepare_result_file()
+            child_env[TASK_RESULT_ENV] = str(self.result_file)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
         except Exception as exc:
             self._remove_temporary_config()
+            self._remove_result_file()
             messagebox.showerror("Could not start task", str(exc))
             self.child = None
             return
@@ -847,7 +856,9 @@ class InteractiveTaskLauncher(tk.Tk):
             if code is not None:
                 self.child = None
                 self.active_selection = None
+                reason = self._read_result_detail()
                 self._remove_temporary_config()
+                self._remove_result_file()
                 self._reset_task_buttons()
                 # Match household_task_gui: 0=SUCCESS, 10=FAILURE, 2=closed early.
                 if code == 0:
@@ -857,8 +868,11 @@ class InteractiveTaskLauncher(tk.Tk):
                         sticky=True,
                     )
                 elif code == 10:
+                    msg = "Task result: FAILURE"
+                    if reason:
+                        msg = f"{msg} ({reason})"
                     self._set_status(
-                        "Task result: FAILURE. Select another scenario below.",
+                        f"{msg}. Select another scenario below.",
                         "#e6a15c",
                         sticky=True,
                     )
@@ -897,10 +911,45 @@ class InteractiveTaskLauncher(tk.Tk):
             except OSError:
                 pass
 
+    def _prepare_result_file(self):
+        self._remove_result_file()
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            prefix="robodyna_interactive_result_",
+            delete=False,
+        )
+        handle.close()
+        self.result_file = Path(handle.name)
+
+    def _read_result_detail(self) -> str | None:
+        path = self.result_file
+        if path is None or not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            return None
+        detail = data.get("detail") if isinstance(data, dict) else None
+        if isinstance(detail, str):
+            detail = detail.strip()
+            return detail or None
+        return None
+
+    def _remove_result_file(self):
+        path = self.result_file
+        self.result_file = None
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def _stop_task(self, status=None):
         child = self.child
         if child is None:
             self._remove_temporary_config()
+            self._remove_result_file()
             return
         try:
             os.killpg(child.pid, signal.SIGTERM)
@@ -914,6 +963,7 @@ class InteractiveTaskLauncher(tk.Tk):
             self.child = None
             self.active_selection = None
             self._remove_temporary_config()
+            self._remove_result_file()
             self._reset_task_buttons()
         if status:
             self._set_status(status, "#e6a15c", sticky=True)
