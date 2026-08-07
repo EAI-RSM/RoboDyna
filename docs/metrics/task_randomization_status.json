@@ -1,0 +1,289 @@
+{
+  "schema": {
+    "always_on": "Params that diversify every episode under current task_config/demo_dynamic.yml (yaml-alone collect/record), including params unlocked by yaml-true gates. Unconditional = no Opt/enable if-guard.",
+    "gated_off_by_default": "Opt/gate features OFF under GUI Default (SCENARIO_OVERRIDES force false) and/or false/off in yaml / code default. Listed as feature keys.",
+    "gated_on_by_yaml": "Opt-like or randomize_* / mode flags that are TRUE (or non-default-on) in demo_dynamic.yml so yaml-alone runs get them without GUI Opt selection. GUI Default may still force these OFF.",
+    "note": "Global domain_randomization in demo_dynamic.yml is all off (random_background/light/clutter false; table/camera jitter 0) — omitted from per-task lists."
+  },
+  "tasks": [
+    {
+      "task_id": "catch_marbles_trapdoors",
+      "suite": "basic",
+      "always_on": ["shuffle_colors/color_order", "target_color/target_button_idx", "ball_speed", "ball_dir", "ball_x0", "ball_phase"],
+      "gated_off_by_default": ["door_open_once", "enable_distractor", "distractor_speed", "distractor_x0", "distractor_phase", "distractor_collide"],
+      "gated_on_by_yaml": ["shuffle_colors"]
+    },
+    {
+      "task_id": "catch_ramp_ball",
+      "suite": "basic",
+      "always_on": ["roll_speed", "lane_start_x", "idle_time"],
+      "gated_off_by_default": ["wall_bounce_enabled", "wall_rebound_angle", "bounce_side", "enable_distractor", "distractor_start_x", "distractor_roll_speed"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "catch_cuboid",
+      "suite": "basic",
+      "always_on": ["board_center_y", "cuboid_move_speed", "active_hole"],
+      "gated_off_by_default": ["catch_two_cuboids", "dual_hole_pair", "opaque_surface"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "catch_shelf_marble",
+      "suite": "basic",
+      "always_on": ["n_shelves", "shelf_centers_x", "shelf_offsets", "shelf_angle_deg"],
+      "gated_off_by_default": ["reactive_marble", "oscillating_shelf_enabled", "osc_shelf_idx"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "catch_valley_ball",
+      "suite": "basic",
+      "always_on": ["mirrored", "param_jitter_geometry", "down_run", "up_run", "drop_forward_angle_deg", "initial_forward_speed", "launch_speed", "roll_acceleration", "landing_gap", "red_line_gap", "idle_time", "lane_y", "catcher_start_x"],
+      "gated_off_by_default": ["wall_bounce_enabled", "drop_wall_angle_deg", "enable_distractor", "distractor_start"],
+      "gated_on_by_yaml": ["random_mirror"]
+    },
+    {
+      "task_id": "stop_valley_ball",
+      "suite": "basic",
+      "always_on": ["mirrored", "param_jitter_geometry", "drop_forward_angle_deg", "launch_speed", "idle_time", "bat_spawn_xy"],
+      "gated_off_by_default": ["wall_bounce_enabled", "drop_wall_angle_deg", "enable_distractor"],
+      "gated_on_by_yaml": ["random_mirror"]
+    },
+    {
+      "task_id": "cook_meat",
+      "suite": "basic",
+      "always_on": ["cook_steps", "target_doneness_range", "pan_board_pose", "skillet_id"],
+      "gated_off_by_default": ["cook_button_enabled", "dual_setup_enabled", "dual_layout_cells"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "cook_meat_timer",
+      "suite": "basic",
+      "always_on": ["cook_steps", "target_doneness_range", "pan_board_pose", "skillet_id"],
+      "gated_off_by_default": ["cook_button_enabled", "dual_setup_enabled", "dual_layout_cells"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "put_cup_belt",
+      "suite": "basic",
+      "always_on": ["mirrored", "belt_speed", "curtain_phase", "belt_dir", "slot_start", "cup_xy", "curtain_size_scale"],
+      "gated_off_by_default": ["blue_curtain_dynamic_enabled"],
+      "gated_on_by_yaml": ["blue_curtains_enabled", "random_mirror"],
+      "_gui_default_forces_off": ["blue_curtains_enabled"]
+    },
+    {
+      "task_id": "dispense_gummy",
+      "suite": "basic",
+      "always_on": ["tube_stack_colors_random", "bowl_speed"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": ["layout_mode=random", "belt_continuous_motion"],
+      "_gui_default_forces_off": ["layout_mode→alternating", "belt_continuous_motion"]
+    },
+    {
+      "task_id": "punch_dual_holes",
+      "suite": "basic",
+      "always_on": ["square_gaps", "missing_tile_side", "missing_tile_index", "punch_model_id", "per_page_target_offset"],
+      "gated_off_by_default": ["belt_phase_discrete"],
+      "gated_on_by_yaml": ["missing_tile_mode", "belt_continous_motion"],
+      "_gui_default_forces_off": ["missing_tile_mode", "belt_continous_motion"],
+      "_note": "belt_phase_discrete only samples when belt_continous_motion=false; yaml continuous → phase fixed 0"
+    },
+    {
+      "task_id": "save_goal",
+      "suite": "basic",
+      "always_on": ["mirrored", "ball_speed", "ball_start_y", "launch_angle_deg"],
+      "gated_off_by_default": ["players_enabled", "player_poses", "bounce_player_idx", "cover_enabled", "cover_len_placement"],
+      "gated_on_by_yaml": ["random_mirror"]
+    },
+    {
+      "task_id": "hit_target",
+      "suite": "basic",
+      "always_on": ["arm_side/dart_side", "target_speed", "sway_amp", "sway_period", "sway_dir", "sway_phase0", "dart_spawn", "target_y"],
+      "gated_off_by_default": ["blocker_enabled", "blocker_dynamic", "blocker_y_gap", "blocker_speed"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "load_train",
+      "suite": "basic",
+      "always_on": ["train_omega", "train_dir", "ball_side", "ball_pose"],
+      "gated_off_by_default": ["target_wagon_mode", "target_wagon_idx", "tunnel_enabled", "tunnel_n_wagons", "tunnel_center_angle"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "marble_shelf_maze",
+      "suite": "basic",
+      "always_on": ["shelf_offsets", "level_gaps", "bowl_side"],
+      "gated_off_by_default": ["continuous_ball_motion", "oscillating_bowl_enabled", "bowl_phase0"],
+      "gated_on_by_yaml": [],
+      "_note": "yml pins n_shelves=4 (not randomized); bowl_phase0 only when oscillating_bowl_enabled"
+    },
+    {
+      "task_id": "pack_fruits",
+      "suite": "basic",
+      "always_on": ["belt_speed_left", "belt_speed_right", "item_type_order", "wave_spawn_random", "pair_stagger_y", "single_wave_belt", "basket_id"],
+      "gated_off_by_default": ["distractor_enabled", "distractor_spawn"],
+      "gated_on_by_yaml": ["spawn_mode=random", "pair_stagger_enabled", "single_wave_any_belt"],
+      "_gui_default_forces_off": ["spawn_mode→parallel", "pair_stagger_enabled", "single_wave_any_belt"]
+    },
+    {
+      "task_id": "pick_ripe_apple",
+      "suite": "basic",
+      "always_on": ["red_window", "good_side", "high_branch_side", "hang_x", "basket_id"],
+      "gated_off_by_default": ["two_apples_enabled", "basket_move_enabled", "basket_speed"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "place_block_belt",
+      "suite": "basic",
+      "always_on": ["belt_speed", "bowl_move_speed", "belt_mirrored", "block_half_h", "block_mass", "block_xy", "bowl_y", "bowl_id", "bowl_move_dir"],
+      "gated_off_by_default": ["blocker_enabled", "blocker_length", "blocker_half_x", "blocker_x", "blocker_flush_side"],
+      "gated_on_by_yaml": ["bowl_move_enabled", "random_belt_flip"],
+      "_gui_default_forces_off": ["bowl_move_enabled"]
+    },
+    {
+      "task_id": "play_billiard",
+      "suite": "basic",
+      "always_on": ["target_pocket_id", "blocked_pocket_id", "arm_side", "primary_ball_xy", "num_extra_balls", "distractor_ball_poses", "cue_y"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": ["specific_hole", "enable_distractors"],
+      "_gui_default_forces_off": ["specific_hole", "enable_distractors"]
+    },
+    {
+      "task_id": "control_quality",
+      "suite": "basic",
+      "always_on": ["alternating_first_color", "tile_gaps", "belt_speed"],
+      "gated_off_by_default": ["color_mode=random", "black_frac_max"],
+      "gated_on_by_yaml": ["spacing_mode=random"]
+    },
+    {
+      "task_id": "drop_ball_hole",
+      "suite": "basic",
+      "always_on": ["spin_dir", "spin_speed_sampled", "ball_side", "ball_spawn", "target_hole_xy", "dummy_hole_xy"],
+      "gated_off_by_default": ["stick_to_surface"],
+      "gated_on_by_yaml": ["add_dummy_hole"],
+      "_gui_default_forces_off": ["add_dummy_hole"]
+    },
+    {
+      "task_id": "sort_apples_belt",
+      "suite": "basic",
+      "always_on": ["belt_speed", "green_on_left", "alternating_first_color", "basket_id"],
+      "gated_off_by_default": ["color_mode=random", "rotten_prob", "rotten_idx"],
+      "gated_on_by_yaml": [],
+      "_note": "n_apples_min=max=4 → count fixed; alternating still flips start color"
+    },
+    {
+      "task_id": "whack_moles",
+      "suite": "basic",
+      "always_on": ["board_center_y", "mole_hole_assignment", "mole_pop_speed", "whack_schedule"],
+      "gated_off_by_default": ["distractor_enabled", "rabbit_holes", "relocating_moles", "relocate_hole"],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "trap_bug",
+      "suite": "household",
+      "always_on": ["bug_type", "run_side", "bug_spawn_x", "bug_speed", "emerge_target_y", "trap_xy"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": ["bug_type=random", "run_side=random"]
+    },
+    {
+      "task_id": "boil_milk",
+      "suite": "household",
+      "always_on": ["stove_side", "pot_burner", "target_ring", "milk_box_id", "mug_id", "milk_box_xy", "mug_xy", "milk_box_yaw", "mug_yaw"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": ["stove_side=random", "pot_burner=random", "milk_box_id=-1", "mug_id=-1"]
+    },
+    {
+      "task_id": "fill_coffee_jar",
+      "suite": "household",
+      "always_on": ["target_fill", "stove_side", "station_x", "disp_y", "jar_y", "coffee_box_id", "milk_box_id", "mug_id", "kettle_id", "kettle_burner", "kettle_yaw", "decor_xy_yaw"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": ["randomize_layout", "target_fill=random", "stove_side=random", "coffee_box_id=-1", "milk_box_id=-1", "mug_id=-1", "kettle_id=-1", "kettle_burner=random"]
+    },
+    {
+      "task_id": "pour_beer",
+      "suite": "household",
+      "always_on": ["station_side", "station_x", "cup_y", "tap_y", "bar_decor_xy_yaw"],
+      "gated_off_by_default": ["randomize_rates", "pour_rate", "foam_gain", "foam_gain_start", "foam_ramp_steps", "foam_decay"],
+      "gated_on_by_yaml": ["randomize_layout", "station_side=random"]
+    },
+    {
+      "task_id": "cook_food",
+      "suite": "household",
+      "always_on": ["food_type", "stove_pose", "range_xy", "burner", "cook_steps", "board_xy", "decor_xy", "food_on_board_xy"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": ["randomize_layout", "food_type=random", "stove_pose=random", "burner=random"]
+    },
+    {
+      "task_id": "cook_food_timer",
+      "suite": "household",
+      "always_on": ["food_type", "stove_pose", "range_xy", "burner", "cook_steps", "board_xy", "decor_xy", "food_on_board_xy"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": ["randomize_layout", "food_type=random", "stove_pose=random", "burner=random"]
+    },
+    {
+      "task_id": "measure_ingredient",
+      "suite": "household",
+      "always_on": ["microwave_pose", "station_side", "station_x", "disp_y", "scale_xy", "baking_decor_xy", "decor_on_microwave", "pour_rate"],
+      "gated_off_by_default": ["target_fill_random"],
+      "gated_on_by_yaml": ["randomize_layout", "station_side=random", "microwave_pose=random"],
+      "_note": "yml target_fill=0.25 fixed; pour_rate_jitter=0.15 always samples pour_rate"
+    },
+    {
+      "task_id": "make_soup",
+      "suite": "household",
+      "always_on": ["range_slot", "range_xy", "background_textures", "board_xy", "board_arm", "burner", "veg_offsets", "decor_xy", "decor_bread_id"],
+      "gated_off_by_default": ["pin_burner"],
+      "gated_on_by_yaml": ["randomize_layout", "randomize_background"]
+    },
+    {
+      "task_id": "catch_cup",
+      "suite": "household",
+      "always_on": ["shelf_cup_ids_slots", "rolling_cup_index", "roll_side", "roll_speed", "drop_x", "land_y", "pillow_start_xy", "lower_shelf_decor"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "catch_mouse_object_drop",
+      "suite": "household",
+      "always_on": ["mouse_speed", "upper_shelf_objects", "target_object", "mouse_start_end", "plant_x", "lower_shelf_extras", "basket_start_xy"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "stop_ball",
+      "suite": "household",
+      "always_on": ["ball_id", "arm_side", "ball_y_on_shelf", "roll_speed", "roll_heading_angle", "shelf_table_decor"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": ["arm_side=random"]
+    },
+    {
+      "task_id": "clean_table",
+      "suite": "household",
+      "always_on": ["laptop_side", "mug_side", "mug_laptop_gap", "pair_xy", "sponge_y", "spill_steps", "spill_pattern", "decor_xy"],
+      "gated_off_by_default": ["force_side"],
+      "gated_on_by_yaml": ["randomize_layout", "laptop_side=random", "mug_side=random"]
+    },
+    {
+      "task_id": "serve_dinner",
+      "suite": "extra",
+      "always_on": ["n_meatballs", "skillet_id", "meatball_micro_jitter", "salad_model_id", "lettuce_model_id", "tomato_model_id", "bottle_model_id", "cup_model_id"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": []
+    },
+    {
+      "task_id": "empty_bag",
+      "suite": "extra",
+      "always_on": ["bag_yaw_deg", "rolling_apple_id", "apple_color", "static_veg_ids"],
+      "gated_off_by_default": ["bag_side"],
+      "gated_on_by_yaml": ["apple_color=random"],
+      "_note": "yml bag_side=left fixed (random only if bag_side=random)"
+    },
+    {
+      "task_id": "catch_rolling_cup",
+      "suite": "extra",
+      "always_on": ["cup_id", "cup_shelf_xy", "decor_basket_id", "decor_apple_id", "decor_mug_ids", "decor_kettle_id", "decor_tissue_id", "decor_alarm_id"],
+      "gated_off_by_default": [],
+      "gated_on_by_yaml": [],
+      "_note": "roll_speed fixed from yaml (no jitter); background texture picks cleared when clean_background_rate=1"
+    }
+  ]
+}

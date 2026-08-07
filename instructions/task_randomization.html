@@ -1,0 +1,1262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>RoboDynaExp — Task Randomization (what is effective)</title>
+<style>
+  :root {
+    --bg:#0f1419; --panel:#1a222c; --panel2:#222c38; --border:#334155; --text:#e8eef4;
+    --muted:#9aabbc; --accent:#5b9fd4; --basic:#3d8b6e; --hh:#b8860b; --extra:#6b7280;
+    --opt:#7c6cf0; --ok:#2f9e6b; --warn:#b8860b; --mismatch:#c45c5c;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:"IBM Plex Sans","Segoe UI",sans-serif; color:var(--text);
+    background:radial-gradient(1100px 500px at 15% -10%, #1a2a3a 0%, var(--bg) 55%);
+    line-height:1.45;
+  }
+  .wrap { max-width:1100px; margin:0 auto; padding:1rem 1.5rem 3rem; }
+  header.hero {
+    padding:2rem 1.5rem 1rem; border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg,#15202b,transparent);
+  }
+  h1 { margin:0 0 .4rem; font-size:1.7rem; letter-spacing:-.02em; }
+  h2 { margin:1.75rem 0 .6rem; font-size:1.25rem; }
+  h3 { margin:0; font-size:1.05rem; }
+  h4 {
+    margin:.85rem 0 .35rem; font-size:.78rem; text-transform:uppercase;
+    letter-spacing:.04em; color:var(--muted);
+  }
+  .muted { color:var(--muted); max-width:80ch; }
+  .small { font-size:.9rem; }
+  .toolbar {
+    display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; position:sticky; top:0; z-index:5;
+    background:rgba(15,20,25,.92); backdrop-filter:blur(8px); padding:.75rem 0;
+    border-bottom:1px solid var(--border);
+  }
+  input[type=search] {
+    flex:1; min-width:200px; padding:.55rem .75rem; border-radius:8px;
+    border:1px solid var(--border); background:var(--panel); color:var(--text);
+  }
+  .filters label { margin-right:.75rem; color:var(--muted); font-size:.9rem; cursor:pointer; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:.75rem; margin:1rem 0; }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:.85rem 1rem; }
+  .stat b { display:block; font-size:1.4rem; }
+  .stat span { color:var(--muted); font-size:.85rem; }
+  .pill {
+    display:inline-block; font-size:.72rem; padding:.15rem .5rem; border-radius:999px;
+    border:1px solid var(--border); color:var(--muted); margin-right:.2rem;
+  }
+  .pill.basic { color:#b7e4d0; border-color:var(--basic); background:rgba(61,139,110,.15); }
+  .pill.household { color:#f0d48a; border-color:var(--hh); background:rgba(184,134,11,.15); }
+  .pill.extra { color:#d1d5db; border-color:var(--extra); }
+  .pill.opt { color:#d2ccff; border-color:var(--opt); background:rgba(124,108,240,.15); }
+  .pill.ok { color:#b8f0d4; border-color:var(--ok); background:rgba(47,158,107,.15); }
+  .pill.warn { color:#f0d48a; border-color:var(--warn); background:rgba(184,134,11,.15); }
+  .pill.mismatch { color:#f0b4b4; border-color:var(--mismatch); background:rgba(196,92,92,.15); }
+  .pill.dim { color:var(--muted); }
+  .task {
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:1rem 1.1rem; margin:.85rem 0;
+  }
+  .task header { display:flex; flex-wrap:wrap; gap:.5rem 1rem; justify-content:space-between; align-items:baseline; }
+  .status-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin:.5rem 0; }
+  @media (max-width:720px) { .status-grid { grid-template-columns:1fr; } }
+  ul.oklist li { color:#b8f0d4; }
+  ul.warnlist li { color:#f0d48a; }
+  ul.oklist, ul.warnlist, ul.fixed { margin:.2rem 0 0; padding-left:1.15rem; font-size:.9rem; }
+  ul.fixed { color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:.88rem; margin:.35rem 0 .6rem; }
+  th, td { text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; }
+  code { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.88em; color:#c6e0f5; }
+  .index { columns:2; gap:1.5rem; }
+  @media (max-width:720px) { .index { columns:1; } }
+  .index li { margin:.25rem 0; break-inside:avoid; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .callout {
+    background:var(--panel2); border-left:3px solid var(--accent);
+    padding:.85rem 1rem; border-radius:0 8px 8px 0; margin:1rem 0; color:var(--muted); font-size:.92rem;
+  }
+  .callout.warn { border-left-color:var(--warn); }
+  .callout.bad { border-left-color:var(--mismatch); }
+  .legend span { margin-right:.5rem; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <h1>Task randomization — what is effective</h1>
+    <p class="muted">
+      Which diversification parameters are <strong>already implemented and active</strong> under
+      current <code>demo_dynamic.yml</code>, vs implemented but off until you pick Opt1/Opt2
+      (or flip a yaml gate).
+    </p>
+  </div>
+</header>
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><b>23</b><span>Basic tasks</span></div>
+    <div class="stat"><b>12</b><span>Household tasks</span></div>
+    <div class="stat"><b>235</b><span>Always-on params</span></div>
+    <div class="stat"><b>80</b><span>Opt/gate-off params</span></div>
+  </div>
+
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="Search task or param…" autocomplete="off"/>
+    <div class="filters">
+      <label><input type="checkbox" class="suite" value="basic" checked/> Basic</label>
+      <label><input type="checkbox" class="suite" value="household" checked/> Household</label>
+      <label><input type="checkbox" class="suite" value="extra" checked/> Extra</label>
+      <label><input type="checkbox" id="onlyAlways"/> Only tasks with effective params</label>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="legend" style="margin-bottom:.5rem">
+      <span class="pill ok">Effective now</span>
+      <span class="pill warn">Implemented — Opt/gate OFF by default</span>
+      <span class="pill mismatch">ON in yaml — OFF under GUI Default</span>
+    </div>
+    <strong>How to read this:</strong>
+    All listed params are <em>implemented in code</em>.
+    <span class="pill ok">Effective now</span> means they already diversify every seed with current
+    <code>demo_dynamic.yml</code> (yaml-alone collect / record / household GUI).
+    Basic GUI <strong>Default</strong> forces Opt flags off via <code>SCENARIO_OVERRIDES</code>
+    even when yaml has them true — those show as <span class="pill mismatch">yaml≠GUI</span>.
+  </div>
+
+  <div class="callout warn">
+    <strong>Global domain_randomization</strong> (<code>random_background</code>,
+    <code>cluttered_table</code>, <code>random_light</code>, <code>random_table_height</code>,
+    <code>random_head_camera_dis</code>) is <strong>all OFF</strong> in <code>demo_dynamic.yml</code>.
+    Code exists; enable via config or <code>demo_randomized.yml</code>.
+  </div>
+
+  <div class='callout bad'><strong>Yaml ON, GUI Default OFF</strong> (yaml-alone collect gets these; basic interactive GUI Default does not):<ul><li><code>put_cup_belt</code>: <code>blue_curtains_enabled</code></li><li><code>dispense_gummy</code>: <code>layout_mode→alternating</code>, <code>belt_continuous_motion</code></li><li><code>punch_dual_holes</code>: <code>missing_tile_mode</code>, <code>belt_continous_motion</code></li><li><code>pack_fruits</code>: <code>spawn_mode→parallel</code>, <code>pair_stagger_enabled</code>, <code>single_wave_any_belt</code></li><li><code>place_block_belt</code>: <code>bowl_move_enabled</code></li><li><code>play_billiard</code>: <code>specific_hole</code>, <code>enable_distractors</code></li><li><code>drop_ball_hole</code>: <code>add_dummy_hole</code></li></ul></div>
+
+  <h2>Global domain randomization</h2>
+  <table>
+    <thead><tr><th>Parameter</th><th>demo_dynamic default</th><th>Status</th><th>Behavior when enabled</th></tr></thead>
+    <tbody><tr><td><code>random_background</code></td><td><code>False</code></td><td><span class='pill warn'>OFF in demo_dynamic</span></td><td>sample wall/table textures from assets/background_texture/{seen|unseen}; each may be cleared with P=clean_background_rate</td></tr><tr><td><code>cluttered_table</code></td><td><code>False</code></td><td><span class='pill warn'>OFF in demo_dynamic</span></td><td>spawn clutter objects via get_cluttered_table(); skipped entirely with P=clean_background_rate</td></tr><tr><td><code>clean_background_rate</code></td><td><code>1</code></td><td><span class='pill warn'>1 = skip texture/clutter rand</span></td><td>probability of skipping texture/clutter randomization</td></tr><tr><td><code>random_head_camera_dis</code></td><td><code>0</code></td><td><span class='pill warn'>OFF in demo_dynamic</span></td><td>passed to Camera(...); head pose displacement scale</td></tr><tr><td><code>random_table_height</code></td><td><code>0</code></td><td><span class='pill warn'>OFF in demo_dynamic</span></td><td>table_z_bias = U(-random_table_height, 0) + table_height_bias</td></tr><tr><td><code>random_light</code></td><td><code>False</code></td><td><span class='pill warn'>OFF in demo_dynamic</span></td><td>per-light RGB = U(0,1) for directional and point lights at setup</td></tr><tr><td><code>crazy_random_light_rate</code></td><td><code>0</code></td><td><span class='pill warn'>OFF in demo_dynamic</span></td><td>if random_light: crazy_random_light = Bernoulli(rate); when true, re-randomize light colors each render update</td></tr></tbody>
+  </table>
+
+  <h2>Index</h2>
+  <ol class="index" id="index"><li data-suite="basic"><a href="#catch_marbles_trapdoors"><code>catch_marbles_trapdoors</code></a> <span class="pill basic">basic</span> <span class="pill ok">6 on</span> <span class="pill warn">6 off</span></li><li data-suite="basic"><a href="#catch_ramp_ball"><code>catch_ramp_ball</code></a> <span class="pill basic">basic</span> <span class="pill ok">3 on</span> <span class="pill warn">6 off</span></li><li data-suite="basic"><a href="#catch_cuboid"><code>catch_cuboid</code></a> <span class="pill basic">basic</span> <span class="pill ok">3 on</span> <span class="pill warn">3 off</span></li><li data-suite="basic"><a href="#catch_shelf_marble"><code>catch_shelf_marble</code></a> <span class="pill basic">basic</span> <span class="pill ok">4 on</span> <span class="pill warn">3 off</span></li><li data-suite="basic"><a href="#catch_valley_ball"><code>catch_valley_ball</code></a> <span class="pill basic">basic</span> <span class="pill ok">13 on</span> <span class="pill warn">4 off</span></li><li data-suite="basic"><a href="#stop_valley_ball"><code>stop_valley_ball</code></a> <span class="pill basic">basic</span> <span class="pill ok">6 on</span> <span class="pill warn">3 off</span></li><li data-suite="basic"><a href="#cook_meat"><code>cook_meat</code></a> <span class="pill basic">basic</span> <span class="pill ok">4 on</span> <span class="pill warn">3 off</span></li><li data-suite="basic"><a href="#cook_meat_timer"><code>cook_meat_timer</code></a> <span class="pill basic">basic</span> <span class="pill ok">4 on</span> <span class="pill warn">3 off</span></li><li data-suite="basic"><a href="#put_cup_belt"><code>put_cup_belt</code></a> <span class="pill basic">basic</span> <span class="pill ok">7 on</span> <span class="pill warn">1 off</span></li><li data-suite="basic"><a href="#dispense_gummy"><code>dispense_gummy</code></a> <span class="pill basic">basic</span> <span class="pill ok">2 on</span> <span class="pill warn">0 off</span></li><li data-suite="basic"><a href="#punch_dual_holes"><code>punch_dual_holes</code></a> <span class="pill basic">basic</span> <span class="pill ok">5 on</span> <span class="pill warn">1 off</span></li><li data-suite="basic"><a href="#save_goal"><code>save_goal</code></a> <span class="pill basic">basic</span> <span class="pill ok">4 on</span> <span class="pill warn">5 off</span></li><li data-suite="basic"><a href="#hit_target"><code>hit_target</code></a> <span class="pill basic">basic</span> <span class="pill ok">8 on</span> <span class="pill warn">4 off</span></li><li data-suite="basic"><a href="#load_train"><code>load_train</code></a> <span class="pill basic">basic</span> <span class="pill ok">4 on</span> <span class="pill warn">5 off</span></li><li data-suite="basic"><a href="#marble_shelf_maze"><code>marble_shelf_maze</code></a> <span class="pill basic">basic</span> <span class="pill ok">3 on</span> <span class="pill warn">3 off</span></li><li data-suite="basic"><a href="#pack_fruits"><code>pack_fruits</code></a> <span class="pill basic">basic</span> <span class="pill ok">7 on</span> <span class="pill warn">2 off</span></li><li data-suite="basic"><a href="#pick_ripe_apple"><code>pick_ripe_apple</code></a> <span class="pill basic">basic</span> <span class="pill ok">5 on</span> <span class="pill warn">3 off</span></li><li data-suite="basic"><a href="#place_block_belt"><code>place_block_belt</code></a> <span class="pill basic">basic</span> <span class="pill ok">9 on</span> <span class="pill warn">5 off</span></li><li data-suite="basic"><a href="#play_billiard"><code>play_billiard</code></a> <span class="pill basic">basic</span> <span class="pill ok">7 on</span> <span class="pill warn">0 off</span></li><li data-suite="basic"><a href="#control_quality"><code>control_quality</code></a> <span class="pill basic">basic</span> <span class="pill ok">3 on</span> <span class="pill warn">2 off</span></li><li data-suite="basic"><a href="#drop_ball_hole"><code>drop_ball_hole</code></a> <span class="pill basic">basic</span> <span class="pill ok">6 on</span> <span class="pill warn">1 off</span></li><li data-suite="basic"><a href="#sort_apples_belt"><code>sort_apples_belt</code></a> <span class="pill basic">basic</span> <span class="pill ok">4 on</span> <span class="pill warn">3 off</span></li><li data-suite="basic"><a href="#whack_moles"><code>whack_moles</code></a> <span class="pill basic">basic</span> <span class="pill ok">4 on</span> <span class="pill warn">4 off</span></li><li data-suite="household"><a href="#trap_bug"><code>trap_bug</code></a> <span class="pill household">household</span> <span class="pill ok">6 on</span> <span class="pill warn">0 off</span></li><li data-suite="household"><a href="#boil_milk"><code>boil_milk</code></a> <span class="pill household">household</span> <span class="pill ok">9 on</span> <span class="pill warn">0 off</span></li><li data-suite="household"><a href="#fill_coffee_jar"><code>fill_coffee_jar</code></a> <span class="pill household">household</span> <span class="pill ok">12 on</span> <span class="pill warn">0 off</span></li><li data-suite="household"><a href="#pour_beer"><code>pour_beer</code></a> <span class="pill household">household</span> <span class="pill ok">5 on</span> <span class="pill warn">6 off</span></li><li data-suite="household"><a href="#cook_food"><code>cook_food</code></a> <span class="pill household">household</span> <span class="pill ok">8 on</span> <span class="pill warn">0 off</span></li><li data-suite="household"><a href="#cook_food_timer"><code>cook_food_timer</code></a> <span class="pill household">household</span> <span class="pill ok">8 on</span> <span class="pill warn">0 off</span></li><li data-suite="household"><a href="#measure_ingredient"><code>measure_ingredient</code></a> <span class="pill household">household</span> <span class="pill ok">8 on</span> <span class="pill warn">1 off</span></li><li data-suite="household"><a href="#make_soup"><code>make_soup</code></a> <span class="pill household">household</span> <span class="pill ok">9 on</span> <span class="pill warn">1 off</span></li><li data-suite="household"><a href="#catch_cup"><code>catch_cup</code></a> <span class="pill household">household</span> <span class="pill ok">8 on</span> <span class="pill warn">0 off</span></li><li data-suite="household"><a href="#catch_mouse_object_drop"><code>catch_mouse_object_drop</code></a> <span class="pill household">household</span> <span class="pill ok">7 on</span> <span class="pill warn">0 off</span></li><li data-suite="household"><a href="#stop_ball"><code>stop_ball</code></a> <span class="pill household">household</span> <span class="pill ok">6 on</span> <span class="pill warn">0 off</span></li><li data-suite="household"><a href="#clean_table"><code>clean_table</code></a> <span class="pill household">household</span> <span class="pill ok">8 on</span> <span class="pill warn">1 off</span></li><li data-suite="extra"><a href="#serve_dinner"><code>serve_dinner</code></a> <span class="pill extra">extra</span> <span class="pill ok">8 on</span> <span class="pill warn">0 off</span></li><li data-suite="extra"><a href="#empty_bag"><code>empty_bag</code></a> <span class="pill extra">extra</span> <span class="pill ok">4 on</span> <span class="pill warn">1 off</span></li><li data-suite="extra"><a href="#catch_rolling_cup"><code>catch_rolling_cup</code></a> <span class="pill extra">extra</span> <span class="pill ok">8 on</span> <span class="pill warn">0 off</span></li></ol>
+
+  <h2>Per-task</h2>
+  <div id="tasks">
+<article id="catch_marbles_trapdoors" class="task" data-suite="basic" data-search="catch_marbles_trapdoors basic shuffle_colors/color_order target_color/target_button_idx ball_speed ball_dir ball_x0 ball_phase door_open_once enable_distractor distractor_speed distractor_x0 distractor_phase distractor_collide shuffle_colors default door_open_once=false, enable_distractor=false — each door reopens up to door_open_max (default 3) then locks; no black distractor opt1 door_open_once=true — each trapdoor opens only once then locks closed opt2 enable_distractor=true — spawn black distractor marble (opposite travel direction) opt1+2 both flags true shuffle_colors / color_order if shuffle_colors: np.random.shuffle left→right color order of doors+keys target_color / target_button_idx null/random → u{0..n_buttons-1} ball_speed ball_speed × u(ball_speed_scale_min, ball_speed_scale_max) ball_dir / ball_x0 / ball_phase dir ±1; x0 u(ball_x_min,max); phase u(0,2π) distractor_speed if distractor_speed null: same ±scale sampling as target distractor_x0 / distractor_phase spawn opposite end of track; phase u(0,2π) distractor_collide if config &#x27;random&#x27;: bernoulli(0.5)"
+  data-n-always="6" data-n-gated="6">
+  <header>
+    <h3><code>catch_marbles_trapdoors</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>6 effective now</span><span class='pill warn'>6 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>shuffle_colors/color_order</code></li><li><code>target_color/target_button_idx</code></li><li><code>ball_speed</code></li><li><code>ball_dir</code></li><li><code>ball_x0</code></li><li><code>ball_phase</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>door_open_once</code></li><li><code>enable_distractor</code></li><li><code>distractor_speed</code></li><li><code>distractor_x0</code></li><li><code>distractor_phase</code></li><li><code>distractor_collide</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>shuffle_colors</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>door_open_once</code>, <code>enable_distractor</code></td><td>door_open_once=false, enable_distractor=false — each door reopens up to door_open_max (default 3) then locks; no black distractor</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>door_open_once</code></td><td>door_open_once=true — each trapdoor opens only once then locks closed</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>enable_distractor</code></td><td>enable_distractor=true — spawn black distractor marble (opposite travel direction)</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>door_open_once</code>, <code>enable_distractor</code></td><td>both flags true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>shuffle_colors / color_order</code></td><td><span class='pill ok'>Effective now</span></td><td>if shuffle_colors: np.random.shuffle left→right color order of doors+keys</td><td><code>shuffle_colors</code></td><td class='muted'>default true in yml</td></tr><tr data-status='always'><td><code>target_color / target_button_idx</code></td><td><span class='pill ok'>Effective now</span></td><td>null/random → U{0..n_buttons-1}</td><td><code>target_color</code></td><td class='muted'>or pin red|yellow|blue|green|0..3</td></tr><tr data-status='always'><td><code>ball_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>ball_speed × U(ball_speed_scale_min, ball_speed_scale_max)</td><td><code>ball_speed, ball_speed_scale_min/max</code></td><td class='muted'>yml ±20% (0.8–1.2)</td></tr><tr data-status='always'><td><code>ball_dir / ball_x0 / ball_phase</code></td><td><span class='pill ok'>Effective now</span></td><td>dir ±1; x0 U(ball_x_min,max); phase U(0,2π)</td><td><span class='muted'>—</span></td><td class='muted'>load_actors</td></tr><tr data-status='opt_off'><td><code>distractor_speed</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>if distractor_speed null: same ±scale sampling as target</td><td><code>distractor_speed, distractor_speed_scale_min/max</code></td><td class='muted'>opt2 only</td></tr><tr data-status='opt_off'><td><code>distractor_x0 / distractor_phase</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>spawn opposite end of track; phase U(0,2π)</td><td><code>distractor_y_offset, distractor_height_offset</code></td><td class='muted'>opt2</td></tr><tr data-status='opt_off'><td><code>distractor_collide</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>if config &#x27;random&#x27;: Bernoulli(0.5)</td><td><code>distractor_collide</code></td><td class='muted'>yml false = passthrough</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>door_open_angle_deg / door_open_speed_deg / door_open_duration_sec / door_open_max</code> — trapdoor kinematics; door_open_max default 3 (door_open_once forces 1)</li><li><code>press_hold_steps / button_press_depth / ball_bounce_height / marble_protrude_frac</code> — interaction / settle geometry</li><li><code>key_base_half</code> — keycap base size</li></ul>
+</article>
+
+<article id="catch_ramp_ball" class="task" data-suite="basic" data-search="catch_ramp_ball basic roll_speed lane_start_x idle_time wall_bounce_enabled wall_rebound_angle bounce_side enable_distractor distractor_start_x distractor_roll_speed  default both false — straight red roll; no distractor opt1 wall_bounce_enabled=true — lateral kick + side-rail rebound opt2 enable_distractor=true — blue distractor on separate lane (catching blue fails) opt1+2 both true red/distractor roll_speed roll_speed × u(roll_speed_scale_min,max) × ball_speed_scale(0.2) wall rebound angle / bounce_side u(angled_path_min_deg, angled_path_max_deg) × random ± side lane start x (red) u(lane_min, lane_max) or half-lane prefer_side distractor start x sample in candidate intervals separated from red idle_time u(idle_time_min, idle_time_max)"
+  data-n-always="3" data-n-gated="6">
+  <header>
+    <h3><code>catch_ramp_ball</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>3 effective now</span><span class='pill warn'>6 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>roll_speed</code></li><li><code>lane_start_x</code></li><li><code>idle_time</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>wall_bounce_enabled</code></li><li><code>wall_rebound_angle</code></li><li><code>bounce_side</code></li><li><code>enable_distractor</code></li><li><code>distractor_start_x</code></li><li><code>distractor_roll_speed</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>wall_bounce_enabled</code>, <code>enable_distractor</code></td><td>both false — straight red roll; no distractor</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>wall_bounce_enabled</code></td><td>wall_bounce_enabled=true — lateral kick + side-rail rebound</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>enable_distractor</code></td><td>enable_distractor=true — blue distractor on separate lane (catching blue fails)</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>wall_bounce_enabled</code>, <code>enable_distractor</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>red/distractor roll_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>roll_speed × U(roll_speed_scale_min,max) × BALL_SPEED_SCALE(0.2)</td><td><code>roll_speed, roll_speed_scale_min/max</code></td><td class='muted'>independent sample per ball</td></tr><tr data-status='opt_off'><td><code>wall rebound angle / bounce_side</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>U(angled_path_min_deg, angled_path_max_deg) × random ± side</td><td><code>angled_path_min_deg, angled_path_max_deg</code></td><td class='muted'>opt1 only</td></tr><tr data-status='unknown'><td><code>lane start x (red)</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>U(lane_min, lane_max) or half-lane prefer_side</td><td><code>x_span</code></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>distractor start x</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>sample in candidate intervals separated from red</td><td><span class='muted'>—</span></td><td class='muted'>opt2</td></tr><tr data-status='always'><td><code>idle_time</code></td><td><span class='pill ok'>Effective now</span></td><td>U(idle_time_min, idle_time_max)</td><td><code>idle_time_min, idle_time_max</code></td><td class='muted'></td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>ramp_angle / ramp_back_y / ramp_front_y / drop_height / drop_time</code> — ramp geometry</li><li><code>ball_radius / rim_radius / ramp_friction / fall_time / release_clearance</code> — physics / catch</li><li><code>ball_path_mode</code> — compat; overridden by wall_bounce_enabled</li></ul>
+</article>
+
+<article id="catch_cuboid" class="task" data-suite="basic" data-search="catch_cuboid basic board_center_y cuboid_move_speed active_hole catch_two_cuboids dual_hole_pair opaque_surface  default both false — one cuboid; glass/see-through top lattice opt1 catch_two_cuboids=true — two cuboids from opposite holes; both must be held opt2 opaque_surface=true — opaque colored top lattice opt1+2 both true board_center_y u(0, 0.05) cuboid_move_speed / _cuboid_pop_speed u(cuboid_move_speed_min, cuboid_move_speed_max) once per episode active hole (single) randint(0, num_holes) dual hole pair random left/right pair with ≥1-cell gap (prefer similar rows)"
+  data-n-always="3" data-n-gated="3">
+  <header>
+    <h3><code>catch_cuboid</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>3 effective now</span><span class='pill warn'>3 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>board_center_y</code></li><li><code>cuboid_move_speed</code></li><li><code>active_hole</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>catch_two_cuboids</code></li><li><code>dual_hole_pair</code></li><li><code>opaque_surface</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>catch_two_cuboids</code>, <code>opaque_surface</code></td><td>both false — one cuboid; glass/see-through top lattice</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>catch_two_cuboids</code></td><td>catch_two_cuboids=true — two cuboids from opposite holes; both must be held</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>opaque_surface</code></td><td>opaque_surface=true — opaque colored top lattice</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>catch_two_cuboids</code>, <code>opaque_surface</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>board_center_y</code></td><td><span class='pill ok'>Effective now</span></td><td>U(0, 0.05)</td><td><span class='muted'>—</span></td><td class='muted'>create_board</td></tr><tr data-status='always'><td><code>cuboid_move_speed / _cuboid_pop_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>U(cuboid_move_speed_min, cuboid_move_speed_max) once per episode</td><td><code>cuboid_move_speed_min, cuboid_move_speed_max</code></td><td class='muted'>shared by dual cuboids</td></tr><tr data-status='unknown'><td><code>active hole (single)</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint(0, num_holes)</td><td><span class='muted'>—</span></td><td class='muted'>default / opt2</td></tr><tr data-status='opt_off'><td><code>dual hole pair</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>random left/right pair with ≥1-cell gap (prefer similar rows)</td><td><code>catch_two_cuboids</code></td><td class='muted'>opt1</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>num_appearances / pop_steps / grasp_tol</code> — pop schedule / catch tol</li><li><code>hole_size / hole_count / hole_bar_thickness</code> — board grid (code defaults if unset in yml)</li></ul>
+</article>
+
+<article id="catch_shelf_marble" class="task" data-suite="basic" data-search="catch_shelf_marble basic n_shelves shelf_centers_x shelf_offsets shelf_angle_deg reactive_marble oscillating_shelf_enabled osc_shelf_idx  default both false — marble waits on top until bowl key pressed; shelves static opt1 reactive_marble=true — marble starts falling at episode start (uses reactive_roll_speed) opt2 oscillating_shelf_enabled=true — one random non-top shelf sweeps −x..+x opt1+2 both true n_shelves randint(n_shelves_min, n_shelves_max) unless n_shelves pinned shelf_centers_x / offsets independent ± offset signs × u(offset_min_frac, offset_max_frac)*shelf_length; resample if span&gt;max_stack_span; + stack_shift u±stack_shift_range shelf_angle_deg per-shelf magnitude u(tilt_min_deg, tilt_max_deg); dirs from offsets; bottom exit dir random ± osc_shelf_idx randint(1, n_shelves-1) unless oscillating_shelf_index set"
+  data-n-always="4" data-n-gated="3">
+  <header>
+    <h3><code>catch_shelf_marble</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>4 effective now</span><span class='pill warn'>3 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>n_shelves</code></li><li><code>shelf_centers_x</code></li><li><code>shelf_offsets</code></li><li><code>shelf_angle_deg</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>reactive_marble</code></li><li><code>oscillating_shelf_enabled</code></li><li><code>osc_shelf_idx</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>reactive_marble</code>, <code>oscillating_shelf_enabled</code></td><td>both false — marble waits on top until bowl key pressed; shelves static</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>reactive_marble</code></td><td>reactive_marble=true — marble starts falling at episode start (uses reactive_roll_speed)</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>oscillating_shelf_enabled</code></td><td>oscillating_shelf_enabled=true — one random non-top shelf sweeps −x..+x</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>reactive_marble</code>, <code>oscillating_shelf_enabled</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>n_shelves</code></td><td><span class='pill ok'>Effective now</span></td><td>randint(n_shelves_min, n_shelves_max) unless n_shelves pinned</td><td><code>n_shelves_min, n_shelves_max, n_shelves</code></td><td class='muted'>yml 4–7</td></tr><tr data-status='always'><td><code>shelf_centers_x / offsets</code></td><td><span class='pill ok'>Effective now</span></td><td>independent ± offset signs × U(offset_min_frac, offset_max_frac)*shelf_length; resample if span&gt;max_stack_span; + stack_shift U±stack_shift_range</td><td><code>offset_min_frac, offset_max_frac, stack_shift_range, max_stack_span</code></td><td class='muted'>zig-zag cascade</td></tr><tr data-status='always'><td><code>shelf_angle_deg</code></td><td><span class='pill ok'>Effective now</span></td><td>per-shelf magnitude U(tilt_min_deg, tilt_max_deg); dirs from offsets; bottom exit dir random ±</td><td><code>tilt_min_deg, tilt_max_deg</code></td><td class='muted'></td></tr><tr data-status='opt_off'><td><code>osc_shelf_idx</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>randint(1, n_shelves-1) unless oscillating_shelf_index set</td><td><code>oscillating_shelf_index, oscillating_shelf_period</code></td><td class='muted'>opt2; top shelf never oscillates</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>shelf_length / stack_height / bottom_clearance / ball_radius</code> — geometry</li><li><code>roll_speed / reactive_roll_speed / bowl_speed / bowl_catch_xy_tol</code> — motion / catch</li><li><code>key_x_left / key_x_right / key_y</code> — bowl control keys</li></ul>
+</article>
+
+<article id="catch_valley_ball" class="task" data-suite="basic" data-search="catch_valley_ball basic mirrored param_jitter_geometry down_run up_run drop_forward_angle_deg initial_forward_speed launch_speed roll_acceleration landing_gap red_line_gap idle_time lane_y catcher_start_x wall_bounce_enabled drop_wall_angle_deg enable_distractor distractor_start random_mirror default both false — straight red path; no distractor opt1 wall_bounce_enabled=true — rail rebound mid-run opt2 enable_distractor=true — black distractor on separate lane (catching black fails) opt1+2 both true mirrored / side if mirrored=null and random_mirror: bernoulli(0.5) flip layout x→−x (left arm) ramp geometry means each mean × u(1±param_jitter): ramp_half_width, thickness, valley_x/height, rises, rails, drop_height/time, speeds, gaps, etc. down_run / up_run × u(1±length_jitter) drop_wall_angle_deg opt1: ±u(angled_path_min_deg, angled_path_max_deg) drop_forward_angle_deg u(drop_forward_angle_min_deg, drop_forward_angle_max_deg) initial_forward_speed / launch_speed / roll_acceleration / landing_gap / red_line_gap means ±param_jitter roll_time / idle_time u(roll_time_min,max); u(idle_time_min,max) lane y / distractor start / catcher start x u(lane); distractor separated from red; catcher x = side×u(0.30,0.34)"
+  data-n-always="13" data-n-gated="4">
+  <header>
+    <h3><code>catch_valley_ball</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>13 effective now</span><span class='pill warn'>4 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>mirrored</code></li><li><code>param_jitter_geometry</code></li><li><code>down_run</code></li><li><code>up_run</code></li><li><code>drop_forward_angle_deg</code></li><li><code>initial_forward_speed</code></li><li><code>launch_speed</code></li><li><code>roll_acceleration</code></li><li><code>landing_gap</code></li><li><code>red_line_gap</code></li><li><code>idle_time</code></li><li><code>lane_y</code></li><li><code>catcher_start_x</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>wall_bounce_enabled</code></li><li><code>drop_wall_angle_deg</code></li><li><code>enable_distractor</code></li><li><code>distractor_start</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>random_mirror</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>wall_bounce_enabled</code>, <code>enable_distractor</code></td><td>both false — straight red path; no distractor</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>wall_bounce_enabled</code></td><td>wall_bounce_enabled=true — rail rebound mid-run</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>enable_distractor</code></td><td>enable_distractor=true — black distractor on separate lane (catching black fails)</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>wall_bounce_enabled</code>, <code>enable_distractor</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>mirrored / side</code></td><td><span class='pill ok'>Effective now</span></td><td>if mirrored=null and random_mirror: Bernoulli(0.5) flip layout x→−x (left arm)</td><td><code>mirrored, random_mirror</code></td><td class='muted'>yml random_mirror=true</td></tr><tr data-status='unknown'><td><code>ramp geometry means</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>each mean × U(1±param_jitter): ramp_half_width, thickness, valley_x/height, rises, rails, drop_height/time, speeds, gaps, etc.</td><td><code>param_jitter</code></td><td class='muted'>default ±10%; inherits catch_valley_ball_v1.load_actors</td></tr><tr data-status='always'><td><code>down_run / up_run</code></td><td><span class='pill ok'>Effective now</span></td><td>× U(1±length_jitter)</td><td><code>length_jitter, down_run, up_run</code></td><td class='muted'>default ±5%</td></tr><tr data-status='opt_off'><td><code>drop_wall_angle_deg</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>opt1: ±U(angled_path_min_deg, angled_path_max_deg)</td><td><code>angled_path_min_deg, angled_path_max_deg</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>drop_forward_angle_deg</code></td><td><span class='pill ok'>Effective now</span></td><td>U(drop_forward_angle_min_deg, drop_forward_angle_max_deg)</td><td><code>drop_forward_angle_min_deg, drop_forward_angle_max_deg</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>initial_forward_speed / launch_speed / roll_acceleration / landing_gap / red_line_gap</code></td><td><span class='pill ok'>Effective now</span></td><td>means ±param_jitter</td><td><code>initial_forward_speed, launch_speed, roll_acceleration, landing_gap, red_line_gap</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>roll_time / idle_time</code></td><td><span class='pill ok'>Effective now</span></td><td>U(roll_time_min,max); U(idle_time_min,max)</td><td><code>roll_time_min/max, idle_time_min/max</code></td><td class='muted'>roll_time mostly unused when speed-based</td></tr><tr data-status='unknown'><td><code>lane y / distractor start / catcher start x</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>U(lane); distractor separated from red; catcher x = side×U(0.30,0.34)</td><td><span class='muted'>—</span></td><td class='muted'>catcher swapped to procedural box after parent spawn</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>ball_radius / ball_mass</code> — fixed per yml comments</li><li><code>catcher_model / bowl_* / push_step</code> — custom_catch_box push catcher</li><li><code>curve_segments / physics_max_steps / settle_steps</code> — </li></ul>
+</article>
+
+<article id="stop_valley_ball" class="task" data-suite="basic" data-search="stop_valley_ball basic mirrored param_jitter_geometry drop_forward_angle_deg launch_speed idle_time bat_spawn_xy wall_bounce_enabled drop_wall_angle_deg enable_distractor random_mirror default both false opt1 rail rebound opt2 black distractor; hitting it with bat fails opt1+2 both true mirrored / side same as valley parent via random_mirror / mirrored ramp + ball kinematics same param_jitter / angle sampling as catch_valley_ball_v1.load_actors bat spawn pose bat_x=side×u(0.28,0.34); bat_y u(panel_spawn_y_min, panel_spawn_y_max)"
+  data-n-always="6" data-n-gated="3">
+  <header>
+    <h3><code>stop_valley_ball</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>6 effective now</span><span class='pill warn'>3 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>mirrored</code></li><li><code>param_jitter_geometry</code></li><li><code>drop_forward_angle_deg</code></li><li><code>launch_speed</code></li><li><code>idle_time</code></li><li><code>bat_spawn_xy</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>wall_bounce_enabled</code></li><li><code>drop_wall_angle_deg</code></li><li><code>enable_distractor</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>random_mirror</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>wall_bounce_enabled</code>, <code>enable_distractor</code></td><td>both false</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>wall_bounce_enabled</code></td><td>rail rebound</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>enable_distractor</code></td><td>black distractor; hitting it with bat fails</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>wall_bounce_enabled</code>, <code>enable_distractor</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>mirrored / side</code></td><td><span class='pill ok'>Effective now</span></td><td>same as valley parent via random_mirror / mirrored</td><td><code>mirrored, random_mirror</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>ramp + ball kinematics</code></td><td><span class='pill ok'>Effective now</span></td><td>same param_jitter / angle sampling as catch_valley_ball_v1.load_actors</td><td><code>param_jitter, angled_path_*, drop_forward_angle_*, initial_forward_speed, launch_speed, ...</code></td><td class='muted'>uses stop_valley_ball task_args; length_jitter not listed in yml (falls back to parent default if used)</td></tr><tr data-status='unknown'><td><code>bat spawn pose</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>bat_x=side×U(0.28,0.34); bat_y U(panel_spawn_y_min, panel_spawn_y_max)</td><td><code>panel_spawn_y_min, panel_spawn_y_max</code></td><td class='muted'></td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>panel_radius / handle_* / holder_height / intercept_flight_frac</code> — bat geometry / intercept</li><li><code>initial_forward_speed_min/max / platform_length_scale_min/max</code> — yml pins equal mins/maxes (no extra speed/length range beyond jitter)</li></ul>
+</article>
+
+<article id="cook_meat" class="task" data-suite="basic" data-search="cook_meat basic cook_steps target_doneness_range pan_board_pose skillet_id cook_button_enabled dual_setup_enabled dual_layout_cells  default latch on/off cook key; single station opt1 cook_button_enabled=true — hold-to-cook opt2 dual_setup_enabled=true — dual stations, both arms opt1+2 dual + hold-to-cook cook_steps (episode) round(u(nom×(1±cook_speed_jitter))) or absolute min/max if set target_doneness_range shift both limits by u(±target_doneness_range_jitter) clamped to [0,1] pan/board pose xy ±place_jitter_xy; yaw ±place_yaw_lim; reject overlaps skillet_id choice({0,1,2,3}) dual layout cells when dual: random valid grid cell placement"
+  data-n-always="4" data-n-gated="3">
+  <header>
+    <h3><code>cook_meat</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>4 effective now</span><span class='pill warn'>3 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>cook_steps</code></li><li><code>target_doneness_range</code></li><li><code>pan_board_pose</code></li><li><code>skillet_id</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>cook_button_enabled</code></li><li><code>dual_setup_enabled</code></li><li><code>dual_layout_cells</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>cook_button_enabled</code>, <code>dual_setup_enabled</code></td><td>latch ON/OFF cook key; single station</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>cook_button_enabled</code></td><td>cook_button_enabled=true — hold-to-cook</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>dual_setup_enabled</code></td><td>dual_setup_enabled=true — dual stations, both arms</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>cook_button_enabled</code>, <code>dual_setup_enabled</code></td><td>dual + hold-to-cook</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>cook_steps (episode)</code></td><td><span class='pill ok'>Effective now</span></td><td>round(U(nom×(1±cook_speed_jitter))) or absolute min/max if set</td><td><code>cook_steps, cook_speed_jitter</code></td><td class='muted'>yml jitter 0.20</td></tr><tr data-status='always'><td><code>target_doneness_range</code></td><td><span class='pill ok'>Effective now</span></td><td>shift both limits by U(±target_doneness_range_jitter) clamped to [0,1]</td><td><code>target_doneness_range, target_doneness_range_jitter</code></td><td class='muted'>yml [0.45,0.55] ±0.05</td></tr><tr data-status='unknown'><td><code>pan/board pose</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>XY ±place_jitter_xy; yaw ±place_yaw_lim; reject overlaps</td><td><code>place_jitter_xy, place_yaw_lim, place_dx, place_dy</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>skillet_id</code></td><td><span class='pill ok'>Effective now</span></td><td>choice({0,1,2,3})</td><td><span class='muted'>—</span></td><td class='muted'>asset variant</td></tr><tr data-status='opt_off'><td><code>dual layout cells</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>when dual: random valid grid cell placement</td><td><code>dual_setup_enabled</code></td><td class='muted'>opt2</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>key_offset_x / key_y_bias / key_press_depth</code> — key placement relative to pan</li><li><code>max_episode_steps / board_scale_mult</code> — episode cutoff / board size</li></ul>
+</article>
+
+<article id="cook_meat_timer" class="task" data-suite="basic" data-search="cook_meat_timer basic cook_steps target_doneness_range pan_board_pose skillet_id cook_button_enabled dual_setup_enabled dual_layout_cells  default same as cook_meat default + pie timer visual opt1 hold-to-cook opt2 dual stations opt1+2 dual + hold-to-cook (inherits cook_meat) same cook_steps jitter, doneness-range shift, pan/board jitter/yaw, skillet_id, dual layout"
+  data-n-always="4" data-n-gated="3">
+  <header>
+    <h3><code>cook_meat_timer</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>4 effective now</span><span class='pill warn'>3 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>cook_steps</code></li><li><code>target_doneness_range</code></li><li><code>pan_board_pose</code></li><li><code>skillet_id</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>cook_button_enabled</code></li><li><code>dual_setup_enabled</code></li><li><code>dual_layout_cells</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>cook_button_enabled</code>, <code>dual_setup_enabled</code></td><td>same as cook_meat default + pie timer visual</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>cook_button_enabled</code></td><td>hold-to-cook</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>dual_setup_enabled</code></td><td>dual stations</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>cook_button_enabled</code>, <code>dual_setup_enabled</code></td><td>dual + hold-to-cook</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>(inherits cook_meat)</code></td><td><span class='pill ok'>Effective now</span></td><td>same cook_steps jitter, doneness-range shift, pan/board jitter/yaw, skillet_id, dual layout</td><td><code>cook_steps, cook_speed_jitter, target_doneness_range*, place_jitter_xy, place_yaw_lim</code></td><td class='muted'>cook_meat_timer merges task_args over cook_meat defaults; cook_steps yml 3846</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>timer_radius / timer_n_sections</code> — pie timer disc only; not randomized</li><li><code>max_episode_steps / key_* / board_scale_mult</code> — same knobs as cook_meat</li></ul>
+</article>
+
+<article id="put_cup_belt" class="task" data-suite="basic" data-search="put_cup_belt basic mirrored belt_speed curtain_phase belt_dir slot_start cup_xy curtain_size_scale blue_curtain_dynamic_enabled blue_curtains_enabled random_mirror default gui forces both false (note: yml alone has blue_curtains_enabled=true) opt1 blue_curtains_enabled=true — spawn blue curtain strips opt2 blue_curtain_dynamic_enabled=true — curtains sway (implies curtains) opt1+2 static curtains + dynamic sway mirrored / arm side if random_mirror: bernoulli(0.5) x→−x belt_speed u((1±belt_speed_jitter)*belt_speed) curtain size scale u(1±curtain_size_jitter) on strip half-size curtain_phase / belt_dir / slot_start phase u(0,2π); dir ±1; slot_start u(±belt_motion_limit) cup_x / cup_y side×u(0.065,0.115); y u(-0.055,-0.028)"
+  data-n-always="7" data-n-gated="1">
+  <header>
+    <h3><code>put_cup_belt</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>7 effective now</span><span class='pill warn'>1 Opt/gate off</span><span class='pill mismatch'>1 yaml≠GUI</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>mirrored</code></li><li><code>belt_speed</code></li><li><code>curtain_phase</code></li><li><code>belt_dir</code></li><li><code>slot_start</code></li><li><code>cup_xy</code></li><li><code>curtain_size_scale</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>blue_curtain_dynamic_enabled</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>blue_curtains_enabled</code> <code>random_mirror</code></p>
+
+  <p class="small"><span class="pill mismatch">Yaml ON → GUI Default forces OFF</span>
+  <code>blue_curtains_enabled</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>blue_curtains_enabled</code>, <code>blue_curtain_dynamic_enabled</code></td><td>GUI forces both false (note: yml alone has blue_curtains_enabled=true)</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>blue_curtains_enabled</code></td><td>blue_curtains_enabled=true — spawn blue curtain strips</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>blue_curtain_dynamic_enabled</code></td><td>blue_curtain_dynamic_enabled=true — curtains sway (implies curtains)</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>blue_curtains_enabled</code>, <code>blue_curtain_dynamic_enabled</code></td><td>static curtains + dynamic sway</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>mirrored / arm side</code></td><td><span class='pill ok'>Effective now</span></td><td>if random_mirror: Bernoulli(0.5) x→−x</td><td><code>random_mirror</code></td><td class='muted'>yml true</td></tr><tr data-status='always'><td><code>belt_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>U((1±belt_speed_jitter)*belt_speed)</td><td><code>belt_speed, belt_speed_jitter</code></td><td class='muted'>±20%</td></tr><tr data-status='unknown'><td><code>curtain size scale</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>U(1±curtain_size_jitter) on strip half-size</td><td><code>curtain_size_jitter</code></td><td class='muted'>when curtains on</td></tr><tr data-status='always'><td><code>curtain_phase / belt_dir / slot_start</code></td><td><span class='pill ok'>Effective now</span></td><td>phase U(0,2π); dir ±1; slot_start U(±belt_motion_limit)</td><td><code>curtain_freq, curtain_amp, belt_range</code></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>cup_x / cup_y</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>side×U(0.065,0.115); y U(-0.055,-0.028)</td><td><span class='muted'>—</span></td><td class='muted'>small pose jitter</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>placement_tol / gap_tol / reach_tol / moving_component_spacing</code> — success / alignment</li><li><code>post_place_lift_z / lift_off_only_after_place</code> — post-place motion</li></ul>
+</article>
+
+<article id="dispense_gummy" class="task" data-suite="basic" data-search="dispense_gummy basic tube_stack_colors_random bowl_speed  layout_mode=random belt_continuous_motion default layout_mode=alternating; belt_continuous_motion=false — discrete station hops opt1 layout_mode=random — randomized gummy stacks (≤1 target per depth; unequal target counts) opt2 belt_continuous_motion=true — hold-to-slide bowl opt1+2 random layout + continuous bowl tube stack colors (alternating) random which tube starts with target at depth0; alternating thereafter tube stack colors (random) sample unequal (left_count,right_count); permute depths for targets bowl_speed (continuous) bowl_speed × u(1±belt_speed_jitter)"
+  data-n-always="2" data-n-gated="0">
+  <header>
+    <h3><code>dispense_gummy</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>2 effective now</span><span class='pill warn'>0 Opt/gate off</span><span class='pill mismatch'>2 yaml≠GUI</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>tube_stack_colors_random</code></li><li><code>bowl_speed</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>layout_mode=random</code> <code>belt_continuous_motion</code></p>
+
+  <p class="small"><span class="pill mismatch">Yaml ON → GUI Default forces OFF</span>
+  <code>layout_mode→alternating</code> <code>belt_continuous_motion</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>layout_mode</code>, <code>belt_continuous_motion</code></td><td>layout_mode=alternating; belt_continuous_motion=false — discrete station hops</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>layout_mode</code></td><td>layout_mode=random — randomized gummy stacks (≤1 target per depth; unequal target counts)</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>belt_continuous_motion</code></td><td>belt_continuous_motion=true — hold-to-slide bowl</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>layout_mode</code>, <code>belt_continuous_motion</code></td><td>random layout + continuous bowl</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='yaml_on_gui_off'><td><code>tube stack colors (alternating)</code></td><td><span class='pill mismatch'>ON in yaml — OFF under GUI Default</span></td><td>random which tube starts with target at depth0; alternating thereafter</td><td><code>layout_mode=alternating</code></td><td class='muted'>default / opt2</td></tr><tr data-status='yaml_on_gui_off'><td><code>tube stack colors (random)</code></td><td><span class='pill mismatch'>ON in yaml — OFF under GUI Default</span></td><td>sample unequal (left_count,right_count); permute depths for targets</td><td><code>layout_mode=random</code></td><td class='muted'>opt1; tube_capacity≥3</td></tr><tr data-status='always'><td><code>bowl_speed (continuous)</code></td><td><span class='pill ok'>Effective now</span></td><td>bowl_speed × U(1±belt_speed_jitter)</td><td><code>bowl_speed, belt_speed_jitter</code></td><td class='muted'>opt2 only</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>target_color / tube_capacity / tube_x_* / tube_center_y</code> — layout geometry; yml target_color=yellow</li><li><code>belt_move_steps / dispense_steps / press_hold_steps / bowl_align_tol</code> — timing / catch</li><li><code>note</code> — yml currently has layout_mode=random and belt_continuous_motion=true; GUI SCENARIO_OVERRIDES force explicit defaults per scenario</li></ul>
+</article>
+
+<article id="punch_dual_holes" class="task" data-suite="basic" data-search="punch_dual_holes basic square_gaps missing_tile_side missing_tile_index punch_model_id per_page_target_offset belt_phase_discrete missing_tile_mode belt_continous_motion default gui: both false — discrete stop-per-tile; no missing tile opt1 missing_tile_mode=true — one random missing tile (1- vs 2-arm stops) opt2 belt_continous_motion=true — never stop; speed × belt_continuous_speed_scale opt1+2 both true square_gaps always u(square_gap_min, square_gap_max) between tiles (variable spacing; not a scenario flag) missing_tile_side / missing_tile_index choice(left|right); randint(0, n_pages) belt phase (discrete) randint(0, 60) start delay punch_model_id choice(punch_model_ids) per-page target offset u(-0.012, 0.012) relative to punch center belt_speed (if min/max used) u(belt_speed_min,max) when belt_speed unset"
+  data-n-always="5" data-n-gated="1">
+  <header>
+    <h3><code>punch_dual_holes</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>5 effective now</span><span class='pill warn'>1 Opt/gate off</span><span class='pill mismatch'>2 yaml≠GUI</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>square_gaps</code></li><li><code>missing_tile_side</code></li><li><code>missing_tile_index</code></li><li><code>punch_model_id</code></li><li><code>per_page_target_offset</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>belt_phase_discrete</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>missing_tile_mode</code> <code>belt_continous_motion</code></p>
+
+  <p class="small"><span class="pill mismatch">Yaml ON → GUI Default forces OFF</span>
+  <code>missing_tile_mode</code> <code>belt_continous_motion</code></p>
+<p class='muted small'>belt_phase_discrete only samples when belt_continous_motion=false; yaml continuous → phase fixed 0</p>
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>missing_tile_mode</code>, <code>belt_continous_motion</code></td><td>GUI: both false — discrete stop-per-tile; no missing tile</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>missing_tile_mode</code></td><td>missing_tile_mode=true — one random missing tile (1- vs 2-arm stops)</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>belt_continous_motion</code></td><td>belt_continous_motion=true — never stop; speed × belt_continuous_speed_scale</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>missing_tile_mode</code>, <code>belt_continous_motion</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>square_gaps</code></td><td><span class='pill ok'>Effective now</span></td><td>always U(square_gap_min, square_gap_max) between tiles (variable spacing; not a scenario flag)</td><td><code>square_gap_min, square_gap_max</code></td><td class='muted'>yml 0.010–0.030</td></tr><tr data-status='yaml_on_gui_off'><td><code>missing_tile_side / missing_tile_index</code></td><td><span class='pill mismatch'>ON in yaml — OFF under GUI Default</span></td><td>choice(left|right); randint(0, n_pages)</td><td><code>missing_tile_mode</code></td><td class='muted'>opt1</td></tr><tr data-status='yaml_on_gui_off'><td><code>belt phase (discrete)</code></td><td><span class='pill mismatch'>ON in yaml — OFF under GUI Default</span></td><td>randint(0, 60) start delay</td><td><code>belt_continous_motion=false</code></td><td class='muted'>continuous phase=0</td></tr><tr data-status='always'><td><code>punch_model_id</code></td><td><span class='pill ok'>Effective now</span></td><td>choice(PUNCH_MODEL_IDS)</td><td><span class='muted'>—</span></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>per-page target offset</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>U(-0.012, 0.012) relative to punch center</td><td><span class='muted'>—</span></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>belt_speed (if min/max used)</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>U(belt_speed_min,max) when belt_speed unset</td><td><code>belt_speed / belt_speed_min/max, belt_continuous_speed_scale</code></td><td class='muted'>yml sets fixed belt_speed then ×1.6 when continuous</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>n_pages / punch_tol / belt_inward_reach / belt_outward_scale / tile_pause_s</code> — yml note: missing_tile_mode/belt_continous_motion currently true in yml; GUI overrides per scenario</li></ul>
+</article>
+
+<article id="save_goal" class="task" data-suite="basic" data-search="save_goal basic mirrored ball_speed ball_start_y launch_angle_deg players_enabled player_poses bounce_player_idx cover_enabled cover_len_placement random_mirror default both false — open field shot opt1 players_enabled=true — field players; ball bounces off one toward goal opt2 cover_enabled=true — mid-field tunnel/cover opt1+2 players + cover mirrored / travel_dir mirrored=null + random_mirror → 50/50 field flip goal_center_y u(mean±goal_center_y_jitter) ball_speed u(ball_speed×scale_min, ball_speed×scale_max) ball_start_y / launch_angle_deg start_y u(±ball_start_y_jitter); angle u(ball_angle_deg_min,max) until end in goal mouth player poses / bounce_player_idx players_max players with randomized x/y under separation constraints; bounce player randint cover_len / cover placement u(cover_len_min, max_spannable); random offset in mid region"
+  data-n-always="4" data-n-gated="5">
+  <header>
+    <h3><code>save_goal</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>4 effective now</span><span class='pill warn'>5 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>mirrored</code></li><li><code>ball_speed</code></li><li><code>ball_start_y</code></li><li><code>launch_angle_deg</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>players_enabled</code></li><li><code>player_poses</code></li><li><code>bounce_player_idx</code></li><li><code>cover_enabled</code></li><li><code>cover_len_placement</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>random_mirror</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>players_enabled</code>, <code>cover_enabled</code></td><td>both false — open field shot</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>players_enabled</code></td><td>players_enabled=true — field players; ball bounces off one toward goal</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>cover_enabled</code></td><td>cover_enabled=true — mid-field tunnel/cover</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>players_enabled</code>, <code>cover_enabled</code></td><td>players + cover</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>mirrored / travel_dir</code></td><td><span class='pill ok'>Effective now</span></td><td>mirrored=null + random_mirror → 50/50 field flip</td><td><code>mirrored, random_mirror</code></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>goal_center_y</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>U(mean±goal_center_y_jitter)</td><td><code>goal_center_y, goal_center_y_jitter</code></td><td class='muted'>yml jitter 0.0</td></tr><tr data-status='always'><td><code>ball_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>U(ball_speed×scale_min, ball_speed×scale_max)</td><td><code>ball_speed, ball_speed_scale_min/max</code></td><td class='muted'>±20%</td></tr><tr data-status='always'><td><code>ball_start_y / launch_angle_deg</code></td><td><span class='pill ok'>Effective now</span></td><td>start_y U(±ball_start_y_jitter); angle U(ball_angle_deg_min,max) until end in goal mouth</td><td><code>ball_start_y_jitter, ball_angle_deg_min/max</code></td><td class='muted'></td></tr><tr data-status='opt_off'><td><code>player poses / bounce_player_idx</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>players_max players with randomized x/y under separation constraints; bounce player randint</td><td><code>players_max, player_y_spread, player_separation, ...</code></td><td class='muted'>opt1</td></tr><tr data-status='opt_off'><td><code>cover_len / cover placement</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>U(cover_len_min, max_spannable); random offset in mid region</td><td><code>cover_len_min, cover_entry_gap, cover_exit_gap_frac, ...</code></td><td class='muted'>opt2</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>goal_x / keeper_x / red_line_x / green_area_* / keeper_pose_tol</code> — field geometry</li><li><code>net_enabled / net_depth / net_cell</code> — visual net</li></ul>
+</article>
+
+<article id="hit_target" class="task" data-suite="basic" data-search="hit_target basic arm_side/dart_side target_speed sway_amp sway_period sway_dir sway_phase0 dart_spawn target_y blocker_enabled blocker_dynamic blocker_y_gap blocker_speed  default both false — swaying target only opt1 blocker_enabled=true — green static blocker at midline opt2 blocker_dynamic=true — red disc sways opposite phase opt1+2 both discs; red dual_blocker_gap in front of green arm_side / dart_side arm_side=null → choice(±1); left=−x, right=+x blocker_y_gap u(blocker_y_gap_min, blocker_y_gap_max) target_speed / blocker_speed base × u(1±speed_jitter_frac) sway_amp / sway_period / sway_dir / sway_phase0 amp×u(0.7,1.0); period×u(0.85,1.25); dir ±1; phase u(0,2π); dyn phase ≈π±u(0.35) dart spawn / target_y dart_x=side×u(0.10,0.22); dart_y u(-0.12,-0.04); target_y += u(-0.02,0.02)"
+  data-n-always="8" data-n-gated="4">
+  <header>
+    <h3><code>hit_target</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>8 effective now</span><span class='pill warn'>4 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>arm_side/dart_side</code></li><li><code>target_speed</code></li><li><code>sway_amp</code></li><li><code>sway_period</code></li><li><code>sway_dir</code></li><li><code>sway_phase0</code></li><li><code>dart_spawn</code></li><li><code>target_y</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>blocker_enabled</code></li><li><code>blocker_dynamic</code></li><li><code>blocker_y_gap</code></li><li><code>blocker_speed</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>blocker_enabled</code>, <code>blocker_dynamic</code></td><td>both false — swaying target only</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>blocker_enabled</code></td><td>blocker_enabled=true — green static blocker at midline</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>blocker_dynamic</code></td><td>blocker_dynamic=true — red disc sways opposite phase</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>blocker_enabled</code>, <code>blocker_dynamic</code></td><td>both discs; red dual_blocker_gap in front of green</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>arm_side / dart_side</code></td><td><span class='pill ok'>Effective now</span></td><td>arm_side=null → choice(±1); left=−x, right=+x</td><td><code>arm_side</code></td><td class='muted'></td></tr><tr data-status='opt_off'><td><code>blocker_y_gap</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>U(blocker_y_gap_min, blocker_y_gap_max)</td><td><code>blocker_y_gap_min, blocker_y_gap_max</code></td><td class='muted'>when blockers on</td></tr><tr data-status='opt_off'><td><code>target_speed / blocker_speed</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>base × U(1±speed_jitter_frac)</td><td><code>target_speed, blocker_speed, speed_jitter_frac</code></td><td class='muted'>±20%</td></tr><tr data-status='always'><td><code>sway_amp / sway_period / sway_dir / sway_phase0</code></td><td><span class='pill ok'>Effective now</span></td><td>amp×U(0.7,1.0); period×U(0.85,1.25); dir ±1; phase U(0,2π); dyn phase ≈π±U(0.35)</td><td><code>sway_amp, sway_period</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>dart spawn / target_y</code></td><td><span class='pill ok'>Effective now</span></td><td>dart_x=side×U(0.10,0.22); dart_y U(-0.12,-0.04); target_y += U(-0.02,0.02)</td><td><code>target_y_offset</code></td><td class='muted'></td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>board_half_size / center_half_size / blocker_radius / dual_blocker_gap</code> — sizes</li><li><code>motion_x_min / motion_x_max / blocker_z_offset</code> — path clamps; z_offset must stay 0</li></ul>
+</article>
+
+<article id="load_train" class="task" data-suite="basic" data-search="load_train basic train_omega train_dir ball_side ball_pose target_wagon_mode target_wagon_idx tunnel_enabled tunnel_n_wagons tunnel_center_angle  default any open wagon succeeds; no tunnel opt1 target_wagon_mode=true — one random red target wagon; others gray; must drop in red opt2 tunnel_enabled=true — arched back-arc tunnel (or tunnel_enabled=random → bernoulli(tunnel_prob)) opt1+2 red target + tunnel train_omega / train_dir signed: ±u(train_omega_min, train_omega_max) ball_side / ball pose ball_side=random → l/r; |x| u(ball_lateral_min,max); y ±ball_y_jitter target_wagon_idx choice among cargo wagon indices tunnel_present / tunnel length / center if tunnel_enabled=random: p(tunnel_prob); n_wagons u(min,max); center π/2 ± tunnel_center_jitter n_wagons (optional range) if n_wagons_min/max set: randint; else fixed n_wagons"
+  data-n-always="4" data-n-gated="5">
+  <header>
+    <h3><code>load_train</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>4 effective now</span><span class='pill warn'>5 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>train_omega</code></li><li><code>train_dir</code></li><li><code>ball_side</code></li><li><code>ball_pose</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>target_wagon_mode</code></li><li><code>target_wagon_idx</code></li><li><code>tunnel_enabled</code></li><li><code>tunnel_n_wagons</code></li><li><code>tunnel_center_angle</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>target_wagon_mode</code>, <code>tunnel_enabled</code></td><td>any open wagon succeeds; no tunnel</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>target_wagon_mode</code></td><td>target_wagon_mode=true — one random red target wagon; others gray; must drop in red</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>tunnel_enabled</code></td><td>tunnel_enabled=true — arched back-arc tunnel (or tunnel_enabled=random → Bernoulli(tunnel_prob))</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>target_wagon_mode</code>, <code>tunnel_enabled</code></td><td>red target + tunnel</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>train_omega / train_dir</code></td><td><span class='pill ok'>Effective now</span></td><td>signed: ±U(train_omega_min, train_omega_max)</td><td><code>train_omega_min, train_omega_max</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>ball_side / ball pose</code></td><td><span class='pill ok'>Effective now</span></td><td>ball_side=random → L/R; |x| U(ball_lateral_min,max); y ±ball_y_jitter</td><td><code>ball_side, ball_lateral_min/max, ball_y_jitter</code></td><td class='muted'></td></tr><tr data-status='opt_off'><td><code>target_wagon_idx</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>choice among cargo wagon indices</td><td><code>target_wagon_mode</code></td><td class='muted'>opt1</td></tr><tr data-status='opt_off'><td><code>tunnel_present / tunnel length / center</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>if tunnel_enabled=random: P(tunnel_prob); n_wagons U(min,max); center π/2 ± tunnel_center_jitter</td><td><code>tunnel_enabled, tunnel_prob, tunnel_n_wagons_min/max, tunnel_center_jitter</code></td><td class='muted'>opt2</td></tr><tr data-status='unknown'><td><code>n_wagons (optional range)</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>if n_wagons_min/max set: randint; else fixed n_wagons</td><td><code>n_wagons</code></td><td class='muted'>yml fixed 3</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>rail_radius / car_* / catch_radius / align_tol / release_*</code> — train/wagon geometry and drop tolerances</li></ul>
+</article>
+
+<article id="marble_shelf_maze" class="task" data-suite="basic" data-search="marble_shelf_maze basic shelf_offsets level_gaps bowl_side continuous_ball_motion oscillating_bowl_enabled bowl_phase0  default both false — snap marble to shelf centre after each drop; static bowl opt1 continuous_ball_motion=true — keep real dynamics after landing (alias natural_ball_stop) opt2 oscillating_bowl_enabled=true — bowl sweeps l↔r opt1+2 both true n_shelves randint(n_shelves_min,max) if range set; else fixed n_shelves (yml fixed 4) shelf zig-zag offsets alternating signs from random s0; |offset| u(offset_min,offset_max) from overlap_min/max level_gaps each gap × u(1±level_gap_jitter) then renormalized to sum bowl_phase0 / bowl_side opt2: phase u(0,2π); else bowl_side choice(left|right)"
+  data-n-always="3" data-n-gated="3">
+  <header>
+    <h3><code>marble_shelf_maze</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>3 effective now</span><span class='pill warn'>3 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>shelf_offsets</code></li><li><code>level_gaps</code></li><li><code>bowl_side</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>continuous_ball_motion</code></li><li><code>oscillating_bowl_enabled</code></li><li><code>bowl_phase0</code></li></ul>
+    </div>
+  </div>
+<p class='muted small'>yml pins n_shelves=4 (not randomized); bowl_phase0 only when oscillating_bowl_enabled</p>
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>continuous_ball_motion</code>, <code>oscillating_bowl_enabled</code></td><td>both false — snap marble to shelf centre after each drop; static bowl</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>continuous_ball_motion</code></td><td>continuous_ball_motion=true — keep real dynamics after landing (alias natural_ball_stop)</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>oscillating_bowl_enabled</code></td><td>oscillating_bowl_enabled=true — bowl sweeps L↔R</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>continuous_ball_motion</code>, <code>oscillating_bowl_enabled</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='unknown'><td><code>n_shelves</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint(n_shelves_min,max) if range set; else fixed n_shelves (yml fixed 4)</td><td><code>n_shelves, n_shelves_min/max</code></td><td class='muted'>hard max 6</td></tr><tr data-status='unknown'><td><code>shelf zig-zag offsets</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>alternating signs from random s0; |offset| U(offset_min,offset_max) from overlap_min/max</td><td><code>overlap_min, overlap_max</code></td><td class='muted'>re-centered to x=0</td></tr><tr data-status='always'><td><code>level_gaps</code></td><td><span class='pill ok'>Effective now</span></td><td>each gap × U(1±level_gap_jitter) then renormalized to sum</td><td><code>level_gap, level_gap_jitter, min_level_gap</code></td><td class='muted'>yml jitter 0.35</td></tr><tr data-status='opt_off'><td><code>bowl_phase0 / bowl_side</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>opt2: phase U(0,2π); else bowl_side choice(left|right)</td><td><code>oscillating_bowl_period</code></td><td class='muted'></td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>continuous_ball_speed_scale / continuous_tilt_duration_scale</code> — opt1 motion scaling</li><li><code>tilt_angle_deg / tilt_duration_sec / roll_off_speed / bowl_catch_radius</code> — tilt / catch</li><li><code>button_x / press_hold_steps</code> — control buttons</li></ul>
+</article>
+
+<article id="pack_fruits" class="task" data-suite="basic" data-search="pack_fruits basic belt_speed_left belt_speed_right item_type_order wave_spawn_random pair_stagger_y single_wave_belt basket_id distractor_enabled distractor_spawn spawn_mode=random pair_stagger_enabled single_wave_any_belt default spawn_mode=parallel; stagger/single_wave_any_belt false; no distractor opt1 spawn_mode=random + pair_stagger_enabled + single_wave_any_belt — single|pair waves, either belt for singles opt2 distractor_enabled=true — black distractor fruit with distractor_prob opt1+2 random waves + distractor belt_speed left/right each ep: nominal × u(1±belt_speed_jitter) per belt item type order / sides shuffle fruit types; may assign random sides wave spawn (random mode) bernoulli pair vs single; pair stagger u(0, fruit_diameter); leading side random; single may pick either belt distractor spawn per wave p(distractor_prob); y gap ≥ distractor_min_gap_mult × diameter basket_id choice({0..4})"
+  data-n-always="7" data-n-gated="2">
+  <header>
+    <h3><code>pack_fruits</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>7 effective now</span><span class='pill warn'>2 Opt/gate off</span><span class='pill mismatch'>3 yaml≠GUI</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>belt_speed_left</code></li><li><code>belt_speed_right</code></li><li><code>item_type_order</code></li><li><code>wave_spawn_random</code></li><li><code>pair_stagger_y</code></li><li><code>single_wave_belt</code></li><li><code>basket_id</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>distractor_enabled</code></li><li><code>distractor_spawn</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>spawn_mode=random</code> <code>pair_stagger_enabled</code> <code>single_wave_any_belt</code></p>
+
+  <p class="small"><span class="pill mismatch">Yaml ON → GUI Default forces OFF</span>
+  <code>spawn_mode→parallel</code> <code>pair_stagger_enabled</code> <code>single_wave_any_belt</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>spawn_mode</code>, <code>pair_stagger_enabled</code>, <code>single_wave_any_belt</code>, <code>distractor_enabled</code></td><td>spawn_mode=parallel; stagger/single_wave_any_belt false; no distractor</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>spawn_mode</code>, <code>pair_stagger_enabled</code>, <code>single_wave_any_belt</code></td><td>spawn_mode=random + pair_stagger_enabled + single_wave_any_belt — single|pair waves, either belt for singles</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>distractor_enabled</code></td><td>distractor_enabled=true — black distractor fruit with distractor_prob</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>spawn_mode</code>, <code>pair_stagger_enabled</code>, <code>single_wave_any_belt</code>, <code>distractor_enabled</code></td><td>random waves + distractor</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>belt_speed left/right</code></td><td><span class='pill ok'>Effective now</span></td><td>each ep: nominal × U(1±belt_speed_jitter) per belt</td><td><code>belt_speed, belt_speed_jitter, belt_speed_left/right</code></td><td class='muted'>±20%</td></tr><tr data-status='unknown'><td><code>item type order / sides</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>shuffle fruit types; may assign random sides</td><td><code>n_per_color / n_apple / n_orange</code></td><td class='muted'></td></tr><tr data-status='yaml_on_gui_off'><td><code>wave spawn (random mode)</code></td><td><span class='pill mismatch'>ON in yaml — OFF under GUI Default</span></td><td>Bernoulli pair vs single; pair stagger U(0, fruit_diameter); leading side random; single may pick either belt</td><td><code>spawn_mode, pair_stagger_enabled, single_wave_any_belt</code></td><td class='muted'>opt1</td></tr><tr data-status='opt_off'><td><code>distractor spawn</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>per wave P(distractor_prob); Y gap ≥ distractor_min_gap_mult × diameter</td><td><code>distractor_prob, distractor_color, distractor_min_gap_mult</code></td><td class='muted'>opt2</td></tr><tr data-status='always'><td><code>basket_id</code></td><td><span class='pill ok'>Effective now</span></td><td>choice({0..4})</td><td><code>basket_scale, basket_x, basket_y</code></td><td class='muted'>asset variant</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>belt_gap / spawn_gap / pick_y / pick_y_end / pick_station_y / fruit_scale / pick_lift</code> — belt layout and grasp</li><li><code>note</code> — yml currently spawn_mode=random with stagger flags true; GUI default forces parallel/off</li></ul>
+</article>
+
+<article id="pick_ripe_apple" class="task" data-suite="basic" data-search="pick_ripe_apple basic red_window good_side high_branch_side hang_x basket_id two_apples_enabled basket_move_enabled basket_speed  default single good apple; static basket opt1 two_apples_enabled=true (alias spoiled_apple_enabled) — second yellow→black spoiled apple opt2 basket_move_enabled=true — basket oscillates between branch-tip x bounds opt1+2 both true red_window u(red_window_min, red_window_max) good_side / apple_side random|left|right → ±1 high_branch_side random|left|right which side gets branch_z_high hang_x tip − side × u(0, apple_x_jitter) per spawned side basket_speed / basket_dir u(basket_speed_min,max); dir ±1 basket_id choice({0..4})"
+  data-n-always="5" data-n-gated="3">
+  <header>
+    <h3><code>pick_ripe_apple</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>5 effective now</span><span class='pill warn'>3 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>red_window</code></li><li><code>good_side</code></li><li><code>high_branch_side</code></li><li><code>hang_x</code></li><li><code>basket_id</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>two_apples_enabled</code></li><li><code>basket_move_enabled</code></li><li><code>basket_speed</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>two_apples_enabled</code>, <code>basket_move_enabled</code></td><td>single good apple; static basket</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>two_apples_enabled</code></td><td>two_apples_enabled=true (alias spoiled_apple_enabled) — second yellow→black spoiled apple</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>basket_move_enabled</code></td><td>basket_move_enabled=true — basket oscillates between branch-tip X bounds</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>two_apples_enabled</code>, <code>basket_move_enabled</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>red_window</code></td><td><span class='pill ok'>Effective now</span></td><td>U(red_window_min, red_window_max)</td><td><code>red_window_min, red_window_max, red_tolerance</code></td><td class='muted'>ripeness target band</td></tr><tr data-status='always'><td><code>good_side / apple_side</code></td><td><span class='pill ok'>Effective now</span></td><td>random|left|right → ±1</td><td><code>good_side, apple_side</code></td><td class='muted'>which apple is pickable</td></tr><tr data-status='always'><td><code>high_branch_side</code></td><td><span class='pill ok'>Effective now</span></td><td>random|left|right which side gets branch_z_high</td><td><code>high_branch_side, branch_z_high, branch_z_low</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>hang_x</code></td><td><span class='pill ok'>Effective now</span></td><td>tip − side × U(0, apple_x_jitter) per spawned side</td><td><code>apple_hang_dx, apple_x_jitter</code></td><td class='muted'>stem+apple coupled</td></tr><tr data-status='opt_off'><td><code>basket_speed / basket_dir</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>U(basket_speed_min,max); dir ±1</td><td><code>basket_speed_min, basket_speed_max</code></td><td class='muted'>opt2</td></tr><tr data-status='always'><td><code>basket_id</code></td><td><span class='pill ok'>Effective now</span></td><td>choice({0..4})</td><td><code>basket_scale</code></td><td class='muted'></td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>ripen_steps / tree_x / tree_y / basket_x / basket_y / trunk_height / apple_scale_mult</code> — layout &amp; ripen duration</li></ul>
+</article>
+
+<article id="place_block_belt" class="task" data-suite="basic" data-search="place_block_belt basic belt_speed bowl_move_speed belt_mirrored block_half_h block_mass block_xy bowl_y bowl_id bowl_move_dir blocker_enabled blocker_length blocker_half_x blocker_x blocker_flush_side bowl_move_enabled random_belt_flip default gui: both false (yml alone has bowl_move_enabled=true) opt1 bowl_move_enabled=true — bowl oscillates along full belt y opt2 blocker_enabled=true — red rod on belt; place in clear y-lane opt1+2 moving bowl + blocker belt_speed / bowl_move_speed each × u(1±speed_jitter_frac) belt_mirrored if random_belt_flip: bernoulli(0.5) mirror about x=0 block_half_h / block_mass half_h ×u(0.9,1.1); mass ×u(0.8,1.2) block_x / block_y x in clearance band; y = belt_y ± u(block_y_jitter) bowl_y / bowl_id / bowl_move_dir y u(lane); id choice(1..7); dir ±1 blocker length/thickness/x/flush length frac u(min,max); half_x ×u(1±blocker_half_x_jitter_frac); x u in clearance; flush side bernoulli"
+  data-n-always="9" data-n-gated="5">
+  <header>
+    <h3><code>place_block_belt</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>9 effective now</span><span class='pill warn'>5 Opt/gate off</span><span class='pill mismatch'>1 yaml≠GUI</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>belt_speed</code></li><li><code>bowl_move_speed</code></li><li><code>belt_mirrored</code></li><li><code>block_half_h</code></li><li><code>block_mass</code></li><li><code>block_xy</code></li><li><code>bowl_y</code></li><li><code>bowl_id</code></li><li><code>bowl_move_dir</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>blocker_enabled</code></li><li><code>blocker_length</code></li><li><code>blocker_half_x</code></li><li><code>blocker_x</code></li><li><code>blocker_flush_side</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>bowl_move_enabled</code> <code>random_belt_flip</code></p>
+
+  <p class="small"><span class="pill mismatch">Yaml ON → GUI Default forces OFF</span>
+  <code>bowl_move_enabled</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>bowl_move_enabled</code>, <code>blocker_enabled</code></td><td>GUI: both false (yml alone has bowl_move_enabled=true)</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>bowl_move_enabled</code></td><td>bowl_move_enabled=true — bowl oscillates along full belt y</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>blocker_enabled</code></td><td>blocker_enabled=true — red rod on belt; place in clear y-lane</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>bowl_move_enabled</code>, <code>blocker_enabled</code></td><td>moving bowl + blocker</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>belt_speed / bowl_move_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>each × U(1±speed_jitter_frac)</td><td><code>belt_speed, bowl_move_speed, speed_jitter_frac</code></td><td class='muted'>±20%</td></tr><tr data-status='always'><td><code>belt_mirrored</code></td><td><span class='pill ok'>Effective now</span></td><td>if random_belt_flip: Bernoulli(0.5) mirror about x=0</td><td><code>random_belt_flip</code></td><td class='muted'>yml true</td></tr><tr data-status='always'><td><code>block_half_h / block_mass</code></td><td><span class='pill ok'>Effective now</span></td><td>half_h ×U(0.9,1.1); mass ×U(0.8,1.2)</td><td><span class='muted'>—</span></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>block_x / block_y</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>x in clearance band; y = belt_y ± U(block_y_jitter)</td><td><code>block_y_jitter, block_belt_clearance</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>bowl_y / bowl_id / bowl_move_dir</code></td><td><span class='pill ok'>Effective now</span></td><td>y U(lane); id choice(1..7); dir ±1</td><td><span class='muted'>—</span></td><td class='muted'></td></tr><tr data-status='opt_off'><td><code>blocker length/thickness/x/flush</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>length frac U(min,max); half_x ×U(1±blocker_half_x_jitter_frac); x U in clearance; flush side Bernoulli</td><td><code>blocker_length_frac_min/max, blocker_half_x, blocker_half_x_jitter_frac, blocker_start_clearance</code></td><td class='muted'>opt2</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>place_line_offset / theta_max_deg / belt_ride_steps</code> — success / scoring</li></ul>
+</article>
+
+<article id="play_billiard" class="task" data-suite="basic" data-search="play_billiard basic target_pocket_id blocked_pocket_id arm_side primary_ball_xy num_extra_balls distractor_ball_poses cue_y  specific_hole enable_distractors default both false — red ball; any of 6 pockets ok opt1 specific_hole=true — one random top pocket (l/m/r) + yellow arrow opt2 enable_distractors=true — 1–2 colored distractor balls opt1+2 distractors block exactly one top hole; target = random open top pocket num_extra_balls if num_extra_balls≤0: randint(1,2); else clip to 1–2 target_pocket_id / blocked_pocket_id opt1: choice(top_pocket_ids); opt1+2: block one top, target another open arm_side / primary ball xy l/r 50/50; x in half-table band; y = table_cy ±u(0.05) distractor ball poses path/unused_tops placement with lateral/fraction jitter cue_y table_cy ± u(0.04)"
+  data-n-always="7" data-n-gated="0">
+  <header>
+    <h3><code>play_billiard</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>7 effective now</span><span class='pill warn'>0 Opt/gate off</span><span class='pill mismatch'>2 yaml≠GUI</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>target_pocket_id</code></li><li><code>blocked_pocket_id</code></li><li><code>arm_side</code></li><li><code>primary_ball_xy</code></li><li><code>num_extra_balls</code></li><li><code>distractor_ball_poses</code></li><li><code>cue_y</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>specific_hole</code> <code>enable_distractors</code></p>
+
+  <p class="small"><span class="pill mismatch">Yaml ON → GUI Default forces OFF</span>
+  <code>specific_hole</code> <code>enable_distractors</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>specific_hole</code>, <code>enable_distractors</code></td><td>both false — red ball; any of 6 pockets OK</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>specific_hole</code></td><td>specific_hole=true — one random top pocket (L/M/R) + yellow arrow</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>enable_distractors</code></td><td>enable_distractors=true — 1–2 colored distractor balls</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>specific_hole</code>, <code>enable_distractors</code></td><td>distractors block exactly one top hole; target = random open top pocket</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>num_extra_balls</code></td><td><span class='pill ok'>Effective now</span></td><td>if num_extra_balls≤0: randint(1,2); else clip to 1–2</td><td><code>num_extra_balls</code></td><td class='muted'>opt2; yml=2</td></tr><tr data-status='yaml_on_gui_off'><td><code>target_pocket_id / blocked_pocket_id</code></td><td><span class='pill mismatch'>ON in yaml — OFF under GUI Default</span></td><td>opt1: choice(TOP_POCKET_IDS); opt1+2: block one top, target another open</td><td><code>specific_hole, target_pocket</code></td><td class='muted'>target_pocket can force</td></tr><tr data-status='always'><td><code>arm_side / primary ball xy</code></td><td><span class='pill ok'>Effective now</span></td><td>L/R 50/50; x in half-table band; y = table_cy ±U(0.05)</td><td><span class='muted'>—</span></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>distractor ball poses</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>path/unused_tops placement with lateral/fraction jitter</td><td><code>blocker_mode</code></td><td class='muted'>opt2</td></tr><tr data-status='always'><td><code>cue_y</code></td><td><span class='pill ok'>Effective now</span></td><td>table_cy ± U(0.04)</td><td><span class='muted'>—</span></td><td class='muted'></td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>ball_radius / table_cx/cy / table_half_len/wid / settle_steps / strike_impulse</code> — yml currently specific_hole=True and enable_distractors=True; GUI default forces false/false</li></ul>
+</article>
+
+<article id="control_quality" class="task" data-suite="basic" data-search="control_quality basic alternating_first_color tile_gaps belt_speed color_mode=random black_frac_max spacing_mode=random default color_mode=alternating; black_frac_max=0 — no black distractor tiles opt1 color_mode=random — per-tile red/green independent opt2 black_frac_max=0.5 — randomly blacken up to floor(n*frac) tiles (≥1 when n≥2) opt1+2 random colors + black tiles tile colors alternating: random first color then alternate; random: each tile choice(red|green); then blacken n_black∈[1,max] if black_frac_max&gt;0 tile gaps (spacing_mode=random) u(spacing_min, spacing_max) between tiles belt_speed if unset: belt_speed_default×u(0.8,1.25); else config value"
+  data-n-always="3" data-n-gated="2">
+  <header>
+    <h3><code>control_quality</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>3 effective now</span><span class='pill warn'>2 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>alternating_first_color</code></li><li><code>tile_gaps</code></li><li><code>belt_speed</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>color_mode=random</code></li><li><code>black_frac_max</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>spacing_mode=random</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>color_mode</code>, <code>black_frac_max</code></td><td>color_mode=alternating; black_frac_max=0 — no black distractor tiles</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>color_mode</code></td><td>color_mode=random — per-tile red/green independent</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>black_frac_max</code></td><td>black_frac_max=0.5 — randomly blacken up to floor(n*frac) tiles (≥1 when n≥2)</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>color_mode</code>, <code>black_frac_max</code></td><td>random colors + black tiles</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='opt_off'><td><code>tile colors</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>alternating: random first color then alternate; random: each tile choice(red|green); then blacken n_black∈[1,max] if black_frac_max&gt;0</td><td><code>color_mode, black_frac_max</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>tile gaps (spacing_mode=random)</code></td><td><span class='pill ok'>Effective now</span></td><td>U(spacing_min, spacing_max) between tiles</td><td><code>spacing_mode, spacing_min, spacing_max, tile_spacing</code></td><td class='muted'>yml spacing_mode=random</td></tr><tr data-status='always'><td><code>belt_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>if unset: BELT_SPEED_DEFAULT×U(0.8,1.25); else config value</td><td><code>belt_speed</code></td><td class='muted'>not in yml → default×jitter</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>n_tiles / tile_pause_s</code> — count and max hold under stamp</li></ul>
+</article>
+
+<article id="drop_ball_hole" class="task" data-suite="basic" data-search="drop_ball_hole basic spin_dir spin_speed_sampled ball_side ball_spawn target_hole_xy dummy_hole_xy stick_to_surface add_dummy_hole default gui: both false opt1 stick_to_surface=true — latch/fail if ball lands off real hole opt2 add_dummy_hole=true — opposite-corner decoy hole (slightly smaller than ball) opt1+2 both true spin_dir / spin_speed_sampled dir ±1; speed u(spin_speed×(1±spin_speed_jitter)) or absolute min/max ball_side / ball spawn ball_side=random → l/r; x/y ±ball_x_jitter / ball_y_jitter target / dummy hole local xy corner-biased centers with ±hole_xy_jitter (and small angle jitter for cylinder)"
+  data-n-always="6" data-n-gated="1">
+  <header>
+    <h3><code>drop_ball_hole</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>6 effective now</span><span class='pill warn'>1 Opt/gate off</span><span class='pill mismatch'>1 yaml≠GUI</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>spin_dir</code></li><li><code>spin_speed_sampled</code></li><li><code>ball_side</code></li><li><code>ball_spawn</code></li><li><code>target_hole_xy</code></li><li><code>dummy_hole_xy</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>stick_to_surface</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>add_dummy_hole</code></p>
+
+  <p class="small"><span class="pill mismatch">Yaml ON → GUI Default forces OFF</span>
+  <code>add_dummy_hole</code></p>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>stick_to_surface</code>, <code>add_dummy_hole</code></td><td>GUI: both false</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>stick_to_surface</code></td><td>stick_to_surface=true — latch/fail if ball lands off real hole</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>add_dummy_hole</code></td><td>add_dummy_hole=true — opposite-corner decoy hole (slightly smaller than ball)</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>stick_to_surface</code>, <code>add_dummy_hole</code></td><td>both true</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>spin_dir / spin_speed_sampled</code></td><td><span class='pill ok'>Effective now</span></td><td>dir ±1; speed U(spin_speed×(1±spin_speed_jitter)) or absolute min/max</td><td><code>spin_speed, spin_speed_jitter, spin_speed_min/max</code></td><td class='muted'>±20%</td></tr><tr data-status='always'><td><code>ball_side / ball spawn</code></td><td><span class='pill ok'>Effective now</span></td><td>ball_side=random → L/R; x/y ±ball_x_jitter / ball_y_jitter</td><td><code>ball_side, ball_x_jitter, ball_y_jitter</code></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>target / dummy hole local xy</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>corner-biased centers with ±hole_xy_jitter (and small angle jitter for cylinder)</td><td><code>hole_xy_jitter, container_shape, cylinder_hole_*</code></td><td class='muted'>dummy only if add_dummy_hole</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>container_shape / stick_* / dummy_hole_radius_frac / dummy_hole_nest_depth / force_platform_miss</code> — yml add_dummy_hole currently true; GUI default forces false</li><li><code>ball_color</code> — fixed red in yml</li></ul>
+</article>
+
+<article id="sort_apples_belt" class="task" data-suite="basic" data-search="sort_apples_belt basic belt_speed green_on_left alternating_first_color basket_id color_mode=random rotten_prob rotten_idx  default color_mode=alternating; rotten_prob=0 opt1 color_mode=random — independent red/green per apple opt2 rotten_prob=0.3 — with p, one random apple is brown/rotten + dump bin opt1+2 random colors + rotten chance n_apples randint(n_apples_min, n_apples_max) belt_speed u(belt_speed_min, belt_speed_max) × belt_speed_scale green_on_left bernoulli(0.5) basket side mapping apple colors alternating: random first then alternate; random: each bernoulli rotten index if enabled and u()&lt;rotten_prob: randint apple index brown basket_id choice(basket_instance_ids)"
+  data-n-always="4" data-n-gated="3">
+  <header>
+    <h3><code>sort_apples_belt</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>4 effective now</span><span class='pill warn'>3 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>belt_speed</code></li><li><code>green_on_left</code></li><li><code>alternating_first_color</code></li><li><code>basket_id</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>color_mode=random</code></li><li><code>rotten_prob</code></li><li><code>rotten_idx</code></li></ul>
+    </div>
+  </div>
+<p class='muted small'>n_apples_min=max=4 → count fixed; alternating still flips start color</p>
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>color_mode</code>, <code>rotten_prob</code></td><td>color_mode=alternating; rotten_prob=0</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>color_mode</code></td><td>color_mode=random — independent red/green per apple</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>rotten_prob</code></td><td>rotten_prob=0.3 — with P, one random apple is brown/rotten + dump bin</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>color_mode</code>, <code>rotten_prob</code></td><td>random colors + rotten chance</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='unknown'><td><code>n_apples</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint(n_apples_min, n_apples_max)</td><td><code>n_apples_min, n_apples_max</code></td><td class='muted'>yml both 4 → fixed 4</td></tr><tr data-status='always'><td><code>belt_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>U(belt_speed_min, belt_speed_max) × belt_speed_scale</td><td><code>belt_speed_min, belt_speed_max, belt_speed_scale</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>green_on_left</code></td><td><span class='pill ok'>Effective now</span></td><td>Bernoulli(0.5) basket side mapping</td><td><span class='muted'>—</span></td><td class='muted'></td></tr><tr data-status='opt_off'><td><code>apple colors</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>alternating: random first then alternate; random: each Bernoulli</td><td><code>color_mode</code></td><td class='muted'></td></tr><tr data-status='opt_off'><td><code>rotten index</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>if enabled and U()&lt;rotten_prob: randint apple index brown</td><td><code>rotten_prob</code></td><td class='muted'>opt2</td></tr><tr data-status='always'><td><code>basket_id</code></td><td><span class='pill ok'>Effective now</span></td><td>choice(BASKET_INSTANCE_IDS)</td><td><span class='muted'>—</span></td><td class='muted'></td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>advance_every / gate_center_y / gate_default_left</code> — belt tick and diverter</li></ul>
+</article>
+
+<article id="whack_moles" class="task" data-suite="basic" data-search="whack_moles basic board_center_y mole_hole_assignment mole_pop_speed whack_schedule distractor_enabled rabbit_holes relocating_moles relocate_hole  default both false — fixed-hole moles only opt1 distractor_enabled=true — rabbit distractor(s); touching fails opt2 relocating_moles=true — moles reappear from a free hole after going down opt1+2 rabbits + relocating moles board_center_y u(0, 0.05) mole/rabbit hole assignment _assign_holes: shuffled l/r preference then leftovers mole_pop_speed per mole u(pop_speed×(1−mole_speed_spread), pop_speed) whack schedule shuffle mole order; hard mode pairs opposite non-adjacent holes relocate hole opt2: randint among free holes (prefer ≠ old)"
+  data-n-always="4" data-n-gated="4">
+  <header>
+    <h3><code>whack_moles</code></h3>
+    <div>
+      <span class="pill basic">basic</span>
+      <span class='pill ok'>4 effective now</span><span class='pill warn'>4 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>board_center_y</code></li><li><code>mole_hole_assignment</code></li><li><code>mole_pop_speed</code></li><li><code>whack_schedule</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>distractor_enabled</code></li><li><code>rabbit_holes</code></li><li><code>relocating_moles</code></li><li><code>relocate_hole</code></li></ul>
+    </div>
+  </div>
+
+  <h4>Scenario options (GUI)</h4><table><thead><tr><th>Scenario</th><th>Config keys</th><th>Effect</th></tr></thead><tbody><tr><td><span class='pill opt'>default</span></td><td><code>distractor_enabled</code>, <code>relocating_moles</code></td><td>both false — fixed-hole moles only</td></tr><tr><td><span class='pill opt'>opt1</span></td><td><code>distractor_enabled</code></td><td>distractor_enabled=true — rabbit distractor(s); touching fails</td></tr><tr><td><span class='pill opt'>opt2</span></td><td><code>relocating_moles</code></td><td>relocating_moles=true — moles reappear from a free hole after going down</td></tr><tr><td><span class='pill opt'>opt1+2</span></td><td><code>distractor_enabled</code>, <code>relocating_moles</code></td><td>rabbits + relocating moles</td></tr></tbody></table>
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>board_center_y</code></td><td><span class='pill ok'>Effective now</span></td><td>U(0, 0.05)</td><td><span class='muted'>—</span></td><td class='muted'></td></tr><tr data-status='unknown'><td><code>mole/rabbit hole assignment</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>_assign_holes: shuffled L/R preference then leftovers</td><td><code>num_moles, num_distractors</code></td><td class='muted'></td></tr><tr data-status='always'><td><code>mole_pop_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>per mole U(pop_speed×(1−mole_speed_spread), pop_speed)</td><td><code>pop_speed, mole_speed_spread</code></td><td class='muted'>yml spread 0.40 → [60%,100%]</td></tr><tr data-status='unknown'><td><code>whack schedule</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>shuffle mole order; hard mode pairs opposite non-adjacent holes</td><td><code>difficulty</code></td><td class='muted'>yml difficulty=easy</td></tr><tr data-status='opt_off'><td><code>relocate hole</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>opt2: randint among free holes (prefer ≠ old)</td><td><code>relocating_moles</code></td><td class='muted'>runtime per mole cycle</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>pop_steps / press_commit_frac / strike_xy_tol / strike_attempts / hover_clearance</code> — bobbing / smash policy knobs</li></ul>
+</article>
+
+<article id="trap_bug" class="task" data-suite="household" data-search="trap_bug household bug_type run_side bug_spawn_x bug_speed emerge_target_y trap_xy  bug_type=random run_side=random  bug_type if bug_type=random (default), np.random.choice(bug_types) run_side if run_side=random: follow shelf x sign, else coin-flip ±1; trap/arm on same side bug_spawn_x shelf_x + run_sign * u(0.02,0.10), clipped bug_speed u(bug_speed_min, bug_speed_max) emerge_target_y spawn_y − u(0.10,0.16), clipped trap_xy x=run_sign*u(0.16,0.28); y=u(-0.18,-0.05)"
+  data-n-always="6" data-n-gated="0">
+  <header>
+    <h3><code>trap_bug</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>6 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>bug_type</code></li><li><code>run_side</code></li><li><code>bug_spawn_x</code></li><li><code>bug_speed</code></li><li><code>emerge_target_y</code></li><li><code>trap_xy</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>bug_type=random</code> <code>run_side=random</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>bug_type</code></td><td><span class='pill ok'>Effective now</span></td><td>if bug_type=random (default), np.random.choice(bug_types)</td><td><code>bug_type / bug_types</code></td><td class='muted'>pool default [cockroach, spider, ant]; also accepts species alias</td></tr><tr data-status='always'><td><code>run_side</code></td><td><span class='pill ok'>Effective now</span></td><td>if run_side=random: follow shelf X sign, else coin-flip ±1; trap/arm on same side</td><td><code>run_side</code></td><td class='muted'>left|right|random; sets arm_side</td></tr><tr data-status='always'><td><code>bug_spawn_x</code></td><td><span class='pill ok'>Effective now</span></td><td>shelf_x + run_sign * U(0.02,0.10), clipped</td><td><span class='muted'>—</span></td><td class='muted'>code-only; under bookshelf lip</td></tr><tr data-status='always'><td><code>bug_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>U(bug_speed_min, bug_speed_max)</td><td><code>bug_speed_min / bug_speed_max</code></td><td class='muted'>yaml 0.07–0.14 m/s; legacy roach_speed_* accepted</td></tr><tr data-status='always'><td><code>emerge_target_y</code></td><td><span class='pill ok'>Effective now</span></td><td>spawn_y − U(0.10,0.16), clipped</td><td><span class='muted'>—</span></td><td class='muted'>code-only emerge distance</td></tr><tr data-status='always'><td><code>trap_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>x=run_sign*U(0.16,0.28); y=U(-0.18,-0.05)</td><td><span class='muted'>—</span></td><td class='muted'>code-only trap start pose</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>emerge_steps</code> — yaml 40</li><li><code>walk_time</code> — yaml 15.0 s then hide/fail</li><li><code>trap_half / trap_wall / trap_mass / release_clearance</code> — trap geometry/mass from demo_dynamic.yml</li></ul>
+</article>
+
+<article id="boil_milk" class="task" data-suite="household" data-search="boil_milk household stove_side pot_burner target_ring milk_box_id mug_id milk_box_xy mug_xy milk_box_yaw mug_yaw  stove_side=random pot_burner=random milk_box_id=-1 mug_id=-1  stove_side if not left|right: randomstate(seed+17).choice([left,right]); mw on opposite side pot_burner if pot_burner=random: rng.choice among burner_names present target_ring base * (1 ± u(-j,j)) with j=target_ring_jitter; clip [0,100] milk_box_id if milk_box_id&lt;0: rng.randint(0,4) for 038_milk-box mug_id if mug_id&lt;0: rng.randint(0,10) for 039_mug milk_box_xy / mug_xy _sample_free_prop_xy on apron clear of mw/stove with mug_gap milk_box_yaw / mug_yaw u(-0.6,0.6) / u(-0.5,0.5)"
+  data-n-always="9" data-n-gated="0">
+  <header>
+    <h3><code>boil_milk</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>9 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>stove_side</code></li><li><code>pot_burner</code></li><li><code>target_ring</code></li><li><code>milk_box_id</code></li><li><code>mug_id</code></li><li><code>milk_box_xy</code></li><li><code>mug_xy</code></li><li><code>milk_box_yaw</code></li><li><code>mug_yaw</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>stove_side=random</code> <code>pot_burner=random</code> <code>milk_box_id=-1</code> <code>mug_id=-1</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>stove_side</code></td><td><span class='pill ok'>Effective now</span></td><td>if not left|right: RandomState(seed+17).choice([left,right]); MW on opposite side</td><td><code>stove_side</code></td><td class='muted'>uses range_x_left/right, microwave_x_left/right</td></tr><tr data-status='always'><td><code>pot_burner</code></td><td><span class='pill ok'>Effective now</span></td><td>if pot_burner=random: rng.choice among BURNER_NAMES present</td><td><code>pot_burner</code></td><td class='muted'>left_front|right_front|left_rear|right_rear|random</td></tr><tr data-status='always'><td><code>target_ring</code></td><td><span class='pill ok'>Effective now</span></td><td>base * (1 ± U(-j,j)) with j=target_ring_jitter; clip [0,100]</td><td><code>target_ring / target_ring_jitter</code></td><td class='muted'>yaml base 80, jitter 0.10 (±10%)</td></tr><tr data-status='always'><td><code>milk_box_id</code></td><td><span class='pill ok'>Effective now</span></td><td>if milk_box_id&lt;0: rng.randint(0,4) for 038_milk-box</td><td><code>milk_box_id</code></td><td class='muted'>yaml -1 = random</td></tr><tr data-status='always'><td><code>mug_id</code></td><td><span class='pill ok'>Effective now</span></td><td>if mug_id&lt;0: rng.randint(0,10) for 039_mug</td><td><code>mug_id</code></td><td class='muted'>demo_dynamic -1=random; demo_kitchens fixed 0</td></tr><tr data-status='always'><td><code>milk_box_xy / mug_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>_sample_free_prop_xy on apron clear of MW/stove with mug_gap</td><td><code>mug_gap</code></td><td class='muted'>seed+91; non-overlapping apron slots</td></tr><tr data-status='always'><td><code>milk_box_yaw / mug_yaw</code></td><td><span class='pill ok'>Effective now</span></td><td>U(-0.6,0.6) / U(-0.5,0.5)</td><td><span class='muted'>—</span></td><td class='muted'>code-only yaw jitter</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>scene_id</code> — yaml 0</li><li><code>boil_steps / settle_steps / baseline_level / shutoff_lead / overflow_level</code> — liquid dynamics; force_overflow optional fail demo</li><li><code>pot_radius / pot_height / handle_length / range_scale_mult / microwave_scale_mult / milk_box_height / mug_height</code> — geometry scales from yaml</li></ul>
+</article>
+
+<article id="fill_coffee_jar" class="task" data-suite="household" data-search="fill_coffee_jar household target_fill stove_side station_x disp_y jar_y coffee_box_id milk_box_id mug_id kettle_id kettle_burner kettle_yaw decor_xy_yaw  randomize_layout target_fill=random stove_side=random coffee_box_id=-1 milk_box_id=-1 mug_id=-1 kettle_id=-1 kettle_burner=random  target_fill if target_fill=random: choice among fill_levels (0.25,0.50,0.75) stove_side if not left|right: choice([left,right]); dispenser on opposite half station layout (station_x, disp_y, jar_y) when randomize_layout: u(station_x_*_lo/hi), u(disp_y±up/down), jar gap u(0.125,0.145) with clearance coffee_box_id / milk_box_id / mug_id if id&lt;0: rng.choice available variants; xy + yaw u(-0.6,0.6) aabb-clear kettle_id / kettle_burner / kettle_yaw if kettle_id&lt;0 / kettle_burner=random: choice; yaw u(-π,π)"
+  data-n-always="12" data-n-gated="0">
+  <header>
+    <h3><code>fill_coffee_jar</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>12 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>target_fill</code></li><li><code>stove_side</code></li><li><code>station_x</code></li><li><code>disp_y</code></li><li><code>jar_y</code></li><li><code>coffee_box_id</code></li><li><code>milk_box_id</code></li><li><code>mug_id</code></li><li><code>kettle_id</code></li><li><code>kettle_burner</code></li><li><code>kettle_yaw</code></li><li><code>decor_xy_yaw</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>randomize_layout</code> <code>target_fill=random</code> <code>stove_side=random</code> <code>coffee_box_id=-1</code> <code>milk_box_id=-1</code> <code>mug_id=-1</code> <code>kettle_id=-1</code> <code>kettle_burner=random</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>target_fill</code></td><td><span class='pill ok'>Effective now</span></td><td>if target_fill=random: choice among FILL_LEVELS (0.25,0.50,0.75)</td><td><code>target_fill</code></td><td class='muted'>yaml random; rng seed+202</td></tr><tr data-status='always'><td><code>stove_side</code></td><td><span class='pill ok'>Effective now</span></td><td>if not left|right: choice([left,right]); dispenser on opposite half</td><td><code>stove_side</code></td><td class='muted'>RandomState(seed+17)</td></tr><tr data-status='always'><td><code>station layout (station_x, disp_y, jar_y)</code></td><td><span class='pill ok'>Effective now</span></td><td>when randomize_layout: U(station_x_*_lo/hi), U(disp_y±up/down), jar gap U(0.125,0.145) with clearance</td><td><code>randomize_layout / station_x_* / disp_y / disp_y_up / disp_y_down / jar_y_min</code></td><td class='muted'>press-reliable band; seed+101</td></tr><tr data-status='always'><td><code>coffee_box_id / milk_box_id / mug_id</code></td><td><span class='pill ok'>Effective now</span></td><td>if id&lt;0: rng.choice available variants; XY + yaw U(-0.6,0.6) AABB-clear</td><td><code>coffee_box_id / milk_box_id / mug_id</code></td><td class='muted'>yaml -1; decor seed+303</td></tr><tr data-status='always'><td><code>kettle_id / kettle_burner / kettle_yaw</code></td><td><span class='pill ok'>Effective now</span></td><td>if kettle_id&lt;0 / kettle_burner=random: choice; yaw U(-π,π)</td><td><code>kettle_id / kettle_burner</code></td><td class='muted'>009_kettle on cooktop burner</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>beans_full / force_thresholds / beans_per_force_level / fill_tol / press_depths / press_sample_s</code> — force→beans dispense mapping; fill_tol ±0.05</li><li><code>force_stiffness / force_engage_slack / scene_id / range_xy</code> — button spring proxy and stove anchors</li></ul>
+</article>
+
+<article id="pour_beer" class="task" data-suite="household" data-search="pour_beer household station_side station_x cup_y tap_y bar_decor_xy_yaw randomize_rates pour_rate foam_gain foam_gain_start foam_ramp_steps foam_decay randomize_layout station_side=random  station_side / station_x / cup_y / tap_y when randomize_layout: shuffle l/r halves; u(station_x_range_*), tap_y=u(base−tap_y_down, base); cup under nozzle bar décor xy / yaw when randomize_layout: _sample_free_xy aabb-clear + yaw ±25° pour_rate / foam_gain / foam_gain_start / foam_ramp_steps / foam_decay only if value is [lo,hi] list or randomize_rates:true → u(range)"
+  data-n-always="5" data-n-gated="6">
+  <header>
+    <h3><code>pour_beer</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>5 effective now</span><span class='pill warn'>6 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>station_side</code></li><li><code>station_x</code></li><li><code>cup_y</code></li><li><code>tap_y</code></li><li><code>bar_decor_xy_yaw</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>randomize_rates</code></li><li><code>pour_rate</code></li><li><code>foam_gain</code></li><li><code>foam_gain_start</code></li><li><code>foam_ramp_steps</code></li><li><code>foam_decay</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>randomize_layout</code> <code>station_side=random</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>station_side / station_x / cup_y / tap_y</code></td><td><span class='pill ok'>Effective now</span></td><td>when randomize_layout: shuffle L/R halves; U(station_x_range_*), tap_y=U(base−tap_y_down, base); cup under nozzle</td><td><code>randomize_layout / station_side / station_x_range_left|right / cup_y / tap_dy / tap_y_down</code></td><td class='muted'>yaml randomize_layout true, station_side random</td></tr><tr data-status='always'><td><code>bar décor XY / yaw</code></td><td><span class='pill ok'>Effective now</span></td><td>when randomize_layout: _sample_free_xy AABB-clear + yaw ±25°</td><td><code>randomize_layout</code></td><td class='muted'>sparse bar props</td></tr><tr data-status='opt_off'><td><code>pour_rate / foam_gain / foam_gain_start / foam_ramp_steps / foam_decay</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>only if value is [lo,hi] list OR randomize_rates:true → U(range)</td><td><code>randomize_rates / pour_rate(_range) / foam_gain(_range) / …</code></td><td class='muted'>default yaml scalars → fixed; randomize_rates off in demo_*.yml</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>pour_rate / foam_gain / foam_gain_start / foam_ramp_steps / foam_decay</code> — current yaml fixed values used when not ranged</li><li><code>target_liquid / full_liquid_tol / tap_settle_sec / open_gap_timeout_sec / expert_foam_pause|resume</code> — success/foam expert thresholds</li><li><code>scene_id</code> — yaml 0</li></ul>
+</article>
+
+<article id="cook_food" class="task" data-suite="household" data-search="cook_food household food_type stove_pose range_xy burner cook_steps board_xy decor_xy food_on_board_xy  randomize_layout food_type=random stove_pose=random burner=random  food_type if random/empty: np.random.choice(meat, sausage, onion_half) stove_pose / range_xy when randomize_layout and stove_pose=random: choice([current,center]) → range_xy or range_center_xy burner when randomize_layout and burner=random: equal-weight choice among reachable front_burners cook_steps u(nom×(1−j), nom×(1+j)); j=cook_speed_jitter; onion uses cook_steps_onion default board_xy / decor_xy / food_on_board_xy when randomize_layout: ±pos_jitter (default 0.025) / food_on_board_jitter (0.018) with aabb clear"
+  data-n-always="8" data-n-gated="0">
+  <header>
+    <h3><code>cook_food</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>8 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>food_type</code></li><li><code>stove_pose</code></li><li><code>range_xy</code></li><li><code>burner</code></li><li><code>cook_steps</code></li><li><code>board_xy</code></li><li><code>decor_xy</code></li><li><code>food_on_board_xy</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>randomize_layout</code> <code>food_type=random</code> <code>stove_pose=random</code> <code>burner=random</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>food_type</code></td><td><span class='pill ok'>Effective now</span></td><td>if random/empty: np.random.choice(meat, sausage, onion_half)</td><td><code>food_type</code></td><td class='muted'>yaml random</td></tr><tr data-status='always'><td><code>stove_pose / range_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>when randomize_layout and stove_pose=random: choice([current,center]) → range_xy or range_center_xy</td><td><code>randomize_layout / stove_pose / range_xy / range_center_xy</code></td><td class='muted'>seed+17</td></tr><tr data-status='always'><td><code>burner</code></td><td><span class='pill ok'>Effective now</span></td><td>when randomize_layout and burner=random: equal-weight choice among reachable FRONT_BURNERS</td><td><code>burner</code></td><td class='muted'>left_front|right_front only</td></tr><tr data-status='always'><td><code>cook_steps</code></td><td><span class='pill ok'>Effective now</span></td><td>U(nom×(1−j), nom×(1+j)); j=cook_speed_jitter; onion uses cook_steps_onion default</td><td><code>cook_steps / cook_speed_jitter / cook_steps_onion</code></td><td class='muted'>yaml j=0.20</td></tr><tr data-status='always'><td><code>board_xy / decor_xy / food_on_board_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>when randomize_layout: ±pos_jitter (default 0.025) / food_on_board_jitter (0.018) with AABB clear</td><td><code>randomize_layout / pos_jitter / food_on_board_jitter / board_y</code></td><td class='muted'>board side depends on burner</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>shutoff_lead / cook_intensity / skillet_id / skillet_handle_yaw / place_dx|dy / pan_scale / plate_scale / board_scale_mult</code> — demo_dynamic shutoff_lead 0.22 vs demo_kitchens 0.04</li><li><code>target_doneness_range</code> — per-food defaults in FOOD_SPECS unless overridden</li><li><code>scene_id / range_scale_mult</code> — yaml</li></ul>
+</article>
+
+<article id="cook_food_timer" class="task" data-suite="household" data-search="cook_food_timer household food_type stove_pose range_xy burner cook_steps board_xy decor_xy food_on_board_xy  randomize_layout food_type=random stove_pose=random burner=random  (inherits cook_food) subclass merges task_args.cook_food_timer then cook_food.setup/load; same randomization as cook_food"
+  data-n-always="8" data-n-gated="0">
+  <header>
+    <h3><code>cook_food_timer</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>8 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>food_type</code></li><li><code>stove_pose</code></li><li><code>range_xy</code></li><li><code>burner</code></li><li><code>cook_steps</code></li><li><code>board_xy</code></li><li><code>decor_xy</code></li><li><code>food_on_board_xy</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>randomize_layout</code> <code>food_type=random</code> <code>stove_pose=random</code> <code>burner=random</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>(inherits cook_food)</code></td><td><span class='pill ok'>Effective now</span></td><td>subclass merges task_args.cook_food_timer then cook_food.setup/load; same randomization as cook_food</td><td><code>food_type / randomize_layout / stove_pose / burner / cook_speed_jitter / …</code></td><td class='muted'>envs/cook_food_timer.py → cook_food</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>timer_radius / timer_n_sections / timer_x / timer_y</code> — pie timer pose; advances only while stove on</li><li><code>same cook_food knobs</code> — demo_dynamic.yml cook_food_timer block</li></ul>
+</article>
+
+<article id="measure_ingredient" class="task" data-suite="household" data-search="measure_ingredient household microwave_pose station_side station_x disp_y scale_xy baking_decor_xy decor_on_microwave pour_rate target_fill_random randomize_layout station_side=random microwave_pose=random  microwave_pose when randomize_layout: shuffle top_left|left_corner (microwave_pose=random) station_side / station_x / disp_y l/r shuffle + u(station_x_range_*); disp_y ± disp_y_jitter; jar under spout with jar_start_gap scale_xy same-side of station; dist u(scale_dist±scale_dist_jitter), ang u(-0.45,0.45) baking décor xy / on-microwave aabb-clear; each item on mw top with p=decor_on_microwave_prob else table pour_rate pour_rate * u(1−pour_rate_jitter, 1+pour_rate_jitter) target_fill only if target_fill=random: choice(fill_levels)"
+  data-n-always="8" data-n-gated="1">
+  <header>
+    <h3><code>measure_ingredient</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>8 effective now</span><span class='pill warn'>1 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>microwave_pose</code></li><li><code>station_side</code></li><li><code>station_x</code></li><li><code>disp_y</code></li><li><code>scale_xy</code></li><li><code>baking_decor_xy</code></li><li><code>decor_on_microwave</code></li><li><code>pour_rate</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>target_fill_random</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>randomize_layout</code> <code>station_side=random</code> <code>microwave_pose=random</code></p>
+<p class='muted small'>yml target_fill=0.25 fixed; pour_rate_jitter=0.15 always samples pour_rate</p>
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>microwave_pose</code></td><td><span class='pill ok'>Effective now</span></td><td>when randomize_layout: shuffle top_left|left_corner (microwave_pose=random)</td><td><code>randomize_layout / microwave_pose / microwave_top_left / microwave_left_corner</code></td><td class='muted'>seed+17 in setup</td></tr><tr data-status='always'><td><code>station_side / station_x / disp_y</code></td><td><span class='pill ok'>Effective now</span></td><td>L/R shuffle + U(station_x_range_*); disp_y ± disp_y_jitter; jar under spout with jar_start_gap</td><td><code>station_side / station_x_range_* / disp_y / disp_y_jitter / jar_start_gap</code></td><td class='muted'>yaml station_side random, disp_y_jitter 0.06</td></tr><tr data-status='always'><td><code>scale_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>same-side of station; dist U(scale_dist±scale_dist_jitter), ang U(-0.45,0.45)</td><td><code>scale_dist / scale_dist_jitter</code></td><td class='muted'>scale is décor prop; not success metric</td></tr><tr data-status='always'><td><code>baking décor XY / on-microwave</code></td><td><span class='pill ok'>Effective now</span></td><td>AABB-clear; each item on MW top with p=decor_on_microwave_prob else table</td><td><code>decor_on_microwave_prob / decor_x_range / decor_y_range</code></td><td class='muted'>yaml p=0.35</td></tr><tr data-status='always'><td><code>pour_rate</code></td><td><span class='pill ok'>Effective now</span></td><td>pour_rate * U(1−pour_rate_jitter, 1+pour_rate_jitter)</td><td><code>pour_rate / pour_rate_jitter</code></td><td class='muted'>yaml jitter 0.15</td></tr><tr data-status='unknown'><td><code>target_fill</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>only if target_fill=random: choice(fill_levels)</td><td><code>target_fill / fill_levels</code></td><td class='muted'>yaml currently fixed 0.25 (not random)</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>target_fill / fill_tol / overflow_level / oil_style / scale_id</code> — oil_style solid|transparent; fill_levels [0.25,0.50,0.75,1.0]</li><li><code>board_scale_mult / microwave_scale_mult / scene_id</code> — yaml</li><li><code>bread_xy / flour_xy / chips_xy / bowl_xy</code> — used when randomize_layout=false</li></ul>
+</article>
+
+<article id="make_soup" class="task" data-suite="household" data-search="make_soup household range_slot range_xy background_textures board_xy board_arm burner veg_offsets decor_xy decor_bread_id pin_burner randomize_layout randomize_background  range_slot / range_xy when randomize_layout: choice(range_slots) among current|top_left|top_right random_background if randomize_background: sets random_background + clean_background_rate board_xy u over slot-dependent x band × y∈[-0.24,-0.06] clear of stove arm (board arm) from board_x; near center (|x|≤board_center_x_tol) prefer stove-side arm burner unless pin_burner: 70% preferred inner/front burner for slot/arm else choice(front) veg offsets on board _sample_veg_offsets: 80% near pour lip, else full board; non-overlap carrot/broccoli/mushroom/onion/tomato decor plate/wine/glass xy when randomize_layout: u(-0.42,0.42)×u(-0.22,0.06) aabb-clear decor_bread model_id choice([0,1,2]) for 075_bread"
+  data-n-always="9" data-n-gated="1">
+  <header>
+    <h3><code>make_soup</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>9 effective now</span><span class='pill warn'>1 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>range_slot</code></li><li><code>range_xy</code></li><li><code>background_textures</code></li><li><code>board_xy</code></li><li><code>board_arm</code></li><li><code>burner</code></li><li><code>veg_offsets</code></li><li><code>decor_xy</code></li><li><code>decor_bread_id</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>pin_burner</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>randomize_layout</code> <code>randomize_background</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>range_slot / range_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>when randomize_layout: choice(range_slots) among current|top_left|top_right</td><td><code>randomize_layout / range_slots / range_xy_*</code></td><td class='muted'>seed+17; RANGE_SLOTS</td></tr><tr data-status='always'><td><code>random_background</code></td><td><span class='pill ok'>Effective now</span></td><td>if randomize_background: sets random_background + clean_background_rate</td><td><code>randomize_background / clean_background_rate</code></td><td class='muted'>yaml true / 0.0</td></tr><tr data-status='always'><td><code>board_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>U over slot-dependent X band × Y∈[-0.24,-0.06] clear of stove</td><td><code>randomize_layout / board_x / board_y</code></td><td class='muted'>seed+101</td></tr><tr data-status='unknown'><td><code>arm (board arm)</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>from board_x; near center (|x|≤board_center_x_tol) prefer stove-side arm</td><td><code>board_center_x_tol</code></td><td class='muted'>left|right pour arm</td></tr><tr data-status='opt_off'><td><code>burner</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>unless pin_burner: 70% preferred inner/front burner for slot/arm else choice(front)</td><td><code>burner / pin_burner / randomize_layout</code></td><td class='muted'>front burners only</td></tr><tr data-status='always'><td><code>veg offsets on board</code></td><td><span class='pill ok'>Effective now</span></td><td>_sample_veg_offsets: 80% near pour lip, else full board; non-overlap carrot/broccoli/mushroom/onion/tomato</td><td><span class='muted'>—</span></td><td class='muted'>fixed veg set; randomized poses</td></tr><tr data-status='unknown'><td><code>decor plate/wine/glass XY</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>when randomize_layout: U(-0.42,0.42)×U(-0.22,0.06) AABB-clear</td><td><code>plate_x|y / wine_x|y / glass_x|y</code></td><td class='muted'>fallbacks from yaml</td></tr><tr data-status='unknown'><td><code>decor_bread model_id</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>choice([0,1,2]) for 075_bread</td><td><code>bread_scale</code></td><td class='muted'>seed+303</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>water_level / pot_radius|height|wall / board_half / cube_half / tomato_radius / pour_tip_rad / tilt_*</code> — geometry &amp; pour thresholds</li><li><code>plate_scale / wine_scale / glass_scale / scene_id / range_scale_mult</code> — yaml</li></ul>
+</article>
+
+<article id="catch_cup" class="task" data-suite="household" data-search="catch_cup household shelf_cup_ids_slots rolling_cup_index roll_side roll_speed drop_x land_y pillow_start_xy lower_shelf_decor    wall/table/floor texture ids randint + clean_background_rate skips shelf cup_ids / slots choice n_shelf_cups(=4) from cup_ids pool; _sample_cup_slots x gaps≥2cm + y back-band rolling_cup index / id / side randint which cup tips; arm_side from cup_x sign roll_speed u(roll_speed, roll_speed*(1+roll_speed_jitter_frac)) drop_x cup_x + u(-drop_x_jitter, +drop_x_jitter) side-clipped land_y (exit) u(land_y_min, land_y_max) drives soft physx fall vy pillow_start_xy near drop_x ±0.04; resample if occupied lower-shelf décor kettle/tissue/alarm: random model_id + u shelf xy"
+  data-n-always="8" data-n-gated="0">
+  <header>
+    <h3><code>catch_cup</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>8 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>shelf_cup_ids_slots</code></li><li><code>rolling_cup_index</code></li><li><code>roll_side</code></li><li><code>roll_speed</code></li><li><code>drop_x</code></li><li><code>land_y</code></li><li><code>pillow_start_xy</code></li><li><code>lower_shelf_decor</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='unknown'><td><code>wall/table/floor texture ids</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint + clean_background_rate skips</td><td><code>clean_background_rate (base)</code></td><td class='muted'>office shelf scene background</td></tr><tr data-status='unknown'><td><code>shelf cup_ids / slots</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>choice N_SHELF_CUPS(=4) from cup_ids pool; _sample_cup_slots X gaps≥2cm + Y back-band</td><td><code>cup_ids</code></td><td class='muted'>yaml [0,1,2,3,5]</td></tr><tr data-status='unknown'><td><code>rolling_cup index / id / side</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint which cup tips; arm_side from cup_x sign</td><td><code>cup_id (optional pin)</code></td><td class='muted'>pillow follows same side</td></tr><tr data-status='always'><td><code>roll_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>U(roll_speed, roll_speed*(1+roll_speed_jitter_frac))</td><td><code>roll_speed / roll_speed_jitter_frac</code></td><td class='muted'>yaml 0.024, jitter 0.50 → up to 1.5×</td></tr><tr data-status='always'><td><code>drop_x</code></td><td><span class='pill ok'>Effective now</span></td><td>cup_x + U(-drop_x_jitter, +drop_x_jitter) side-clipped</td><td><code>drop_x_jitter</code></td><td class='muted'>yaml 0.06 m</td></tr><tr data-status='always'><td><code>land_y (exit)</code></td><td><span class='pill ok'>Effective now</span></td><td>U(land_y_min, land_y_max) drives soft PhysX fall vy</td><td><code>land_y_min / land_y_max</code></td><td class='muted'>yaml 0.00–0.06</td></tr><tr data-status='always'><td><code>pillow_start_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>near drop_x ±0.04; resample if occupied</td><td><code>pillow_start_y</code></td><td class='muted'>code jitter around pillow_start_y</td></tr><tr data-status='unknown'><td><code>lower-shelf décor</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>kettle/tissue/alarm: random model_id + U shelf XY</td><td><span class='muted'>—</span></td><td class='muted'>facing robot</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>plant_scale / decor_cup_scale / rolling_cup_scale / tip_duration / upright_hold / pillow_scale / pillow_mass / push_step / pillow_catch_xy_tol / post_place_dwell</code> — demo_dynamic.yml catch_cup</li></ul>
+</article>
+
+<article id="catch_mouse_object_drop" class="task" data-suite="household" data-search="catch_mouse_object_drop household mouse_speed upper_shelf_objects target_object mouse_start_end plant_x lower_shelf_extras basket_start_xy    background textures randint wall/table/floor + clean_background_rate mouse_speed u(mean×(1−j), mean×(1+j)×mouse_speed_fast_side_mult) upper-shelf objects n_objects (3–5) from cup/wineglass/beer/wine catalog; permutation + near-edge/deep modes; x gaps≥obj_x_gap_min target object randint among reachable shelf objects; mouse start end coin-flip preferring mouse_start_gap_min plant_x / optional mug décor plant u(-0.48,-0.34); mug with p=0.85 random id/pose lower-shelf extras tissue + n_lower_extra random office props, shuffled catalog, u xy basket_start_xy x≈u(-0.03,0.03); y=u(basket_start_y, basket_start_y+span)"
+  data-n-always="7" data-n-gated="0">
+  <header>
+    <h3><code>catch_mouse_object_drop</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>7 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>mouse_speed</code></li><li><code>upper_shelf_objects</code></li><li><code>target_object</code></li><li><code>mouse_start_end</code></li><li><code>plant_x</code></li><li><code>lower_shelf_extras</code></li><li><code>basket_start_xy</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='unknown'><td><code>background textures</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint wall/table/floor + clean_background_rate</td><td><span class='muted'>—</span></td><td class='muted'>same shelf-scene pattern</td></tr><tr data-status='always'><td><code>mouse_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>U(mean×(1−j), mean×(1+j)×mouse_speed_fast_side_mult)</td><td><code>mouse_speed / mouse_speed_jitter_frac / mouse_speed_fast_side_mult</code></td><td class='muted'>yaml 0.10, j=0.30, fast_mult=1.20</td></tr><tr data-status='unknown'><td><code>upper-shelf objects</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>n_objects (3–5) from cup/wineglass/beer/wine catalog; permutation + near-edge/deep modes; X gaps≥obj_x_gap_min</td><td><code>n_objects / obj_x_gap_min</code></td><td class='muted'>yaml n_objects=4</td></tr><tr data-status='unknown'><td><code>target object</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint among reachable shelf objects; mouse start end coin-flip preferring mouse_start_gap_min</td><td><code>mouse_start_gap_min</code></td><td class='muted'>push route sampled from viable ends</td></tr><tr data-status='always'><td><code>plant_x / optional mug décor</code></td><td><span class='pill ok'>Effective now</span></td><td>plant U(-0.48,-0.34); mug with p=0.85 random id/pose</td><td><span class='muted'>—</span></td><td class='muted'>code-only décor</td></tr><tr data-status='unknown'><td><code>lower-shelf extras</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>tissue + n_lower_extra random office props, shuffled catalog, U XY</td><td><code>n_lower_extra</code></td><td class='muted'>yaml 2</td></tr><tr data-status='always'><td><code>basket_start_xy</code></td><td><span class='pill ok'>Effective now</span></td><td>x≈U(-0.03,0.03); y=U(basket_start_y, basket_start_y+span)</td><td><code>basket_start_y / basket_start_y_span</code></td><td class='muted'>yaml -0.28 + 0.10</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>catch_xy_tol / post_place_dwell / basket_half_xy / basket_height</code> — success / basket geometry</li></ul>
+</article>
+
+<article id="stop_ball" class="task" data-suite="household" data-search="stop_ball household ball_id arm_side ball_y_on_shelf roll_speed roll_heading_angle shelf_table_decor  arm_side=random  background textures randint + clean_background_rate ball_id choice(ball_ids) unless ball_id pinned arm_side / ball spawn half if arm_side=random: left|right coin-flip; ball_x on that half u(ball_x_abs_*) ball_y on shelf u(mid/back band of shelf depth) roll_speed u(mean×(1−j), mean×(1+j)) roll heading angle _sample_roll_heading: 45% side-exit u(side_exit_angle_min, roll_angle_max)×±1 else u(-amax,amax); bias toward spawn half; feasibility shrink shelf/table décor shuffled candidates; random model ids; preferred slots ±jitter"
+  data-n-always="6" data-n-gated="0">
+  <header>
+    <h3><code>stop_ball</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>6 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>ball_id</code></li><li><code>arm_side</code></li><li><code>ball_y_on_shelf</code></li><li><code>roll_speed</code></li><li><code>roll_heading_angle</code></li><li><code>shelf_table_decor</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>arm_side=random</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='unknown'><td><code>background textures</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint + clean_background_rate</td><td><span class='muted'>—</span></td><td class='muted'>office shelf</td></tr><tr data-status='always'><td><code>ball_id</code></td><td><span class='pill ok'>Effective now</span></td><td>choice(ball_ids) unless ball_id pinned</td><td><code>ball_ids / ball_id</code></td><td class='muted'>yaml [0,1]</td></tr><tr data-status='always'><td><code>arm_side / ball spawn half</code></td><td><span class='pill ok'>Effective now</span></td><td>if arm_side=random: left|right coin-flip; ball_x on that half U(BALL_X_ABS_*)</td><td><code>arm_side</code></td><td class='muted'>yaml random; arm finalized from traj</td></tr><tr data-status='unknown'><td><code>ball_y on shelf</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>U(mid/back band of shelf depth)</td><td><span class='muted'>—</span></td><td class='muted'>code-only</td></tr><tr data-status='always'><td><code>roll_speed</code></td><td><span class='pill ok'>Effective now</span></td><td>U(mean×(1−j), mean×(1+j))</td><td><code>roll_speed / roll_speed_jitter_frac</code></td><td class='muted'>yaml 0.15, j=0.30</td></tr><tr data-status='unknown'><td><code>roll heading angle</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>_sample_roll_heading: 45% side-exit U(SIDE_EXIT_ANGLE_MIN, roll_angle_max)×±1 else U(-amax,amax); bias toward spawn half; feasibility shrink</td><td><code>roll_angle_max</code></td><td class='muted'>yaml 0.70 rad; may exit front or side</td></tr><tr data-status='unknown'><td><code>shelf/table décor</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>shuffled candidates; random model ids; preferred slots ±jitter</td><td><code>trophy_scale_mult / screen_scale_mult</code></td><td class='muted'>clock/screen/speaker/trophy etc.</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>ball_scale_mult / fall_speed_xy / shelf_roll_duration / table_edge_y / table_x_edge / intercept_frac / handoff_distance / live_* damping|friction|restitution / settle_* / max_live_steps</code> — demo_dynamic.yml stop_ball physics &amp; success</li></ul>
+</article>
+
+<article id="clean_table" class="task" data-suite="household" data-search="clean_table household laptop_side mug_side mug_laptop_gap pair_xy sponge_y spill_steps spill_pattern decor_xy force_side randomize_layout laptop_side=random mug_side=random  laptop_side / mug_side unless force_side+pinned: coin-flip laptop l/r of mug; arm follows mug side mug–laptop gap &amp; pair xy gap=u(mug_laptop_gap_min,max) clamped 0.30–0.40; mid±; ±20% rigid x shift; mug_y=u(mug_y_min,max); laptop_y≈base×u(0.7,1.3) sponge_y sponge_y + u(-0.04,0.04) clipped toward robot on mug half spill_steps / spill speed mult=u(1−spill_speed_jitter,1+j); spill_steps=round(base/mult) spill pattern randomstate(spill_seed): wobble/freq/width/side_bias/n_main/puddle_spread décor xy (plant/file/pen/clock) upper 30% y band non-overlap via decor_seed"
+  data-n-always="8" data-n-gated="1">
+  <header>
+    <h3><code>clean_table</code></h3>
+    <div>
+      <span class="pill household">household</span>
+      <span class='pill ok'>8 effective now</span><span class='pill warn'>1 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>laptop_side</code></li><li><code>mug_side</code></li><li><code>mug_laptop_gap</code></li><li><code>pair_xy</code></li><li><code>sponge_y</code></li><li><code>spill_steps</code></li><li><code>spill_pattern</code></li><li><code>decor_xy</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>force_side</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>randomize_layout</code> <code>laptop_side=random</code> <code>mug_side=random</code></p>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='opt_off'><td><code>laptop_side / mug_side</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>unless force_side+pinned: coin-flip laptop L/R of mug; arm follows mug side</td><td><code>randomize_layout / laptop_side / mug_side / force_side</code></td><td class='muted'>yaml randomize_layout true</td></tr><tr data-status='always'><td><code>mug–laptop gap &amp; pair XY</code></td><td><span class='pill ok'>Effective now</span></td><td>gap=U(mug_laptop_gap_min,max) clamped 0.30–0.40; mid±; ±20% rigid X shift; mug_y=U(mug_y_min,max); laptop_y≈base×U(0.7,1.3)</td><td><code>mug_laptop_gap_min|max / mug_y_min|max / laptop_y</code></td><td class='muted'>yaml gaps 0.30–0.40</td></tr><tr data-status='always'><td><code>sponge_y</code></td><td><span class='pill ok'>Effective now</span></td><td>sponge_y + U(-0.04,0.04) clipped toward robot on mug half</td><td><code>sponge_y / sponge_dx</code></td><td class='muted'>when randomize_layout</td></tr><tr data-status='always'><td><code>spill_steps / spill speed</code></td><td><span class='pill ok'>Effective now</span></td><td>mult=U(1−spill_speed_jitter,1+j); spill_steps=round(base/mult)</td><td><code>spill_steps / spill_speed_jitter</code></td><td class='muted'>yaml j=0.30 (±30%)</td></tr><tr data-status='unknown'><td><code>spill pattern</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>RandomState(spill_seed): wobble/freq/width/side_bias/n_main/puddle_spread</td><td><code>spill_seed (optional pin)</code></td><td class='muted'>else randint seed; irregular lobed stream</td></tr><tr data-status='always'><td><code>décor XY (plant/file/pen/clock)</code></td><td><span class='pill ok'>Effective now</span></td><td>upper 30% Y band non-overlap via decor_seed</td><td><code>decor_seed / randomize_layout</code></td><td class='muted'>code defaults if unset</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>mug_id / mug_scale_mult / laptop_id / reach_laptop_level / clean_tol / expert_wipe_level / initial_puddle_level / sponge_grasp_*</code> — demo_dynamic.yml clean_table</li><li><code>post_tip_wait / spot_contact_extra / spot_clear_dwell / wipe_safe_z / mug_avoid_margin</code> — wipe/success tuning</li></ul>
+</article>
+
+<article id="serve_dinner" class="task" data-suite="extra" data-search="serve_dinner extra n_meatballs skillet_id meatball_micro_jitter salad_model_id lettuce_model_id tomato_model_id bottle_model_id cup_model_id    n_meatballs if n_meatballs unset: randint(3,5) → 3 or 4 skillet_id choice([0,2]) meatball micro-jitter ±0.0015 m xy in pan salad/lettuce/tomato/bottle/cup model_ids choice among small id pools for décor assets"
+  data-n-always="8" data-n-gated="0">
+  <header>
+    <h3><code>serve_dinner</code></h3>
+    <div>
+      <span class="pill extra">extra</span>
+      <span class='pill ok'>8 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>n_meatballs</code></li><li><code>skillet_id</code></li><li><code>meatball_micro_jitter</code></li><li><code>salad_model_id</code></li><li><code>lettuce_model_id</code></li><li><code>tomato_model_id</code></li><li><code>bottle_model_id</code></li><li><code>cup_model_id</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='always'><td><code>n_meatballs</code></td><td><span class='pill ok'>Effective now</span></td><td>if n_meatballs unset: randint(3,5) → 3 or 4</td><td><code>n_meatballs</code></td><td class='muted'>not in GUI TASKS; present in demo_dynamic/demo_kitchens</td></tr><tr data-status='always'><td><code>skillet_id</code></td><td><span class='pill ok'>Effective now</span></td><td>choice([0,2])</td><td><span class='muted'>—</span></td><td class='muted'>code-only</td></tr><tr data-status='unknown'><td><code>meatball micro-jitter</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>±0.0015 m XY in pan</td><td><span class='muted'>—</span></td><td class='muted'>packing noise</td></tr><tr data-status='unknown'><td><code>salad/lettuce/tomato/bottle/cup model_ids</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>choice among small id pools for décor assets</td><td><code>salad_x|y / bottle_x|y / cup_x|y / *_scale</code></td><td class='muted'>layout XY fixed from yaml; asset variants random</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>burner / range_xy / plate_x|y / pan_scale / plate_scale / meatball_radius / pour_tip_rad / tilt_hold_dot / knob_contact_radius</code> — no randomize_layout flag; layout pinned</li><li><code>scene_id / range_scale_mult / salad_bowl_scale / lettuce_scale / tomato_scale</code> — yaml</li></ul>
+</article>
+
+<article id="empty_bag" class="task" data-suite="extra" data-search="empty_bag extra bag_yaw_deg rolling_apple_id apple_color static_veg_ids bag_side apple_color=random  bag_side if bag_side=random: coin-flip side_sign; else left/right bag_yaw_deg if unset: u(-12,12) deg rolling apple id choice(apple_ids) apple_color if random: green|red coin-flip then recolor static veg in bag shuffle veg_ids, take 2"
+  data-n-always="4" data-n-gated="1">
+  <header>
+    <h3><code>empty_bag</code></h3>
+    <div>
+      <span class="pill extra">extra</span>
+      <span class='pill ok'>4 effective now</span><span class='pill warn'>1 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>bag_yaw_deg</code></li><li><code>rolling_apple_id</code></li><li><code>apple_color</code></li><li><code>static_veg_ids</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <ul class='warnlist'><li><code>bag_side</code></li></ul>
+    </div>
+  </div>
+
+  <p class="small"><span class="pill ok">Yaml-on gates</span>
+  <code>apple_color=random</code></p>
+<p class='muted small'>yml bag_side=left fixed (random only if bag_side=random)</p>
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='opt_off'><td><code>bag_side</code></td><td><span class='pill warn'>Implemented — Opt/gate OFF by default</span></td><td>if bag_side=random: coin-flip side_sign; else left/right</td><td><code>bag_side</code></td><td class='muted'>yaml demo_dynamic left (fixed); not in GUI TASKS</td></tr><tr data-status='always'><td><code>bag_yaw_deg</code></td><td><span class='pill ok'>Effective now</span></td><td>if unset: U(-12,12) deg</td><td><code>bag_yaw_deg</code></td><td class='muted'>demo_kitchens may pin 0.0</td></tr><tr data-status='unknown'><td><code>rolling apple id</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>choice(APPLE_IDS)</td><td><span class='muted'>—</span></td><td class='muted'>code-only</td></tr><tr data-status='always'><td><code>apple_color</code></td><td><span class='pill ok'>Effective now</span></td><td>if random: green|red coin-flip then recolor</td><td><code>apple_color</code></td><td class='muted'>yaml random</td></tr><tr data-status='unknown'><td><code>static veg in bag</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>shuffle VEG_IDS, take 2</td><td><code>veg_scale_mult</code></td><td class='muted'>packing props</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>scene_id / bag_x_abs / bag_y / bag_scale_mult / table_edge_y / grasp_tol / grasp_hover_z / grasp_tcp_dz / post_catch_lift</code> — demo_dynamic vs demo_kitchens differ slightly on bag_y/veg_scale</li><li><code>knock_arm / catch_arm</code> — hardcoded left knock / right catch in simple scenario</li></ul>
+</article>
+
+<article id="catch_rolling_cup" class="task" data-suite="extra" data-search="catch_rolling_cup extra cup_id cup_shelf_xy decor_basket_id decor_apple_id decor_mug_ids decor_kettle_id decor_tissue_id decor_alarm_id    background textures randint + clean_background_rate cup_id choice(cup_ids) unless cup_id pinned cup shelf xy right half: x=sign*u(cup_x_abs_*), y=u(shelf y band) décor (basket/apple/mugs/kettle/tissue/alarm) random ids; n_mugs=randint(3,5); placement with occupancy"
+  data-n-always="8" data-n-gated="0">
+  <header>
+    <h3><code>catch_rolling_cup</code></h3>
+    <div>
+      <span class="pill extra">extra</span>
+      <span class='pill ok'>8 effective now</span><span class='pill warn'>0 Opt/gate off</span>
+    </div>
+  </header>
+  
+  <div class="status-grid">
+    <div>
+      <h4>Effective every seed (current demo_dynamic.yml)</h4>
+      <ul class='oklist'><li><code>cup_id</code></li><li><code>cup_shelf_xy</code></li><li><code>decor_basket_id</code></li><li><code>decor_apple_id</code></li><li><code>decor_mug_ids</code></li><li><code>decor_kettle_id</code></li><li><code>decor_tissue_id</code></li><li><code>decor_alarm_id</code></li></ul>
+    </div>
+    <div>
+      <h4>Implemented but OFF by default (Opt / gate)</h4>
+      <p class='muted small'>None.</p>
+    </div>
+  </div>
+<p class='muted small'>roll_speed fixed from yaml (no jitter); background texture picks cleared when clean_background_rate=1</p>
+  
+  <h4>Parameter detail</h4><table><thead><tr><th>Parameter</th><th>Status</th><th>How</th><th>Config key</th><th>Notes</th></tr></thead><tbody><tr data-status='unknown'><td><code>background textures</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>randint + clean_background_rate</td><td><span class='muted'>—</span></td><td class='muted'>not in GUI TASKS; present in demo_dynamic.yml</td></tr><tr data-status='always'><td><code>cup_id</code></td><td><span class='pill ok'>Effective now</span></td><td>choice(cup_ids) unless cup_id pinned</td><td><code>cup_ids / cup_id</code></td><td class='muted'>yaml [0,1,2,5,6,3]</td></tr><tr data-status='unknown'><td><code>cup shelf XY</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>right half: x=sign*U(CUP_X_ABS_*), y=U(shelf y band)</td><td><span class='muted'>—</span></td><td class='muted'>arm_side fixed right</td></tr><tr data-status='unknown'><td><code>décor (basket/apple/mugs/kettle/tissue/alarm)</code></td><td><span class='pill dim'>Implemented (see notes)</span></td><td>random ids; n_mugs=randint(3,5); placement with occupancy</td><td><span class='muted'>—</span></td><td class='muted'>full-width shelf décor</td></tr></tbody></table>
+  <h4>Fixed but configurable (not per-seed random)</h4><ul class='fixed'><li><code>roll_speed / fall_speed_xy / tip_duration / table_edge_y / intercept_frac / catch_shelf_clearance / post_grasp_lift / upright_hold</code> — yaml fixed speeds (no roll_speed_jitter_frac unlike stop_ball/catch_cup)</li></ul>
+</article>
+</div>
+</div>
+<script>
+(function() {
+  const q = document.getElementById('q');
+  const checks = [...document.querySelectorAll('.suite')];
+  const onlyAlways = document.getElementById('onlyAlways');
+  const tasks = [...document.querySelectorAll('.task')];
+  const indexItems = [...document.querySelectorAll('#index li')];
+  function apply() {
+    const term = (q.value || '').trim().toLowerCase();
+    const suites = new Set(checks.filter(c => c.checked).map(c => c.value));
+    tasks.forEach(el => {
+      const okSuite = suites.has(el.dataset.suite);
+      const okTerm = !term || (el.dataset.search || '').includes(term);
+      const okAlways = !onlyAlways.checked || Number(el.dataset.nAlways) > 0;
+      el.classList.toggle('hidden', !(okSuite && okTerm && okAlways));
+    });
+    indexItems.forEach(el => {
+      const id = (el.querySelector('code') || {}).textContent || '';
+      const task = document.getElementById(id);
+      const okSuite = suites.has(el.dataset.suite);
+      const okTerm = !term || (task && (task.dataset.search || '').includes(term));
+      const okAlways = !onlyAlways.checked || (task && Number(task.dataset.nAlways) > 0);
+      el.classList.toggle('hidden', !(okSuite && okTerm && okAlways));
+    });
+  }
+  q.addEventListener('input', apply);
+  checks.forEach(c => c.addEventListener('change', apply));
+  onlyAlways.addEventListener('change', apply);
+})();
+</script>
+</body>
+</html>

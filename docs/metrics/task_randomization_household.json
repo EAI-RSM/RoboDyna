@@ -1,0 +1,755 @@
+{
+  "tasks": [
+    {
+      "task_id": "trap_bug",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "bug_type",
+          "how": "if bug_type=random (default), np.random.choice(bug_types)",
+          "config_key": "bug_type / bug_types",
+          "notes": "pool default [cockroach, spider, ant]; also accepts species alias"
+        },
+        {
+          "param": "run_side",
+          "how": "if run_side=random: follow shelf X sign, else coin-flip ±1; trap/arm on same side",
+          "config_key": "run_side",
+          "notes": "left|right|random; sets arm_side"
+        },
+        {
+          "param": "bug_spawn_x",
+          "how": "shelf_x + run_sign * U(0.02,0.10), clipped",
+          "config_key": null,
+          "notes": "code-only; under bookshelf lip"
+        },
+        {
+          "param": "bug_speed",
+          "how": "U(bug_speed_min, bug_speed_max)",
+          "config_key": "bug_speed_min / bug_speed_max",
+          "notes": "yaml 0.07–0.14 m/s; legacy roach_speed_* accepted"
+        },
+        {
+          "param": "emerge_target_y",
+          "how": "spawn_y − U(0.10,0.16), clipped",
+          "config_key": null,
+          "notes": "code-only emerge distance"
+        },
+        {
+          "param": "trap_xy",
+          "how": "x=run_sign*U(0.16,0.28); y=U(-0.18,-0.05)",
+          "config_key": null,
+          "notes": "code-only trap start pose"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "emerge_steps",
+          "notes": "yaml 40"
+        },
+        {
+          "param": "walk_time",
+          "notes": "yaml 15.0 s then hide/fail"
+        },
+        {
+          "param": "trap_half / trap_wall / trap_mass / release_clearance",
+          "notes": "trap geometry/mass from demo_dynamic.yml"
+        }
+      ]
+    },
+    {
+      "task_id": "boil_milk",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "stove_side",
+          "how": "if not left|right: RandomState(seed+17).choice([left,right]); MW on opposite side",
+          "config_key": "stove_side",
+          "notes": "uses range_x_left/right, microwave_x_left/right"
+        },
+        {
+          "param": "pot_burner",
+          "how": "if pot_burner=random: rng.choice among BURNER_NAMES present",
+          "config_key": "pot_burner",
+          "notes": "left_front|right_front|left_rear|right_rear|random"
+        },
+        {
+          "param": "target_ring",
+          "how": "base * (1 ± U(-j,j)) with j=target_ring_jitter; clip [0,100]",
+          "config_key": "target_ring / target_ring_jitter",
+          "notes": "yaml base 80, jitter 0.10 (±10%)"
+        },
+        {
+          "param": "milk_box_id",
+          "how": "if milk_box_id<0: rng.randint(0,4) for 038_milk-box",
+          "config_key": "milk_box_id",
+          "notes": "yaml -1 = random"
+        },
+        {
+          "param": "mug_id",
+          "how": "if mug_id<0: rng.randint(0,10) for 039_mug",
+          "config_key": "mug_id",
+          "notes": "demo_dynamic -1=random; demo_kitchens fixed 0"
+        },
+        {
+          "param": "milk_box_xy / mug_xy",
+          "how": "_sample_free_prop_xy on apron clear of MW/stove with mug_gap",
+          "config_key": "mug_gap",
+          "notes": "seed+91; non-overlapping apron slots"
+        },
+        {
+          "param": "milk_box_yaw / mug_yaw",
+          "how": "U(-0.6,0.6) / U(-0.5,0.5)",
+          "config_key": null,
+          "notes": "code-only yaw jitter"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "scene_id",
+          "notes": "yaml 0"
+        },
+        {
+          "param": "boil_steps / settle_steps / baseline_level / shutoff_lead / overflow_level",
+          "notes": "liquid dynamics; force_overflow optional fail demo"
+        },
+        {
+          "param": "pot_radius / pot_height / handle_length / range_scale_mult / microwave_scale_mult / milk_box_height / mug_height",
+          "notes": "geometry scales from yaml"
+        }
+      ]
+    },
+    {
+      "task_id": "fill_coffee_jar",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "target_fill",
+          "how": "if target_fill=random: choice among FILL_LEVELS (0.25,0.50,0.75)",
+          "config_key": "target_fill",
+          "notes": "yaml random; rng seed+202"
+        },
+        {
+          "param": "stove_side",
+          "how": "if not left|right: choice([left,right]); dispenser on opposite half",
+          "config_key": "stove_side",
+          "notes": "RandomState(seed+17)"
+        },
+        {
+          "param": "station layout (station_x, disp_y, jar_y)",
+          "how": "when randomize_layout: U(station_x_*_lo/hi), U(disp_y±up/down), jar gap U(0.125,0.145) with clearance",
+          "config_key": "randomize_layout / station_x_* / disp_y / disp_y_up / disp_y_down / jar_y_min",
+          "notes": "press-reliable band; seed+101"
+        },
+        {
+          "param": "coffee_box_id / milk_box_id / mug_id",
+          "how": "if id<0: rng.choice available variants; XY + yaw U(-0.6,0.6) AABB-clear",
+          "config_key": "coffee_box_id / milk_box_id / mug_id",
+          "notes": "yaml -1; decor seed+303"
+        },
+        {
+          "param": "kettle_id / kettle_burner / kettle_yaw",
+          "how": "if kettle_id<0 / kettle_burner=random: choice; yaw U(-π,π)",
+          "config_key": "kettle_id / kettle_burner",
+          "notes": "009_kettle on cooktop burner"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "beans_full / force_thresholds / beans_per_force_level / fill_tol / press_depths / press_sample_s",
+          "notes": "force→beans dispense mapping; fill_tol ±0.05"
+        },
+        {
+          "param": "force_stiffness / force_engage_slack / scene_id / range_xy",
+          "notes": "button spring proxy and stove anchors"
+        }
+      ]
+    },
+    {
+      "task_id": "pour_beer",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "station_side / station_x / cup_y / tap_y",
+          "how": "when randomize_layout: shuffle L/R halves; U(station_x_range_*), tap_y=U(base−tap_y_down, base); cup under nozzle",
+          "config_key": "randomize_layout / station_side / station_x_range_left|right / cup_y / tap_dy / tap_y_down",
+          "notes": "yaml randomize_layout true, station_side random"
+        },
+        {
+          "param": "bar décor XY / yaw",
+          "how": "when randomize_layout: _sample_free_xy AABB-clear + yaw ±25°",
+          "config_key": "randomize_layout",
+          "notes": "sparse bar props"
+        },
+        {
+          "param": "pour_rate / foam_gain / foam_gain_start / foam_ramp_steps / foam_decay",
+          "how": "only if value is [lo,hi] list OR randomize_rates:true → U(range)",
+          "config_key": "randomize_rates / pour_rate(_range) / foam_gain(_range) / …",
+          "notes": "default yaml scalars → fixed; randomize_rates off in demo_*.yml"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "pour_rate / foam_gain / foam_gain_start / foam_ramp_steps / foam_decay",
+          "notes": "current yaml fixed values used when not ranged"
+        },
+        {
+          "param": "target_liquid / full_liquid_tol / tap_settle_sec / open_gap_timeout_sec / expert_foam_pause|resume",
+          "notes": "success/foam expert thresholds"
+        },
+        {
+          "param": "scene_id",
+          "notes": "yaml 0"
+        }
+      ]
+    },
+    {
+      "task_id": "cook_food",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "food_type",
+          "how": "if random/empty: np.random.choice(meat, sausage, onion_half)",
+          "config_key": "food_type",
+          "notes": "yaml random"
+        },
+        {
+          "param": "stove_pose / range_xy",
+          "how": "when randomize_layout and stove_pose=random: choice([current,center]) → range_xy or range_center_xy",
+          "config_key": "randomize_layout / stove_pose / range_xy / range_center_xy",
+          "notes": "seed+17"
+        },
+        {
+          "param": "burner",
+          "how": "when randomize_layout and burner=random: equal-weight choice among reachable FRONT_BURNERS",
+          "config_key": "burner",
+          "notes": "left_front|right_front only"
+        },
+        {
+          "param": "cook_steps",
+          "how": "U(nom×(1−j), nom×(1+j)); j=cook_speed_jitter; onion uses cook_steps_onion default",
+          "config_key": "cook_steps / cook_speed_jitter / cook_steps_onion",
+          "notes": "yaml j=0.20"
+        },
+        {
+          "param": "board_xy / decor_xy / food_on_board_xy",
+          "how": "when randomize_layout: ±pos_jitter (default 0.025) / food_on_board_jitter (0.018) with AABB clear",
+          "config_key": "randomize_layout / pos_jitter / food_on_board_jitter / board_y",
+          "notes": "board side depends on burner"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "shutoff_lead / cook_intensity / skillet_id / skillet_handle_yaw / place_dx|dy / pan_scale / plate_scale / board_scale_mult",
+          "notes": "demo_dynamic shutoff_lead 0.22 vs demo_kitchens 0.04"
+        },
+        {
+          "param": "target_doneness_range",
+          "notes": "per-food defaults in FOOD_SPECS unless overridden"
+        },
+        {
+          "param": "scene_id / range_scale_mult",
+          "notes": "yaml"
+        }
+      ]
+    },
+    {
+      "task_id": "cook_food_timer",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "(inherits cook_food)",
+          "how": "subclass merges task_args.cook_food_timer then cook_food.setup/load; same randomization as cook_food",
+          "config_key": "food_type / randomize_layout / stove_pose / burner / cook_speed_jitter / …",
+          "notes": "envs/cook_food_timer.py → cook_food"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "timer_radius / timer_n_sections / timer_x / timer_y",
+          "notes": "pie timer pose; advances only while stove on"
+        },
+        {
+          "param": "same cook_food knobs",
+          "notes": "demo_dynamic.yml cook_food_timer block"
+        }
+      ]
+    },
+    {
+      "task_id": "measure_ingredient",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "microwave_pose",
+          "how": "when randomize_layout: shuffle top_left|left_corner (microwave_pose=random)",
+          "config_key": "randomize_layout / microwave_pose / microwave_top_left / microwave_left_corner",
+          "notes": "seed+17 in setup"
+        },
+        {
+          "param": "station_side / station_x / disp_y",
+          "how": "L/R shuffle + U(station_x_range_*); disp_y ± disp_y_jitter; jar under spout with jar_start_gap",
+          "config_key": "station_side / station_x_range_* / disp_y / disp_y_jitter / jar_start_gap",
+          "notes": "yaml station_side random, disp_y_jitter 0.06"
+        },
+        {
+          "param": "scale_xy",
+          "how": "same-side of station; dist U(scale_dist±scale_dist_jitter), ang U(-0.45,0.45)",
+          "config_key": "scale_dist / scale_dist_jitter",
+          "notes": "scale is décor prop; not success metric"
+        },
+        {
+          "param": "baking décor XY / on-microwave",
+          "how": "AABB-clear; each item on MW top with p=decor_on_microwave_prob else table",
+          "config_key": "decor_on_microwave_prob / decor_x_range / decor_y_range",
+          "notes": "yaml p=0.35"
+        },
+        {
+          "param": "pour_rate",
+          "how": "pour_rate * U(1−pour_rate_jitter, 1+pour_rate_jitter)",
+          "config_key": "pour_rate / pour_rate_jitter",
+          "notes": "yaml jitter 0.15"
+        },
+        {
+          "param": "target_fill",
+          "how": "only if target_fill=random: choice(fill_levels)",
+          "config_key": "target_fill / fill_levels",
+          "notes": "yaml currently fixed 0.25 (not random)"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "target_fill / fill_tol / overflow_level / oil_style / scale_id",
+          "notes": "oil_style solid|transparent; fill_levels [0.25,0.50,0.75,1.0]"
+        },
+        {
+          "param": "board_scale_mult / microwave_scale_mult / scene_id",
+          "notes": "yaml"
+        },
+        {
+          "param": "bread_xy / flour_xy / chips_xy / bowl_xy",
+          "notes": "used when randomize_layout=false"
+        }
+      ]
+    },
+    {
+      "task_id": "make_soup",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "range_slot / range_xy",
+          "how": "when randomize_layout: choice(range_slots) among current|top_left|top_right",
+          "config_key": "randomize_layout / range_slots / range_xy_*",
+          "notes": "seed+17; RANGE_SLOTS"
+        },
+        {
+          "param": "random_background",
+          "how": "if randomize_background: sets random_background + clean_background_rate",
+          "config_key": "randomize_background / clean_background_rate",
+          "notes": "yaml true / 0.0"
+        },
+        {
+          "param": "board_xy",
+          "how": "U over slot-dependent X band × Y∈[-0.24,-0.06] clear of stove",
+          "config_key": "randomize_layout / board_x / board_y",
+          "notes": "seed+101"
+        },
+        {
+          "param": "arm (board arm)",
+          "how": "from board_x; near center (|x|≤board_center_x_tol) prefer stove-side arm",
+          "config_key": "board_center_x_tol",
+          "notes": "left|right pour arm"
+        },
+        {
+          "param": "burner",
+          "how": "unless pin_burner: 70% preferred inner/front burner for slot/arm else choice(front)",
+          "config_key": "burner / pin_burner / randomize_layout",
+          "notes": "front burners only"
+        },
+        {
+          "param": "veg offsets on board",
+          "how": "_sample_veg_offsets: 80% near pour lip, else full board; non-overlap carrot/broccoli/mushroom/onion/tomato",
+          "config_key": null,
+          "notes": "fixed veg set; randomized poses"
+        },
+        {
+          "param": "decor plate/wine/glass XY",
+          "how": "when randomize_layout: U(-0.42,0.42)×U(-0.22,0.06) AABB-clear",
+          "config_key": "plate_x|y / wine_x|y / glass_x|y",
+          "notes": "fallbacks from yaml"
+        },
+        {
+          "param": "decor_bread model_id",
+          "how": "choice([0,1,2]) for 075_bread",
+          "config_key": "bread_scale",
+          "notes": "seed+303"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "water_level / pot_radius|height|wall / board_half / cube_half / tomato_radius / pour_tip_rad / tilt_*",
+          "notes": "geometry & pour thresholds"
+        },
+        {
+          "param": "plate_scale / wine_scale / glass_scale / scene_id / range_scale_mult",
+          "notes": "yaml"
+        }
+      ]
+    },
+    {
+      "task_id": "catch_cup",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "wall/table/floor texture ids",
+          "how": "randint + clean_background_rate skips",
+          "config_key": "clean_background_rate (base)",
+          "notes": "office shelf scene background"
+        },
+        {
+          "param": "shelf cup_ids / slots",
+          "how": "choice N_SHELF_CUPS(=4) from cup_ids pool; _sample_cup_slots X gaps≥2cm + Y back-band",
+          "config_key": "cup_ids",
+          "notes": "yaml [0,1,2,3,5]"
+        },
+        {
+          "param": "rolling_cup index / id / side",
+          "how": "randint which cup tips; arm_side from cup_x sign",
+          "config_key": "cup_id (optional pin)",
+          "notes": "pillow follows same side"
+        },
+        {
+          "param": "roll_speed",
+          "how": "U(roll_speed, roll_speed*(1+roll_speed_jitter_frac))",
+          "config_key": "roll_speed / roll_speed_jitter_frac",
+          "notes": "yaml 0.024, jitter 0.50 → up to 1.5×"
+        },
+        {
+          "param": "drop_x",
+          "how": "cup_x + U(-drop_x_jitter, +drop_x_jitter) side-clipped",
+          "config_key": "drop_x_jitter",
+          "notes": "yaml 0.06 m"
+        },
+        {
+          "param": "land_y (exit)",
+          "how": "U(land_y_min, land_y_max) drives soft PhysX fall vy",
+          "config_key": "land_y_min / land_y_max",
+          "notes": "yaml 0.00–0.06"
+        },
+        {
+          "param": "pillow_start_xy",
+          "how": "near drop_x ±0.04; resample if occupied",
+          "config_key": "pillow_start_y",
+          "notes": "code jitter around pillow_start_y"
+        },
+        {
+          "param": "lower-shelf décor",
+          "how": "kettle/tissue/alarm: random model_id + U shelf XY",
+          "config_key": null,
+          "notes": "facing robot"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "plant_scale / decor_cup_scale / rolling_cup_scale / tip_duration / upright_hold / pillow_scale / pillow_mass / push_step / pillow_catch_xy_tol / post_place_dwell",
+          "notes": "demo_dynamic.yml catch_cup"
+        }
+      ]
+    },
+    {
+      "task_id": "catch_mouse_object_drop",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "background textures",
+          "how": "randint wall/table/floor + clean_background_rate",
+          "config_key": null,
+          "notes": "same shelf-scene pattern"
+        },
+        {
+          "param": "mouse_speed",
+          "how": "U(mean×(1−j), mean×(1+j)×mouse_speed_fast_side_mult)",
+          "config_key": "mouse_speed / mouse_speed_jitter_frac / mouse_speed_fast_side_mult",
+          "notes": "yaml 0.10, j=0.30, fast_mult=1.20"
+        },
+        {
+          "param": "upper-shelf objects",
+          "how": "n_objects (3–5) from cup/wineglass/beer/wine catalog; permutation + near-edge/deep modes; X gaps≥obj_x_gap_min",
+          "config_key": "n_objects / obj_x_gap_min",
+          "notes": "yaml n_objects=4"
+        },
+        {
+          "param": "target object",
+          "how": "randint among reachable shelf objects; mouse start end coin-flip preferring mouse_start_gap_min",
+          "config_key": "mouse_start_gap_min",
+          "notes": "push route sampled from viable ends"
+        },
+        {
+          "param": "plant_x / optional mug décor",
+          "how": "plant U(-0.48,-0.34); mug with p=0.85 random id/pose",
+          "config_key": null,
+          "notes": "code-only décor"
+        },
+        {
+          "param": "lower-shelf extras",
+          "how": "tissue + n_lower_extra random office props, shuffled catalog, U XY",
+          "config_key": "n_lower_extra",
+          "notes": "yaml 2"
+        },
+        {
+          "param": "basket_start_xy",
+          "how": "x≈U(-0.03,0.03); y=U(basket_start_y, basket_start_y+span)",
+          "config_key": "basket_start_y / basket_start_y_span",
+          "notes": "yaml -0.28 + 0.10"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "catch_xy_tol / post_place_dwell / basket_half_xy / basket_height",
+          "notes": "success / basket geometry"
+        }
+      ]
+    },
+    {
+      "task_id": "stop_ball",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "background textures",
+          "how": "randint + clean_background_rate",
+          "config_key": null,
+          "notes": "office shelf"
+        },
+        {
+          "param": "ball_id",
+          "how": "choice(ball_ids) unless ball_id pinned",
+          "config_key": "ball_ids / ball_id",
+          "notes": "yaml [0,1]"
+        },
+        {
+          "param": "arm_side / ball spawn half",
+          "how": "if arm_side=random: left|right coin-flip; ball_x on that half U(BALL_X_ABS_*)",
+          "config_key": "arm_side",
+          "notes": "yaml random; arm finalized from traj"
+        },
+        {
+          "param": "ball_y on shelf",
+          "how": "U(mid/back band of shelf depth)",
+          "config_key": null,
+          "notes": "code-only"
+        },
+        {
+          "param": "roll_speed",
+          "how": "U(mean×(1−j), mean×(1+j))",
+          "config_key": "roll_speed / roll_speed_jitter_frac",
+          "notes": "yaml 0.15, j=0.30"
+        },
+        {
+          "param": "roll heading angle",
+          "how": "_sample_roll_heading: 45% side-exit U(SIDE_EXIT_ANGLE_MIN, roll_angle_max)×±1 else U(-amax,amax); bias toward spawn half; feasibility shrink",
+          "config_key": "roll_angle_max",
+          "notes": "yaml 0.70 rad; may exit front or side"
+        },
+        {
+          "param": "shelf/table décor",
+          "how": "shuffled candidates; random model ids; preferred slots ±jitter",
+          "config_key": "trophy_scale_mult / screen_scale_mult",
+          "notes": "clock/screen/speaker/trophy etc."
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "ball_scale_mult / fall_speed_xy / shelf_roll_duration / table_edge_y / table_x_edge / intercept_frac / handoff_distance / live_* damping|friction|restitution / settle_* / max_live_steps",
+          "notes": "demo_dynamic.yml stop_ball physics & success"
+        }
+      ]
+    },
+    {
+      "task_id": "clean_table",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "laptop_side / mug_side",
+          "how": "unless force_side+pinned: coin-flip laptop L/R of mug; arm follows mug side",
+          "config_key": "randomize_layout / laptop_side / mug_side / force_side",
+          "notes": "yaml randomize_layout true"
+        },
+        {
+          "param": "mug–laptop gap & pair XY",
+          "how": "gap=U(mug_laptop_gap_min,max) clamped 0.30–0.40; mid±; ±20% rigid X shift; mug_y=U(mug_y_min,max); laptop_y≈base×U(0.7,1.3)",
+          "config_key": "mug_laptop_gap_min|max / mug_y_min|max / laptop_y",
+          "notes": "yaml gaps 0.30–0.40"
+        },
+        {
+          "param": "sponge_y",
+          "how": "sponge_y + U(-0.04,0.04) clipped toward robot on mug half",
+          "config_key": "sponge_y / sponge_dx",
+          "notes": "when randomize_layout"
+        },
+        {
+          "param": "spill_steps / spill speed",
+          "how": "mult=U(1−spill_speed_jitter,1+j); spill_steps=round(base/mult)",
+          "config_key": "spill_steps / spill_speed_jitter",
+          "notes": "yaml j=0.30 (±30%)"
+        },
+        {
+          "param": "spill pattern",
+          "how": "RandomState(spill_seed): wobble/freq/width/side_bias/n_main/puddle_spread",
+          "config_key": "spill_seed (optional pin)",
+          "notes": "else randint seed; irregular lobed stream"
+        },
+        {
+          "param": "décor XY (plant/file/pen/clock)",
+          "how": "upper 30% Y band non-overlap via decor_seed",
+          "config_key": "decor_seed / randomize_layout",
+          "notes": "code defaults if unset"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "mug_id / mug_scale_mult / laptop_id / reach_laptop_level / clean_tol / expert_wipe_level / initial_puddle_level / sponge_grasp_*",
+          "notes": "demo_dynamic.yml clean_table"
+        },
+        {
+          "param": "post_tip_wait / spot_contact_extra / spot_clear_dwell / wipe_safe_z / mug_avoid_margin",
+          "notes": "wipe/success tuning"
+        }
+      ]
+    },
+    {
+      "task_id": "serve_dinner",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "n_meatballs",
+          "how": "if n_meatballs unset: randint(3,5) → 3 or 4",
+          "config_key": "n_meatballs",
+          "notes": "not in GUI TASKS; present in demo_dynamic/demo_kitchens"
+        },
+        {
+          "param": "skillet_id",
+          "how": "choice([0,2])",
+          "config_key": null,
+          "notes": "code-only"
+        },
+        {
+          "param": "meatball micro-jitter",
+          "how": "±0.0015 m XY in pan",
+          "config_key": null,
+          "notes": "packing noise"
+        },
+        {
+          "param": "salad/lettuce/tomato/bottle/cup model_ids",
+          "how": "choice among small id pools for décor assets",
+          "config_key": "salad_x|y / bottle_x|y / cup_x|y / *_scale",
+          "notes": "layout XY fixed from yaml; asset variants random"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "burner / range_xy / plate_x|y / pan_scale / plate_scale / meatball_radius / pour_tip_rad / tilt_hold_dot / knob_contact_radius",
+          "notes": "no randomize_layout flag; layout pinned"
+        },
+        {
+          "param": "scene_id / range_scale_mult / salad_bowl_scale / lettuce_scale / tomato_scale",
+          "notes": "yaml"
+        }
+      ]
+    },
+    {
+      "task_id": "empty_bag",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "bag_side",
+          "how": "if bag_side=random: coin-flip side_sign; else left/right",
+          "config_key": "bag_side",
+          "notes": "yaml demo_dynamic left (fixed); not in GUI TASKS"
+        },
+        {
+          "param": "bag_yaw_deg",
+          "how": "if unset: U(-12,12) deg",
+          "config_key": "bag_yaw_deg",
+          "notes": "demo_kitchens may pin 0.0"
+        },
+        {
+          "param": "rolling apple id",
+          "how": "choice(APPLE_IDS)",
+          "config_key": null,
+          "notes": "code-only"
+        },
+        {
+          "param": "apple_color",
+          "how": "if random: green|red coin-flip then recolor",
+          "config_key": "apple_color",
+          "notes": "yaml random"
+        },
+        {
+          "param": "static veg in bag",
+          "how": "shuffle VEG_IDS, take 2",
+          "config_key": "veg_scale_mult",
+          "notes": "packing props"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "scene_id / bag_x_abs / bag_y / bag_scale_mult / table_edge_y / grasp_tol / grasp_hover_z / grasp_tcp_dz / post_catch_lift",
+          "notes": "demo_dynamic vs demo_kitchens differ slightly on bag_y/veg_scale"
+        },
+        {
+          "param": "knock_arm / catch_arm",
+          "notes": "hardcoded left knock / right catch in simple scenario"
+        }
+      ]
+    },
+    {
+      "task_id": "catch_rolling_cup",
+      "suite": "household",
+      "scenario_options": [],
+      "randomized_params": [
+        {
+          "param": "background textures",
+          "how": "randint + clean_background_rate",
+          "config_key": null,
+          "notes": "not in GUI TASKS; present in demo_dynamic.yml"
+        },
+        {
+          "param": "cup_id",
+          "how": "choice(cup_ids) unless cup_id pinned",
+          "config_key": "cup_ids / cup_id",
+          "notes": "yaml [0,1,2,5,6,3]"
+        },
+        {
+          "param": "cup shelf XY",
+          "how": "right half: x=sign*U(CUP_X_ABS_*), y=U(shelf y band)",
+          "config_key": null,
+          "notes": "arm_side fixed right"
+        },
+        {
+          "param": "décor (basket/apple/mugs/kettle/tissue/alarm)",
+          "how": "random ids; n_mugs=randint(3,5); placement with occupancy",
+          "config_key": null,
+          "notes": "full-width shelf décor"
+        }
+      ],
+      "fixed_but_configurable": [
+        {
+          "param": "roll_speed / fall_speed_xy / tip_duration / table_edge_y / intercept_frac / catch_shelf_clearance / post_grasp_lift / upright_hold",
+          "notes": "yaml fixed speeds (no roll_speed_jitter_frac unlike stop_ball/catch_cup)"
+        }
+      ]
+    }
+  ]
+}
