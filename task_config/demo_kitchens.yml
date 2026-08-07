@@ -235,7 +235,7 @@ task_args:
     board_y: -0.14
     board_center_x_tol: 0.06
     cube_half: 0.012
-    tomato_radius: 0.015
+    tomato_radius: 0.012         # matched to prior cube half
     tilt_hold_dot: 0.82
     tilt_spill_dot: 0.50
     pour_tip_rad: 0.70           # wrist roll for the pour (~40°)
@@ -270,7 +270,7 @@ task_args:
     board_x: 0.16
     board_y: -0.14
     cube_half: 0.012
-    tomato_radius: 0.015
+    tomato_radius: 0.012         # matched to prior cube half
     tilt_hold_dot: 0.82
     tilt_spill_dot: 0.50
     pour_tip_rad: 0.70

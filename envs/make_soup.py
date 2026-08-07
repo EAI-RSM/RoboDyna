@@ -1,11 +1,13 @@
 """Make soup: pour chopping-board vegetables into a pot of water on a lit stove.
 
 KitchenS scene with a cooking range. The burner starts on (fire + knob). A chopping
-board holds colored vegetable cubes (orange, green, purple) and a small red tomato.
-A pot of water sits on the lit burner. The robot lifts the board, carries it roughly
-level over the pot, and tips carefully so the pieces fall in under physics (tilting
-too early / too far drops them onto the table). Success requires every piece in the
-pot and none on the table — no stove-turn step.
+board holds a small carrot, sideways broccoli and mushroom, white onion half,
+and a red tomato (each roughly the old 2.4 cm cube footprint). A pot of water sits on
+the lit burner.
+The robot lifts the board, carries it roughly level over the pot, and tips carefully
+so the pieces fall in under physics (tilting too early / too far drops them onto the
+table). Success requires every piece in the pot and none on the table — no stove-turn
+step.
 """
 from __future__ import annotations
 
@@ -65,16 +67,51 @@ class make_soup(KitchenS_base_task):
     HANDLE_HALF: ClassVar[tuple[float, float, float]] = (0.022, 0.024, 0.022)
     BOARD_COLOR: ClassVar[tuple[float, float, float]] = (0.55, 0.38, 0.22)
     HANDLE_COLOR: ClassVar[tuple[float, float, float]] = (0.72, 0.55, 0.28)
-    CUBE_HALF: ClassVar[float] = 0.012
-    TOMATO_RADIUS: ClassVar[float] = 0.015
+    CUBE_HALF: ClassVar[float] = 0.012  # prior produce cube half-extent (2.4 cm)
+    TOMATO_RADIUS: ClassVar[float] = 0.012  # matched to cube half
     GRASP_TCP_TOL: ClassVar[float] = 0.045
-    VEG_COLORS: ClassVar[dict[str, tuple[float, float, float]]] = {
-        "orange": (0.95, 0.45, 0.08),
-        "green": (0.20, 0.65, 0.22),
-        "purple": (0.55, 0.18, 0.70),
-    }
+    # Board produce ≈ prior cube size. Kenney CC0 meshes + cook_food onion half.
+    # half_h / footprint are post-scale_mult world sizes used for layout + seating.
+    # qpos=None → upright (model +Y → world +Z). "side" → lie on the board.
+    VEG_MESHES: ClassVar[tuple[dict[str, Any], ...]] = (
+        {
+            "name": "carrot",
+            "modelname": "271_carrot",
+            "scale_mult": 1.30,  # procedural carrot, +30%, on its side
+            "footprint": 0.020,
+            "half_h": 0.011,
+            "orient": "side",
+        },
+        {
+            "name": "broccoli",
+            "modelname": "273_broccoli",
+            "scale_mult": 1.105,  # prior 0.85 × 1.3, on its side
+            "footprint": 0.014,
+            "half_h": 0.012,
+            "orient": "side",
+        },
+        {
+            "name": "mushroom",
+            "modelname": "272_mushroom",
+            "scale_mult": 1.17,  # prior 0.90 × 1.3, on its side
+            "footprint": 0.014,
+            "half_h": 0.013,
+            "orient": "side",
+        },
+        {
+            "name": "onion",
+            "modelname": "270_onion_half",
+            "scale_mult": 0.50,  # Ø ~2.3 cm (stock is Ø4.7 cm)
+            "footprint": 0.012,
+            "half_h": 0.003,
+            "orient": "upright",
+            "color": (1.0, 1.0, 1.0),  # white onion
+        },
+    )
     TOMATO_COLOR: ClassVar[tuple[float, float, float]] = (0.90, 0.10, 0.08)
     DECOR_QPOS: ClassVar[list[float]] = [0.70710678, 0.70710678, 0.0, 0.0]
+    # Lie on the board: upright (Y→Z) tipped 90° about world Y (stem along table).
+    SIDE_QPOS: ClassVar[list[float]] = [0.5, 0.5, 0.5, -0.5]
 
     # Soft-friction model during an armed pour: pieces stay on the board until
     # the board's up-axis drops below this (≈35° tip). Past that they free-fall.
@@ -722,7 +759,7 @@ class make_soup(KitchenS_base_task):
 
     def _sample_veg_offsets(
         self, rng: np.random.RandomState, pour_sign: float = -1.0
-    ) -> list[tuple[str, str, tuple[float, float, float], tuple[float, float]]]:
+    ) -> list[tuple[str, str, Any, float, float, tuple[float, float]]]:
         """Non-overlapping produce poses in board-local XY (not a perfect grid).
 
         ``pour_sign`` is −1 when the pour lip is the board's −X edge (right arm)
@@ -732,7 +769,10 @@ class make_soup(KitchenS_base_task):
         hx = float(self.board_half[0])
         hy = float(self.board_half[1])
         # Keep clear of the handle on the −Y edge and of the board rim.
-        margin = max(self.cube_half, self.tomato_radius) + 0.006
+        footprints = [float(s["footprint"]) for s in self.VEG_MESHES] + [
+            float(self.tomato_radius)
+        ]
+        margin = max(footprints) + 0.006
         x_lo, x_hi = -hx + margin, hx - margin
         y_lo, y_hi = -hy + margin + float(self.handle_half[1]) * 0.35, hy - margin
         # Pour-lip half of the board (with a little scatter into the mid-board).
@@ -740,15 +780,28 @@ class make_soup(KitchenS_base_task):
             lip_lo, lip_hi = x_lo, 0.35 * x_lo + 0.65 * (0.5 * (x_lo + x_hi))
         else:
             lip_lo, lip_hi = 0.35 * x_hi + 0.65 * (0.5 * (x_lo + x_hi)), x_hi
-        specs = [
-            ("cube_orange", "cube", self.VEG_COLORS["orange"], self.cube_half),
-            ("cube_green", "cube", self.VEG_COLORS["green"], self.cube_half),
-            ("cube_purple", "cube", self.VEG_COLORS["purple"], self.cube_half),
-            ("tomato", "sphere", self.TOMATO_COLOR, self.tomato_radius),
+        specs: list[tuple[str, str, dict[str, Any], float, float]] = [
+            (
+                str(s["name"]),
+                "mesh",
+                dict(s),
+                float(s["footprint"]),
+                float(s["half_h"]),
+            )
+            for s in self.VEG_MESHES
         ]
+        specs.append(
+            (
+                "tomato",
+                "sphere",
+                {"color": list(self.TOMATO_COLOR)},
+                float(self.tomato_radius),
+                float(self.tomato_radius),
+            )
+        )
         placed: list[tuple[float, float, float]] = []
-        out = []
-        for name, kind, color, rad in specs:
+        out: list[tuple[str, str, dict[str, Any], float, float, tuple[float, float]]] = []
+        for name, kind, payload, rad, half_h in specs:
             ok = False
             for _ in range(80):
                 if rng.rand() < 0.80:
@@ -761,21 +814,36 @@ class make_soup(KitchenS_base_task):
                     for px, py, pr in placed
                 ):
                     placed.append((dx, dy, float(rad)))
-                    out.append((name, kind, color, (dx, dy)))
+                    out.append((name, kind, payload, float(rad), float(half_h), (dx, dy)))
                     ok = True
                     break
             if not ok:
                 # Compact fallback near the pour lip.
                 sx = -1.0 if float(pour_sign) < 0.0 else 1.0
                 fallback = {
-                    "cube_orange": (sx * 0.055, -0.020),
-                    "cube_green": (sx * 0.055, 0.020),
-                    "cube_purple": (sx * 0.022, -0.018),
-                    "tomato": (sx * 0.022, 0.020),
+                    "carrot": (sx * 0.055, -0.020),
+                    "broccoli": (sx * 0.055, 0.020),
+                    "mushroom": (sx * 0.028, -0.018),
+                    "onion": (sx * 0.028, 0.018),
+                    "tomato": (sx * 0.010, 0.000),
                 }[name]
-                out.append((name, kind, color, fallback))
+                out.append((name, kind, payload, float(rad), float(half_h), fallback))
                 placed.append((fallback[0], fallback[1], float(rad)))
         return out
+
+    def _recolor_actor(
+        self, actor: Any, rgb: tuple[float, float, float] | list[float]
+    ) -> None:
+        """Flat-tint a produce mesh (used for the purple onion half)."""
+        r, g, b = [float(v) for v in rgb[:3]]
+        body = getattr(actor, "actor", actor)
+        for c in body.get_components():
+            if isinstance(c, sapien.render.RenderBodyComponent):
+                for s in c.render_shapes:
+                    try:
+                        s.material.set_base_color([r, g, b, 1.0])
+                    except Exception:
+                        pass
 
     def _spawn_vegetables(
         self,
@@ -784,35 +852,42 @@ class make_soup(KitchenS_base_task):
         board_top: float,
         rng: np.random.RandomState | None = None,
     ) -> None:
-        """Colored cubes + a small round tomato resting on the board."""
+        """Carrot / broccoli / mushroom / white onion + tomato on the board."""
         if rng is None:
             rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0)) + 202)
         # Right arm pours over the board's −X lip; left arm over +X.
         pour_sign = -1.0 if str(getattr(self, "arm", "right")) == "right" else 1.0
         layout = self._sample_veg_offsets(rng, pour_sign=pour_sign)
-        for name, kind, color, (dx, dy) in layout:
-            if kind == "cube":
-                h = self.cube_half
-                z = board_top + h + 0.001
-                pose = sapien.Pose([bx + dx, by + dy, z], [1, 0, 0, 0])
-                veg = create_box(
+        for name, kind, payload, rad, half_h, (dx, dy) in layout:
+            if kind == "mesh":
+                # Kenney / onion meshes are Y-up. Upright: +Y→world +Z. Side: identity
+                # so the long axis lies on the board.
+                orient = str(payload.get("orient", "upright"))
+                q = list(self.SIDE_QPOS if orient == "side" else self.DECOR_QPOS)
+                z = board_top + float(half_h) + 0.001
+                pose = sapien.Pose([bx + dx, by + dy, z], q)
+                veg = create_actor(
                     self,
                     pose=pose,
-                    half_size=[h, h, h],
-                    color=list(color),
-                    name=name,
+                    modelname=str(payload["modelname"]),
+                    model_id=0,
+                    convex=True,
                     is_static=False,
+                    scale_mult=float(payload.get("scale_mult", 1.0)),
                 )
+                veg.set_name(name)
                 veg.set_mass(0.012)
+                if payload.get("color") is not None:
+                    self._recolor_actor(veg, payload["color"])
             else:
-                r = self.tomato_radius
+                r = float(self.tomato_radius)
                 z = board_top + r + 0.001
                 pose = sapien.Pose([bx + dx, by + dy, z], [1, 0, 0, 0])
                 entity = create_sphere(
                     self,
                     pose=pose,
                     radius=r,
-                    color=list(color) + [1.0],
+                    color=list(payload["color"]) + [1.0],
                     name=name,
                     is_static=False,
                 )
