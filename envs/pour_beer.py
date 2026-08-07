@@ -500,23 +500,47 @@ class pour_beer(KitchenS_base_task):
             raw = default
         return (float(raw[0]), float(raw[1]))
 
-    def _sample_scalar_or_range(self, cfg, key, default, rng, range_key=None, range_default=None):
+    def _sample_scalar_or_range(
+        self,
+        cfg,
+        key,
+        default,
+        rng,
+        range_key=None,
+        range_default=None,
+        jitter_key=None,
+        jitter_default=0.0,
+        allow_randomize_default_range=True,
+    ):
         """Return a float from a scalar yaml value or a [lo, hi] range.
 
         - ``key: [lo, hi]`` always samples once per episode.
-        - With ``randomize_rates: true``, sample from ``range_key`` (or class
-          ``range_default``) when the scalar ``key`` is not itself a range.
+        - Explicit ``range_key: [lo, hi]`` in cfg samples from that range.
+        - With ``randomize_rates: true`` and ``jitter_key``, sample
+          ``U(scalar*(1±jitter), …)`` around the scalar (preferred for
+          pour_rate / foam_gain ±20%).
+        - Else with ``randomize_rates`` and ``allow_randomize_default_range``,
+          fall back to class ``range_default`` (legacy absolute ranges).
         - Otherwise use the scalar ``key`` / ``default``.
         """
         raw = cfg.get(key, default)
         if isinstance(raw, (list, tuple)) and len(raw) == 2:
             return float(rng.uniform(float(raw[0]), float(raw[1])))
-        if bool(cfg.get("randomize_rates", False)):
-            if range_key is not None and cfg.get(range_key) is not None:
-                lo, hi = self._parse_range(cfg, range_key, range_default or (default, default))
-                return float(rng.uniform(lo, hi))
-            if range_default is not None:
-                return float(rng.uniform(float(range_default[0]), float(range_default[1])))
+        if range_key is not None and cfg.get(range_key) is not None:
+            lo, hi = self._parse_range(cfg, range_key, range_default or (default, default))
+            return float(rng.uniform(lo, hi))
+        if bool(cfg.get("randomize_rates", False)) and jitter_key is not None:
+            base = float(raw if raw is not None else default)
+            j = abs(float(cfg.get(jitter_key, jitter_default)))
+            if j > 0.0:
+                return float(rng.uniform(base * (1.0 - j), base * (1.0 + j)))
+            return base
+        if (
+            bool(cfg.get("randomize_rates", False))
+            and allow_randomize_default_range
+            and range_default is not None
+        ):
+            return float(rng.uniform(float(range_default[0]), float(range_default[1])))
         return float(raw if raw is not None else default)
 
     @staticmethod
@@ -731,28 +755,38 @@ class pour_beer(KitchenS_base_task):
         return base_side, base_cup_y, tap_dy
 
     def _resolve_rates(self, cfg, rng):
+        # pour_rate / foam_gain: ±pour_rate_jitter / ±_gain_jitter (default ±20%)
+        # when randomize_rates, unless an explicit *_range is set.
         self.pour_rate = self._sample_scalar_or_range(
             cfg, "pour_rate", self.POUR_RATE, rng,
             range_key="pour_rate_range", range_default=self.POUR_RATE_RANGE,
+            jitter_key="pour_rate_jitter", jitter_default=0.20,
+            allow_randomize_default_range=False,
         )
         # foam_gain = peak foam % of stream after a continuous open pour.
         self.foam_gain = self._sample_scalar_or_range(
             cfg, "foam_gain", self.FOAM_GAIN, rng,
             range_key="foam_gain_range", range_default=self.FOAM_GAIN_RANGE,
+            jitter_key="foam_gain_jitter", jitter_default=0.20,
+            allow_randomize_default_range=False,
         )
+        # Other foam params stay fixed unless yaml provides a list / *_range.
         self.foam_gain_start = self._sample_scalar_or_range(
             cfg, "foam_gain_start", self.FOAM_GAIN_START, rng,
             range_key="foam_gain_start_range",
             range_default=self.FOAM_GAIN_START_RANGE,
+            allow_randomize_default_range=False,
         )
         self.foam_ramp_steps = int(round(self._sample_scalar_or_range(
             cfg, "foam_ramp_steps", self.FOAM_RAMP_STEPS, rng,
             range_key="foam_ramp_steps_range",
             range_default=self.FOAM_RAMP_STEPS_RANGE,
+            allow_randomize_default_range=False,
         )))
         self.foam_decay = self._sample_scalar_or_range(
             cfg, "foam_decay", self.FOAM_DECAY, rng,
             range_key="foam_decay_range", range_default=self.FOAM_DECAY_RANGE,
+            allow_randomize_default_range=False,
         )
         # Clamp to safe positive bounds.
         self.pour_rate = float(np.clip(self.pour_rate, 1e-5, 0.005))

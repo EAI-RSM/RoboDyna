@@ -117,6 +117,8 @@ task_args:
     ramp_back_y: 0.395          # m; high end world-y (meets back wall)
     ramp_front_y: 0.02          # m; low end world-y (catch side)
     ball_radius: 0.018          # m; ball radius
+    randomize_ramp_params: true # ±ramp_param_jitter on ramp_* + ball_radius
+    ramp_param_jitter: 0.10     # ±10%
     rim_radius: 0.04            # m; cup catch XY tolerance
     x_span: 0.15                # m; ± playable lateral lane half-width
     drop_height: 0.08           # m; drop above ramp top surface
@@ -141,6 +143,7 @@ task_args:
     catch_two_cuboids: false
     # Option 2: opaque colored top lattice (false = glass / see-through).
     opaque_surface: false
+    randomize_cuboid_color: true  # sample cuboid RGB from cuboid_colors pool
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
     cuboid_move_speed_min: 0.04
     cuboid_move_speed_max: 0.10
@@ -249,6 +252,8 @@ task_args:
     n_shelves_min: 4            # per-ep random shelf count low (set n_shelves to pin a fixed count)
     n_shelves_max: 7            # per-ep random shelf count high
     shelf_length: 0.20          # m; shelf length along belt (x)
+    randomize_shelf_params: true  # ±shelf_param_jitter on shelf_length + roll_speed
+    shelf_param_jitter: 0.10      # ±10%
     stack_height: 0.39          # m; bottom→top shelf span; level_gap = stack_height/(n_shelves-1)
     tilt_min_deg: 15.0          # deg; per-shelf tilt magnitude min; direction is
     tilt_max_deg: 45.0          # independently randomized per shelf, see load_actors
@@ -515,6 +520,8 @@ task_args:
     gap_tol: 0.06               # m; curtain-gap vs corridor alignment for “open”
     reach_tol: 0.05             # m; yellow-gap vs corridor alignment for reach
     moving_component_spacing: 0.10  # m; yellow-stick center spacing (2cm tighter)
+    randomize_slot_spacing: true    # ±jitter on yellow-stick spacing
+    moving_component_spacing_jitter: 0.15  # ±15%
     blue_curtains_enabled: true # opt1: spawn blue curtain strips
     blue_curtain_dynamic_enabled: false  # opt2: if true, curtains also sway (implies opt1)
     random_mirror: true         # randomly mirror across y-axis (x→−x); left arm when mirrored
@@ -534,7 +541,9 @@ task_args:
     tube_capacity: 4            # slots / gummies per tube
     layout_mode: random    # Default: alternating; Opt 1: random
     belt_continuous_motion: true  # Opt 2: false = discrete hops; true = hold-to-slide
-    target_color: yellow        # yellow|blue — color to catch
+    target_color: yellow        # fixed when randomize_gummy_colors=false
+    randomize_gummy_colors: true  # sample target+distractor from 5 colors (exclusive)
+    # gummy_colors: [red, yellow, purple, green, blue]
     ball_diameter: 0.03         # m; gummy diameter
     ball_slot_gap: 0.003        # m; vertical gap between stacked gummies in tube
     tube_inner_radius: 0.017    # m; must exceed ball radius
@@ -624,6 +633,8 @@ task_args:
     green_area_x_len: 0.10      # m; keeper placement zone depth (toward field)
     green_area_y_extra: 0.05    # m; extra half-width beyond goal posts
     red_line_x: 0.10            # m; deadline offset from goal (last legal place)
+    randomize_red_line: true    # sample from green border up to red_line_inward_max into green
+    red_line_inward_max: 0.05   # m; max distance from green border toward goal
     goal_x: 0.30                # m; |goal x|; side randomized ±
     keeper_x: 0.16              # m; |target keeper x| in green zone
     keeper_goal_clearance: 0.05 # m; keep keeper clear of goal frame
@@ -653,6 +664,8 @@ task_args:
     motion_x_min: -0.272        # m; left outer clamp (+0.10 m vs 0.172)
     motion_x_max: 0.272         # m; right outer clamp
     blocker_radius: 0.028       # m; disc radius (30% smaller diameter than 0.040)
+    randomize_blocker_radius: true  # ±blocker_radius_jitter when a blocker is enabled
+    blocker_radius_jitter: 0.10     # ±10%
     blocker_thickness: 0.002    # m; blocker disc thickness
     # Distance from target to first/static blocker sampled per episode in [min, max].
     blocker_y_gap_min: 0.050    # m; Opt1 / Opt2 / Opt1+2 static (5 cm)
@@ -679,6 +692,8 @@ task_args:
     tunnel_n_wagons_max: 4      # Opt 2: high
     tunnel_center_jitter: 0.40  # Opt 2: rad; L/R of 12 o'clock for tunnel center
     rail_radius: 0.20           # m; circular rail radius
+    randomize_rail_radius: true # one-sided: U[rail_radius, rail_radius*(1+jitter)]
+    rail_radius_jitter: 0.10    # +0..10%
     train_omega_min: 0.10       # rad/(step·0.01); per-ep speed sample low
     train_omega_max: 0.18       # high; signed direction random ±
     ball_side: random           # random|left|right — ball on −x/+x; matching arm grasps
@@ -758,6 +773,8 @@ task_args:
     # belt_speed_right: 0.0012
     advance_every: 3            # physics steps between belt ticks
     spawn_gap: 0.16             # m; min spacing between successive spawns
+    randomize_spawn_gap: true   # ±spawn_gap_jitter
+    spawn_gap_jitter: 0.20      # ±20%
     pick_y: 0.24                # m; start arm approach; fruit keeps rolling
     pick_y_end: -0.16           # m; past this, too late; fruit loops to far end
     pick_station_y: 0.02        # m; hover/grab line; fruit rolls through without pausing
@@ -868,6 +885,9 @@ task_args:
     # cubic = existing box/tray + square rotating cap; cylinder = hollow
     # circular tray + circular rotating cap.
     container_shape: cylinder  # cubic | cylinder
+    bucket_half: 0.12           # m; container inner half-extent (cap scales with it)
+    randomize_container_radius: true  # ±container_radius_jitter on bucket_half (+ cap)
+    container_radius_jitter: 0.15     # ±15%
     cylinder_hole_inset: 0.025 # cylinder only: keep the hole clear of the plate rim
     cylinder_hole_edge_clearance: 0.008  # keep the full hole disk inside the rim
     spin_speed: 1.9             # angular speed baseline; dir random ±
@@ -988,6 +1008,8 @@ task_args:
     microwave_x_left: -0.32
     microwave_x_right: 0.32
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
+    randomize_boil_steps: true  # ±boil_steps_jitter
+    boil_steps_jitter: 0.20     # ±20%
     settle_steps: 1200          # steps for liquid to return toward baseline when off
     baseline_level: 0.35        # resting fill fraction
     target_ring: 80             # 100 = rim, 0 = pot floor (base before jitter)
@@ -1082,6 +1104,9 @@ task_args:
     station_x_range_right: [0.06, 0.16]
     station_x_range: [0.06, 0.16]
     pour_rate: 0.000715
+    randomize_rates: true       # ±jitter on pour_rate + foam_gain (other foam params stay fixed)
+    pour_rate_jitter: 0.20      # ±20%
+    foam_gain_jitter: 0.20      # ±20%
     # Stream foam % ramps start→peak over foam_ramp_steps of continuous open; resets on close.
     foam_gain_start: 0.18
     foam_gain: 0.85
@@ -1151,6 +1176,8 @@ task_args:
     beans_full: 160             # rim = 100% fill
     force_thresholds: [3.0, 6.0, 10.0, 14.0]   # N  (light → hard)
     beans_per_force_level: [1, 5, 10, 15]       # light → hard press
+    randomize_beans_per_force_level: true       # ±beans_per_force_level_jitter per level
+    beans_per_force_level_jitter: 0.10          # ±10% (kept non-decreasing)
     force_stiffness: 800.0      # N/m spring engagement proxy
     force_engage_slack: 0.05    # m pressure engagement above key top
     press_depths: [0.020, 0.030, 0.044, 0.057]  # expert depths for levels 1–4
@@ -1169,6 +1196,7 @@ task_args:
     scene_id: 0
     target_fill: 0.25
     fill_levels: [0.25, 0.50, 0.75, 1.0]
+    randomize_target_fill: true # sample from fill_levels each episode
     pour_rate: 0.00022
     # Sample fill speed ∼ Uniform(1±pour_rate_jitter) * pour_rate (0 = fixed).
     pour_rate_jitter: 0.15
@@ -1229,6 +1257,8 @@ task_args:
     board_center_x_tol: 0.06     # |board_x| <= tol → either arm
     cube_half: 0.012
     tomato_radius: 0.012         # matched to prior cube half
+    n_veg_min: 2                 # distinct produce count (no duplicates)
+    n_veg_max: 4
     tilt_hold_dot: 0.82
     tilt_spill_dot: 0.50
     pour_tip_rad: 0.70           # wrist roll for the pour (~40°)
@@ -1261,6 +1291,8 @@ task_args:
     board_y: -0.14
     cube_half: 0.012
     tomato_radius: 0.012         # matched to prior cube half
+    n_veg_min: 2
+    n_veg_max: 4
     tilt_hold_dot: 0.82
     tilt_spill_dot: 0.50
     pour_tip_rad: 0.70

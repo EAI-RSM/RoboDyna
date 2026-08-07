@@ -840,7 +840,24 @@ class fill_coffee_jar(KitchenS_base_task):
         thr = cfg.get("force_thresholds", self.FORCE_THRESHOLDS)
         beans_lv = cfg.get("beans_per_force_level", self.BEANS_PER_FORCE_LEVEL)
         self.force_thresholds = tuple(float(x) for x in thr)
-        self.beans_per_force_level = tuple(int(x) for x in beans_lv)
+        beans_base = [int(x) for x in beans_lv]
+        self.randomize_beans_per_force_level = bool(
+            cfg.get("randomize_beans_per_force_level", False)
+        )
+        beans_jitter = float(
+            np.clip(abs(float(cfg.get("beans_per_force_level_jitter", 0.10))), 0.0, 0.95)
+        )
+        if self.randomize_beans_per_force_level and beans_jitter > 0.0:
+            rng_beans = np.random.RandomState(seed + 303)
+            jittered = []
+            for n in beans_base:
+                scale = 1.0 + float(rng_beans.uniform(-beans_jitter, beans_jitter))
+                jittered.append(max(1, int(round(n * scale))))
+            # Keep non-decreasing so harder presses never dispense fewer beans.
+            for i in range(1, len(jittered)):
+                jittered[i] = max(jittered[i], jittered[i - 1])
+            beans_base = jittered
+        self.beans_per_force_level = tuple(beans_base)
         if len(self.force_thresholds) != 4 or len(self.beans_per_force_level) != 4:
             raise ValueError("force_thresholds and beans_per_force_level need length 4")
         if any(

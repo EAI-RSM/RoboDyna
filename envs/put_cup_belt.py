@@ -106,6 +106,15 @@ class put_cup_belt(Base_Task):
         self.reach_tol = float(c.get("reach_tol", self.REACH_TOL_DEFAULT))
         self.slot_spacing = float(c.get("moving_component_spacing",
                                         c.get("slot_spacing", self.MOVING_COMPONENT_SPACING_DEFAULT)))
+        self.randomize_slot_spacing = bool(c.get("randomize_slot_spacing", False))
+        spacing_jitter = float(c.get("moving_component_spacing_jitter",
+                                     c.get("slot_spacing_jitter", 0.15)))
+        spacing_jitter = float(np.clip(abs(spacing_jitter), 0.0, 0.95))
+        if self.randomize_slot_spacing and spacing_jitter > 0.0:
+            self.slot_spacing = float(np.random.uniform(
+                self.slot_spacing * (1.0 - spacing_jitter),
+                self.slot_spacing * (1.0 + spacing_jitter),
+            ))
         # opt1: spawn blue curtains; opt2: make them sway (opt2 implies curtains present)
         opt1 = bool(
             c.get(

@@ -54,6 +54,8 @@ task_args:
     # The pot boils through the whole reach for the knob (~960 steps), so the
     # rise is slow enough that the shutoff motion still lands under overflow.
     boil_steps: 6000            # steps for liquid_level 0→1 while stove is on
+    randomize_boil_steps: true  # ±boil_steps_jitter
+    boil_steps_jitter: 0.20     # ±20%
     settle_steps: 1200          # steps for liquid to return toward baseline when off
     baseline_level: 0.35
     # Red ring mark: 100 = pot rim, 0 = pot floor. Success = reach ring, then off.
@@ -142,6 +144,9 @@ task_args:
     station_x_range_right: [0.06, 0.16]
     station_x_range: [0.06, 0.16]
     pour_rate: 0.000715
+    randomize_rates: true
+    pour_rate_jitter: 0.20
+    foam_gain_jitter: 0.20
     foam_gain_start: 0.18
     foam_gain: 0.85
     foam_ramp_steps: 70
@@ -159,6 +164,7 @@ task_args:
     # target_fill: 0.25 | 0.50 | 0.75 | 1.0 | random  (±fill_tol)
     target_fill: 0.25
     fill_levels: [0.25, 0.50, 0.75, 1.0]
+    randomize_target_fill: true
     pour_rate: 0.00022
     # Sample fill speed ∼ Uniform(1±pour_rate_jitter) * pour_rate (0 = fixed).
     pour_rate_jitter: 0.15
@@ -237,6 +243,8 @@ task_args:
     board_center_x_tol: 0.06
     cube_half: 0.012
     tomato_radius: 0.012         # matched to prior cube half
+    n_veg_min: 2                 # distinct produce count (no duplicates)
+    n_veg_max: 4
     tilt_hold_dot: 0.82
     tilt_spill_dot: 0.50
     pour_tip_rad: 0.70           # wrist roll for the pour (~40°)
@@ -272,6 +280,8 @@ task_args:
     board_y: -0.14
     cube_half: 0.012
     tomato_radius: 0.012         # matched to prior cube half
+    n_veg_min: 2
+    n_veg_max: 4
     tilt_hold_dot: 0.82
     tilt_spill_dot: 0.50
     pour_tip_rad: 0.70

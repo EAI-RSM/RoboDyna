@@ -607,7 +607,17 @@ class catch_shelf_marble(Base_Task):
             self.n_shelves = int(c["n_shelves"])
         else:
             self.n_shelves = int(np.random.randint(self.n_shelves_min, self.n_shelves_max + 1))
-        self.shelf_length = float(c.get("shelf_length", self.SHELF_LENGTH_DEFAULT))
+        self.randomize_shelf_params = bool(c.get("randomize_shelf_params", False))
+        shelf_jitter = float(np.clip(abs(float(c.get("shelf_param_jitter", 0.10))), 0.0, 0.95))
+        j = shelf_jitter if self.randomize_shelf_params else 0.0
+
+        def _pm(mean):
+            mean = float(mean)
+            if j <= 0.0:
+                return mean
+            return float(np.random.uniform(mean * (1.0 - j), mean * (1.0 + j)))
+
+        self.shelf_length = _pm(c.get("shelf_length", self.SHELF_LENGTH_DEFAULT))
         self.shelf_depth = float(c.get("shelf_depth", self.SHELF_DEPTH_DEFAULT))
         self.shelf_thick = float(c.get("shelf_thick", self.SHELF_THICK_DEFAULT))
         self.stack_height = float(c.get("stack_height", self.STACK_HEIGHT_DEFAULT))
@@ -624,11 +634,13 @@ class catch_shelf_marble(Base_Task):
         self.max_stack_span = float(c.get("max_stack_span", self.MAX_STACK_SPAN_DEFAULT))
 
         self.ball_radius = float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT))
-        self.roll_speed = float(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
+        self.roll_speed = _pm(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
         self.max_fall_steps = int(c.get("max_fall_steps", self.MAX_FALL_STEPS_DEFAULT))
 
         self.reactive_marble = self._parse_reactive_marble(c)
-        self.reactive_roll_speed = float(c.get("reactive_roll_speed", self.REACTIVE_ROLL_SPEED_DEFAULT))
+        self.reactive_roll_speed = _pm(
+            c.get("reactive_roll_speed", self.REACTIVE_ROLL_SPEED_DEFAULT)
+        )
         if self.reactive_marble:
             # The marble starts falling immediately (see `play_once`), well before the arm's fixed
             # reach/press sequence finishes -- slow the slide legs down so the descent has a chance

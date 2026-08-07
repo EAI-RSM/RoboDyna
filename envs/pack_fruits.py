@@ -159,6 +159,13 @@ class pack_fruits(Base_Task):
         }
         self.advance_every = int(cfg.get("advance_every", self.ADVANCE_EVERY_DEFAULT))
         self.spawn_gap = float(cfg.get("spawn_gap", self.SPAWN_GAP_DEFAULT))
+        self.randomize_spawn_gap = bool(cfg.get("randomize_spawn_gap", False))
+        sg_jitter = float(np.clip(abs(float(cfg.get("spawn_gap_jitter", 0.20))), 0.0, 0.95))
+        if self.randomize_spawn_gap and sg_jitter > 0.0:
+            self.spawn_gap = float(np.random.uniform(
+                self.spawn_gap * (1.0 - sg_jitter),
+                self.spawn_gap * (1.0 + sg_jitter),
+            ))
         self.pick_y = float(cfg.get("pick_y", self.PICK_Y))
         self.pick_y_end = float(cfg.get("pick_y_end", self.PICK_Y_END))
         self.pick_station_y = float(cfg.get("pick_station_y", self.PICK_STATION_Y))

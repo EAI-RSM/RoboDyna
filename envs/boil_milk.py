@@ -95,9 +95,10 @@ class boil_milk(KitchenS_base_task):
         self._ignore_knob = False
         self._expert_holding_knob = False
         self.force_overflow = bool(self._cfg.get("force_overflow", False))
-        # 100 = rim, 0 = pot floor.
-        ring = float(self._cfg.get("target_ring", self.TARGET_RING_DEFAULT))
-        self.target_ring = float(np.clip(ring, 0.0, 100.0))
+        # Placeholder; load_actors samples the ring with ±jitter from the seed.
+        self.target_ring = float(
+            np.clip(self._cfg.get("target_ring", self.TARGET_RING_DEFAULT), 0.0, 100.0)
+        )
         self.target_level = self.target_ring / 100.0
         self.pot_burner = "left_rear"
 
@@ -143,14 +144,30 @@ class boil_milk(KitchenS_base_task):
                 return name
         return str(rng.choice(names))
 
+    def _sample_target_ring(self, cfg, rng: np.random.RandomState) -> float:
+        """Configured fill mark with multiplicative ±``target_ring_jitter`` (default 10%)."""
+        base = float(cfg.get("target_ring", self.TARGET_RING_DEFAULT))
+        jitter = float(cfg.get("target_ring_jitter", 0.10))
+        if jitter > 0.0:
+            scale = 1.0 + float(rng.uniform(-abs(jitter), abs(jitter)))
+            ring = base * scale
+        else:
+            ring = base
+        return float(np.clip(ring, 0.0, 100.0))
+
     # ---------------------------------------------------------------- actors
     def load_actors(self):
         cfg = self._cfg
         self.boil_steps = int(cfg.get("boil_steps", self.BOIL_STEPS_DEFAULT))
+        self.randomize_boil_steps = bool(cfg.get("randomize_boil_steps", False))
+        bs_jitter = float(np.clip(abs(float(cfg.get("boil_steps_jitter", 0.20))), 0.0, 0.95))
+        rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0) or 0) + 41)
+        if self.randomize_boil_steps and bs_jitter > 0.0:
+            scale = 1.0 + float(rng.uniform(-bs_jitter, bs_jitter))
+            self.boil_steps = max(1, int(round(self.boil_steps * scale)))
         self.settle_steps = int(cfg.get("settle_steps", self.SETTLE_STEPS_DEFAULT))
         self.baseline_level = float(cfg.get("baseline_level", self.BASELINE_LEVEL_DEFAULT))
-        ring = float(cfg.get("target_ring", self.TARGET_RING_DEFAULT))
-        self.target_ring = float(np.clip(ring, 0.0, 100.0))
+        self.target_ring = self._sample_target_ring(cfg, rng)
         self.target_level = self.target_ring / 100.0
         lead = float(cfg.get("shutoff_lead", self.SHUTOFF_LEAD_DEFAULT))
         # Prefer explicit expert_shutoff_level if set; else ring minus lead.
@@ -189,7 +206,6 @@ class boil_milk(KitchenS_base_task):
         if not hasattr(self, "burner_xy"):
             raise UnStableError("cooking range missing — KitchenS base did not load a range")
 
-        rng = np.random.RandomState(int(getattr(self, "_layout_seed", 0) or 0) + 41)
         self.pot_burner = self._select_pot_burner(cfg, rng)
         if self.pot_burner in getattr(self, "burner_positions", {}):
             self.burner_xy = self.burner_positions[self.pot_burner]
@@ -345,7 +361,9 @@ class boil_milk(KitchenS_base_task):
             f"range={np.round(self.range_xy, 3).tolist()} "
             f"mw={None if self.microwave_xy is None else np.round(self.microwave_xy, 3).tolist()} "
             f"burner={self.pot_burner} arm={self.arm} "
-            f"knob_x={float(self.knob_xy[0]):.3f}"
+            f"knob_x={float(self.knob_xy[0]):.3f} "
+            f"target_ring={self.target_ring:.1f}% "
+            f"shutoff={self.expert_shutoff_level:.3f}"
         )
 
     @staticmethod

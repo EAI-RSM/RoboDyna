@@ -388,16 +388,21 @@ class measure_ingredient(KitchenS_base_task):
         self._microwave_pose_choice = "top_left"
 
     def _resolve_target_fill(self, cfg, rng: np.random.RandomState) -> float:
-        """Parse target_fill: 0.25/0.5/0.75/1.0 or ``random``."""
+        """Parse target_fill: 0.25/0.5/0.75/1.0 or ``random``.
+
+        ``randomize_target_fill: true`` forces a choice from ``fill_levels``
+        (default ``[0.25, 0.50, 0.75, 1.0]``), same as ``target_fill: random``.
+        """
+        levels = cfg.get("fill_levels", self.FILL_LEVELS)
+        choices = [float(x) for x in levels]
+        for c in choices:
+            if c not in self.FILL_LEVELS:
+                raise ValueError(
+                    f"fill_levels entry {c} not in {self.FILL_LEVELS}"
+                )
+        randomize = bool(cfg.get("randomize_target_fill", False))
         tf = cfg.get("target_fill", 0.25)
-        if isinstance(tf, str) and tf.strip().lower() == "random":
-            levels = cfg.get("fill_levels", self.FILL_LEVELS)
-            choices = [float(x) for x in levels]
-            for c in choices:
-                if c not in self.FILL_LEVELS:
-                    raise ValueError(
-                        f"fill_levels entry {c} not in {self.FILL_LEVELS}"
-                    )
+        if randomize or (isinstance(tf, str) and tf.strip().lower() == "random"):
             return float(rng.choice(choices))
         level = 0.25 if tf is None else float(tf)
         if level not in self.FILL_LEVELS:

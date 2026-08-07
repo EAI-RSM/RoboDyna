@@ -231,7 +231,14 @@ class drop_ball_hole(Base_Task):
         # Wide so each arm's drop spot stays over the cavity; shallow (low walls) so the tall walls
         # don't block the arm reaching over the centre (the deep-bucket version was unplannable).
         self.bucket_center = np.array([0.0, -0.02])     # x, y at center-mid
-        self.bucket_half = 0.12                         # inner half-extent (xy) -- wide tray
+        self.bucket_half = float(cfg.get("bucket_half", 0.12))  # inner half-extent (xy)
+        self.randomize_container_radius = bool(cfg.get("randomize_container_radius", False))
+        cr_jitter = float(np.clip(abs(float(cfg.get("container_radius_jitter", 0.15))), 0.0, 0.95))
+        if self.randomize_container_radius and cr_jitter > 0.0:
+            self.bucket_half = float(np.random.uniform(
+                self.bucket_half * (1.0 - cr_jitter),
+                self.bucket_half * (1.0 + cr_jitter),
+            ))
         self.bucket_h = 0.15                            # support box / rim height
         wall_t = 0.010
         floor_z = z0

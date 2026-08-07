@@ -25,6 +25,9 @@ class dispense_gummy(Base_Task):
           Hold an arrow key to slide the bowl continuously. Episode speed is sampled
           as ``bowl_speed × U(1 ± belt_speed_jitter)`` (default ±20%).
           CLI: ``--task-arg belt_continuous_motion=true`` or legacy ``--option 2``.
+      - ``randomize_gummy_colors`` — sample target + distractor exclusively from
+          {red, yellow, purple, green, blue}. A cue ball of the target color sits
+          in the bowl from episode start.
     """
 
     TUBE_CAPACITY_DEFAULT = 4
@@ -68,9 +71,14 @@ class dispense_gummy(Base_Task):
     PRESS_LOOP_MAX_STEPS_DEFAULT = 2500
 
     COLORS = {
+        "red": [0.90, 0.18, 0.16],
         "yellow": [0.96, 0.82, 0.18],
+        "purple": [0.58, 0.28, 0.82],
+        "green": [0.22, 0.72, 0.32],
         "blue": [0.20, 0.48, 0.92],
     }
+    COLOR_NAMES = ("red", "yellow", "purple", "green", "blue")
+    RANDOMIZE_GUMMY_COLORS_DEFAULT = False
     TUBE_COLOR = [0.84, 0.93, 1.00]
     FRAME_COLOR = [0.48, 0.48, 0.52]
     VERTICAL_CYLINDER_Q = [0.70710678, 0.0, -0.70710678, 0.0]
@@ -93,11 +101,18 @@ class dispense_gummy(Base_Task):
         self.yellow_missed = 0
         self.blue_caught = 0
         self.blue_dropped = 0
+        self._caught_by_color = {name: 0 for name in self.COLORS}
+        self._missed_by_color = {name: 0 for name in self.COLORS}
+        self.randomize_gummy_colors = False
+        self.distractor_color_name = "blue"
+        self.target_color = "yellow"
         self.press_history = []
         self.tube_centers = {}
         self.discard_anchors = {}
         self.table_top = 0.0
         self.bowl = None
+        self._cue_ball = None
+        self._cue_ball_rigid = None
         self._bowl_target_x = 0.0
         self._bowl_station_idx = 0
         self._belt_key_latched = {"left": False, "right": False}
@@ -542,7 +557,24 @@ class dispense_gummy(Base_Task):
         return entity
 
     def _distractor_color(self):
+        name = getattr(self, "distractor_color_name", None)
+        if name is not None:
+            return str(name)
+        # Legacy binary fallback when colors are not randomized.
         return "blue" if self.target_color == "yellow" else "yellow"
+
+    def _cue_ball_pose(self):
+        bowl_p = self._bowl_center_world()
+        return sapien.Pose(
+            [float(bowl_p[0]), float(bowl_p[1]), float(bowl_p[2] + 0.018)],
+            [1, 0, 0, 0],
+        )
+
+    def _update_cue_ball(self):
+        if self._cue_ball is None:
+            return
+        pose = self._cue_ball_pose()
+        self._set_entity_pose(self._cue_ball, pose)
 
     def _validate_stack_pattern(self):
         distractor = self._distractor_color()
@@ -675,18 +707,20 @@ class dispense_gummy(Base_Task):
         if drop["caught"]:
             record["state"] = "caught"
             self._caught_ball_records.append(record)
+            self._caught_by_color[color] = int(self._caught_by_color.get(color, 0)) + 1
             if color == "yellow":
                 self.yellow_caught += 1
-            else:
+            elif color == "blue":
                 self.blue_caught += 1
             return
 
         record["state"] = "discarded"
         self._set_entity_pose(record["actor"], self._discard_pose(side, self._discard_counts[side]))
         self._discard_counts[side] += 1
+        self._missed_by_color[color] = int(self._missed_by_color.get(color, 0)) + 1
         if color == "yellow":
             self.yellow_missed += 1
-        else:
+        elif color == "blue":
             self.blue_dropped += 1
 
     # ------------------------------------------------------------------ actors
@@ -721,9 +755,41 @@ class dispense_gummy(Base_Task):
         self.belt_key_press_dz = float(cfg.get("belt_key_press_dz", self.BELT_KEY_PRESS_DZ_DEFAULT))
         self.press_loop_tol = float(cfg.get("press_loop_tol", self.PRESS_LOOP_TOL_DEFAULT))
         self.press_loop_max_steps = int(cfg.get("press_loop_max_steps", self.PRESS_LOOP_MAX_STEPS_DEFAULT))
-        self.target_color = str(cfg.get("target_color", "yellow")).strip().lower()
-        if self.target_color not in self.COLORS:
-            raise ValueError("dispense_gummy target_color must be yellow or blue")
+        self.randomize_gummy_colors = bool(
+            cfg.get("randomize_gummy_colors", self.RANDOMIZE_GUMMY_COLORS_DEFAULT)
+        )
+        palette = list(cfg.get("gummy_colors", self.COLOR_NAMES))
+        palette = [str(c).strip().lower() for c in palette]
+        for name in palette:
+            if name not in self.COLORS:
+                raise ValueError(
+                    f"dispense_gummy unknown gummy color {name!r}; "
+                    f"expected one of {list(self.COLORS)}"
+                )
+        if self.randomize_gummy_colors:
+            if len(palette) < 2:
+                raise ValueError("dispense_gummy randomize_gummy_colors needs ≥2 colors")
+            pick = list(np.random.choice(palette, size=2, replace=False))
+            self.target_color = str(pick[0])
+            self.distractor_color_name = str(pick[1])
+        else:
+            self.target_color = str(cfg.get("target_color", "yellow")).strip().lower()
+            if self.target_color not in self.COLORS:
+                raise ValueError(
+                    f"dispense_gummy target_color must be one of {list(self.COLORS)}"
+                )
+            # Legacy default: binary yellow↔blue when not randomizing.
+            if self.target_color == "yellow":
+                self.distractor_color_name = "blue"
+            elif self.target_color == "blue":
+                self.distractor_color_name = "yellow"
+            else:
+                others = [c for c in palette if c != self.target_color] or [
+                    c for c in self.COLOR_NAMES if c != self.target_color
+                ]
+                self.distractor_color_name = str(others[0])
+        self._caught_by_color = {name: 0 for name in self.COLORS}
+        self._missed_by_color = {name: 0 for name in self.COLORS}
 
         # Layout mode (default alternating; Opt 1 = random). Accept legacy difficulty_option.
         layout = cfg.get("layout_mode", None)
@@ -911,14 +977,26 @@ class dispense_gummy(Base_Task):
         self.add_prohibit_area(self.bowl, padding=0.05)
         self.add_prohibit_area(self.belt, padding=0.03)
 
-        # The red key on the left dispenses one gummy from each tube.
-        create_box(
+        # Cue ball of the target color in the bowl (visual reference; not counted).
+        self._cue_ball = create_sphere(
             self,
-            pose=sapien.Pose([self.key_x, self.key_y, self.table_top + 0.010], [1, 0, 0, 0]),
-            half_size=[0.040, 0.040, 0.010],
+            pose=self._cue_ball_pose(),
+            radius=self.ball_radius,
+            color=self.COLORS[self.target_color],
+            is_static=False,
+            name=f"cue_gummy_{self.target_color}",
+        )
+        self._cue_ball_rigid = self._make_kinematic(self._cue_ball)
+
+        # The red key on the left dispenses one gummy from each tube.
+        add_key_base_border(
+            self,
+            float(self.key_x),
+            float(self.key_y),
+            float(self.table_top),
+            self.key_half,
             color=[0.36, 0.36, 0.40],
-            is_static=True,
-            name="dispense_key_base",
+            name_prefix="dispense_key_base",
         )
         self.dispense_key_rest_xyz = [
             self.key_x,
@@ -944,13 +1022,14 @@ class dispense_gummy(Base_Task):
         self.belt_key_top_z = self.table_top + 2.0 * self.key_half[2]
         self.belt_key_rest_xyz = {}
         for side, (key_x, key_y) in self.belt_key_xy.items():
-            create_box(
+            add_key_base_border(
                 self,
-                pose=sapien.Pose([key_x, key_y, self.table_top + 0.010]),
-                half_size=[0.040, 0.034, 0.010],
+                float(key_x),
+                float(key_y),
+                float(self.table_top),
+                self.key_half,
                 color=[0.28, 0.28, 0.31],
-                is_static=True,
-                name=f"belt_key_base_{side}",
+                name_prefix=f"belt_key_base_{side}",
             )
             self.belt_key_rest_xyz[side] = [
                 key_x,
@@ -1022,6 +1101,7 @@ class dispense_gummy(Base_Task):
         self._update_reactive_keys()
         self._animate_keys()
         self._advance_bowl_on_belt()
+        self._update_cue_ball()
         self._update_caught_balls()
 
         if not self._active_drops:
@@ -1094,14 +1174,20 @@ class dispense_gummy(Base_Task):
 
     # ------------------------------------------------------------------ success
     def check_success(self):
-        target_caught = self.yellow_caught if self.target_color == "yellow" else self.blue_caught
-        target_missed = self.yellow_missed if self.target_color == "yellow" else self.blue_dropped
-        distractor_caught = self.blue_caught if self.target_color == "yellow" else self.yellow_caught
+        target_caught = int(self._caught_by_color.get(self.target_color, 0))
+        target_missed = int(self._missed_by_color.get(self.target_color, 0))
+        distractor = self._distractor_color()
+        distractor_caught = int(self._caught_by_color.get(distractor, 0))
+        # Any non-target ball in the bowl fails (covers multi-color future layouts).
+        non_target_caught = sum(
+            int(n) for name, n in self._caught_by_color.items() if name != self.target_color
+        )
         return bool(
             (not self.invalid_pattern)
             and target_caught == self.total_target
             and target_missed == 0
             and distractor_caught == 0
+            and non_target_caught == 0
         )
 
     def get_obs(self):
@@ -1111,7 +1197,11 @@ class dispense_gummy(Base_Task):
             "yellow_missed": int(self.yellow_missed),
             "blue_caught": int(self.blue_caught),
             "blue_dropped": int(self.blue_dropped),
+            "caught_by_color": {k: int(v) for k, v in self._caught_by_color.items()},
+            "missed_by_color": {k: int(v) for k, v in self._missed_by_color.items()},
             "target_color": self.target_color,
+            "distractor_color": self._distractor_color(),
+            "randomize_gummy_colors": bool(self.randomize_gummy_colors),
             "layout_mode": str(self.layout_mode),
             "belt_continuous_motion": bool(self.belt_continuous_motion),
             "bowl_speed": float(self.bowl_speed),

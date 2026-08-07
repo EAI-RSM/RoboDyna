@@ -147,6 +147,15 @@ class hit_target(Base_Task):
         self.blocker_enabled = bool(cfg.get("blocker_enabled", self.BLOCKER_ENABLED_DEFAULT))  # Opt 1
         self.blocker_dynamic = bool(cfg.get("blocker_dynamic", self.BLOCKER_DYNAMIC_DEFAULT))  # Opt 2
         self.blocker_radius = float(cfg.get("blocker_radius", self.BLOCKER_RADIUS_DEFAULT))
+        self.randomize_blocker_radius = bool(cfg.get("randomize_blocker_radius", False))
+        br_jitter = float(np.clip(abs(float(cfg.get("blocker_radius_jitter", 0.10))), 0.0, 0.95))
+        if self.randomize_blocker_radius and br_jitter > 0.0 and (
+            self.blocker_enabled or self.blocker_dynamic
+        ):
+            self.blocker_radius = float(np.random.uniform(
+                self.blocker_radius * (1.0 - br_jitter),
+                self.blocker_radius * (1.0 + br_jitter),
+            ))
         self.blocker_radius = min(self.blocker_radius, self.board_radius * 0.95)
         self.blocker_thickness = float(cfg.get("blocker_thickness", self.BLOCKER_THICKNESS_DEFAULT))
         gap_min = abs(float(cfg.get("blocker_y_gap_min", self.BLOCKER_Y_GAP_MIN_DEFAULT)))

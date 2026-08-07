@@ -247,6 +247,13 @@ class load_train(Base_Task):
         self.rail_cx = float(cfg.get("rail_center_x", self.RAIL_CENTER_X_DEFAULT))
         self.rail_cy = float(cfg.get("rail_center_y", self.RAIL_CENTER_Y_DEFAULT))
         self.rail_radius = float(cfg.get("rail_radius", self.RAIL_RADIUS_DEFAULT))
+        self.randomize_rail_radius = bool(cfg.get("randomize_rail_radius", False))
+        # One-sided: current radius as lower bound, up to +rail_radius_jitter (default +10%).
+        rr_jitter = float(np.clip(abs(float(cfg.get("rail_radius_jitter", 0.10))), 0.0, 0.95))
+        if self.randomize_rail_radius and rr_jitter > 0.0:
+            self.rail_radius = float(np.random.uniform(
+                self.rail_radius, self.rail_radius * (1.0 + rr_jitter)
+            ))
         self.rail_segments = int(cfg.get("rail_segments", self.RAIL_SEGMENTS_DEFAULT))
         self.rail_half_w = float(cfg.get("rail_half_w", self.RAIL_HALF_W_DEFAULT))
         self.rail_thick = float(cfg.get("rail_thick", self.RAIL_THICK_DEFAULT))

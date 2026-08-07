@@ -44,6 +44,9 @@ class catch_ramp_ball(Base_Task):
     X_SPAN_DEFAULT = 0.15
     DROP_HEIGHT_DEFAULT = 0.10
     DROP_TIME_DEFAULT = 0.50
+    # Per-episode ±jitter on ramp_* + ball_radius when randomize_ramp_params.
+    RANDOMIZE_RAMP_PARAMS_DEFAULT = False
+    RAMP_PARAM_JITTER_DEFAULT = 0.10
 
     WALL_BOUNCE_ENABLED_DEFAULT = False
     ENABLE_DISTRACTOR_DEFAULT = False
@@ -146,13 +149,34 @@ class catch_ramp_ball(Base_Task):
         scale = float(np.random.uniform(min(scale_min, scale_max), max(scale_min, scale_max)))
         return float(max(1e-4, nominal * scale))
 
+    @staticmethod
+    def _sample_pm(mean, jitter):
+        """Sample uniformly in ``[mean*(1-jitter), mean*(1+jitter)]``."""
+        mean = float(mean)
+        jitter = float(max(jitter, 0.0))
+        lo, hi = mean * (1.0 - jitter), mean * (1.0 + jitter)
+        if lo > hi:
+            lo, hi = hi, lo
+        if abs(hi - lo) < 1e-12:
+            return mean
+        return float(np.random.uniform(lo, hi))
+
     # ----------------------------------------------------------------- actors
     def load_actors(self):
         c = self._cfg
         self.table_top = 0.74 + self.table_z_bias
-        ang = float(c.get("ramp_angle", self.RAMP_ANGLE_DEFAULT))
+        self.randomize_ramp_params = bool(
+            c.get("randomize_ramp_params", self.RANDOMIZE_RAMP_PARAMS_DEFAULT)
+        )
+        ramp_jitter = float(c.get("ramp_param_jitter", self.RAMP_PARAM_JITTER_DEFAULT))
+        ramp_jitter = float(np.clip(abs(ramp_jitter), 0.0, 0.95))
+        j = ramp_jitter if self.randomize_ramp_params else 0.0
+
+        ang = self._sample_pm(c.get("ramp_angle", self.RAMP_ANGLE_DEFAULT), j)
         self.ramp_angle = ang
-        self.ball_radius = float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT))
+        self.ball_radius = self._sample_pm(
+            c.get("ball_radius", self.BALL_RADIUS_DEFAULT), j
+        )
         self.settle_steps = int(c.get("settle_steps", self.SETTLE_STEPS_DEFAULT))
         self.rim_radius = float(c.get("rim_radius", self.RIM_RADIUS_DEFAULT))
         self.drop_height = float(c.get("drop_height", self.DROP_HEIGHT_DEFAULT))
@@ -171,7 +195,9 @@ class catch_ramp_ball(Base_Task):
         self.release_clearance = float(
             c.get("release_clearance", self.RELEASE_CLEARANCE_DEFAULT)
         )
-        self.ramp_friction = float(c.get("ramp_friction", self.RAMP_FRICTION_DEFAULT))
+        self.ramp_friction = self._sample_pm(
+            c.get("ramp_friction", self.RAMP_FRICTION_DEFAULT), j
+        )
         fall_t = float(c.get("fall_time", self.FALL_TIME_DEFAULT))
         idle_t = float(np.random.uniform(
             c.get("idle_time_min", self.IDLE_TIME_MIN_DEFAULT),
@@ -182,8 +208,10 @@ class catch_ramp_ball(Base_Task):
         self.idle_steps = int(round(idle_t * self.SIM_HZ))
 
         # Ramp sized so the high end meets the white back wall.
-        back_y = float(c.get("ramp_back_y", self.RAMP_BACK_Y_DEFAULT))
-        front_y = float(c.get("ramp_front_y", self.RAMP_FRONT_Y_DEFAULT))
+        back_y = self._sample_pm(c.get("ramp_back_y", self.RAMP_BACK_Y_DEFAULT), j)
+        front_y = self._sample_pm(c.get("ramp_front_y", self.RAMP_FRONT_Y_DEFAULT), j)
+        if front_y >= back_y:
+            front_y = float(back_y) - 0.02
         cos_a = float(np.cos(ang))
         sin_a = float(np.sin(ang))
         hy = (back_y - front_y) / max(2.0 * cos_a, 1e-6)

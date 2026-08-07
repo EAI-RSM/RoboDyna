@@ -830,6 +830,15 @@ class save_goal(Base_Task):
         self.green_area_x_len = float(c.get("green_area_x_len", self.GREEN_AREA_X_LEN_DEFAULT))
         self.green_area_y_extra = float(c.get("green_area_y_extra", self.GREEN_AREA_Y_EXTRA_DEFAULT))
         self.red_line_goal_offset = float(c.get("red_line_x", c.get("red_line_y", self.RED_LINE_X_DEFAULT)))
+        # When on: red line starts at the field-side green border and may move up to
+        # red_line_inward_max (default 5 cm) into the green toward the goal.
+        self.randomize_red_line = bool(c.get("randomize_red_line", False))
+        inward_max = abs(float(c.get("red_line_inward_max", 0.05)))
+        if self.randomize_red_line:
+            border = float(self.green_area_x_len)
+            lo = max(1e-3, border - inward_max)
+            hi = max(lo, border)
+            self.red_line_goal_offset = float(np.random.uniform(lo, hi))
 
         self.keeper_x_abs = float(c.get("keeper_x", c.get("keeper_y", self.KEEPER_X_DEFAULT)))
         self.keeper_pose_tol = float(c.get("keeper_pose_tol", self.KEEPER_POSE_TOL_DEFAULT))
