@@ -141,7 +141,7 @@ task_args:
     station_x_range_left: [-0.16, -0.06]
     station_x_range_right: [0.06, 0.16]
     station_x_range: [0.06, 0.16]
-    pour_rate: 0.00055
+    pour_rate: 0.000715
     foam_gain_start: 0.18
     foam_gain: 0.85
     foam_ramp_steps: 70
@@ -151,6 +151,7 @@ task_args:
     expert_foam_pause: 0.16
     expert_foam_resume: 0.09
     target_liquid: 0.90
+    safe_total: 0.96
     full_liquid_tol: 0.05
   measure_ingredient:
     # Baking counter (no sink/tap/stove): pour oil, then place jar on scale.
@@ -180,7 +181,7 @@ task_args:
     disp_y: 0.08
     disp_y_jitter: 0.06
     jar_y: -0.06
-    jar_start_gap: 0.12
+    jar_start_gap: 0.025
     scale_x: -0.32
     scale_y: -0.14
     scale_dist: 0.25

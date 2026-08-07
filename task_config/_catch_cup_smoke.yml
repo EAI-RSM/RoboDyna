@@ -865,9 +865,9 @@ task_args:
     knob_contact_radius: 0.06
   pour_beer:
     # KitchenS: pull the hinged beer-tap lever by hand; flow follows opening.
-    # Pause so foam settles; foam over the rim = fail. Fill glass (~90% beer) to succeed.
+    # Pause so foam settles; foam over the rim = fail. Fill glass (>90% beer) to succeed.
     scene_id: 0
-    pour_rate: 0.00055
+    pour_rate: 0.000715
     foam_gain_start: 0.18
     foam_gain: 0.85
     foam_ramp_steps: 70
@@ -875,6 +875,7 @@ task_args:
     expert_foam_pause: 0.16
     expert_foam_resume: 0.09
     target_liquid: 0.90
+    safe_total: 0.96
     full_liquid_tol: 0.05
   clean_table:
     # Cup tips; brown spill grows toward laptop (~30 cm). Wipe with sponge in time.
@@ -903,7 +904,7 @@ task_args:
     station_x: -0.08
     disp_y: 0.08
     jar_y: -0.06
-    jar_start_gap: 0.12
+    jar_start_gap: 0.025
     scale_x: -0.32
     scale_y: -0.14
     scale_dist: 0.25

@@ -958,8 +958,7 @@ def _fill_level_detail(env, task: str) -> str:
         except Exception:
             total = liq + foam
         tgt = 100.0 * float(getattr(env, "target_liquid", 0.90))
-        tol = 100.0 * float(getattr(env, "full_liquid_tol", 0.05))
-        band = f"target={tgt - tol:.0f}–{tgt + tol:.0f}%"
+        band = f"need>{tgt:.0f}%"
         if bool(getattr(env, "overflowed", False)):
             return f"OVERFLOW beer={liq:.0f}% foam={foam:.0f}% total={total:.0f}%"
         return f"beer={liq:.0f}% foam={foam:.0f}% total={total:.0f}% {band}"

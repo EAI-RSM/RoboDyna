@@ -1,8 +1,9 @@
 """Push a marked jar under an oil nozzle and fill it to a target ring.
 
 KitchenS prep-counter scene (no sink / tap / stove): silver oil dispenser, marked
-glass jar in front of the nozzle, electronic scale (scene prop), and baking props.
-The robot pushes the jar under the nozzle (``catch_cup`` pillow-style contact shove),
+glass jar a few centimeters in front of the nozzle, electronic scale (scene prop),
+and baking props. The robot pushes the jar under the nozzle
+(``catch_cup`` pillow-style contact shove),
 presses the green key to latch oil ON (key turns red), then presses OFF at the
 target fill. Oil that misses the jar mouth (jar not under the nozzle, or pushed
 past it) puddles on the table and fails the episode. The scale is not required
@@ -42,7 +43,8 @@ class measure_ingredient(KitchenS_base_task):
     JAR_BOTTOM_T = 0.005
     JAR_MASS = 0.22
     # Jar spawns this far toward the robot (−Y) from the fill/nozzle target.
-    JAR_START_GAP = 0.12
+    # Small gap → only a short shove (~2–3 cm) to seat under the spout.
+    JAR_START_GAP = 0.025
     # Nozzle must land within this radius of the jar center to fill (else spill).
     JAR_CATCH_R = 0.028
 
