@@ -428,6 +428,23 @@ class CookMeatHelperTests(unittest.TestCase):
             cook_meat._update_kinematic_tasks(task)
         self.assertEqual(st["doneness"], 0.5)
 
+    def test_set_station_cook_off_freezes_doneness(self) -> None:
+        """Pressing OFF (cook_on→False) freezes the shutoff score immediately."""
+        task = object.__new__(cook_meat)
+        st = {
+            "doneness": 0.52,
+            "max_doneness": 0.52,
+            "grasp_doneness": None,
+            "cook_on": True,
+            "cooking_active": True,
+            "cook_phase_done": False,
+            "_pending_off": False,
+        }
+        cook_meat._set_station_cook_on(task, st, False)
+        self.assertFalse(st["cook_on"])
+        self.assertEqual(st["grasp_doneness"], 0.52)
+        self.assertTrue(st["cook_phase_done"])
+
     def test_key_color_switches_green_to_red(self) -> None:
         """Keycap render color is green when up and red when down."""
         task = object.__new__(cook_meat)

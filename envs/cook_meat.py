@@ -31,8 +31,9 @@ class cook_meat(Base_Task):
     """Cook a steak into a configured doneness range via a cook key.
 
     Default: place steak on the pan, press the key to latch cooking ON (key
-    stays down), press again to latch OFF when doneness is in range. Success
-    is doneness-in-range at shutoff — steak may stay on the pan.
+    stays down), press again while ON to latch OFF (cooking stops on that
+    press; stove does not turn off by itself). Success is doneness-in-range
+    at shutoff — steak may stay on the pan.
 
     Options (``task_args.cook_meat``; independent toggles):
       Opt 1 — hold cook  →  ``cook_button_enabled`` (**default: false**)
@@ -1192,7 +1193,8 @@ class cook_meat(Base_Task):
     def _update_reactive_cook_keys(self) -> None:
         """Animate keys; latch ON/OFF (default) or spring hold (Opt 1).
 
-        Latch: press while OFF → ON (stays down); press while ON → OFF on release.
+        Latch: press while OFF → ON (stays down, cooking runs); press while ON →
+        OFF immediately (cooking stops). Stove never turns off by itself.
         Hold (Opt 1): key springs with the gripper; no latch state.
         Keycap turns red while depressed and green when up.
         """
@@ -1223,24 +1225,15 @@ class cook_meat(Base_Task):
                 if not st.get("cook_on"):
                     if tag in triggered:
                         self._set_station_cook_on(st, True)
-                        # Keep touch latched for this press so release does not
-                        # immediately look like a second OFF press.
+                        # Consume this press so release is not a fresh edge.
                         st["_touch_latched"] = True
-                        st["_pending_off"] = False
                     else:
                         st["_touch_latched"] = touching
-                        st["_pending_off"] = False
                     continue
 
+                # Rising tip edge while ON → OFF now; cooking stops with cook_on.
                 if touching and not st.get("_touch_latched"):
-                    st["_pending_off"] = True
-                if (
-                    st.get("_pending_off")
-                    and not touching
-                    and st.get("_touch_latched")
-                ):
                     self._set_station_cook_on(st, False)
-                    st["_pending_off"] = False
                 st["_touch_latched"] = touching
 
         for st in stations:
@@ -1267,6 +1260,7 @@ class cook_meat(Base_Task):
                     # Freeze score whenever the key is up (success needs shutoff).
                     st["grasp_doneness"] = float(st["doneness"])
             else:
+                # Latch: cook only while cook_on (OFF press clears it immediately).
                 if st.get("cook_on") and on_pan:
                     self._advance_station_cook(st)
         # Keep primary aliases in sync for obs / success helpers.
@@ -1328,12 +1322,15 @@ class cook_meat(Base_Task):
         return self.grasp_actor(actor, arm_tag=arm_tag, **kwargs)
 
     def _press_cook_keys(self, want_on: bool) -> None:
-        """Press each station's cook key to latch ON or OFF (measure_ingredient style).
+        """Press each station's cook key to latch ON or OFF.
 
         ON: cooking starts at depress; key stays down after the EE lifts.
-        OFF: cooking continues through the press; freeze only after release when
-        the key returns up. Uses absolute ``move_to_pose`` hover/press targets.
+        OFF: cooking stops at depress (``cook_on`` clears); key stays visually
+        down under the gripper via ``_expert_key_held``, then springs up on
+        release. Cooking never stops before that press.
+        Uses absolute ``move_to_pose`` hover/press targets.
         """
+        want_on = bool(want_on)
         for st in self.stations:
             if st["cook_key"] is None:
                 raise RuntimeError("cook_meat: cook_key missing")
@@ -1343,7 +1340,6 @@ class cook_meat(Base_Task):
         hover = float(getattr(self, "key_hover_dis", self.KEY_HOVER_DIS_DEFAULT))
         # Target TCP near the key top; EE frame is EE_TO_TCP above TCP.
         press_above = max(0.0, hover - float(self.key_press_depth))
-        want_on = bool(want_on)
 
         def _press_pair(left_st, right_st=None) -> None:
             if right_st is None:
@@ -1354,17 +1350,14 @@ class cook_meat(Base_Task):
                     self.move_to_pose(arm, self._cook_key_tip_pose(left_st, press_above))
                 )
                 left_st["_expert_key_held"] = True
-                if want_on:
-                    self._set_station_cook_on(left_st, True)
+                # Latch state changes at depress (ON starts / OFF stops cooking).
+                self._set_station_cook_on(left_st, want_on)
                 # Brief dwell at bottom so the depress is visible in demos.
                 for _ in range(4):
                     self._update_kinematic_tasks()
                     self.scene.step()
                 self.move(self.move_to_pose(arm, self._cook_key_tip_pose(left_st, hover)))
                 left_st["_expert_key_held"] = False
-                if not want_on:
-                    # OFF applies on release (key springs up).
-                    self._set_station_cook_on(left_st, False)
                 self.move(self.open_gripper(arm))
                 return
 
@@ -1380,8 +1373,7 @@ class cook_meat(Base_Task):
             )
             for st in (left_st, right_st):
                 st["_expert_key_held"] = True
-                if want_on:
-                    self._set_station_cook_on(st, True)
+                self._set_station_cook_on(st, want_on)
             for _ in range(4):
                 self._update_kinematic_tasks()
                 self.scene.step()
@@ -1391,8 +1383,6 @@ class cook_meat(Base_Task):
             )
             for st in (left_st, right_st):
                 st["_expert_key_held"] = False
-                if not want_on:
-                    self._set_station_cook_on(st, False)
             self.move(self.open_gripper(la), self.open_gripper(ra))
 
         if len(self.stations) == 1:
