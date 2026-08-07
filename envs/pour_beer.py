@@ -2,9 +2,8 @@
 
 Chrome draft tower with a low-resistance wooden lever. The handle has collision
 so the gripper can press the knob; while contacted it free-follows the hand,
-and a snappy spring returns it upright (cutting flow) as soon as contact is
-lost. Beer stream thickness and fill rate scale with how far the handle is
-turned. Foaminess of the stream
+and a soft spring returns it upright only when free. Beer stream thickness and
+fill rate scale with how far the handle is turned. Foaminess of the stream
 ramps up the longer the tap stays open in one continuous pour, and resets when
 the tap is closed then reopened. Overflow fails with a yellow stain.
 
@@ -67,9 +66,8 @@ class pour_beer(KitchenS_base_task):
     LEVER_OPEN_RAD = 0.55 * np.pi  # ~99° forward (−Y) when fully open
     LEVER_DEADZONE = 0.03  # rad — small; past this, flow starts promptly
     LEVER_OPEN_THRESH = 0.18  # rad — counts as "opened" for success
-    # Snappy spring return (rad/tick) — only when the gripper is NOT contacting.
-    # ~0.06 rad/tick closes a full open (~1.73 rad) in ~0.12s and cuts flow fast.
-    LEVER_RETURN_STEP = 0.06
+    # Soft spring return (rad/tick) — only when the gripper is NOT contacting.
+    LEVER_RETURN_STEP = 0.012
     # Gripper↔knob engagement (pressure proxy + contact).
     # Keep engage tight; release radius is larger so the spring doesn't flick
     # back into the hand from brief proximity gaps (that shoved the arm).
@@ -79,7 +77,7 @@ class pour_beer(KitchenS_base_task):
     LEVER_RELEASE_R = 0.055  # m; stay engaged until this far from the tip
     LEVER_CONTACT_FORCE_N = 1.2  # N; light finger contact on the knob engages
     LEVER_HOLD_FORCE_N = 0.4  # N; residual contact keeps hold (no spring)
-    LEVER_PRESS_LOST_GRACE = 12  # ~50ms at 250Hz before spring snaps shut
+    LEVER_PRESS_LOST_GRACE = 50  # ~0.2s at 250Hz before spring return
     # Slow track + hold deadband: stable TCP must freeze the lever (no bounce).
     LEVER_TRACK_STEP = 0.028  # rad/tick while pressed (~1.6°/tick)
     LEVER_HOLD_DEADBAND = 0.035  # rad; |target−cur| below this → hold pose
@@ -98,13 +96,11 @@ class pour_beer(KitchenS_base_task):
     LEVER_HOVER = 0.05
     LEVER_GRASP_Z = 0.0
 
-    # Success requires liquid_level strictly above this (e.g. >90%).
     TARGET_LIQUID = 0.90
-    # Kept for config/UI compatibility; success no longer uses a ± band.
     FULL_LIQUID_TOL = 0.05
     # Max rate at full open (per physics step); scales with lever angle.
     # Keep modest — long IK arcs while open still advance fill every tick.
-    POUR_RATE = 0.000715
+    POUR_RATE = 0.00055
     # Foam % of the stream ramps with continuous open time (resets on close).
     # Start low so a fresh crack is mostly beer; peak encourages pause-and-pour.
     FOAM_GAIN_START = 0.18
@@ -114,7 +110,7 @@ class pour_beer(KitchenS_base_task):
     # Fraction of collapsing foam that becomes beer (modest — no end surge).
     FOAM_TO_LIQUID = 0.28
     # Per-episode sample ranges when randomize_rates / [lo,hi] yaml values are used.
-    POUR_RATE_RANGE = (0.00052, 0.000975)
+    POUR_RATE_RANGE = (0.00040, 0.00075)
     FOAM_GAIN_RANGE = (0.65, 1.05)  # peak foam % range when randomize_rates
     FOAM_GAIN_START_RANGE = (0.10, 0.28)
     FOAM_RAMP_STEPS_RANGE = (50, 100)
@@ -122,8 +118,7 @@ class pour_beer(KitchenS_base_task):
     OVERFLOW_LEVEL = 1.0
     EXPERT_FOAM_PAUSE = 0.16
     EXPERT_FOAM_RESUME = 0.09
-    # Expert pour cap (beer+foam) — above TARGET so liquid can clear 90%.
-    SAFE_TOTAL = 0.96
+    SAFE_TOTAL = 0.90
     # Tap must stay fully idle this long before success can pass.
     # 1s gap avoids mid-pour / spring-return flicker latching success while the
     # lever still looks open or foam is still collapsing into beer.
@@ -132,7 +127,7 @@ class pour_beer(KitchenS_base_task):
     # episode and score via check_success (success if criteria met, else fail).
     OPEN_GAP_TIMEOUT_SEC = 5.0
     TAP_IDLE_ANGLE = 0.02  # rad — upright enough to count as closed
-    TAP_IDLE_VEL = 0.05  # rad/step — below return step once nearly shut
+    TAP_IDLE_VEL = 0.012  # rad/step — not still springing
     # Liquid must not rise more than this while idle (blocks foam→beer "filling").
     LIQUID_STABLE_EPS = 1e-5
 
@@ -1670,7 +1665,7 @@ class pour_beer(KitchenS_base_task):
                 self._lever_ang_vel = 0.0
                 return
 
-        # Truly free → snappy spring shut (constant rate so flow cuts promptly).
+        # Truly free → soft spring back to upright.
         self._lever_pressed = False
         self._lever_press_lost_steps = 0
         self._lever_target_filt = None
@@ -1678,7 +1673,11 @@ class pour_beer(KitchenS_base_task):
             self._lever_ang_vel = 0.0
             return
         cur = float(self.lever_angle)
-        rate = float(self.LEVER_RETURN_STEP)
+        span = max(self.lever_open_rad, 1e-6)
+        rate = max(
+            0.004,
+            float(self.LEVER_RETURN_STEP) * (0.35 + 0.65 * cur / span),
+        )
         self._apply_lever_pose(max(0.0, cur - rate))
 
     # ------------------------------------------------------------------ fluids
@@ -2203,8 +2202,7 @@ class pour_beer(KitchenS_base_task):
         rate_scale = float(np.clip(rate_scale, 0.75, 2.2))
         pour_idle = int(round(150 * rate_scale))
         max_cycles = int(round(14 * max(1.0, rate_scale)))
-        # Pour until beer is clearly past the >target success gate.
-        close_at = max(0.10, float(self.target_liquid) + 0.02)
+        close_at = max(0.10, float(self.target_liquid) - 0.02)
         # Leave headroom so spring-return ticks after release cannot crest the rim.
         pour_cap = min(float(self.safe_total) - 0.04, close_at)
         for cycle in range(max_cycles):
@@ -2316,7 +2314,9 @@ class pour_beer(KitchenS_base_task):
             return False
         if not bool(getattr(self, "closed_after_pour", False)):
             return False
-        liquid_ok = float(self.liquid_level) > float(self.target_liquid)
+        lo = float(self.target_liquid) - float(self.full_liquid_tol)
+        hi = float(self.target_liquid) + float(self.full_liquid_tol)
+        liquid_ok = lo <= float(self.liquid_level) <= hi
         not_overfull = self._total_fill() < float(self.overflow_level) - 0.02
         return bool(liquid_ok and not_overfull)
 
