@@ -43,7 +43,7 @@ class cook_meat(Base_Task):
           CLI: ``--task-arg dual_setup_enabled=true`` or ``--option 2``.
       Opt 1+2 — dual stations with hold-to-cook keys.
 
-    ``max_episode_steps`` (default 600) caps eval ``step_lim`` and collection
+    ``max_episode_steps`` (default 15000) caps eval ``step_lim`` and collection
     length for every scenario (default / Opt1 / Opt2 / Opt1+2).
 
     Keycap is green when up and red when depressed (latched ON, or held in
@@ -53,7 +53,7 @@ class cook_meat(Base_Task):
     COOK_STEPS_DEFAULT: ClassVar[int] = 549  # ~40% faster than prior 769
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
     TARGET_DONENESS_DEFAULT: ClassVar[float] = 0.5
-    MAX_EPISODE_STEPS_DEFAULT: ClassVar[int] = 600  # eval / collection episode cutoff
+    MAX_EPISODE_STEPS_DEFAULT: ClassVar[int] = 15000  # eval / collection episode cutoff
     COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = False  # false=latch; true=hold (Opt 1)
     DUAL_SETUP_ENABLED_DEFAULT: ClassVar[bool] = False  # Opt 2
     TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.45, 0.55)

@@ -273,13 +273,13 @@ class CookMeatHelperTests(unittest.TestCase):
         task._apply_legacy_option()
         self.assertTrue(task._cook_cfg["dual_setup_enabled"])
 
-    def test_apply_max_episode_steps_default_600(self) -> None:
-        """Default / missing config uses 600 for step_lim and collection cutoff."""
+    def test_apply_max_episode_steps_default_15000(self) -> None:
+        """Default / missing config uses 15000 for step_lim and collection cutoff."""
         task = object.__new__(cook_meat)
         task.max_episode_steps = cook_meat.MAX_EPISODE_STEPS_DEFAULT
         task._apply_max_episode_steps()
-        self.assertEqual(task.step_lim, 600)
-        self.assertEqual(task._max_episode_steps, 600)
+        self.assertEqual(task.step_lim, 15000)
+        self.assertEqual(task._max_episode_steps, 15000)
         self.assertFalse(task._episode_timed_out)
 
     def test_apply_max_episode_steps_from_config_value(self) -> None:

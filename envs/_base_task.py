@@ -169,24 +169,13 @@ class Base_Task(gym.Env):
             raise UnStableError(
                 f'Objects is unstable in seed({kwags.get("seed", 0)}), unstable objects: {", ".join(unstable_list)}')
 
+        # Shared cutoff for every task (classic RoboTwin base + household + dynamic).
+        from .utils.household_view import EPISODE_MAX_STEPS
+
+        self._max_episode_steps = int(EPISODE_MAX_STEPS)
+        self._episode_timed_out = False
         if self.eval_mode:
-            with open(os.path.join(CONFIGS_PATH, "_eval_step_limit.yml"), "r") as f:
-                try:
-                    data = yaml.safe_load(f)
-                    self.step_lim = data[self.task_name]
-                except:
-                    print(f"{self.task_name} not in step limit file, set to 1000")
-                    self.step_lim = 1000
-
-        # Household tasks: hard saved-frame / control-step episode cutoff.
-        try:
-            from .utils.household_view import HOUSEHOLD_MAX_STEPS, HOUSEHOLD_TASKS
-
-            if getattr(self, "task_name", None) in HOUSEHOLD_TASKS:
-                self._max_episode_steps = int(HOUSEHOLD_MAX_STEPS)
-                self._episode_timed_out = False
-        except Exception:
-            pass
+            self.step_lim = int(EPISODE_MAX_STEPS)
 
         # info
         self.info = dict()
@@ -906,7 +895,7 @@ class Base_Task(gym.Env):
         self._phase_marks.append({"label": str(label), "frame": int(self.FRAME_IDX), **meta})
 
     def _episode_step_count(self) -> int:
-        """Progress toward the household step cutoff.
+        """Progress toward the shared ``EPISODE_MAX_STEPS`` cutoff.
 
         During data collection this is the saved-frame index; during policy
         eval (no RGB save) it falls back to ``take_action_cnt``.

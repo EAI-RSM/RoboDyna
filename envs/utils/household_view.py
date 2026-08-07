@@ -33,8 +33,10 @@ HOUSEHOLD_TASKS = frozenset(
     }
 )
 
-# Saved-frame / control-step episode + demo render cap (not wall-clock).
-HOUSEHOLD_MAX_STEPS = 600
+# Shared episode cutoff for household + base tasks (sim / control steps, not wall-clock).
+EPISODE_MAX_STEPS = 15000
+# Back-compat alias used by record_demo / older callers.
+HOUSEHOLD_MAX_STEPS = EPISODE_MAX_STEPS
 # Kept for callers that still pass --max-seconds; unused as the household default.
 HOUSEHOLD_MAX_SECONDS = 60.0
 

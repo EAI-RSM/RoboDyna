@@ -120,8 +120,8 @@ class sort_apples_belt(Base_Task):
     # the belt exit (computed from 011_dustbin extents at DUSTBIN_SCALE_MULT).
     # Fallback used only if model_data is missing.
     DUSTBIN_DY = 0.052
-    # Episode budget (sim steps via _step_ctr / _step_record); ~40 s at 250 Hz.
-    MAX_EPISODE_STEPS = 10000
+    # Episode budget (sim steps via _step_ctr / _step_record); 15000 @ 250 Hz ≈ 60 s.
+    MAX_EPISODE_STEPS = 15000
     # Cap per button-hold wait so a stuck apple can reseat/retry instead of burning
     # the whole episode budget waiting for a deposit that never comes.
     HOLD_WAIT_MAX = 900

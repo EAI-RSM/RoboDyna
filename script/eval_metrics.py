@@ -517,7 +517,7 @@ class EvalMetricsTracker:
             fail_reason: Reason for failure if applicable
             seed: Random seed used for this episode
         """
-        max_steps = getattr(self.env, 'step_lim', 1000)
+        max_steps = getattr(self.env, 'step_lim', 15000)
         
         # Route completion
         route_completion = self.compute_route_completion(success)

@@ -68,7 +68,7 @@ task_args:
   cook_meat:
     cook_steps: 549             # ~40% faster than prior 769; per-ep × U(1±cook_speed_jitter)
     cook_speed_jitter: 0.20
-    max_episode_steps: 600      # episode cutoff for default / Opt1 / Opt2 / Opt1+2
+    max_episode_steps: 15000    # episode cutoff for default / Opt1 / Opt2 / Opt1+2
     cook_button_enabled: false  # Opt 1: hold-to-cook; false = latch ON/OFF
     dual_setup_enabled: false   # Opt 2: dual stations (≥10 cm clearance)
     target_doneness: 0.5
@@ -76,7 +76,7 @@ task_args:
   cook_meat_timer:
     cook_steps: 769
     cook_speed_jitter: 0.20
-    max_episode_steps: 600
+    max_episode_steps: 15000
     cook_button_enabled: false  # Opt 1: hold-to-cook
     dual_setup_enabled: false
     target_doneness_range: [0.45, 0.55]

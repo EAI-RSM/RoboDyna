@@ -50,6 +50,9 @@ def record_one(task: str, seed: int, config: str = "demo_dynamic", save_freq: in
     def _setup(**kw):
         _orig(**kw)
         configure_topdown_camera(env)
+        # Demo recording can override the shared EPISODE_MAX_STEPS (15000) via env.
+        env._max_episode_steps = int(os.environ.get("DEMO_MAX_STEPS", "15000"))
+        env._max_episode_seconds = None
 
     env.setup_demo = _setup
     shutil.rmtree(Path(save_root) / ".cache", ignore_errors=True)
