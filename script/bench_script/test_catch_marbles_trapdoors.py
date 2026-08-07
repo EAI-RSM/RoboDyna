@@ -245,11 +245,11 @@ def record_and_export_demos():
         f.write(
             f"{TASK} — expert controller demos\n\n"
             "default  : door_open_once=false, enable_distractor=false "
-            "(unlimited opens, random target color)\n"
+            "(≤3 opens/door, random target color)\n"
             "opt1     : door_open_once=true,  enable_distractor=false "
             "(open once only)\n"
             "opt2     : door_open_once=false, enable_distractor=true "
-            "(unlimited opens + black distractor)\n"
+            "(≤3 opens/door + black distractor)\n"
             "opt1+2   : door_open_once=true,  enable_distractor=true "
             "(open once + distractor); files tagged opt1_opt2\n\n"
             "Success: target marble falls through matching-color trapdoor into lower box.\n"

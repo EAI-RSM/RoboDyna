@@ -44,6 +44,7 @@ task_args:
     door_open_speed_deg: 220.0
     door_open_duration_sec: 0.5
     door_open_once: false       # opt1: true = open each door only once
+    door_open_max: 3            # max open/close cycles per door when door_open_once=false
     enable_distractor: false    # opt2: true = black distractor marble
     distractor_collide: false   # false=pass through, true=bounce
     distractor_height_offset: 0.0  # keep 0 = same Z as target
