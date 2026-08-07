@@ -31,6 +31,8 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     print_mode_controls,
 )
 
@@ -364,6 +366,8 @@ def main():
     if args.control == "keyboard":
         print_instructions("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")
 
+    terminal_started_at = None
+
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -387,6 +391,12 @@ def main():
             if viewer.window.key_down("escape"):
                 break
 
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
+
             if _all_pages_resolved(env):
                 # check_success() initializes punch_score_L/R, but the detail
                 # string is evaluated before report_task_result calls it.
@@ -397,8 +407,7 @@ def main():
                     f"L={left_score:.2f} R={right_score:.2f} "
                     f"empty_press={env.invalid_empty_press}",
                 )
-                time.sleep(1.5)
-                break
+                terminal_started_at = time.perf_counter()
 
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:

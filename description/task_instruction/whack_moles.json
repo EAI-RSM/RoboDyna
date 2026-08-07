@@ -1,5 +1,5 @@
 {
-  "full_description": "watch the hole board and press each mole from above when it pops up; two moles bob at randomized rates; touched moles turn green; with distractors do not touch rabbits (they turn red and fail); with relocating moles each mole may reappear from a free hole after going down; Opt 1 and Opt 2 can combine",
+  "full_description": "watch the hole board and press each mole from above when it pops up; touched moles turn green; do not touch any rabbit",
   "schema": "{A} notifies the mole model, {B} notifies the hole board, {a} notifies the arm(s), {n} notifies the mole count, {m} notifies the difficulty, {d} notifies the distractor count, {R} notifies the rabbit model, {o} notifies the active options",
   "preference": "num of words should not exceed 14. Degree of detail avg is 6",
   "seen": [

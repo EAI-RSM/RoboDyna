@@ -31,6 +31,8 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     require_selected_arms,
 )
 
@@ -469,6 +471,7 @@ def main():
         env._cube_weld = {}
 
     done_since = None
+    terminal_started_at = None
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -483,16 +486,26 @@ def main():
             if viewer.window.key_down("escape"):
                 break
 
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
+
             if env.distractor_hit:
                 report_task_result(env, "rabbit touched")
-                break
+                terminal_started_at = time.perf_counter()
+                sleep_to_timestep(env, frame_start)
+                continue
             if env.check_success():
                 if done_since is None:
                     done_since = time.perf_counter()
                     print("All moles hit; wrapping up…")
                 elif time.perf_counter() - done_since >= 1.0:
                     report_task_result(env)
-                    break
+                    terminal_started_at = time.perf_counter()
+                    sleep_to_timestep(env, frame_start)
+                    continue
 
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:

@@ -32,6 +32,8 @@ from _interactive_common import (  # noqa: E402
     print_instructions,
     print_mode_controls,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     resolve_action_arm,
 )
 
@@ -270,6 +272,8 @@ def main():
         print_instructions("Arrows nudge the cup; Space places it.")
 
     settle_after = None
+    terminal_started_at = None
+
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -284,13 +288,19 @@ def main():
             if viewer.window.key_down("escape"):
                 break
 
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
+
             if getattr(env, "_ball_phase", None) == "released":
                 if settle_after is None:
                     settle_after = time.perf_counter()
                     print("Ball released from ramp lip; waiting to settle…")
                 elif time.perf_counter() - settle_after >= 2.5:
                     report_task_result(env)
-                    break
+                    terminal_started_at = time.perf_counter()
 
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:

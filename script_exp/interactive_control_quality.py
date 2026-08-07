@@ -30,6 +30,8 @@ from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     make_viewer_view_toggle,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     print_mode_controls,
 )
 
@@ -309,6 +311,8 @@ def main():
     if args.control == "keyboard":
         print_instructions("Keyboard arrows still animate key taps as a sandbox shortcut.")
 
+    terminal_started_at = None
+
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -339,6 +343,12 @@ def main():
             if viewer.window.key_down("escape"):
                 break
 
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
+
             if _episode_done(env):
                 report_task_result(
                     env,
@@ -346,8 +356,7 @@ def main():
                     f"missed={sum(1 for m in env.tile_missed if m)}, "
                     f"black_press={env.black_press}",
                 )
-                time.sleep(1.5)
-                break
+                terminal_started_at = time.perf_counter()
 
             remaining = (1.0 / 60.0) - (time.perf_counter() - frame_start)
             if remaining > 0:

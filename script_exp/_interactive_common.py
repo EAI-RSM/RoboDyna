@@ -1076,26 +1076,49 @@ class UniversalRobotControls:
             self._drive(side, step, dt, roll=roll)
 
 
+# Keep stepping/rendering this long after a terminal SUCCESS/FAILURE so the
+# result is visible before the viewer closes (wall-clock, not sim time).
+TERMINAL_RESULT_HOLD_SECONDS = 2.0
+
+
+def sleep_to_timestep(env, frame_start: float) -> None:
+    """Sleep the remainder of one physics timestep after a frame's work."""
+    remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
+    if remaining > 0:
+        time.sleep(remaining)
+
+
+def terminal_hold_should_close(terminal_started_at: float | None) -> bool:
+    """True once the post-result display hold has finished (wall-clock)."""
+    if terminal_started_at is None:
+        return False
+    return time.perf_counter() - terminal_started_at >= TERMINAL_RESULT_HOLD_SECONDS
+
+
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
                     overhead: bool = True, is_done=None):
     """Standard interactive loop: callback → kinematics → step → render.
 
     ``is_done(step)`` may return ``True`` / ``False``, or ``(done, detail)``.
-    When done, prints SUCCESS/FAILURE via ``report_task_result`` and returns that
-    bool (or ``None`` if the viewer closed without a result).
-    ``should_stop`` remains a raw break (no auto print) for backward compatibility.
+    When done, prints SUCCESS/FAILURE via ``report_task_result``, then continues
+    stepping/rendering for ``TERMINAL_RESULT_HOLD_SECONDS`` wall-clock before
+    closing. Returns that bool (or ``None`` if the viewer closed without a
+    result). ``should_stop`` remains a raw break (no auto print / no hold) for
+    backward compatibility.
     Starts on head_camera; press V to cycle head ↔ gripper/wrist view(s).
     ``overhead`` is accepted for API compat but ignored (top-down removed).
     """
-    global _LAST_TASK_RESULT, _LAST_TASK_DETAIL
+    global _LAST_TASK_RESULT, _LAST_TASK_DETAIL, _LAST_EPISODE_CONDITION
     _LAST_TASK_RESULT = None
     _LAST_TASK_DETAIL = None
+    _LAST_EPISODE_CONDITION = None
     del overhead  # legacy kwarg; interactive views no longer use top-down
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
     step = 0
+    terminal_started_at = None
     try:
         while not viewer.closed:
             frame_start = time.perf_counter()
@@ -1111,6 +1134,11 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
             if viewer.window.key_down("escape"):
                 break
             step += 1
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
             if is_done is not None:
                 result = is_done(step)
                 if isinstance(result, tuple):
@@ -1120,16 +1148,18 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
                     done, detail = bool(result), None
                 if done:
                     report_task_result(env, detail)
-                    break
+                    terminal_started_at = time.perf_counter()
+                    sleep_to_timestep(env, frame_start)
+                    continue
             if should_stop is not None and should_stop(step):
                 break
             if max_steps is not None and step >= max_steps:
                 print(f"Reached max_steps={max_steps}; evaluating.")
                 report_task_result(env, f"max_steps={max_steps}")
-                break
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
+                terminal_started_at = time.perf_counter()
+                sleep_to_timestep(env, frame_start)
+                continue
+            sleep_to_timestep(env, frame_start)
     finally:
         env.close_env()
     return _LAST_TASK_RESULT

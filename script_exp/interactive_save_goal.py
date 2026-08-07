@@ -31,6 +31,8 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     resolve_action_arm,
 )
 
@@ -315,6 +317,8 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     done_since = None
+    terminal_started_at = None
+
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -329,6 +333,12 @@ def main():
             if viewer.window.key_down("escape"):
                 break
 
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
+
             shot_done = (not getattr(env, "_ball_motion_active", False)) or env._goal_conceded or env._ball_blocked
             if shot_done:
                 if done_since is None:
@@ -339,7 +349,7 @@ def main():
                         f"in_zone={env._keeper_in_zone()}, blocked={env._ball_blocked}, "
                         f"late={env._late_failure}, conceded={env._goal_conceded}",
                     )
-                    break
+                    terminal_started_at = time.perf_counter()
 
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:

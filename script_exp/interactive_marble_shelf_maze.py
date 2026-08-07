@@ -32,6 +32,8 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     print_mode_controls,
 )
 
@@ -283,6 +285,8 @@ def main():
 
     edges = EdgeDirection()
 
+    terminal_started_at = None
+
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -308,10 +312,16 @@ def main():
             viewer.render()
             if viewer.window.key_down("escape"):
                 break
+
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
             mode = str(getattr(env, "_ball_mode", ""))
             if mode in ("done", "missed") and int(getattr(env, "active_shelf_idx", 0)) < 0:
                 report_task_result(env, f"ball_mode={mode}")
-                break
+                terminal_started_at = time.perf_counter()
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:
                 time.sleep(remaining)

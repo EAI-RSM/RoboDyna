@@ -34,6 +34,8 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     resolve_action_arm,
 )
 
@@ -362,6 +364,8 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     settle_after = None
+    terminal_started_at = None
+
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -378,9 +382,17 @@ def main():
             if viewer.window.key_down("escape"):
                 break
 
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
+
             if env._hit_blocker:
                 report_task_result(env, env.hit_result_detail())
-                break
+                terminal_started_at = time.perf_counter()
+                sleep_to_timestep(env, frame_start)
+                continue
             if env._stuck or getattr(controller, "done", False):
                 if settle_after is None:
                     settle_after = time.perf_counter()
@@ -388,7 +400,9 @@ def main():
                     if not env._hit_blocker and env._hit_color is None:
                         env._record_board_hit()
                     report_task_result(env, env.hit_result_detail())
-                    break
+                    terminal_started_at = time.perf_counter()
+                    sleep_to_timestep(env, frame_start)
+                    continue
 
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:

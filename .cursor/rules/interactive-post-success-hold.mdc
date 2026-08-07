@@ -1,0 +1,42 @@
+---
+description: Interactive tasks must keep simulating 2s wall-clock after success/failure is checked
+globs: script_exp/interactive_*.py,script_exp/_interactive_common.py,script_hh_exp/**/*.py
+alwaysApply: false
+---
+
+# Interactive post-success hold
+
+When an interactive / household viewer task reaches a terminal success (or failure) from `check_success` / `success_criteria` / `is_done`, **do not close immediately**.
+
+## Required behavior
+
+1. Detect terminal result and print/report it.
+2. **Continue the viewer loop for 2.0 seconds wall-clock** (`time.perf_counter()`), still stepping physics and rendering.
+3. Only then break / close the env.
+
+## Reference
+
+- Household shared loop already does this: `script_hh_exp/_interactive_common.py` (`terminal_started_at` + `>= 2.0`).
+- Dynamic shared loop: `script_exp/_interactive_common.py` `run_viewer_loop` (same hold).
+- Custom `interactive_*.py` loops that call `report_task_result` / break on success must implement the same 2s wall-clock continue — not sim-time steps, not a bare `sleep` without stepping/rendering unless the shared helper is used.
+
+## ❌ Bad
+
+```python
+if env.check_success():
+    report_task_result(env)
+    break  # closes instantly
+```
+
+## ✅ Good
+
+```python
+if terminal_started_at is not None:
+    if time.perf_counter() - terminal_started_at >= 2.0:
+        break
+    # still step + render, then continue
+    continue
+if env.check_success():
+    report_task_result(env)
+    terminal_started_at = time.perf_counter()
+```

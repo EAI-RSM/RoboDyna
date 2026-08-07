@@ -6,10 +6,11 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat_timer.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_cook_meat_timer.py --control robot
 
-Cooking uses a measure_ingredient-style latching cook key: press to latch ON
-(key stays down, cooking/timer start while steak is on the pan), press again to
-latch OFF (key returns up, doneness freezes). Space toggles steak board ↔ pan
-transfer. Success is doneness-in-range at shutoff (board return not required).
+Cooking uses a latching cook key: press to latch ON (key stays down, cooking/
+timer start while steak is on the pan), press again while ON to latch OFF
+(cooking stops on that press; stove does not turn off by itself). Space toggles
+steak board ↔ pan transfer. Success is doneness-in-range at shutoff (board
+return not required).
 """
 
 import argparse
@@ -35,6 +36,8 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     print_mode_controls,
     require_selected_arms,
 )
@@ -595,6 +598,8 @@ def main():
     )
 
     last_status = None
+    terminal_started_at = None
+
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -609,6 +614,12 @@ def main():
             viewer.render()
             if viewer.window.key_down("escape"):
                 break
+
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
             doneness = [round(float(st["doneness"]), 2) for st in env.stations]
             target_range = env.target_doneness_range
             status = (
@@ -621,7 +632,7 @@ def main():
             done, detail = _episode_done(env)
             if done:
                 report_task_result(env, detail)
-                break
+                terminal_started_at = time.perf_counter()
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:
                 time.sleep(remaining)

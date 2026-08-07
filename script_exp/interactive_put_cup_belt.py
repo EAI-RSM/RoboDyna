@@ -35,6 +35,8 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     resolve_action_arm,
     try_interactive_grasp,
 )
@@ -519,6 +521,8 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     placed_since = None
+    terminal_started_at = None
+
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -533,6 +537,17 @@ def main():
             if viewer.window.key_down("escape"):
                 break
 
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
+
+            if getattr(env, "_curtain_hit", False) and placed_since is None:
+                report_task_result(env, "curtain contact")
+                terminal_started_at = time.perf_counter()
+                sleep_to_timestep(env, frame_start)
+                continue
             if getattr(controller, "placed", False):
                 if placed_since is None:
                     placed_since = time.perf_counter()
@@ -543,10 +558,9 @@ def main():
                     if hit:
                         detail = f"curtain hit; {detail}"
                     report_task_result(env, detail)
-                    break
-            if getattr(env, "_curtain_hit", False) and placed_since is None:
-                report_task_result(env, "curtain contact")
-                break
+                    terminal_started_at = time.perf_counter()
+                    sleep_to_timestep(env, frame_start)
+                    continue
 
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:

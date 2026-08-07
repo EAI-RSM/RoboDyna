@@ -1,5 +1,5 @@
 {
-  "full_description": "default: pick up the raw meat from the cutting board, place it on the pan, press the green cook key to latch cooking on (key turns red), press again to latch off at the target doneness; option 1: hold the cook key to cook (red while pressed); option 2: mirrored dual stations with latching keys; option 1+2: dual hold-to-cook keys. Meat may stay on the pan; no board return required",
+  "full_description": "pick up the raw meat from the cutting board, place it on the pan, and cook it to the target doneness with the cook key; meat may stay on the pan",
   "schema": "{A} notifies the meat, {B} notifies the pan, {C} notifies the cutting board, {E} notifies the cook key, {n} notifies dual-station count when option 2 is on, {a} notifies the arm(s) that handle the meat, {o} notifies option 1 (hold cook) and/or option 2 (dual setup)",
   "preference": "num of words should not exceed 20. Degree of detail avg is 6",
   "seen": [

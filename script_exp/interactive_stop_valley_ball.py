@@ -32,6 +32,8 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
     resolve_action_arm,
 )
 
@@ -374,6 +376,7 @@ def main():
     print_instructions("Press Space to grasp the bat; arrows move XY and E/Q move height.")
 
     settle_after = None
+    terminal_started_at = None
     try:
         while not viewer.closed:
             views.update(viewer.window)
@@ -388,17 +391,27 @@ def main():
             if viewer.window.key_down("escape"):
                 break
 
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
+
             if getattr(env, "_ball_phase", None) == "released":
                 if settle_after is None:
                     settle_after = time.perf_counter()
                     print("Ball left the valley exit; waiting to settle…")
                 elif time.perf_counter() - settle_after >= 2.5:
                     report_task_result(env)
-                    break
+                    terminal_started_at = time.perf_counter()
+                    sleep_to_timestep(env, frame_start)
+                    continue
             # Early fail if the ball hit the table before a head contact.
             if getattr(env, "_ball_table_before_hit", False) and not getattr(env, "_panel_hit", False):
                 report_task_result(env)
-                break
+                terminal_started_at = time.perf_counter()
+                sleep_to_timestep(env, frame_start)
+                continue
 
             remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
             if remaining > 0:

@@ -41,6 +41,8 @@ from _interactive_common import (  # noqa: E402
     print_instructions,
     print_mode_controls,
     report_task_result,
+    sleep_to_timestep,
+    terminal_hold_should_close,
 )
 
 
@@ -504,6 +506,7 @@ def main():
             robot="",
         )
 
+    terminal_started_at = None
     try:
         while (not viewer.closed and (second_viewer is None or not second_viewer.closed)
                and (composite_view is None or composite_view.window_open)):
@@ -531,6 +534,11 @@ def main():
             # explicitly so Escape works consistently across viewer backends.
             if composite_view is None and viewer.window.key_down("escape"):
                 break
+            if terminal_started_at is not None:
+                if terminal_hold_should_close(terminal_started_at):
+                    break
+                sleep_to_timestep(env, frame_start)
+                continue
             if args.record is not None and record_frame_count % record_every == 0:
                 frame = composite_frame if composite_frame is not None else _viewer_rgb_frame(viewer)
                 recorder = recorder or _start_recorder(args.record, frame)
@@ -551,7 +559,9 @@ def main():
             )
             if timed_out:
                 report_task_result(env, "timed_out")
-                break
+                terminal_started_at = time.perf_counter()
+                sleep_to_timestep(env, frame_start)
+                continue
             all_spawned = env._spawned >= env.n_apples
             belt_clear = all(not env._apple_on_belt(i) for i in range(env._spawned))
             if all_spawned and belt_clear:
@@ -563,7 +573,9 @@ def main():
                     report_task_result(
                         env, f"{correct}/{env.n_apples} apples sorted correctly"
                     )
-                    break
+                    terminal_started_at = time.perf_counter()
+                    sleep_to_timestep(env, frame_start)
+                    continue
             else:
                 belt_clear_since = None
             # Keep GUI interaction responsive while preserving the configured physics timestep.
