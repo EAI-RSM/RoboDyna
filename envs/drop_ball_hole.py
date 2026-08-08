@@ -26,6 +26,9 @@ class drop_ball_hole(Base_Task):
       add_dummy_hole (Opt2):
         Cuts an opposite-corner decoy hole *very slightly* smaller than the ball so the ball
         cannot fall through and may get stuck seated in the opening.
+
+    Default / Opt2 (no stick_to_surface): after the gripper releases, the ball has
+    ``drop_timeout_s`` (default 2 s) to fall into the box or the episode fails.
     """
 
     # ----- tunable params (CLASS DEFAULTS; overridable via task_args.drop_ball_hole) -----
@@ -46,7 +49,18 @@ class drop_ball_hole(Base_Task):
     HOLE_ALIGN_TOL_DEFAULT = 0.015
     ALIGN_SEARCH_STEPS_DEFAULT = 1200
     POST_RELEASE_STEPS_DEFAULT = 220
-    RELEASE_OPEN_STEPS_DEFAULT = 200
+    # open_gripper advances ~300 physics steps, but the ball leaves the fingers
+    # ~40% of the way through (contacts the plate / drops). Lead that fraction.
+    RELEASE_OPEN_STEPS_DEFAULT = 300      # fallback full open duration if plan query fails
+    # open_gripper ~300 steps; fingers still grip while the hole can skim under.
+    # Empirically the free ball appears nearer mid-open than the early contact z.
+    RELEASE_FRACTION_DEFAULT = 0.50       # fraction of open plan until ball is free
+    RELEASE_FALL_LEAD_STEPS_DEFAULT = 15  # extra lead after separation to fall through
+    RELEASE_HOLD_STEPS_DEFAULT = 30       # prefer hole staying under the ball this long
+    # Aim slightly upstream of spin so the hole sweeps onto the ball at separation.
+    RELEASE_UPSTREAM_M_DEFAULT = 0.008
+    # Default / Opt2: wall-clock window after release to enter the box (Opt1 uses stick latch).
+    DROP_TIMEOUT_S_DEFAULT = 2.0
     HOLE_DROP_INSET_DEFAULT = 0.006
     HOLE_XY_JITTER_DEFAULT = 0.012        # m; ±x/±y randomization for target & dummy hole centers
     CONTAINER_SHAPE_DEFAULT = "cubic"     # cubic | cylinder
@@ -76,6 +90,8 @@ class drop_ball_hole(Base_Task):
         self.ball_in_box = False
         self.ball_released = False
         self.ball_stuck_on_platform = False
+        self._drop_timed_out = False
+        self._steps_since_release = 0
         self.selected_arm = None
         self.bucket_floor_z = 0.0
         self.hole_orbit_radius = 0.0
@@ -90,6 +106,7 @@ class drop_ball_hole(Base_Task):
         # Must exist before _init_task_env_ (it calls _update_kinematic_tasks pre-load_actors).
         self.stick_to_surface = self.STICK_TO_SURFACE_DEFAULT
         self.add_dummy_hole = self.ADD_DUMMY_HOLE_DEFAULT
+        self.drop_timeout_s = self.DROP_TIMEOUT_S_DEFAULT
         self.stick_contact_steps = self.STICK_CONTACT_STEPS_DEFAULT
         self.stick_settle_steps = self.STICK_SETTLE_STEPS_DEFAULT
         self.stick_vel_tol = self.STICK_VEL_TOL_DEFAULT
@@ -135,6 +152,8 @@ class drop_ball_hole(Base_Task):
             cfg.get("add_dummy_hole", self.ADD_DUMMY_HOLE_DEFAULT),
             self.ADD_DUMMY_HOLE_DEFAULT,
         )  # Opt2
+        # Default / Opt2 post-release entry window (ignored when Opt1 stick is on).
+        self.drop_timeout_s = float(cfg.get("drop_timeout_s", self.DROP_TIMEOUT_S_DEFAULT))
 
         # Opt1 (stick_to_surface) params
         self.stick_contact_steps = int(cfg.get("stick_contact_steps", self.STICK_CONTACT_STEPS_DEFAULT))
@@ -198,6 +217,18 @@ class drop_ball_hole(Base_Task):
             cfg.get("post_release_steps", cfg.get("preview_steps", self.POST_RELEASE_STEPS_DEFAULT))
         )
         self.release_open_steps = int(cfg.get("release_open_steps", self.RELEASE_OPEN_STEPS_DEFAULT))
+        self.release_fraction = float(
+            np.clip(cfg.get("release_fraction", self.RELEASE_FRACTION_DEFAULT), 0.15, 0.95)
+        )
+        self.release_fall_lead_steps = int(
+            cfg.get("release_fall_lead_steps", self.RELEASE_FALL_LEAD_STEPS_DEFAULT)
+        )
+        self.release_hold_steps = int(
+            cfg.get("release_hold_steps", self.RELEASE_HOLD_STEPS_DEFAULT)
+        )
+        self.release_upstream_m = float(
+            cfg.get("release_upstream_m", self.RELEASE_UPSTREAM_M_DEFAULT)
+        )
         self.hole_drop_inset = float(cfg.get("hole_drop_inset", self.HOLE_DROP_INSET_DEFAULT))
         self.hole_xy_jitter = float(cfg.get("hole_xy_jitter", self.HOLE_XY_JITTER_DEFAULT))
         self.cylinder_hole_inset = float(max(
@@ -211,6 +242,9 @@ class drop_ball_hole(Base_Task):
             ),
         ))
         self._parse_surface_features()
+        self._drop_timed_out = False
+        self._steps_since_release = 0
+        self.ball_released = False
 
         # Randomized spin direction and speed sampled from a range each episode.
         self.spin_dir = float(np.random.choice([-1.0, 1.0]))
@@ -747,26 +781,236 @@ class drop_ball_hole(Base_Task):
             if not self._ball_in_box():
                 self._stick_ball_to_cap()
 
+    def _estimate_release_lead_steps(self):
+        """Physics steps from commanding open_gripper until the ball meets the hole.
+
+        ``open_gripper`` runs ~300 steps, but the ball separates from the fingers
+        much earlier (~``release_fraction`` of the plan) and then needs a short
+        fall/settle window while the hole stays underneath.
+        """
+        open_steps = None
+        try:
+            arm = str(getattr(self, "selected_arm", None) or getattr(self, "ball_side", "right"))
+            if arm == "left":
+                cur = float(self.robot.get_left_gripper_val())
+                n = float(self.robot.left_plan_grippers(cur, 1.0)["num_step"])
+            else:
+                cur = float(self.robot.get_right_gripper_val())
+                n = float(self.robot.right_plan_grippers(cur, 1.0)["num_step"])
+            # ``set_gripper`` pads the plan by 50% (see Base_Task.set_gripper).
+            open_steps = int(round(n * 1.5))
+        except Exception:
+            open_steps = None
+        if open_steps is None or open_steps < 1:
+            open_steps = max(1, int(getattr(self, "release_open_steps", self.RELEASE_OPEN_STEPS_DEFAULT)))
+        frac = float(getattr(self, "release_fraction", self.RELEASE_FRACTION_DEFAULT))
+        frac = float(np.clip(frac, 0.15, 0.95))
+        fall_lead = max(0, int(getattr(self, "release_fall_lead_steps", self.RELEASE_FALL_LEAD_STEPS_DEFAULT)))
+        return max(1, int(round(open_steps * frac)) + fall_lead)
+
+    def _hole_err_at(self, step, target_xy, local_xy=None):
+        hole_xy = self._hole_world_xy_at_step(int(step), local_xy=local_xy)
+        return float(np.linalg.norm(hole_xy - np.asarray(target_xy, dtype=np.float64)))
+
+    def _hole_window_score(self, center_step, target_xy, hold_steps=0, local_xy=None):
+        """Worst XY error of the hole vs ``target_xy`` over a short hold window."""
+        hold = max(0, int(hold_steps))
+        if hold <= 0:
+            return self._hole_err_at(center_step, target_xy, local_xy=local_xy)
+        # Sample the approach + pass-through; worst error must stay inside the hole.
+        errs = [
+            self._hole_err_at(center_step + dt, target_xy, local_xy=local_xy)
+            for dt in range(0, hold + 1, max(1, hold // 8))
+        ]
+        return float(max(errs))
+
     def _steps_until_hole_alignment(
-        self, target_xy, max_steps=None, tol=None, lead_steps=0, local_xy=None
+        self,
+        target_xy,
+        max_steps=None,
+        tol=None,
+        lead_steps=0,
+        local_xy=None,
+        hold_steps=None,
     ):
+        """Wait until the hole will be under ``target_xy`` after ``lead_steps``.
+
+        When ``hold_steps`` > 0, require the hole to stay near the release point for
+        that many steps after the lead (so the ball can fall through, not skim by).
+        """
         target_xy = np.array(target_xy, dtype=np.float64)
         max_steps = int(self.align_search_steps if max_steps is None else max_steps)
         tol = float(self.hole_align_tol if tol is None else tol)
         lead_steps = max(0, int(lead_steps))
+        if hold_steps is None:
+            hold_steps = int(getattr(self, "release_hold_steps", self.RELEASE_HOLD_STEPS_DEFAULT))
+        hold_steps = max(0, int(hold_steps))
+        # Slightly looser on the hold window than the instantaneous center hit.
+        hold_tol = tol + 0.35 * float(getattr(self, "cap_hole_radius", self.CAP_HOLE_RADIUS_DEFAULT))
+
         best_steps = 0
-        best_err = float("inf")
+        best_score = float("inf")
+        # When a decoy hole exists, prefer release windows where it is *not*
+        # also under the ball (avoids Opt2 wedge / skim onto the dummy).
+        avoid_dummy = (
+            local_xy is None
+            and bool(getattr(self, "add_dummy_hole", False))
+            and getattr(self, "_dummy_hole_local_xy", None) is not None
+        )
+        dummy_clear = float(getattr(self, "ball_radius", 0.025)) + 0.5 * float(
+            getattr(self, "dummy_hole_radius", 0.0) or 0.0
+        )
         for wait_steps in range(max_steps + 1):
-            hole_xy = self._hole_world_xy_at_step(
-                self._cap_step + wait_steps + lead_steps, local_xy=local_xy
+            t = self._cap_step + wait_steps + lead_steps
+            center_err = self._hole_err_at(t, target_xy, local_xy=local_xy)
+            window_err = self._hole_window_score(
+                t, target_xy, hold_steps=hold_steps, local_xy=local_xy
             )
-            err = float(np.linalg.norm(hole_xy - target_xy))
-            if err < best_err:
-                best_err = err
+            # Prefer a tight center hit that also stays under the ball briefly.
+            score = center_err + 0.35 * max(0.0, window_err - tol)
+            if avoid_dummy:
+                dummy_err = self._hole_err_at(
+                    t, target_xy, local_xy=self._dummy_hole_local_xy
+                )
+                if dummy_err < dummy_clear:
+                    score += (dummy_clear - dummy_err) + 0.02
+            if score < best_score:
+                best_score = score
                 best_steps = wait_steps
-            if err <= tol:
-                return wait_steps
+            if center_err <= tol and window_err <= hold_tol:
+                if (not avoid_dummy) or (
+                    self._hole_err_at(t, target_xy, local_xy=self._dummy_hole_local_xy)
+                    >= dummy_clear
+                ):
+                    return wait_steps
         return best_steps
+
+    def _release_aim_xy(self, target_xy):
+        """Shift the aim slightly upstream against spin so the hole sweeps onto the ball."""
+        target_xy = np.asarray(target_xy, dtype=np.float64)
+        upstream = float(getattr(self, "release_upstream_m", self.RELEASE_UPSTREAM_M_DEFAULT))
+        if upstream <= 1e-6 or abs(float(getattr(self, "spin_omega", 0.0))) < 1e-9:
+            return target_xy
+        center = np.asarray(self.cap_center[:2], dtype=np.float64)
+        radial = target_xy - center
+        n = float(np.linalg.norm(radial))
+        if n < 1e-6:
+            return target_xy
+        # Tangential unit (+CCW). Move aim upstream against the hole's travel.
+        tang = np.array([-radial[1], radial[0]], dtype=np.float64) / n
+        if float(self.spin_omega) < 0.0:
+            tang = -tang
+        return target_xy - upstream * tang
+
+    def _steps_per_revolution(self):
+        omega = abs(float(getattr(self, "spin_omega", 0.0))) + 1e-6
+        return int(max(200, min(2500, round(2.0 * np.pi / (omega * 0.01)))))
+
+    def _reactive_plate_drop(self, max_passes=2):
+        """Second-chance drop: wait for the hole to pass under the ball on the plate.
+
+        The open_gripper motion often drags the ball; the spinning plate can also
+        slide it. Track *live* ball XY every step (closed-loop) until the real hole
+        overlaps, then hold briefly so it can fall.
+
+        Call this *before* ``mark_ball_released`` in Default/Opt2 so the drop-timeout
+        clock does not expire while we wait for the next hole pass.
+        """
+        if getattr(self, "force_platform_miss", False):
+            return
+        rev = self._steps_per_revolution()
+        hold = max(20, int(getattr(self, "release_hold_steps", 30)))
+        # Looser than pre-release tol: ball may sit slightly off the geometric center.
+        tol = float(self.hole_align_tol) + 0.55 * float(self.cap_hole_radius)
+        for _ in range(int(max_passes)):
+            if self._ball_in_box() or getattr(self, "ball_stuck_on_platform", False):
+                return
+            if not self._ball_on_platform_contact():
+                for _ in range(40):
+                    self._dwell(1)
+                    if self._ball_in_box() or self._ball_on_platform_contact():
+                        break
+                if self._ball_in_box():
+                    return
+                if not self._ball_on_platform_contact():
+                    return
+            # Closed-loop: re-read ball XY each step (plate spin can drag it).
+            saw_overlap = False
+            for _ in range(rev + hold):
+                self._dwell(1)
+                if self._ball_in_box():
+                    return
+                if not self._ball_on_platform_contact():
+                    if self._ball_in_box():
+                        return
+                    break
+                ball_xy = np.asarray(self.ball.get_pose().p[:2], dtype=np.float64)
+                err = self._hole_err_at(self._cap_step, ball_xy, local_xy=None)
+                if err <= tol:
+                    saw_overlap = True
+                    # Stay through the overlap so the ball can drop.
+                    for _ in range(hold):
+                        self._dwell(1)
+                        if self._ball_in_box():
+                            return
+                        if not self._ball_on_platform_contact():
+                            return
+                    break
+            if self._ball_in_box():
+                return
+            if not saw_overlap:
+                return
+
+    def _micro_correct_release_xy(self, arm_tag: ArmTag, target_xy, max_shift=0.018):
+        """Nudge the grasped ball toward ``target_xy`` (keeps timing prediction honest)."""
+        if getattr(self, "ball", None) is None:
+            return np.asarray(target_xy, dtype=np.float64)
+        cur = np.asarray(self.ball.get_pose().p[:2], dtype=np.float64)
+        delta = np.asarray(target_xy, dtype=np.float64) - cur
+        dist = float(np.linalg.norm(delta))
+        if dist < 2.5e-3:
+            return cur
+        if dist > float(max_shift):
+            delta = delta * (float(max_shift) / dist)
+        self.move(self.move_by_displacement(
+            arm_tag=arm_tag,
+            x=float(delta[0]),
+            y=float(delta[1]),
+        ))
+        return np.asarray(self.ball.get_pose().p[:2], dtype=np.float64)
+
+    def _wait_for_release_alignment(self, target_xy, local_xy=None, arm_tag=None):
+        """Dwell until a predicted release window; optionally nudge XY onto the aim point."""
+        lead = self._estimate_release_lead_steps()
+        aim_xy = self._release_aim_xy(target_xy)
+        wait = self._steps_until_hole_alignment(
+            aim_xy, lead_steps=lead, local_xy=local_xy
+        )
+        self._dwell(wait)
+        live_xy = np.array(
+            self.ball.get_pose().p[:2] if getattr(self, "ball", None) is not None else target_xy,
+            dtype=np.float64,
+        )
+        # Small XY nudge toward the upstream aim (skip under Opt1 stick — it
+        # desynchronizes the open-lead estimate and hurts first-shot timing).
+        if (
+            arm_tag is not None
+            and local_xy is None
+            and (not bool(getattr(self, "stick_to_surface", False)))
+        ):
+            live_xy = self._micro_correct_release_xy(arm_tag, self._release_aim_xy(live_xy))
+            lead = self._estimate_release_lead_steps()
+        aim_xy = self._release_aim_xy(live_xy)
+        refine = self._steps_until_hole_alignment(
+            aim_xy,
+            lead_steps=lead,
+            local_xy=local_xy,
+            max_steps=160,
+            hold_steps=max(12, int(getattr(self, "release_hold_steps", 30)) // 2),
+        )
+        if refine > 0:
+            self._dwell(refine)
+        return np.asarray(self.ball.get_pose().p[:2], dtype=np.float64)
 
     def _move_ball_to_height(self, arm_tag: ArmTag, target_z: float):
         if getattr(self, "ball", None) is None:
@@ -805,6 +1049,38 @@ class drop_ball_hole(Base_Task):
         below_platform = p[2] <= (self.cap_z - self.cap_thickness - 0.01)
         return bool(in_x and in_y and above_floor and below_platform)
 
+    def _uses_drop_timeout(self):
+        """Default / Opt2: require entry within ``drop_timeout_s`` after release.
+
+        Opt1 / Opt1+2 use ``stick_to_surface`` latching instead of a wall-clock cutoff.
+        """
+        return not bool(getattr(self, "stick_to_surface", False))
+
+    def _drop_timeout_steps(self):
+        dt = float(self.scene.get_timestep()) if getattr(self, "scene", None) is not None else 1.0 / 250.0
+        return max(1, int(round(float(self.drop_timeout_s) / max(dt, 1e-6))))
+
+    def mark_ball_released(self):
+        """Start the post-release clock (Default / Opt2 timeout) after the gripper opens."""
+        self.ball_released = True
+        self._steps_since_release = 0
+        self._drop_timed_out = False
+
+    def _tick_drop_timeout(self):
+        """Advance Default/Opt2 release timer; latch failure after ``drop_timeout_s``."""
+        if not self._uses_drop_timeout():
+            return
+        if not self.ball_released or self.ball_in_box or self.ball_stuck_on_platform:
+            return
+        if self._drop_timed_out:
+            return
+        self._steps_since_release = int(getattr(self, "_steps_since_release", 0)) + 1
+        if self._steps_since_release >= self._drop_timeout_steps():
+            self._drop_timed_out = True
+            self._last_fail_reason = (
+                f"ball not in box within {float(self.drop_timeout_s):.1f}s after release"
+            )
+
     def _update_kinematic_tasks(self):
         # base hook drives DOMINO's dynamic object motion; runs every physics step
         super()._update_kinematic_tasks()
@@ -819,12 +1095,14 @@ class drop_ball_hole(Base_Task):
         if getattr(self, "ball_stuck_on_platform", False):
             self._update_stuck_ball()
             self.ball_in_box = False
+            self._tick_drop_timeout()
             return
         self._try_stick_ball_on_platform()
         if getattr(self, "ball_stuck_on_platform", False):
             self.ball_in_box = False
         else:
             self.ball_in_box = self._ball_in_box()
+        self._tick_drop_timeout()
 
     def _cap_angle_at_step(self, step):
         return self.spin_omega * (step * 0.01)
@@ -858,30 +1136,47 @@ class drop_ball_hole(Base_Task):
         release_target_xy = np.array(self.ball.get_pose().p[:2], dtype=np.float64)
         if self.force_platform_miss and getattr(self, "_force_miss_align_dummy", False):
             # Opt2 error: wait until the decoy hole is under the release point.
-            wait_steps = self._steps_until_hole_alignment(
-                release_target_xy,
-                lead_steps=self.release_open_steps,
-                local_xy=self._dummy_hole_local_xy,
+            self._wait_for_release_alignment(
+                release_target_xy, local_xy=self._dummy_hole_local_xy, arm_tag=None
             )
-            self._dwell(wait_steps)
         elif not self.force_platform_miss:
-            wait_steps = self._steps_until_hole_alignment(
-                release_target_xy,
-                lead_steps=self.release_open_steps,
+            # Aim where the real hole will be when the gripper finishes opening + fall.
+            self._wait_for_release_alignment(
+                release_target_xy, local_xy=None, arm_tag=arm_tag
             )
-            self._dwell(wait_steps)
         else:
             # Opt1 solid-platform miss: brief dwell, no hole wait.
             self._dwell(30)
         self.move(self.open_gripper(arm_tag))
-        # Only enable miss-stick after the gripper has opened, or the held ball can latch early.
-        self.ball_released = True
-        self._dwell(20)
+        self._dwell(25)
+        # Second-chance: wait for the hole under the live on-plate ball *before*
+        # arming Opt1 stick / Default-Opt2 drop-timeout. Stick only latches once
+        # ``mark_ball_released`` is called, so Opt1 can still use this window.
+        if not self.force_platform_miss:
+            self._reactive_plate_drop(max_passes=2)
+        self.mark_ball_released()
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.08, move_axis="arm"))
         self.move(self.back_to_origin(arm_tag))
-        self._dwell(self.post_release_steps)
+        if self._uses_drop_timeout():
+            # Wait until the ball is in the box, stuck (Opt2 dummy), or the 2 s window ends.
+            max_wait = self._drop_timeout_steps() + 40
+            for i in range(max_wait):
+                self._update_kinematic_tasks()
+                self.scene.step()
+                if self.save_freq and (i % self.save_freq == 0):
+                    self._take_picture()
+                if (
+                    self.ball_in_box
+                    or self._drop_timed_out
+                    or getattr(self, "ball_stuck_on_platform", False)
+                ):
+                    break
+            if self.ball_in_box:
+                self._dwell(30)
+        else:
+            self._dwell(self.post_release_steps)
         self._cap_tracking = False
-        if getattr(self, "ball_stuck_on_platform", False):
+        if getattr(self, "ball_stuck_on_platform", False) or self._drop_timed_out:
             self.ball_in_box = False
         else:
             self.ball_in_box = self._ball_in_box()
@@ -898,13 +1193,29 @@ class drop_ball_hole(Base_Task):
     def check_success(self):
         """Success: ball fell through the target hole and rests inside the box."""
         stuck = bool(getattr(self, "ball_stuck_on_platform", False))
-        self.ball_in_box = (not stuck) and self._ball_in_box()
+        timed_out = bool(getattr(self, "_drop_timed_out", False))
+        in_box = (not stuck) and self._ball_in_box()
+        self.ball_in_box = bool(in_box)
+        if timed_out and not in_box:
+            self._last_fail_reason = (
+                f"ball not in box within {float(self.drop_timeout_s):.1f}s after release"
+            )
+        elif stuck:
+            self._last_fail_reason = "ball stuck on platform"
         self.info["ball_side"] = str(getattr(self, "ball_side", "left"))
         self.info["selected_arm"] = str(getattr(self, "selected_arm", "left"))
         self.info["ball_in_box"] = bool(self.ball_in_box)
         self.info["ball_stuck_on_platform"] = stuck
-        self.info["stick_to_surface"] = bool(getattr(self, "stick_to_surface", self.STICK_TO_SURFACE_DEFAULT))
-        self.info["add_dummy_hole"] = bool(getattr(self, "add_dummy_hole", self.ADD_DUMMY_HOLE_DEFAULT))
+        self.info["drop_timed_out"] = bool(timed_out and not in_box)
+        self.info["drop_timeout_s"] = float(
+            getattr(self, "drop_timeout_s", self.DROP_TIMEOUT_S_DEFAULT)
+        )
+        self.info["stick_to_surface"] = bool(
+            getattr(self, "stick_to_surface", self.STICK_TO_SURFACE_DEFAULT)
+        )
+        self.info["add_dummy_hole"] = bool(
+            getattr(self, "add_dummy_hole", self.ADD_DUMMY_HOLE_DEFAULT)
+        )
         return bool(self.ball_in_box)
 
     # ----------------------------------------------------------------- obs
@@ -925,6 +1236,8 @@ class drop_ball_hole(Base_Task):
             "drop_target_xy": self._drop_target_xy.tolist() if hasattr(self, "_drop_target_xy") else [0.0, 0.0],
             "ball_in_box": bool(getattr(self, "ball_in_box", False)),
             "ball_stuck_on_platform": bool(getattr(self, "ball_stuck_on_platform", False)),
+            "drop_timed_out": bool(getattr(self, "_drop_timed_out", False)),
+            "drop_timeout_s": float(getattr(self, "drop_timeout_s", self.DROP_TIMEOUT_S_DEFAULT)),
             "stick_to_surface": bool(getattr(self, "stick_to_surface", self.STICK_TO_SURFACE_DEFAULT)),
             "add_dummy_hole": bool(getattr(self, "add_dummy_hole", self.ADD_DUMMY_HOLE_DEFAULT)),
             "dummy_hole_radius": float(getattr(self, "dummy_hole_radius", 0.0)),

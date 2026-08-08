@@ -894,6 +894,12 @@ task_args:
     spin_speed: 1.52            # angular speed baseline; dir random ± (−20% from 1.9)
     spin_speed_jitter: 0.20     # sample speed ~ U(spin_speed×0.8, spin_speed×1.2)
     # spin_speed_min / spin_speed_max: optional absolute range (overrides jitter when both set)
+    hole_align_tol: 0.015       # m; release XY vs predicted hole center
+    release_open_steps: 300     # fallback full open_gripper duration if plan query fails
+    release_fraction: 0.50      # ball free of fingers this far into the open plan
+    release_fall_lead_steps: 15 # extra lead after separation to fall through the hole
+    release_hold_steps: 30      # prefer hole staying under the ball this long
+    release_upstream_m: 0.008   # m; aim upstream against spin so the hole sweeps onto the ball
     r_tol: 0.06                 # unused; code reads hole_align_tol (default 0.015 m)
     align_window: 0.18          # unused; no matching key in envs/drop_ball_hole.py
     max_track_steps: 900        # unused; code uses align_search_steps (default 1200)

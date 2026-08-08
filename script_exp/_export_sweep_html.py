@@ -112,8 +112,8 @@ BASIC_MAIN_REASONS: dict[str, str] = {
         "distractors (opt2) hardest."
     ),
     "drop_ball_hole": (
-        "Frequent miss of the target hole (or enters dummy hole when present); "
-        "opt1 weakest (1/5)."
+        "Open-fraction lead + reactive plate wait: 10/20. Remaining fails are late "
+        "finger-release vs hole (opt1 stick) or dummy-hole wedges (opt2)."
     ),
     "sort_apples_belt": (
         "Default/opt1 struggle on belt sort timing; dump/rotten (opt2) is reliable; "
@@ -130,8 +130,12 @@ def basic_main_reason(task: str, results: dict, fail_map: dict) -> str:
         if not fails:
             continue
         reasons = fail_map.get(task, {}).get(sc, [])
-        short = "; ".join(reasons[:1]) if reasons else f"fail seeds {fails}"
-        bits.append(f"<strong>{sc}</strong>: {short}")
+        # Prefer JSON fail seeds (authoritative); strip stale [...] from log blurbs.
+        if reasons:
+            short = re.sub(r"\s*\[[^\]]*\]\s*$", "", reasons[0]).strip() or reasons[0]
+            bits.append(f"<strong>{sc}</strong>: {short} {fails}")
+        else:
+            bits.append(f"<strong>{sc}</strong>: fail seeds {fails}")
     detail = "<br>".join(bits) if bits else "—"
     if curated:
         return f"{curated}<br><span class='seeds'>{detail}</span>"
