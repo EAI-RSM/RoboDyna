@@ -26,7 +26,7 @@ class catch_cuboid(Base_Task):
     # ---- task params (class defaults; override via task_args.catch_cuboid in the config) ----
     CATCH_TWO_CUBOIDS_DEFAULT = False     # option 1
     OPAQUE_SURFACE_DEFAULT = False     # option 2 (false => glass top)
-    NUM_APPEARANCES_DEFAULT = 3        # how many times a cuboid pops up over the episode
+    NUM_APPEARANCES_DEFAULT = 5        # how many times a cuboid pops up over the episode
     POP_STEPS_DEFAULT = 90             # sim steps the cuboid stays raised per appearance (its window)
     PRE_POP_STEPS_DEFAULT = 12         # short settle before each pop while the arm pre-positions
     GRASP_TOL_DEFAULT = 0.01         # horizontal tolerance (m) used to normalize the catch offset
@@ -37,8 +37,9 @@ class catch_cuboid(Base_Task):
     POP_HEIGHT = 0.055                # how far above the board top the cuboid rises when popped
     HIDE_DEPTH = 0.070                # how far below the board top the cuboid hides when retracted
     # Per-episode rise/fall speed (m/s) is sampled uniformly from [min, max].
-    CUBOID_MOVE_SPEED_MIN_DEFAULT = 0.04
-    CUBOID_MOVE_SPEED_MAX_DEFAULT = 0.10
+    # Mean 0.056 (= 0.07 × 0.8); range scaled −20% from prior [0.04, 0.10].
+    CUBOID_MOVE_SPEED_MIN_DEFAULT = 0.032
+    CUBOID_MOVE_SPEED_MAX_DEFAULT = 0.08
     RANDOMIZE_CUBOID_COLOR_DEFAULT = False
     CUBOID_COLOR_DEFAULT = [0.40, 0.40, 0.42]
     CUBOID_COLOR_POOL = (

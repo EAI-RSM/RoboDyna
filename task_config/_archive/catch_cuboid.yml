@@ -36,7 +36,9 @@ clear_cache_freq: 5
 collect_data: true
 eval_video_log: true
 task_args:
-  catch_rat:
-    num_appearances: 3
+  catch_cuboid:
+    cuboid_move_speed_min: 0.032
+    cuboid_move_speed_max: 0.08
+    num_appearances: 5
     pop_steps: 90
     grasp_tol: 0.05

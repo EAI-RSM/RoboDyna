@@ -127,9 +127,10 @@ task_args:
     # Option 2: opaque colored top lattice (false = glass / see-through).
     opaque_surface: false
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    cuboid_move_speed_min: 0.04
-    cuboid_move_speed_max: 0.10
-    num_appearances: 3
+    # Mean 0.056 (= prior 0.07 × 0.8); range scaled −20% from [0.04, 0.10].
+    cuboid_move_speed_min: 0.032
+    cuboid_move_speed_max: 0.08
+    num_appearances: 5
     pop_steps: 90
     grasp_tol: 0.05
   whack_moles:

@@ -145,9 +145,10 @@ task_args:
     opaque_surface: false
     randomize_cuboid_color: true  # sample cuboid RGB from cuboid_colors pool
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    cuboid_move_speed_min: 0.04
-    cuboid_move_speed_max: 0.10
-    num_appearances: 3          # how many pop windows per episode
+    # Mean 0.056 (= prior 0.07 × 0.8); range scaled −20% from [0.04, 0.10].
+    cuboid_move_speed_min: 0.032
+    cuboid_move_speed_max: 0.08
+    num_appearances: 5          # how many pop windows per episode
     pop_steps: 90               # sim steps cuboid stays raised per pop
     grasp_tol: 0.05             # m; catch offset scale (success uses ~2.5×)
   catch_rolling_cup:
