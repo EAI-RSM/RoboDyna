@@ -473,7 +473,7 @@ task_args:
     #   Opt1+2             : dual + hold-to-cook keys
     # CLI: --task-arg cook_button_enabled=... / dual_setup_enabled=...
     #      --option 1 | --option 2
-    cook_steps: 2747            # nominal steps for doneness 0→1 (~40% faster than prior 3846)
+    cook_steps: 3434            # nominal steps for doneness 0→1 (−20% speed vs prior 2747)
     cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
     max_episode_steps: 15000    # episode cutoff for default / Opt1 / Opt2 / Opt1+2
     cook_button_enabled: false  # CHANGE: Opt 1; true = hold-to-cook

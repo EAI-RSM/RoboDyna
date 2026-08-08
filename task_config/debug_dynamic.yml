@@ -66,7 +66,7 @@ task_args:
     plate_scale_mult: 0.65
     steamer_scale_mult: 0.10
   cook_meat:
-    cook_steps: 549             # ~40% faster than prior 769; per-ep × U(1±cook_speed_jitter)
+    cook_steps: 686             # −20% speed vs prior 549; per-ep × U(1±cook_speed_jitter)
     cook_speed_jitter: 0.20
     max_episode_steps: 15000    # episode cutoff for default / Opt1 / Opt2 / Opt1+2
     cook_button_enabled: false  # Opt 1: hold-to-cook; false = latch ON/OFF

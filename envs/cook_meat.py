@@ -51,7 +51,7 @@ class cook_meat(Base_Task):
     Opt 1 / Opt 1+2).
     """
 
-    COOK_STEPS_DEFAULT: ClassVar[int] = 549  # ~40% faster than prior 769
+    COOK_STEPS_DEFAULT: ClassVar[int] = 686  # −20% speed vs prior 549
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
     TARGET_DONENESS_DEFAULT: ClassVar[float] = 0.5
     MAX_EPISODE_STEPS_DEFAULT: ClassVar[int] = 15000  # eval / collection episode cutoff
@@ -1324,10 +1324,9 @@ class cook_meat(Base_Task):
     def _press_cook_keys(self, want_on: bool) -> None:
         """Press each station's cook key to latch ON or OFF.
 
-        ON: cooking starts at depress; key stays down after the EE lifts.
-        OFF: cooking stops at depress (``cook_on`` clears); key stays visually
-        down under the gripper via ``_expert_key_held``, then springs up on
-        release. Cooking never stops before that press.
+        ON: cooking starts at depress; key stays down; gripper stays closed for
+        the cook wait so OFF can press immediately.
+        OFF: cooking stops at depress (``cook_on`` clears); then gripper opens.
         Uses absolute ``move_to_pose`` hover/press targets.
         """
         want_on = bool(want_on)
@@ -1344,13 +1343,18 @@ class cook_meat(Base_Task):
         def _press_pair(left_st, right_st=None) -> None:
             if right_st is None:
                 arm = left_st["arm"]
-                self.move(self.close_gripper(arm))
-                self.move(self.move_to_pose(arm, self._cook_key_tip_pose(left_st, hover)))
+                if want_on:
+                    self.move(self.close_gripper(arm))
+                    self.move(
+                        self.move_to_pose(arm, self._cook_key_tip_pose(left_st, hover))
+                    )
+                # OFF: already hovering with gripper closed after the cook wait —
+                # go straight to depress so cooking freezes at the press.
                 self.move(
                     self.move_to_pose(arm, self._cook_key_tip_pose(left_st, press_above))
                 )
                 left_st["_expert_key_held"] = True
-                # Latch state changes at depress (ON starts / OFF stops cooking).
+                # Latch ON/OFF at depress (cooking freezes only when OFF is pressed).
                 self._set_station_cook_on(left_st, want_on)
                 # Brief dwell at bottom so the depress is visible in demos.
                 for _ in range(4):
@@ -1358,15 +1362,18 @@ class cook_meat(Base_Task):
                     self.scene.step()
                 self.move(self.move_to_pose(arm, self._cook_key_tip_pose(left_st, hover)))
                 left_st["_expert_key_held"] = False
-                self.move(self.open_gripper(arm))
+                # Keep gripper closed after ON so OFF can press immediately.
+                if not want_on:
+                    self.move(self.open_gripper(arm))
                 return
 
             la, ra = left_st["arm"], right_st["arm"]
-            self.move(self.close_gripper(la), self.close_gripper(ra))
-            self.move(
-                self.move_to_pose(la, self._cook_key_tip_pose(left_st, hover)),
-                self.move_to_pose(ra, self._cook_key_tip_pose(right_st, hover)),
-            )
+            if want_on:
+                self.move(self.close_gripper(la), self.close_gripper(ra))
+                self.move(
+                    self.move_to_pose(la, self._cook_key_tip_pose(left_st, hover)),
+                    self.move_to_pose(ra, self._cook_key_tip_pose(right_st, hover)),
+                )
             self.move(
                 self.move_to_pose(la, self._cook_key_tip_pose(left_st, press_above)),
                 self.move_to_pose(ra, self._cook_key_tip_pose(right_st, press_above)),
@@ -1383,7 +1390,8 @@ class cook_meat(Base_Task):
             )
             for st in (left_st, right_st):
                 st["_expert_key_held"] = False
-            self.move(self.open_gripper(la), self.open_gripper(ra))
+            if not want_on:
+                self.move(self.open_gripper(la), self.open_gripper(ra))
 
         if len(self.stations) == 1:
             _press_pair(self.stations[0])
@@ -1464,15 +1472,21 @@ class cook_meat(Base_Task):
             self._hold_cook_buttons_until_done()
             return
         self._press_cook_keys(want_on=True)
-        # Park arms clear of the keys while cooking.
+        # Stay above the keys while cooking — only a small lift, no home retract
+        # (long travel back to origin overshoots the doneness window before OFF).
+        lift = 0.04
         if len(self.stations) == 1:
-            self.move(self.back_to_origin(self.stations[0]["arm"]))
+            self.move(
+                self.move_by_displacement(
+                    arm_tag=self.stations[0]["arm"], z=lift, move_axis="world"
+                )
+            )
         else:
             left = next(st for st in self.stations if st["arm"] == "left")
             right = next(st for st in self.stations if st["arm"] == "right")
             self.move(
-                self.back_to_origin(left["arm"]),
-                self.back_to_origin(right["arm"]),
+                self.move_by_displacement(arm_tag=left["arm"], z=lift, move_axis="world"),
+                self.move_by_displacement(arm_tag=right["arm"], z=lift, move_axis="world"),
             )
         self._cook_idle()
         self._press_cook_keys(want_on=False)
