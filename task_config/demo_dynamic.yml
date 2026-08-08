@@ -891,7 +891,7 @@ task_args:
     container_radius_jitter: 0.15     # ±15%
     cylinder_hole_inset: 0.025 # cylinder only: keep the hole clear of the plate rim
     cylinder_hole_edge_clearance: 0.008  # keep the full hole disk inside the rim
-    spin_speed: 1.9             # angular speed baseline; dir random ±
+    spin_speed: 1.52            # angular speed baseline; dir random ± (−20% from 1.9)
     spin_speed_jitter: 0.20     # sample speed ~ U(spin_speed×0.8, spin_speed×1.2)
     # spin_speed_min / spin_speed_max: optional absolute range (overrides jitter when both set)
     r_tol: 0.06                 # unused; code reads hole_align_tol (default 0.015 m)

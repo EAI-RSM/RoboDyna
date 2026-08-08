@@ -184,7 +184,7 @@ task_args:
     theta_max_deg: 30.0
     belt_ride_steps: 600
   drop_ball_hole:
-    spin_speed: 1.9
+    spin_speed: 1.52
     r_tol: 0.06
     align_window: 0.18
     max_track_steps: 900
