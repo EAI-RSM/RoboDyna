@@ -35,6 +35,7 @@ from _interactive_common import (  # noqa: E402
     report_task_result,
     sleep_to_timestep,
     terminal_hold_should_close,
+    print_episode_condition,
 )
 
 
@@ -130,6 +131,7 @@ def main():
     env._interactive_robot_mode = True
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
+    print_episode_condition(env)
     _print_color_map(env)
 
     viewer = env.viewer

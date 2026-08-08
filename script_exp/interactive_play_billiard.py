@@ -36,6 +36,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     resolve_action_arm,
+    print_episode_condition,
 )
 
 
@@ -391,6 +392,7 @@ def main():
     env = play_billiard()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     env._interactive_selected_arms = (env._arm_side,)
+    print_episode_condition(env)
     print(
         f"Arm={env._arm_side}; target pocket={env._target_pocket_name}; "
         f"specific_hole={env.specific_hole}; distractors={env.enable_distractors}."

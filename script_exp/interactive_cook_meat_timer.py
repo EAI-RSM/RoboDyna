@@ -40,6 +40,7 @@ from _interactive_common import (  # noqa: E402
     terminal_hold_should_close,
     print_mode_controls,
     require_selected_arms,
+    print_episode_condition,
 )
 
 
@@ -575,6 +576,7 @@ def main():
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     # Match the main cook_meat_timer rollout: open fingers before approaching steak.
     env.together_open_gripper(save_freq=None)
+    print_episode_condition(env)
     _clear_cook_latches(env)
 
     # Keyboard sandbox starts with steaks on pans so gripper-Z can cook immediately.

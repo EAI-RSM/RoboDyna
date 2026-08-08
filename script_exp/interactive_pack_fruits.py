@@ -26,6 +26,7 @@ from _interactive_common import (  # noqa: E402
     print_banner,
     require_selected_arms,
     run_viewer_loop,
+    print_episode_condition,
 )
 
 bootstrap_repo()
@@ -184,6 +185,7 @@ def main():
     use_robot = args.control == "robot"
     env = pack_fruits()
     env.setup_demo(**configure_task("pack_fruits", args.config, args.seed, use_robot=use_robot))
+    print_episode_condition(env)
     env._belt_running = True
 
     print_banner(

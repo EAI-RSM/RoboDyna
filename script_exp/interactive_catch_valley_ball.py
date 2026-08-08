@@ -32,6 +32,7 @@ from _interactive_common import (  # noqa: E402
     report_task_result,
     sleep_to_timestep,
     terminal_hold_should_close,
+    print_episode_condition,
 )
 
 
@@ -157,6 +158,7 @@ def main():
     # Same as catch_cup pillow: after settle, hand the box to PhysX. Block any
     # freeze/teleport helpers while the interactive push session is active.
     env._enable_box_physics()
+    print_episode_condition(env)
     env._push_active = True
     env._bowl_ready = False
 

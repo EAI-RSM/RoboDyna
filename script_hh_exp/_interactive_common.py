@@ -37,6 +37,7 @@ from script_exp._interactive_common import (  # noqa: E402
     flash_gripper_failure,
     gripper_failure_feedback,
     make_viewer_view_toggle,
+    print_episode_condition,
     print_failure,
     print_instructions,
     print_mode_controls,
@@ -1067,6 +1068,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     module = importlib.import_module(module_name)
     task_cls = getattr(module, class_name)
     from envs import CONFIGS_PATH
+
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
     config = configure_task(task, args.config, args.seed, args.control == "robot")
     task_args = config.setdefault("task_args", {}).setdefault(task, {})
@@ -1091,6 +1093,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     env.setup_demo(**config)
     if post_setup is not None:
         post_setup(env)
+    print_episode_condition(env, task)
     print_mode_controls(task, args.control, keyboard=keyboard_controls, robot=robot_controls)
     controller = HouseholdController(env, task, robot=args.control == "robot")
     viewer = env.viewer

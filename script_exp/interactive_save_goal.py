@@ -34,6 +34,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     resolve_action_arm,
+    print_episode_condition,
 )
 
 
@@ -300,6 +301,7 @@ def main():
     env._interactive_selected_arms = (
         "left" if env.mirrored else "right",
     )
+    print_episode_condition(env)
     _start_shot(env)
     target = env.goalkeeper_target_pose.p if env.goalkeeper_target_pose is not None else [0, 0, 0]
     print(

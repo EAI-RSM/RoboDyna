@@ -73,7 +73,8 @@ task_args:
     door_open_angle_deg: 95.0   # deg; trapdoor open angle
     door_open_speed_deg: 220.0  # deg/s; trapdoor swing rate
     door_open_duration_sec: 0.5 # s; how long a door stays commanded open
-    door_open_once: false       # opt1: true = each door opens only once then locks closed (default: unlimited)
+    door_open_once: false       # opt1: true = each door opens only once then locks closed
+    door_open_max: 3            # max open/close cycles per door when door_open_once=false
     enable_distractor: false    # opt2: true = spawn black distractor marble (opposite direction)
     distractor_collide: false   # false = pass through, true = bounce on contact
     distractor_height_offset: 0.0  # m; keep 0 so distractor matches target marble height (Z)
@@ -124,16 +125,16 @@ task_args:
     cup_fwd_clearance: 0.0      # m; unused (landing from ballistic exit)
     release_clearance: 0.055    # m; PhysX spawn past the front lip
     ramp_friction: 0.06         # kinetic μ on the incline
-  catch_rat:
-    # Option 1: two mice from opposite holes; success requires both held.
-    catch_two_mice: false
+  catch_cuboid:
+    # Option 1: two cuboids from opposite holes; success requires both held.
+    catch_two_cuboids: false
     # Option 2: opaque colored top lattice (false = glass / see-through).
     opaque_surface: false
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    rat_move_speed_min: 0.04
-    rat_move_speed_max: 0.10
+    cuboid_move_speed_min: 0.04
+    cuboid_move_speed_max: 0.10
     num_appearances: 3          # how many pop windows per episode
-    pop_steps: 90               # sim steps rat stays raised per pop
+    pop_steps: 90               # sim steps cuboid stays raised per pop
     grasp_tol: 0.05             # m; catch offset scale (success uses ~2.5×)
   catch_rolling_cup:
     # Full-width single shelf (+30cm), no drawer/file/plates. Cup tips→rolls;
@@ -886,7 +887,7 @@ task_args:
     sponge_y: -0.18
     cup_id: 0
     laptop_id: 0
-    spill_steps: 3200
+    spill_steps: 1067
     expert_wipe_level: 0.18
     reach_laptop_level: 0.92
     clean_rate: 0.0045
@@ -914,14 +915,14 @@ task_args:
     chips_xy: [0.16, 0.08]
   make_soup:
     # KitchenS: chopping board with colored cubes + tomato; pot of water on range.
-    # Lift board level, tip so pieces slide into pot (PhysX), then turn stove on.
+    # Burner starts on. Lift board level, tip so pieces slide into pot (PhysX).
     scene_id: 0
     burner: left_front
     range_xy: [0.18, 0.22]
     water_level: 0.45
-    pot_radius: 0.055
+    pot_radius: 0.06435          # prior 0.0715 × 0.9
     pot_height: 0.075
-    board_half: [0.095, 0.065, 0.010]
+    board_half: [0.095, 0.052, 0.010]  # y prior 0.065 × 0.8
     handle_half: [0.022, 0.024, 0.022]
     board_x: 0.16
     board_y: -0.08

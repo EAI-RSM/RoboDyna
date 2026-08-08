@@ -33,6 +33,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     print_mode_controls,
+    print_episode_condition,
 )
 
 
@@ -125,6 +126,7 @@ def main():
     env._plain_glass = True
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)
+    print_episode_condition(env)
     env._osc_armed = True
     env._bowl_force_stop = False
     env._expert_hold = None

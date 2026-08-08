@@ -35,6 +35,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     resolve_action_arm,
+    print_episode_condition,
 )
 
 
@@ -357,6 +358,7 @@ def main():
     env._interactive_selected_arms = (
         "left" if env.mirrored else "right",
     )
+    print_episode_condition(env)
     # setup_demo already starts ball motion with expert_demo=False.
     ix, iy, iz = _intercept_xyz(env)
     print(

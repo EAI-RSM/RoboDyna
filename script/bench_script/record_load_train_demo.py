@@ -1,4 +1,4 @@
-"""Record a third-person demo for load_train -> ./tmp_load_train/video/vN_episode0.mp4."""
+"""Record a third-person demo for load_train -> ./tmp/tmp_load_train/video/vN_episode0.mp4."""
 import sys
 import os
 import glob

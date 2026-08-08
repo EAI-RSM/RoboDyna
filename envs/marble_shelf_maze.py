@@ -10,7 +10,7 @@ class marble_shelf_maze(Base_Task):
     """A marble threads down a zig-zag stack of shelves hung between two parallel glass sheets.
 
     Two thin vertical glass panes face the robot, separated by a narrow gap. Short glass shelves
-    (catch_shelf_marble / catch_rat window-glass look: light-blue tint + 80% transmission) are
+    (catch_shelf_marble / catch_cuboid window-glass look: light-blue tint + 80% transmission) are
     wedged crosswise in that gap. A marble starts at rest on the centre of the top shelf. Two
     buttons sit on the table; pressing one tilts the active shelf 45 deg toward that side so the
     marble rolls off and drops onto the shelf below (or, from the bottom shelf, into the bowl).
@@ -84,7 +84,7 @@ class marble_shelf_maze(Base_Task):
     OSCILLATING_BOWL_PERIOD_DEFAULT = 3.0     # s; full left→right→left cycle
     OSCILLATING_BOWL_ALIGN_TOL_FRAC = 0.70    # fraction of bowl_catch_radius for expert timing
 
-    # Glass shelves (exact replica of catch_shelf_marble / catch_rat window-glass path).
+    # Glass shelves (exact replica of catch_shelf_marble / catch_cuboid window-glass path).
     SHELF_COLOR = [0.94, 0.97, 1.0]
     SHELF_TRANSMISSION = 0.8
     SHELF_TRANSMISSION_ROUGHNESS = 0.0
@@ -231,7 +231,7 @@ class marble_shelf_maze(Base_Task):
                 pass
             return glass
 
-        # Expert / demo recording: catch_shelf_marble / catch_rat transmission glass.
+        # Expert / demo recording: catch_shelf_marble / catch_cuboid transmission glass.
         glass = sapien.render.RenderMaterial(base_color=[*self.SHELF_COLOR, 1.0])
         glass.set_transmission(float(self.SHELF_TRANSMISSION))
         glass.set_transmission_roughness(float(self.SHELF_TRANSMISSION_ROUGHNESS))

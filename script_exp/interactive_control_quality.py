@@ -33,6 +33,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     print_mode_controls,
+    print_episode_condition,
 )
 
 
@@ -285,6 +286,7 @@ def main():
     # Arrow presses / gripper teleop need planner support.
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.enable_interactive_tile_pause()
+    print_episode_condition(env)
     # Keep the belt frozen while arms move to the key hover poses. Starting it
     # earlier burns the first tile's pause window before the operator can act.
     _move_arms_to_ready(env)

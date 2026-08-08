@@ -56,7 +56,6 @@ class KitchenL_base_task(Base_Task):
         self.basket_right_position_jitter_y = (-0.04, 0.04)
         self.basket_right_modelname = "063_tabletrashbin"
         self.basket_right_model_id = 6
-        self.cabinet_scale = 0.5
         super()._init_task_env_(**kwags)
 
     # ------------------------------------------------------------------
@@ -622,54 +621,3 @@ class KitchenL_base_task(Base_Task):
         if self.basket_right is not None:
             self.basket_right.set_name("basket_right")
             self.add_prohibit_area(self.basket_right, padding=0.05)
-
-    def _load_cabinet_on_table(self, table_height: float, table_xy_bias):
-        """Static wall-cabinet visual + box collision (planner-safe)."""
-        x_center = table_xy_bias[0]
-        y_center = table_xy_bias[1] + 0.12
-        z_center = table_height + 0.55
-        ax, ay, az = math.radians(90), math.radians(180), math.radians(-90)
-        qx, qy, qz, qw = t3d.euler.euler2quat(ax, ay, az)
-        quat = [qw, qx, qy, qz]
-        model_dir = Path("assets/objects_bench/125_cabinet_tynnnw")
-        visual = model_dir / "blender_public/links/base_link.glb"
-        if not visual.exists():
-            cands = sorted(model_dir.rglob("*.glb"))
-            visual = cands[0] if cands else None
-        scale = float(self.cabinet_scale)
-        builder = self.scene.create_actor_builder()
-        builder.set_physx_body_type("static")
-        builder.add_box_collision(
-            pose=sapien.Pose(p=[0, 0, 0]),
-            half_size=[0.28 * scale, 0.14 * scale, 0.22 * scale],
-            material=self.scene.default_physical_material,
-        )
-        if visual is not None:
-            builder.add_visual_from_file(filename=str(visual), scale=[scale, scale, scale])
-        builder.set_initial_pose(sapien.Pose(p=[x_center, y_center, z_center], q=quat))
-        entity = builder.build(name="cabinet")
-        self.cabinet = Actor(
-            entity,
-            {"center": [0, 0, 0], "extents": [0.56 * scale, 0.28 * scale, 0.44 * scale], "scale": scale},
-        )
-        self.add_prohibit_area(self.cabinet, padding=0.02)
-
-    def _add_cabinet_wall_filler(self):
-        if getattr(self, "cabinet", None) is None:
-            return
-        cab_pose = np.array(self.cabinet.get_pose().p, dtype=float)
-        scale_ratio = float(self.cabinet_scale) / 0.5
-        self.cabinet_wall_filler = create_box(
-            self.scene,
-            sapien.Pose(
-                p=[
-                    float(cab_pose[0]),
-                    float(cab_pose[1] + 0.16 * scale_ratio),
-                    float(cab_pose[2]),
-                ]
-            ),
-            half_size=[0.30 * scale_ratio, 0.11 * scale_ratio, 0.22 * scale_ratio],
-            color=(0.32, 0.32, 0.32),
-            name="cabinet_wall_filler",
-            is_static=True,
-        )

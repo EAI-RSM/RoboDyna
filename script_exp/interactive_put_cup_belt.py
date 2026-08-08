@@ -39,6 +39,7 @@ from _interactive_common import (  # noqa: E402
     terminal_hold_should_close,
     resolve_action_arm,
     try_interactive_grasp,
+    print_episode_condition,
 )
 
 
@@ -503,6 +504,7 @@ def main():
     env._interactive_selected_arms = (
         "left" if env.mirrored else "right",
     )
+    print_episode_condition(env)
     _place_cup_south_of_belt(env, hold_kinematic=args.control == "keyboard")
     print(
         f"Side={'left' if env.mirrored else 'right'}; "

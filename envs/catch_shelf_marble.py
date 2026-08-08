@@ -122,7 +122,7 @@ class catch_shelf_marble(Base_Task):
     # Max keycap travel as a fraction of key half-height (keeps the top above the base rim).
     KEY_TRAVEL_FRAC_DEFAULT = 0.85
     KEY_SPRING_STEP_DEFAULT = 0.0007
-    # Thin hollow bezel under each key (not a solid cube the keycap can sink into).
+    # Thin hollow bezel under each key (add_key_base_border).
     KEY_BASE_WALL_T = 0.006
     KEY_BASE_HALF_Z = 0.004
     KEY_BASE_MARGIN = 0.008
@@ -135,7 +135,7 @@ class catch_shelf_marble(Base_Task):
     PRESS_LOOP_MAX_STEPS_DEFAULT = 500
     POST_CATCH_DWELL_DEFAULT = 20
 
-    # Glass shelves (catch_rat window-glass path): very light blue tint + 80% transmission.
+    # Glass shelves (catch_cuboid window-glass path): very light blue tint + 80% transmission.
     SHELF_COLOR = [0.94, 0.97, 1.0]
     SHELF_TRANSMISSION = 0.8
     SHELF_TRANSMISSION_ROUGHNESS = 0.0
@@ -325,7 +325,7 @@ class catch_shelf_marble(Base_Task):
                 pass
             return glass
 
-        # Expert / demo recording: catch_rat-style light-blue + 80% transmission.
+        # Expert / demo recording: catch_cuboid-style light-blue + 80% transmission.
         glass = sapien.render.RenderMaterial(base_color=[*self.SHELF_COLOR, 1.0])
         glass.set_transmission(float(self.SHELF_TRANSMISSION))
         glass.set_transmission_roughness(float(self.SHELF_TRANSMISSION_ROUGHNESS))
@@ -338,7 +338,7 @@ class catch_shelf_marble(Base_Task):
         return glass
 
     def _create_glass_shelf(self, pose, half_size, is_static, name):
-        """Shelf box with collision + catch_rat-style glass visual (moves with the entity)."""
+        """Shelf box with collision + catch_cuboid-style glass visual (moves with the entity)."""
         # Mirror create_entity_box, but attach a transmission glass material instead of opaque paint.
         scene = self.scene
         entity = sapien.Entity()
@@ -793,7 +793,7 @@ class catch_shelf_marble(Base_Task):
 
         # ---- shelves: static + fixed-tilt, except the one oscillating shelf (if enabled), which is
         # built kinematic instead so `_animate_oscillating_shelf` can re-pose it every step.
-        # Visual: catch_rat-style light-blue glass (80% transmission). ----
+        # Visual: catch_cuboid-style light-blue glass (80% transmission). ----
         self.shelves = []
         for i in range(self.n_shelves):
             phi = self._shelf_phi(i, osc_steps=0)  # rest pose at episode start (_osc_steps == 0)
@@ -900,27 +900,18 @@ class catch_shelf_marble(Base_Task):
 
     def _add_key_base_border(self, side, kx, ky):
         """Hollow dark bezel around the keycap (four walls, open center)."""
-        hx = float(self.key_half[0]) + float(self.KEY_BASE_MARGIN)
-        hy = float(self.key_half[1]) + float(self.KEY_BASE_MARGIN)
-        hz = float(self.KEY_BASE_HALF_Z)
-        wt = float(self.KEY_BASE_WALL_T)
-        z = float(self.table_top) + hz
-        color = list(self.KEY_BASE_COLOR)
-        walls = [
-            ("x_pos", [kx + hx - 0.5 * wt, ky, z], [0.5 * wt, hy, hz]),
-            ("x_neg", [kx - hx + 0.5 * wt, ky, z], [0.5 * wt, hy, hz]),
-            ("y_pos", [kx, ky + hy - 0.5 * wt, z], [hx - wt, 0.5 * wt, hz]),
-            ("y_neg", [kx, ky - hy + 0.5 * wt, z], [hx - wt, 0.5 * wt, hz]),
-        ]
-        for name, pos, half in walls:
-            create_box(
-                self,
-                pose=sapien.Pose(list(pos)),
-                half_size=list(half),
-                color=color,
-                is_static=True,
-                name=f"action_key_base_{side}_{name}",
-            )
+        add_key_base_border(
+            self,
+            float(kx),
+            float(ky),
+            float(self.table_top),
+            self.key_half,
+            wall_t=float(self.KEY_BASE_WALL_T),
+            half_z=float(self.KEY_BASE_HALF_Z),
+            margin=float(self.KEY_BASE_MARGIN),
+            color=list(self.KEY_BASE_COLOR),
+            name_prefix=f"action_key_base_{side}",
+        )
 
     def _draw_arrow(self, side, key_x, key_y, z):
         # Author one left-pointing arrow, then rigidly rotate it 180 degrees for the right key, so

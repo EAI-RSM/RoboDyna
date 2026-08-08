@@ -34,6 +34,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     resolve_action_arm,
+    print_episode_condition,
 )
 
 
@@ -271,6 +272,7 @@ def main():
     env._interactive_selected_arms = (
         "left" if env.mirrored else "right",
     )
+    print_episode_condition(env)
     x, y = _target_xy(env)
     print(
         f"Predicted catch target ≈ ({x:.3f}, {y:.3f}); red_line_x={env.red_line_x:.3f}; "

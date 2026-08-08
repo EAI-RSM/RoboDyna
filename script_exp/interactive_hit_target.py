@@ -37,6 +37,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     resolve_action_arm,
+    print_episode_condition,
 )
 
 
@@ -348,6 +349,7 @@ def main():
     env._interactive_selected_arms = (
         "right" if env.dart_side > 0 else "left",
     )
+    print_episode_condition(env)
     print(
         f"Arm={'right' if env.dart_side > 0 else 'left'}; "
         f"blocker_static={env.blocker_enabled}; blocker_dyn={env.blocker_dynamic}."

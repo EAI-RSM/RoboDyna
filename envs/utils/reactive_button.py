@@ -93,6 +93,10 @@ class ReactivePushButtons:
         home_poses: Sequence[sapien.Pose],
         max_depth: float,
         ids: Sequence | None = None,
+        # Per-button arms that may press (e.g. ``(("left",), ("right",), ("right",))``).
+        # When omitted, ids ``"left"``/``"right"`` accept only the matching arm;
+        # all other ids accept either arm.
+        press_arms: Sequence[Sequence[str]] | None = None,
         xy_tol: float = 0.055,
         visual_step: float = DEFAULT_VISUAL_STEP,
         force_stiffness: float = DEFAULT_STIFFNESS,
@@ -144,6 +148,12 @@ class ReactivePushButtons:
                 raise ValueError("ids length must match button count")
             self.ids = list(ids)
         self._id_to_i = {button_id: i for i, button_id in enumerate(self.ids)}
+        if press_arms is None:
+            self._press_arms = None
+        else:
+            if len(press_arms) != n:
+                raise ValueError("press_arms length must match button count")
+            self._press_arms = [tuple(str(s) for s in arms) for arms in press_arms]
         self.visual_depth = [0.0] * n
         self.target_depth = [0.0] * n
         self._forced_depth = [None] * n
@@ -264,9 +274,13 @@ class ReactivePushButtons:
     def _sides_for_button(self, idx: int) -> tuple[str, ...]:
         """Arms that may press this key.
 
-        Left/right-labeled keys only accept the matching arm so an approaching
-        opposite gripper (or a glancing contact) cannot actuate them early.
+        Default: left/right-labeled keys only accept the matching arm so an
+        approaching opposite gripper cannot actuate them early.  Callers that
+        put both direction keys under one arm (e.g. dispense_gummy belt keys)
+        pass ``press_arms`` to override.
         """
+        if self._press_arms is not None:
+            return self._press_arms[idx]
         button_id = self.ids[idx]
         if button_id in ("left", "right"):
             return (str(button_id),)

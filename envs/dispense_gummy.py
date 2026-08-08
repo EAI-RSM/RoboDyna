@@ -1063,6 +1063,8 @@ class dispense_gummy(Base_Task):
             ],
             max_depth=float(self.key_half[2]),
             ids=["dispense", "left", "right"],
+            # Red dispense = left arm; both arrow belt keys = right arm.
+            press_arms=[("left",), ("right",), ("right",)],
             xy_tol=float(self.belt_key_press_xy),
         )
         self._reactive_buttons.set_tops_z([

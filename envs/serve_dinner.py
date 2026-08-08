@@ -144,35 +144,10 @@ class serve_dinner(KitchenS_base_task):
         self._configure_head_camera()
 
     def _configure_head_camera(self) -> None:
-        cams = getattr(self, "cameras", None)
-        if cams is None:
-            return
-        names = list(getattr(cams, "static_camera_name", []) or [])
-        clist = list(getattr(cams, "static_camera_list", []) or [])
-        if "head_camera" not in names:
-            return
-        camera = clist[names.index("head_camera")]
-        rx, ry = getattr(self, "range_xy", self.RANGE_REL_XY)
-        cam_pos = np.array([0.12, -1.15, 1.95], dtype=float)
-        look_at = np.array([float(rx) * 0.55, float(ry) * 0.2 - 0.05, 0.82], dtype=float)
-        forward = look_at - cam_pos
-        forward /= np.linalg.norm(forward)
-        left = np.cross(np.array([0.0, 0.0, 1.0], dtype=float), forward)
-        if float(np.linalg.norm(left)) < 1e-6:
-            left = np.array([-1.0, 0.0, 0.0], dtype=float)
-        left /= np.linalg.norm(left)
-        up = np.cross(forward, left)
-        m = np.eye(4)
-        m[:3, :3] = np.stack([forward, left, up], axis=1)
-        m[:3, 3] = cam_pos
-        camera.entity.set_pose(sapien.Pose(m))
-        try:
-            camera.set_fovy(float(np.deg2rad(58)))
-        except Exception:
-            try:
-                camera.fovy = float(np.deg2rad(58))
-            except Exception:
-                pass
+        """Shared household head framing (see ``envs.utils.household_view``)."""
+        from .utils.household_view import configure_household_head_camera
+
+        configure_household_head_camera(self)
 
     # ---------------------------------------------------------------- actors
     def load_actors(self) -> None:

@@ -1,4 +1,4 @@
-"""Smoke-test catch_rat expert under default / opt1 / opt2 / opt1+2 (5 seeds each)."""
+"""Smoke-test catch_cuboid expert under default / opt1 / opt2 / opt1+2 (5 seeds each)."""
 from __future__ import annotations
 
 import os
@@ -13,15 +13,15 @@ import yaml
 from script.collect_data import class_decorator, get_embodiment_config
 from envs import CONFIGS_PATH
 
-TASK = "catch_rat"
+TASK = "catch_cuboid"
 CONFIG = "demo_dynamic"
 N_SEEDS = 5
 
 CONDITIONS = [
-    ("default", {"catch_two_mice": False, "opaque_surface": False}),
-    ("opt1_catch_two_mice", {"catch_two_mice": True, "opaque_surface": False}),
-    ("opt2_opaque_surface", {"catch_two_mice": False, "opaque_surface": True}),
-    ("opt1+2", {"catch_two_mice": True, "opaque_surface": True}),
+    ("default", {"catch_two_cuboids": False, "opaque_surface": False}),
+    ("opt1_catch_two_cuboids", {"catch_two_cuboids": True, "opaque_surface": False}),
+    ("opt2_opaque_surface", {"catch_two_cuboids": False, "opaque_surface": True}),
+    ("opt1+2", {"catch_two_cuboids": True, "opaque_surface": True}),
 ]
 
 
@@ -31,7 +31,7 @@ def build_base_args():
     args["task_name"] = TASK
     args["task_config"] = CONFIG
     args["episode_num"] = 1
-    args["save_path"] = os.path.abspath("./tmp/tmp_catch_rat_smoke")
+    args["save_path"] = os.path.abspath("./tmp/tmp_catch_cuboid_smoke")
     args["collect_data"] = False
     args["eval_video_log"] = False
     args["save_failed_cases"] = False
@@ -84,10 +84,10 @@ def run_one(task, args, seed: int, flags: dict) -> dict:
             err = f"check_success: {e}"
         else:
             err = None
-        holes = list(getattr(task, "_rat_holes", []))
+        holes = list(getattr(task, "_cuboid_holes", []))
         held = []
         try:
-            held = [bool(x) for x in task._rats_held()]
+            held = [bool(x) for x in task._cuboids_held()]
         except Exception:
             pass
         return {
@@ -96,7 +96,7 @@ def run_one(task, args, seed: int, flags: dict) -> dict:
             "check_success": succ,
             "ok": plan_ok and succ,
             "holes": holes,
-            "rats_held": held,
+            "cuboids_held": held,
             "error": err,
         }
     except Exception as e:
@@ -107,7 +107,7 @@ def run_one(task, args, seed: int, flags: dict) -> dict:
             "check_success": False,
             "ok": False,
             "holes": [],
-            "rats_held": [],
+            "cuboids_held": [],
             "error": str(e),
         }
     finally:
@@ -118,12 +118,12 @@ def run_one(task, args, seed: int, flags: dict) -> dict:
 
 
 def main():
-    os.makedirs("./tmp/tmp_catch_rat_smoke", exist_ok=True)
+    os.makedirs("./tmp/tmp_catch_cuboid_smoke", exist_ok=True)
     base = build_base_args()
     task = class_decorator(TASK)
     summary = []
 
-    print(f"\n=== catch_rat smoke: {N_SEEDS} seeds × {len(CONDITIONS)} conditions ===\n")
+    print(f"\n=== catch_cuboid smoke: {N_SEEDS} seeds × {len(CONDITIONS)} conditions ===\n")
     for name, flags in CONDITIONS:
         print(f"--- {name}: {flags} ---")
         results = []
@@ -134,7 +134,7 @@ def main():
             print(
                 f"  seed={seed}: {status}  plan={r['plan_success']} "
                 f"success={r['check_success']} holes={r['holes']} "
-                f"held={r['rats_held']}"
+                f"held={r['cuboids_held']}"
                 + (f" err={r['error']}" if r["error"] else "")
             )
         n_ok = sum(1 for r in results if r["ok"])

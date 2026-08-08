@@ -267,6 +267,7 @@ def release_dynamic(rigid):
 #   0 = SUCCESS, 10 = FAILURE, 2 = closed before a result.
 _LAST_TASK_RESULT: bool | None = None
 _LAST_TASK_DETAIL: str | None = None
+_LAST_EPISODE_CONDITION: str | None = None
 
 
 def task_result_exit_code(ok: bool | None = None) -> int:
@@ -287,18 +288,193 @@ def _normalize_result_detail(detail: str | None) -> str | None:
     return text or None
 
 
-def _persist_task_result(ok: bool | None, detail: str | None) -> None:
+def _persist_task_result(
+    ok: bool | None,
+    detail: str | None,
+    *,
+    condition: str | None = None,
+) -> None:
     """Write the latest result for a parent GUI launcher, if requested."""
+    global _LAST_EPISODE_CONDITION
+    if condition is not None:
+        _LAST_EPISODE_CONDITION = _normalize_result_detail(condition)
     path = os.environ.get(TASK_RESULT_ENV)
     if not path:
         return
     try:
         Path(path).write_text(
-            json.dumps({"ok": ok, "detail": detail or ""}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "ok": ok,
+                    "detail": detail or "",
+                    "condition": _LAST_EPISODE_CONDITION or "",
+                },
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
     except OSError:
         pass
+
+
+def _resolve_task_name(env, task: str | None = None) -> str:
+    if task:
+        return str(task)
+    name = getattr(env, "task_name", None) or getattr(env, "TASK_NAME", None)
+    if name:
+        return str(name)
+    return type(env).__name__
+
+
+def format_episode_condition(env, task: str | None = None) -> str:
+    """Human-readable episode-specific goal (color, fill target, side, …)."""
+    task = _resolve_task_name(env, task)
+    parts: list[str] = []
+
+    if task == "catch_marbles_trapdoors":
+        names = list(getattr(env, "button_color_names", None) or getattr(env, "color_order", []) or [])
+        idx = int(getattr(env, "target_button_idx", -1))
+        color = names[idx] if 0 <= idx < len(names) else "?"
+        parts.append(f"target marble={color}")
+        if names:
+            parts.append(f"doors L→R={'/'.join(str(c) for c in names)}")
+
+    elif task == "dispense_gummy":
+        color = str(getattr(env, "target_color", "?") or "?")
+        parts.append(f"target gummy={color}")
+        try:
+            distractor = env._distractor_color()
+            parts.append(f"distractor={distractor}")
+        except Exception:
+            pass
+
+    elif task == "measure_ingredient":
+        tgt = float(getattr(env, "target_fill", 0.0))
+        tol = float(getattr(env, "fill_tol", 0.05))
+        parts.append(f"target fill={tgt:.0%}±{tol:.0%}")
+
+    elif task == "fill_coffee_jar":
+        tgt = float(getattr(env, "target_fill", 0.0))
+        tol = float(getattr(env, "fill_tol", 0.05))
+        parts.append(f"target fill={tgt:.0%}±{tol:.0%}")
+        try:
+            beans = int(env._beans_needed())
+            parts.append(f"~{beans} beans")
+        except Exception:
+            pass
+
+    elif task == "boil_milk":
+        ring = float(getattr(env, "target_ring", 100.0 * float(getattr(env, "target_level", 0.8))))
+        parts.append(f"target ring={ring:.0f}%")
+
+    elif task == "pour_beer":
+        tgt = 100.0 * float(getattr(env, "target_liquid", 0.90))
+        parts.append(f"need beer>{tgt:.0f}%")
+
+    elif task in ("cook_food", "cook_food_timer"):
+        food = str(getattr(env, "food_type", "") or "")
+        if food:
+            parts.append(f"food={food}")
+        rng = getattr(env, "target_doneness_range", None)
+        if rng is not None and len(rng) >= 2:
+            parts.append(f"doneness={float(rng[0]):.0%}–{float(rng[1]):.0%}")
+
+    elif task in ("cook_meat", "cook_meat_timer"):
+        rng = getattr(env, "target_doneness_range", None)
+        if rng is not None and len(rng) >= 2:
+            parts.append(f"doneness={float(rng[0]):.0%}–{float(rng[1]):.0%}")
+
+    elif task == "play_billiard":
+        name = getattr(env, "_target_pocket_name", None)
+        pid = getattr(env, "_target_pocket_id", None)
+        if getattr(env, "specific_hole", False) and name not in (None, "any"):
+            parts.append(f"target pocket={name}")
+        elif pid is not None:
+            parts.append(f"target pocket id={pid}")
+        else:
+            parts.append("target pocket=any top")
+
+    elif task == "pick_ripe_apple":
+        side = getattr(env, "apple_side", None)
+        if side is not None:
+            parts.append(f"ripe apple={'left' if float(side) < 0 else 'right'}")
+
+    elif task == "load_train":
+        side = getattr(env, "ball_side", None)
+        if side:
+            parts.append(f"ball side={side}")
+        if bool(getattr(env, "target_wagon_mode", False)):
+            widx = getattr(env, "target_wagon_idx", None)
+            parts.append(f"target wagon={widx if widx is not None else '?'}")
+
+    elif task == "save_goal":
+        mirrored = bool(getattr(env, "mirrored", False))
+        parts.append(f"keeper side={'left' if mirrored else 'right'}")
+        speed = getattr(env, "ball_speed", None)
+        if speed is not None:
+            parts.append(f"ball speed={float(speed):.4f} m/s")
+
+    elif task == "catch_cuboid":
+        color = getattr(env, "cuboid_color", None)
+        if color is not None:
+            try:
+                rgb = [float(c) for c in list(color)[:3]]
+                parts.append(f"cuboid rgb=({rgb[0]:.2f},{rgb[1]:.2f},{rgb[2]:.2f})")
+            except Exception:
+                parts.append(f"cuboid color={color}")
+        if bool(getattr(env, "catch_two_cuboids", False)):
+            parts.append("catch both cuboids")
+
+    elif task == "punch_dual_holes":
+        if str(getattr(env, "missing_tile_mode", "none")) != "none":
+            parts.append(
+                f"missing tile={getattr(env, 'missing_tile_side', '?')}#"
+                f"{getattr(env, 'missing_tile_index', '?')}"
+            )
+
+    elif task == "sort_apples_belt":
+        mode = getattr(env, "color_mode", None)
+        if mode:
+            parts.append(f"color mode={mode}")
+
+    elif task == "make_soup":
+        veggies = getattr(env, "veggies", None)
+        if veggies is not None:
+            names = []
+            for v in list(veggies):
+                name = getattr(v, "get_name", None)
+                try:
+                    names.append(str(name() if callable(name) else getattr(v, "name", type(v).__name__)))
+                except Exception:
+                    names.append("veg")
+            parts.append(f"produce={len(veggies)}" + (f" ({', '.join(names)})" if names else ""))
+
+    elif task == "trap_bug":
+        bug = getattr(env, "bug_type", None) or getattr(env, "_bug_type", None)
+        if bug:
+            parts.append(f"bug={bug}")
+
+    return "; ".join(parts)
+
+
+def print_episode_condition(env, task: str | None = None) -> str:
+    """Print and persist the episode-specific condition; return the text (may be empty).
+
+    Idempotent per env instance so callers may invoke both after ``setup_demo``
+    and from ``run_viewer_loop`` without duplicate lines.
+    """
+    global _LAST_EPISODE_CONDITION
+    if bool(getattr(env, "_episode_condition_printed", False)):
+        return str(getattr(env, "_episode_condition_text", "") or "")
+    text = format_episode_condition(env, task)
+    task_name = _resolve_task_name(env, task)
+    env._episode_condition_printed = True
+    env._episode_condition_text = text
+    if text:
+        print_instructions(f"[{task_name}] condition: {text}")
+        _LAST_EPISODE_CONDITION = text
+        _persist_task_result(None, None, condition=text)
+    return text
 
 
 def report_task_result(env, detail: str | None = None) -> bool:
@@ -1116,6 +1292,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+    print_episode_condition(env)
     views = make_viewer_view_toggle(env, viewer)
     step = 0
     terminal_started_at = None

@@ -30,6 +30,7 @@ from _interactive_common import (  # noqa: E402
     print_banner,
     require_selected_arms,
     run_viewer_loop,
+    print_episode_condition,
 )
 
 bootstrap_repo()
@@ -221,6 +222,7 @@ def main():
     env.setup_demo(**configure_task(
         "pick_ripe_apple", args.config, args.seed, use_robot=use_robot,
     ))
+    print_episode_condition(env)
     env._interactive_phase = "wait"  # wait → hold → done
     env._ripen_started = True
     selected_arm = "left" if env.apple_side < 0 else "right"

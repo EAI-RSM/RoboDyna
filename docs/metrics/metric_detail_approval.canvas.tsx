@@ -791,31 +791,31 @@ const TASKS: TaskSpec[] = [
     ],
   },
   {
-    id: "catch_rat",
-    name: "catch_rat",
+    id: "catch_cuboid",
+    name: "catch_cuboid",
     category: "Manipulation",
     metrics: [
-      { key: "n_rats", type: "int", meaning: "1 or 2" },
+      { key: "n_cuboids", type: "int", meaning: "1 or 2" },
       {
-        key: "rats_held",
+        key: "cuboids_held",
         type: "list[bool]",
-        meaning: "Per-rat gripper contact",
+        meaning: "Per-cuboid gripper contact",
       },
       { key: "n_held", type: "int", meaning: "How many held" },
       {
         key: "catch_pct",
         type: "float",
-        meaning: "n_held / n_rats",
+        meaning: "n_held / n_cuboids",
       },
       {
         key: "catch_accuracy",
         type: "float",
-        meaning: "Same as catch_pct (all required rats for success)",
+        meaning: "Same as catch_pct (all required cuboids for success)",
       },
       {
-        key: "catch_two_mice",
+        key: "catch_two_cuboids",
         type: "bool",
-        meaning: "Two-mice mode flag",
+        meaning: "Two-cuboids mode flag",
       },
       {
         key: "catch_score",

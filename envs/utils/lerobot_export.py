@@ -15,7 +15,7 @@ from .lerobot_v21 import LeRobotV21Writer, build_features
 
 # Stable task_index assignment for the 15-task suite (task_index == episode_chunk folder).
 SUITE_TASK_INDEX = {name: i for i, name in enumerate([
-    "cook_meat", "sort_apples_belt", "place_block_belt", "pick_cup_behind_fan", "catch_rat",
+    "cook_meat", "sort_apples_belt", "place_block_belt", "pick_cup_behind_fan", "catch_cuboid",
     "hit_target", "punch_dual_holes", "catch_marbles_trapdoors", "control_quality",
     "assemble_markers_cylinder", "collect_falling_bowl", "drop_ball_hole",
     "two_type_sorting_catch", "pick_ripe_apple", "put_cup_belt",

@@ -32,6 +32,7 @@ from _interactive_common import (  # noqa: E402
     release_dynamic,
     require_selected_arms,
     run_viewer_loop,
+    print_episode_condition,
 )
 
 bootstrap_repo()
@@ -159,6 +160,7 @@ def main():
     env.setup_demo(**configure_task(
         "place_block_belt", args.config, args.seed, use_robot=use_robot,
     ))
+    print_episode_condition(env)
 
     print_banner(
         "place_block_belt — interactive controls",

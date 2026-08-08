@@ -23,6 +23,7 @@ TASKS = (
     "fill_coffee_jar",
     "pour_beer",
     "cook_food",
+    "cook_food_timer",
     "measure_ingredient",
     "make_soup",
     "catch_cup",

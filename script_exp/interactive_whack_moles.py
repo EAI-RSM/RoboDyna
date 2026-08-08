@@ -34,6 +34,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     require_selected_arms,
+    print_episode_condition,
 )
 
 
@@ -455,6 +456,7 @@ def main():
         f"moles={env.num_moles}; distractors={env.num_distractors}; "
         f"relocating={env.relocating_moles}; difficulty={env.difficulty}."
     )
+    print_episode_condition(env)
 
     controller = (
         RobotMoleController(env, ArmTag) if args.control == "robot"

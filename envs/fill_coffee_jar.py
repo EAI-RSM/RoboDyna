@@ -973,17 +973,17 @@ class fill_coffee_jar(KitchenS_base_task):
             collision=True,
         )
         lid_top = lid_z + lid_hz
-        # Dark collar + blue push button centered on the lid.
-        bbx, bby, bbz = self.BTN_BASE_HALF
+        # Hollow dark bezel + blue push button centered on the lid.
         bhx, bhy, bhz = self.BTN_HALF
-        base_z = lid_top + bbz
-        btn_z = lid_top + 2.0 * bbz + bhz
-        self._add_static_box(
-            pose=sapien.Pose([x, y, base_z]),
-            half_size=[bbx, bby, bbz],
-            color=[*self.BTN_BASE_COLOR, 1.0],
-            name="dispenser_button_base",
-            collision=True,
+        btn_z = lid_top + bhz
+        add_key_base_border(
+            self,
+            float(x),
+            float(y),
+            float(lid_top),
+            self.BTN_HALF,
+            color=list(self.BTN_BASE_COLOR),
+            name_prefix="dispenser_button_base",
         )
         self.dispenser_touch_surface = self._add_static_box(
             pose=sapien.Pose([x, y, btn_z]),

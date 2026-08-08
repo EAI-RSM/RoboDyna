@@ -32,6 +32,7 @@ from _interactive_common import (  # noqa: E402
     release_dynamic,
     require_selected_arms,
     run_viewer_loop,
+    print_episode_condition,
 )
 
 bootstrap_repo()
@@ -190,8 +191,17 @@ def _do_release(env, use_robot: bool):
             ))
         except Exception:
             pass
-    env.ball_released = True
-    print("Released ball — hope the hole was aligned.")
+    if hasattr(env, "mark_ball_released"):
+        env.mark_ball_released()
+    else:
+        env.ball_released = True
+    if env._uses_drop_timeout():
+        print(
+            f"Released ball — {float(env.drop_timeout_s):.0f}s to land in the box "
+            "(default / opt2)."
+        )
+    else:
+        print("Released ball — hope the hole was aligned.")
 
 
 def main():
@@ -208,6 +218,7 @@ def main():
     env.setup_demo(**configure_task(
         "drop_ball_hole", args.config, args.seed, use_robot=use_robot,
     ))
+    print_episode_condition(env)
     env._interactive_selected_arms = (
         "left" if env.ball_side == "left" else "right",
     )
@@ -228,10 +239,16 @@ def main():
             "V — cycle view: head_camera ↔ gripper(s)",
             "Esc — close the viewer window to quit",
             "Watch the spinning platform; release only when the hole passes under.",
+            "Default / Opt2: after release the ball has 2s to fall into the box.",
             "--robot-motion planner|interpolate",
         ],
     )
     print_instructions("Press Space to pick up the ball, then position it over the moving hole.")
+    if env._uses_drop_timeout():
+        print(
+            f"Drop timeout armed: {float(env.drop_timeout_s):.0f}s after release "
+            "(stick_to_surface off)."
+        )
 
     keys_prev: dict = {}
     post_release = 0
@@ -280,8 +297,24 @@ def main():
             post_release += 1
 
     def is_done(step):
-        if env._interactive_released and post_release > getattr(env, "post_release_steps", 220) + 40:
-            return True, f"ball_in_box={env.ball_in_box}, stuck={env.ball_stuck_on_platform}"
+        if not env._interactive_released:
+            return False
+        if env.ball_in_box:
+            return True, "ball in box"
+        if getattr(env, "_drop_timed_out", False):
+            return True, (
+                f"drop timeout ({float(env.drop_timeout_s):.0f}s) — ball not in box"
+            )
+        if env.ball_stuck_on_platform:
+            return True, "ball stuck on platform"
+        # Opt1 / Opt1+2: keep the longer settle window (no wall-clock cutoff).
+        if (
+            not env._uses_drop_timeout()
+            and post_release > getattr(env, "post_release_steps", 220) + 40
+        ):
+            return True, (
+                f"ball_in_box={env.ball_in_box}, stuck={env.ball_stuck_on_platform}"
+            )
         return False
 
     run_viewer_loop(env, on_step, is_done=is_done, max_steps=20000)

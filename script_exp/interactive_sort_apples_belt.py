@@ -43,6 +43,7 @@ from _interactive_common import (  # noqa: E402
     report_task_result,
     sleep_to_timestep,
     terminal_hold_should_close,
+    print_episode_condition,
 )
 
 
@@ -448,6 +449,7 @@ def main():
     env.setup_demo(**_configure_default_task(
         args.config, args.seed, use_robot=args.control == "robot"
     ))
+    print_episode_condition(env)
     # The base task opens both grippers during setup; this interactive launcher
     # starts them closed so button presses use a compact resting posture.
     env.together_close_gripper(save_freq=None)

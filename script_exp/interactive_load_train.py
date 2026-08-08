@@ -32,6 +32,7 @@ from _interactive_common import (  # noqa: E402
     release_dynamic,
     require_selected_arms,
     run_viewer_loop,
+    print_episode_condition,
 )
 
 bootstrap_repo()
@@ -189,6 +190,7 @@ def main():
     env._interactive_selected_arms = (
         "left" if env.ball_side == "left" else "right",
     )
+    print_episode_condition(env)
     env._train_running = True
 
     print_banner(

@@ -306,15 +306,55 @@ def run(TASK_ENV, args):
                     time.sleep(0.5)
                     
             except Exception as e:
-                print(f"\033[91mException during render for seed {current_seed}: {e}\033[0m")
-                failed_episode_indices.append(episode_idx)
-                
-                TASK_ENV.close_env(clear_cache=True)
+                from envs.utils.household_view import EpisodeTimeLimit
+
+                timed_out = isinstance(e, EpisodeTimeLimit)
+                if timed_out:
+                    print(f"\033[93mEpisode TIME LIMIT for seed {current_seed}: {e}\033[0m")
+                else:
+                    print(f"\033[91mException during render for seed {current_seed}: {e}\033[0m")
+
+                # Household / demo cutoff: keep whatever frames were already saved.
+                cache = f"{TASK_ENV.save_dir}/.cache/episode{TASK_ENV.ep_num}/"
+                n_frames = 0
                 try:
-                    TASK_ENV.remove_data_cache()
-                except:
-                    pass
-                time.sleep(0.5)
+                    n_frames = len(
+                        [f for f in os.listdir(cache) if f.endswith(".pkl")]
+                    ) if os.path.isdir(cache) else 0
+                except Exception:
+                    n_frames = 0
+                keep_partial = timed_out and n_frames > 0 and (
+                    bool(args.get("save_failed_cases", False)) or not check_render_success
+                )
+                if keep_partial:
+                    try:
+                        TASK_ENV.close_env(
+                            clear_cache=((successful_episode_count + 1) % clear_cache_freq == 0)
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        TASK_ENV.merge_pkl_to_hdf5_video()
+                    except Exception as merge_e:
+                        print(f"\033[91mPartial merge failed: {merge_e}\033[0m")
+                    try:
+                        TASK_ENV.remove_data_cache()
+                    except Exception:
+                        pass
+                    print(
+                        f"\033[93mEpisode {successful_episode_count} saved PARTIAL "
+                        f"after cutoff ({n_frames} frames, seed={current_seed})\033[0m"
+                    )
+                    successful_renders.append((episode_idx, current_seed))
+                    successful_episode_count += 1
+                else:
+                    failed_episode_indices.append(episode_idx)
+                    TASK_ENV.close_env(clear_cache=True)
+                    try:
+                        TASK_ENV.remove_data_cache()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
             
             episode_idx += 1
 

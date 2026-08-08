@@ -210,11 +210,15 @@ def create_hollow_box_with_holes(
     hole_size=None,
     wall_thickness=0.02,
     top_thickness=0.02,
+    bottom_thickness=0.0,
     bar_thickness=0.02,
     top_transparent=False,
+    panel_overhang=0.0,
 ) -> Actor:
     scene, pose = preprocess(scene, pose)
     x_half, y_half, z_half = half_size
+    bottom_thickness = float(max(0.0, bottom_thickness))
+    panel_overhang = float(max(0.0, panel_overhang))
     builder = scene.create_actor_builder()
     builder.set_physx_body_type("static" if is_static else "dynamic")
 
@@ -259,9 +263,14 @@ def create_hollow_box_with_holes(
         if hole_size * hole_rows + bar_thickness * (hole_rows + 1) > total_y:
             raise ValueError("Requested hole_size is too large for the board depth")
 
-    # side walls around the perimeter (open bottom)
-    side_height = 2 * z_half - top_thickness
-    side_z = -z_half + side_height / 2
+    # Side walls between optional floor and top lattice.
+    # ±X walls span the full Y footprint; ±Y walls meet their inner faces
+    # (half-length x_half - wall_thickness) so corners join with no gap.
+    side_height = 2 * z_half - top_thickness - bottom_thickness
+    if side_height <= 1e-6:
+        raise ValueError("top_thickness + bottom_thickness exceed board height")
+    side_z = -z_half + bottom_thickness + side_height / 2
+    side_y_half_x = x_half - wall_thickness  # ±Y panels butt into ±X panels
     builder.add_box_collision(
         pose=sapien.Pose([-x_half + wall_thickness / 2, 0, side_z]),
         half_size=[wall_thickness / 2, y_half, side_height / 2],
@@ -274,12 +283,12 @@ def create_hollow_box_with_holes(
     )
     builder.add_box_collision(
         pose=sapien.Pose([0, -y_half + wall_thickness / 2, side_z]),
-        half_size=[x_half - 2 * wall_thickness, wall_thickness / 2, side_height / 2],
+        half_size=[side_y_half_x, wall_thickness / 2, side_height / 2],
         material=scene.default_physical_material,
     )
     builder.add_box_collision(
         pose=sapien.Pose([0, y_half - wall_thickness / 2, side_z]),
-        half_size=[x_half - 2 * wall_thickness, wall_thickness / 2, side_height / 2],
+        half_size=[side_y_half_x, wall_thickness / 2, side_height / 2],
         material=scene.default_physical_material,
     )
 
@@ -295,13 +304,35 @@ def create_hollow_box_with_holes(
     if gap_x < bar_thickness or gap_y < bar_thickness:
         raise ValueError("Requested hole_size is too large for the board top")
 
+    # Top / bottom panels can overhang the walls slightly (crate lid / floor look).
+    panel_x = x_half + panel_overhang
+    panel_y = y_half + panel_overhang
+
+    if bottom_thickness > 0.0:
+        bottom_pose = sapien.Pose([0, 0, -z_half + bottom_thickness / 2])
+        bottom_half = [panel_x, panel_y, bottom_thickness / 2]
+        builder.add_box_collision(
+            pose=bottom_pose,
+            half_size=bottom_half,
+            material=scene.default_physical_material,
+        )
+
     # fill the top surface around the holes with a lattice of filled strips
     # horizontal strips: between hole rows and at the top/bottom margins
+    # Outer ±Y strips absorb panel_overhang so the lid matches the floor.
     y = -y_half + gap_y / 2
-    for _ in range(hole_rows + 1):
+    for i in range(hole_rows + 1):
+        strip_y = y
+        strip_hy = gap_y / 2
+        if panel_overhang > 0.0 and i == 0:
+            strip_hy = gap_y / 2 + panel_overhang
+            strip_y = -panel_y + strip_hy
+        elif panel_overhang > 0.0 and i == hole_rows:
+            strip_hy = gap_y / 2 + panel_overhang
+            strip_y = panel_y - strip_hy
         builder.add_box_collision(
-            pose=sapien.Pose([0, y, z_half - top_thickness / 2]),
-            half_size=[x_half, gap_y / 2, top_thickness / 2],
+            pose=sapien.Pose([0, strip_y, z_half - top_thickness / 2]),
+            half_size=[panel_x, strip_hy, top_thickness / 2],
             material=scene.default_physical_material,
         )
         y += hole_size + gap_y
@@ -310,16 +341,30 @@ def create_hollow_box_with_holes(
     y = -y_half + gap_y + hole_size / 2
     for _ in range(hole_rows):
         x = -x_half + gap_x / 2
-        for _ in range(hole_cols + 1):
+        for j in range(hole_cols + 1):
+            strip_x = x
+            strip_hx = gap_x / 2
+            if panel_overhang > 0.0 and j == 0:
+                strip_hx = gap_x / 2 + panel_overhang
+                strip_x = -panel_x + strip_hx
+            elif panel_overhang > 0.0 and j == hole_cols:
+                strip_hx = gap_x / 2 + panel_overhang
+                strip_x = panel_x - strip_hx
             builder.add_box_collision(
-                pose=sapien.Pose([x, y, z_half - top_thickness / 2]),
-                half_size=[gap_x / 2, hole_size / 2, top_thickness / 2],
+                pose=sapien.Pose([strip_x, y, z_half - top_thickness / 2]),
+                half_size=[strip_hx, hole_size / 2, top_thickness / 2],
                 material=scene.default_physical_material,
             )
             x += hole_size + gap_x
         y += hole_size + gap_y
 
     board_color = color if color is not None else [1.0, 1.0, 1.0]
+    if bottom_thickness > 0.0:
+        builder.add_box_visual(
+            pose=sapien.Pose([0, 0, -z_half + bottom_thickness / 2]),
+            half_size=[panel_x, panel_y, bottom_thickness / 2],
+            material=board_color,
+        )
     builder.add_box_visual(
         pose=sapien.Pose([-x_half + wall_thickness / 2, 0, side_z]),
         half_size=[wall_thickness / 2, y_half, side_height / 2],
@@ -332,12 +377,12 @@ def create_hollow_box_with_holes(
     )
     builder.add_box_visual(
         pose=sapien.Pose([0, -y_half + wall_thickness / 2, side_z]),
-        half_size=[x_half - 2 * wall_thickness, wall_thickness / 2, side_height / 2],
+        half_size=[side_y_half_x, wall_thickness / 2, side_height / 2],
         material=board_color,
     )
     builder.add_box_visual(
         pose=sapien.Pose([0, y_half - wall_thickness / 2, side_z]),
-        half_size=[x_half - 2 * wall_thickness, wall_thickness / 2, side_height / 2],
+        half_size=[side_y_half_x, wall_thickness / 2, side_height / 2],
         material=board_color,
     )
 
@@ -345,20 +390,36 @@ def create_hollow_box_with_holes(
     # (same RenderBodyComponent + transmission path as dispense_gummy tubes).
     top_strip_specs = []  # (local_pose, half_size)
     y = -y_half + gap_y / 2
-    for _ in range(hole_rows + 1):
+    for i in range(hole_rows + 1):
+        strip_y = y
+        strip_hy = gap_y / 2
+        if panel_overhang > 0.0 and i == 0:
+            strip_hy = gap_y / 2 + panel_overhang
+            strip_y = -panel_y + strip_hy
+        elif panel_overhang > 0.0 and i == hole_rows:
+            strip_hy = gap_y / 2 + panel_overhang
+            strip_y = panel_y - strip_hy
         top_strip_specs.append((
-            sapien.Pose([0, y, z_half - top_thickness / 2]),
-            [x_half, gap_y / 2, top_thickness / 2],
+            sapien.Pose([0, strip_y, z_half - top_thickness / 2]),
+            [panel_x, strip_hy, top_thickness / 2],
         ))
         y += hole_size + gap_y
 
     y = -y_half + gap_y + hole_size / 2
     for _ in range(hole_rows):
         x = -x_half + gap_x / 2
-        for _ in range(hole_cols + 1):
+        for j in range(hole_cols + 1):
+            strip_x = x
+            strip_hx = gap_x / 2
+            if panel_overhang > 0.0 and j == 0:
+                strip_hx = gap_x / 2 + panel_overhang
+                strip_x = -panel_x + strip_hx
+            elif panel_overhang > 0.0 and j == hole_cols:
+                strip_hx = gap_x / 2 + panel_overhang
+                strip_x = panel_x - strip_hx
             top_strip_specs.append((
-                sapien.Pose([x, y, z_half - top_thickness / 2]),
-                [gap_x / 2, hole_size / 2, top_thickness / 2],
+                sapien.Pose([strip_x, y, z_half - top_thickness / 2]),
+                [strip_hx, hole_size / 2, top_thickness / 2],
             ))
             x += hole_size + gap_x
         y += hole_size + gap_y

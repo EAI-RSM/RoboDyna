@@ -17,6 +17,8 @@ from tkinter import messagebox, ttk
 import yaml
 from PIL import Image, ImageTk
 
+from _task_briefing import build_briefing_text, show_task_briefing
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -255,6 +257,12 @@ def condition_description(task: str, scenario: str) -> str:
     return str(CONDITION_DESCRIPTIONS.get(key, {}).get(scenario, "") or "")
 
 
+def task_summary(task: str) -> str:
+    """README task-summary blurb, or empty if unavailable."""
+    key = README_TASK_ALIASES.get(task, task)
+    return str(CONDITION_DESCRIPTIONS.get(key, {}).get("summary", "") or "")
+
+
 def resolve_seed(value: str) -> int:
     """Return a fixed entered seed, or a fresh random seed for a blank value."""
     value = value.strip()
@@ -461,6 +469,33 @@ class InteractiveTaskLauncher(tk.Tk):
 
         controls = tk.Frame(header, bg=HEADER_BG)
         controls.pack(side="right", padx=22, pady=16)
+
+        brief_group = tk.Frame(controls, bg=HEADER_BG)
+        brief_group.pack(side="left", padx=(0, 16))
+        tk.Label(
+            brief_group,
+            text="Briefing",
+            bg=HEADER_BG,
+            fg=TEXT_SECONDARY,
+            font=("Sans", 13, "bold"),
+        ).pack(anchor="w")
+        self.show_briefing = tk.BooleanVar(value=True)
+        self.briefing_check = tk.Checkbutton(
+            brief_group,
+            text="Show before start",
+            variable=self.show_briefing,
+            onvalue=True,
+            offvalue=False,
+            bg=HEADER_BG,
+            fg=TEXT_PRIMARY,
+            activebackground=HEADER_BG,
+            activeforeground=TEXT_PRIMARY,
+            selectcolor="#182633",
+            highlightthickness=0,
+            font=("Sans", 14, "bold"),
+            cursor="hand2",
+        )
+        self.briefing_check.pack(anchor="w", pady=(6, 0))
 
         seed_group = tk.Frame(controls, bg=HEADER_BG)
         seed_group.pack(side="left", padx=(0, 18))
@@ -802,6 +837,25 @@ class InteractiveTaskLauncher(tk.Tk):
             self.seed_entry.focus_set()
             return
 
+        control_mode = str(self.control.get() or "robot")
+        if bool(self.show_briefing.get()):
+            briefing = build_briefing_text(
+                label=label,
+                task=task,
+                scenario_label=SCENARIO_LABELS.get(scenario, scenario),
+                scenario_desc=condition_description(task, scenario),
+                summary=task_summary(task),
+                control_mode=control_mode,
+                script_path=script,
+            )
+            if not show_task_briefing(self, briefing):
+                self._set_status(
+                    "Briefing cancelled. Select a scenario when ready.",
+                    TEXT_SECONDARY,
+                    sticky=True,
+                )
+                return
+
         try:
             config_name = self._write_temporary_config(task, scenario)
             command = [
@@ -812,7 +866,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 "--seed",
                 str(seed),
                 "--control",
-                self.control.get(),
+                control_mode,
             ]
             child_env = os.environ.copy()
             child_env.setdefault(
@@ -839,6 +893,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 )
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
+        self.briefing_check.configure(state="disabled")
         active_button = self.task_buttons[index][SCENARIOS.index(scenario)]
         active_button.configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
         desc = condition_description(task, scenario)
@@ -848,6 +903,8 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         if desc:
             run_text = f"{run_text}  ({desc})"
+        self._run_status_base = run_text
+        self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
 
     def _poll_child(self):
@@ -856,7 +913,14 @@ class InteractiveTaskLauncher(tk.Tk):
             if code is not None:
                 self.child = None
                 self.active_selection = None
-                reason = self._read_result_detail()
+                payload = self._read_result_payload()
+                reason = None
+                if isinstance(payload, dict):
+                    detail = payload.get("detail")
+                    if isinstance(detail, str) and detail.strip():
+                        reason = detail.strip()
+                self._run_status_base = None
+                self._shown_episode_condition = None
                 self._remove_temporary_config()
                 self._remove_result_file()
                 self._reset_task_buttons()
@@ -888,11 +952,19 @@ class InteractiveTaskLauncher(tk.Tk):
                         "#e6a15c",
                         sticky=True,
                     )
+            else:
+                # While running, surface the episode-specific condition once available.
+                cond = self._read_result_condition()
+                if cond and cond != getattr(self, "_shown_episode_condition", None):
+                    self._shown_episode_condition = cond
+                    base = getattr(self, "_run_status_base", None) or "Running task."
+                    self._set_status(f"{base}  Condition: {cond}", "#70d6a2", sticky=True)
         self.after(250, self._poll_child)
 
     def _reset_task_buttons(self):
         self.control.configure(state="readonly")
         self.seed_entry.configure(state="normal")
+        self.briefing_check.configure(state="normal")
         for row in self.task_buttons:
             for scenario, button in zip(SCENARIOS, row):
                 button.configure(
@@ -922,7 +994,7 @@ class InteractiveTaskLauncher(tk.Tk):
         handle.close()
         self.result_file = Path(handle.name)
 
-    def _read_result_detail(self) -> str | None:
+    def _read_result_payload(self) -> dict | None:
         path = self.result_file
         if path is None or not path.exists():
             return None
@@ -930,10 +1002,26 @@ class InteractiveTaskLauncher(tk.Tk):
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, TypeError):
             return None
-        detail = data.get("detail") if isinstance(data, dict) else None
+        return data if isinstance(data, dict) else None
+
+    def _read_result_detail(self) -> str | None:
+        data = self._read_result_payload()
+        if not data:
+            return None
+        detail = data.get("detail")
         if isinstance(detail, str):
             detail = detail.strip()
             return detail or None
+        return None
+
+    def _read_result_condition(self) -> str | None:
+        data = self._read_result_payload()
+        if not data:
+            return None
+        cond = data.get("condition")
+        if isinstance(cond, str):
+            cond = cond.strip()
+            return cond or None
         return None
 
     def _remove_result_file(self):

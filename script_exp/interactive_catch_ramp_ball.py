@@ -35,6 +35,7 @@ from _interactive_common import (  # noqa: E402
     sleep_to_timestep,
     terminal_hold_should_close,
     resolve_action_arm,
+    print_episode_condition,
 )
 
 
@@ -250,6 +251,7 @@ def main():
 
     env = catch_ramp_ball()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    print_episode_condition(env)
     env._interactive_selected_arms = (
         "right" if float(_aim_xy(env)[0]) > 0 else "left",
     )
