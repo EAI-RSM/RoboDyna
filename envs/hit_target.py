@@ -700,16 +700,64 @@ class hit_target(Base_Task):
                 return True
         return False
 
-    def _predict_side_intercept(self, side_sign, from_step, lead_min=50, lead_max=500, prefer=0.08):
-        """Pick a future step where the target is on our half of the table."""
+    def _estimate_ik_lead_steps(self, distance_m, min_steps=18, max_steps=160):
+        """Rough physics-step budget for a world-frame IK move of ``distance_m``.
+
+        Calibrated from opt2 demos (~0.10 m Z lift ≈ 220 steps → ~2200 steps/m).
+        Used to aim the tip at where the bullseye will be when the drop finishes.
+        """
+        return int(np.clip(abs(float(distance_m)) * 2200.0 + 20.0, min_steps, max_steps))
+
+    def _xz_clear_span(self, x, z, start_step, duration, margin=None):
+        """True if tip column (x,z) clears every disc from ``start_step`` for ``duration``."""
+        if not self._any_blocker():
+            return True
+        m = float(self._shaft_clear_margin() if margin is None else margin)
+        # Slightly looser than live hit checks so we don't drop into a grazing pass.
+        need_r2 = float(self.blocker_radius + m + 0.012) ** 2
+        z = float(z)
+        x = float(x)
+        for dt in range(0, int(duration) + 1, 4):
+            s = int(start_step) + dt
+            if getattr(self, "blocker_enabled", False):
+                bx = self._static_blocker_x()
+                if (x - bx) ** 2 + (z - float(self.blocker_z)) ** 2 < need_r2:
+                    return False
+            if getattr(self, "blocker_dynamic", False):
+                bx = self._dynamic_blocker_x_at(s)
+                if (x - bx) ** 2 + (z - float(self.blocker_z)) ** 2 < need_r2:
+                    return False
+        return True
+
+    def _predict_side_intercept(
+        self,
+        side_sign,
+        from_step,
+        lead_min=50,
+        lead_max=500,
+        prefer=0.08,
+        clear_need=0.0,
+        clear_hold=120,
+    ):
+        """Pick a future step where the target is on our half (and discs stay clear)."""
         prefer = float(prefer)
+        clear_need = float(clear_need)
         best = None
         for dt in range(int(lead_min), int(lead_max) + 1, 2):
             s = from_step + dt
             x = self._target_x_at(s)
             if x * side_sign < max(0.035, 0.45 * prefer):
                 continue
+            if clear_need > 0.0 and abs(x) < clear_need * 0.90:
+                continue
             score = abs(abs(x) - prefer) + 0.00015 * dt
+            if self.blocker_dynamic and clear_need > 0.0:
+                # Require the tip column at the bullseye to stay clear through plant.
+                if not self._xz_clear_span(x, self.blocker_z, s, int(clear_hold)):
+                    continue
+                # Prefer frames where the red disc is farther from the tip column.
+                bx = self._dynamic_blocker_x_at(s)
+                score -= 0.20 * min(0.10, abs(float(bx) - float(x)))
             if best is None or score < best[0]:
                 best = (score, s, float(x))
         if best is not None:
@@ -717,6 +765,61 @@ class hit_target(Base_Task):
         s = from_step + 120
         x = side_sign * prefer
         return s, x
+
+    def _predict_drop_aim(
+        self,
+        side_sign,
+        clear_need,
+        tip_x,
+        tip_z,
+        prefer,
+        search_horizon=240,
+        plant_hold=60,
+    ):
+        """Choose (delay, aim_x) for a high-pass drop that lands on a clear bullseye.
+
+        ``delay`` is steps to wait before starting the Z drop; ``aim_x`` is the tip
+        X that matches the bullseye at landing (now + delay + drop_lead).
+        """
+        drop_lead = self._estimate_ik_lead_steps(
+            float(tip_z) - float(self.target_z), min_steps=28, max_steps=120
+        )
+        tip_x = float(tip_x)
+        clear_need = float(clear_need)
+        prefer = float(prefer)
+        best = None
+        for delay in range(0, int(search_horizon) + 1, 4):
+            t0 = self._step_count + delay
+            t_land = t0 + drop_lead
+            aim_x = float(self._target_x_at(t_land))
+            if abs(aim_x) < clear_need * 0.90 or aim_x * side_sign <= 0:
+                continue
+            # Must stay clear from drop start through landing + short plant dwell.
+            if not self._xz_clear_span(
+                aim_x, self.blocker_z, t0, drop_lead + int(plant_hold)
+            ):
+                continue
+            # Leave time to slide tip X onto aim_x before the drop starts.
+            x_lead = self._estimate_ik_lead_steps(
+                abs(aim_x - tip_x), min_steps=8, max_steps=90
+            )
+            if delay + 4 < x_lead:
+                continue
+            # Prefer soon / near preferred sway amplitude / tip already close in X.
+            score = (
+                0.0020 * delay
+                + abs(abs(aim_x) - prefer)
+                + 0.35 * abs(aim_x - tip_x)
+            )
+            if best is None or score < best[0]:
+                best = (score, delay, aim_x, drop_lead)
+        if best is None:
+            return None
+        return {
+            "delay": int(best[1]),
+            "aim_x": float(best[2]),
+            "drop_lead": int(best[3]),
+        }
 
     # ---------------------------------------------------- per-step kinematic motion
     def _update_kinematic_tasks(self):
@@ -921,55 +1024,115 @@ class hit_target(Base_Task):
         if self._hit_blocker or not self.plan_success:
             return False
 
-        # Hover high near the board until the bullseye is aligned AND the disc is clear.
+        # Hover high near the board; aim X at the bullseye *after* the Z-drop delay,
+        # and only drop when that landing column stays clear of the red disc.
         align_tol = 1.15 * self.center_radius
-        for _ in range(70):
+        prefer = float(max(0.085, 0.95 * float(self.sway_amp)))
+        for _ in range(80):
             if self._hit_blocker or not self.plan_success:
                 return False
             tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-            # Stay high while waiting.
             hi = float(self.blocker_z + self.blocker_radius + 0.028)
             if hi - float(tip[2]) > 0.010:
-                self.move(self.move_by_displacement(arm_tag=arm, z=float(hi - tip[2]), move_axis="world"))
+                self.move(
+                    self.move_by_displacement(
+                        arm_tag=arm, z=float(hi - tip[2]), move_axis="world"
+                    )
+                )
             tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-            cx = float(self._target_center_world()[0])
-            if abs(cx) >= float(clear_need) * 0.90 and cx * side_sign > 0:
-                self._move_tip_x(arm, cx, side_sign, clear_blockers=True)
-                tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-            if (
-                abs(cx) >= float(clear_need) * 0.90
-                and cx * side_sign > 0
-                and abs(cx - float(tip[0])) <= align_tol + 0.022
-                and not self._dyn_threatens_tip(tip[0], self.blocker_z, horizon=60)
-                and self._xz_clear_of_blockers(tip[0], self.blocker_z, step=self._step_count + 20)
-            ):
-                break
-            self._advance(8, try_stick=False)
-        else:
-            self._go_to_standoff(arm)
-            self._align_tip_z(arm)
-            return False
+            drop_lead = self._estimate_ik_lead_steps(
+                float(tip[2]) - float(self.target_z), min_steps=30, max_steps=100
+            )
+            pred = self._predict_drop_aim(
+                side_sign,
+                clear_need,
+                tip_x=float(tip[0]),
+                tip_z=float(tip[2]),
+                prefer=prefer,
+                search_horizon=200,
+                plant_hold=40,
+            )
+            if pred is not None:
+                aim_x = float(pred["aim_x"])
+                delay = int(pred["delay"])
+                drop_lead = int(pred["drop_lead"])
+            else:
+                # Fallback: lead the live bullseye by the drop duration.
+                aim_x = float(self._target_x_at(self._step_count + drop_lead))
+                delay = 0
+                if abs(aim_x) < float(clear_need) * 0.90 or aim_x * side_sign <= 0:
+                    live = float(self._target_center_world()[0])
+                    if abs(live) >= float(clear_need) * 0.90 and live * side_sign > 0:
+                        aim_x = live
+                    else:
+                        self._advance(8, try_stick=False)
+                        continue
 
-        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-        if self._dyn_threatens_tip(tip[0], self.blocker_z, horizon=45):
-            self._go_to_standoff(arm)
-            self._align_tip_z(arm)
-            return False
-        # Snap tip onto live bullseye one last time while still high, then drop.
-        cx = float(self._target_center_world()[0])
-        if abs(cx) >= float(clear_need) * 0.90 and cx * side_sign > 0:
-            self._move_tip_x(arm, cx, side_sign, clear_blockers=True)
-        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-        cz = float(self._target_center_world()[2])
-        if float(tip[2]) - cz > 0.006:
-            self.move(self.move_by_displacement(arm_tag=arm, z=float(cz - tip[2]), move_axis="world"))
-        self._check_blocker_hit()
-        tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-        return bool(
-            self.plan_success
-            and not self._hit_blocker
-            and self._tip_past_blockers(tip[1])
-        )
+            self._move_tip_x(arm, aim_x, side_sign, clear_blockers=True)
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+
+            if delay > 14:
+                self._advance(min(delay, 18), try_stick=False)
+                continue
+
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            # Refresh aim after lateral IK consumed steps.
+            drop_lead = self._estimate_ik_lead_steps(
+                float(tip[2]) - float(self.target_z), min_steps=30, max_steps=100
+            )
+            aim_x = float(self._target_x_at(self._step_count + drop_lead))
+            if abs(aim_x) < float(clear_need) * 0.90 or aim_x * side_sign <= 0:
+                self._advance(8, try_stick=False)
+                continue
+            self._move_tip_x(arm, aim_x, side_sign, clear_blockers=True)
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+
+            aligned = abs(aim_x - float(tip[0])) <= align_tol + 0.028
+            clear_ok = self._xz_clear_span(
+                float(tip[0]), self.blocker_z, self._step_count, drop_lead + 45
+            )
+            # Also accept the old live gate so we don't stall forever.
+            live_cx = float(self._target_center_world()[0])
+            live_ok = (
+                abs(live_cx) >= float(clear_need) * 0.90
+                and live_cx * side_sign > 0
+                and abs(live_cx - float(tip[0])) <= align_tol + 0.022
+                and not self._dyn_threatens_tip(tip[0], self.blocker_z, horizon=50)
+                and self._xz_clear_of_blockers(
+                    tip[0], self.blocker_z, step=self._step_count + 20
+                )
+            )
+            if not ((aligned and clear_ok) or live_ok):
+                self._advance(8, try_stick=False)
+                continue
+
+            if self._dyn_threatens_tip(tip[0], self.blocker_z, horizon=35):
+                self._advance(8, try_stick=False)
+                continue
+
+            # Final X snap to predicted landing, then drop.
+            aim_x = float(self._target_x_at(self._step_count + drop_lead))
+            if abs(aim_x) >= float(clear_need) * 0.90 and aim_x * side_sign > 0:
+                self._move_tip_x(arm, aim_x, side_sign, clear_blockers=True)
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            cz = float(self.target_z)
+            if float(tip[2]) - cz > 0.006:
+                self.move(
+                    self.move_by_displacement(
+                        arm_tag=arm, z=float(cz - tip[2]), move_axis="world"
+                    )
+                )
+            self._check_blocker_hit()
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
+            return bool(
+                self.plan_success
+                and not self._hit_blocker
+                and self._tip_past_blockers(tip[1])
+            )
+
+        self._go_to_standoff(arm)
+        self._align_tip_z(arm)
+        return False
 
     def _align_tip_z(self, arm):
         tip = np.array(self.dart.get_functional_point(0, "list")[:3])
@@ -1103,16 +1266,28 @@ class hit_target(Base_Task):
                         break
                     self._align_tip_z(arm)
                     tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-                    if self._dyn_threatens_tip(tip[0], tip[2], horizon=55):
+                    center = self._target_center_world()
+                    radial = float(np.linalg.norm(tip[[0, 2]] - center[[0, 2]]))
+                    if self._tip_on_board_plane(tip[1]) and radial <= float(self.center_radius):
+                        self._dwell(30)
+                        continue
+                    if self._dyn_threatens_tip(tip[0], tip[2], horizon=40):
                         self._safe_retreat_from_board(arm, side_sign, clear_need)
                         cleared = False
                         break
-                    cx = float(self._target_center_world()[0])
+                    chase_lead = self._estimate_ik_lead_steps(
+                        abs(float(center[0]) - float(tip[0])),
+                        min_steps=18,
+                        max_steps=55,
+                    )
+                    cx = float(self._target_x_at(self._step_count + chase_lead))
                     if (
                         abs(cx) >= clear_need * 0.95
                         and cx * side_sign > 0
-                        and self._xz_clear_of_blockers(cx, tip[2], step=self._step_count + 10)
-                        and not self._dyn_threatens_tip(cx, tip[2], horizon=40)
+                        and self._xz_clear_of_blockers(
+                            cx, tip[2], step=self._step_count + chase_lead
+                        )
+                        and not self._dyn_threatens_tip(cx, tip[2], horizon=35)
                     ):
                         self._move_tip_x(arm, cx, side_sign, clear_blockers=True)
                     else:
@@ -1122,15 +1297,26 @@ class hit_target(Base_Task):
                             side_sign,
                             clear_blockers=True,
                         )
-                    self._dwell(50)
+                    self._dwell(35)
                 if not cleared:
                     continue
                 break
 
+            tip = np.array(self.dart.get_functional_point(0, "list")[:3])
             intercept_step, x_lead = self._predict_side_intercept(
-                side_sign, self._step_count, lead_min=20, lead_max=560, prefer=prefer
+                side_sign,
+                self._step_count,
+                lead_min=20,
+                lead_max=560,
+                prefer=prefer,
+                clear_need=clear_need if self.blocker_dynamic else 0.0,
+                clear_hold=90 if self.blocker_dynamic else 0,
             )
-            wait = max(0, intercept_step - self._step_count - 35)
+            # Lead time ≈ lateral chase duration to the predicted intercept x.
+            chase_lead = self._estimate_ik_lead_steps(
+                abs(float(x_lead) - float(tip[0])), min_steps=22, max_steps=110
+            )
+            wait = max(0, intercept_step - self._step_count - chase_lead)
             if wait > 0:
                 self._advance(min(wait, 600), try_stick=False)
             if self._hit_blocker:
@@ -1140,15 +1326,22 @@ class hit_target(Base_Task):
                 if not self.plan_success or self._hit_blocker:
                     break
                 _, x_lead = self._predict_side_intercept(
-                    side_sign, self._step_count, lead_min=10, lead_max=140, prefer=prefer
+                    side_sign,
+                    self._step_count,
+                    lead_min=10,
+                    lead_max=160,
+                    prefer=prefer,
+                    clear_need=clear_need if self.blocker_dynamic else 0.0,
+                    clear_hold=70 if self.blocker_dynamic else 0,
                 )
                 self._align_tip_z(arm)
                 self._move_tip_x(arm, x_lead, side_sign, clear_blockers=False)
                 self._go_to_standoff(arm)
                 self._advance(8, try_stick=False)
 
-            # Aim at the live bullseye a short horizon ahead (must already clear discs).
-            x_push = float(self._target_x_at(self._step_count + 40))
+            # Aim where the bullseye will be after a short chase (not the live pose).
+            chase_lead = self._estimate_ik_lead_steps(0.04, min_steps=28, max_steps=70)
+            x_push = float(self._target_x_at(self._step_count + chase_lead))
             min_side = clear_need if self._any_blocker() else 0.030
             if abs(x_push) < min_side or x_push * side_sign <= 0:
                 continue
@@ -1169,20 +1362,45 @@ class hit_target(Base_Task):
                 if self.blocker_dynamic:
                     waited = 0
                     while waited < 800 and not self._dynamic_clear_window(
-                        clear_x, self.blocker_z, duration=120
+                        clear_x, self.blocker_z, duration=100
                     ):
                         if self._hit_blocker or not self.plan_success:
                             break
-                        self._advance(12, try_stick=False)
-                        waited += 12
+                        # Nudge wait using predicted next clear landing when available.
+                        tip_w = np.array(self.dart.get_functional_point(0, "list")[:3])
+                        pred = self._predict_drop_aim(
+                            side_sign,
+                            clear_need,
+                            tip_x=float(tip_w[0]),
+                            tip_z=float(
+                                max(
+                                    tip_w[2],
+                                    self.blocker_z + self.blocker_radius + 0.02,
+                                )
+                            ),
+                            prefer=prefer,
+                            search_horizon=280,
+                            plant_hold=45,
+                        )
+                        step = 12
+                        if pred is not None and int(pred["delay"]) > 20:
+                            step = min(48, max(12, int(pred["delay"]) // 2))
+                            clear_x = side_sign * max(
+                                abs(float(pred["aim_x"])), clear_need
+                            )
+                        self._advance(step, try_stick=False)
+                        waited += step
                     if self._hit_blocker or not self.plan_success:
                         break
-                    if not self._dynamic_clear_window(clear_x, self.blocker_z, duration=80):
+                    if not self._dynamic_clear_window(clear_x, self.blocker_z, duration=70):
                         continue
                 if not self._strike_clear_window(duration=140):
                     continue
                 # Re-check: bullseye still outside discs and near the plant column.
-                x_now = float(self._target_x_at(self._step_count + 25))
+                chase_lead = self._estimate_ik_lead_steps(
+                    0.03, min_steps=18, max_steps=50
+                )
+                x_now = float(self._target_x_at(self._step_count + chase_lead))
                 if abs(x_now) < clear_need or x_now * side_sign <= 0:
                     continue
                 if abs(x_now - clear_x) > align_tol + 0.035:
@@ -1262,11 +1480,27 @@ class hit_target(Base_Task):
                     if not self._push_tip_to_plant(arm):
                         break
                 tip = np.array(self.dart.get_functional_point(0, "list")[:3])
-                if self._dyn_threatens_tip(tip[0], tip[2], horizon=55):
+                center = self._target_center_world()
+                radial = float(np.linalg.norm(tip[[0, 2]] - center[[0, 2]]))
+                on_yellow = (
+                    self._tip_on_board_plane(tip[1])
+                    and radial <= float(self.center_radius)
+                )
+                # If already on yellow, dwell hard for a stick — don't retreat for a soft threat.
+                if on_yellow:
+                    self._dwell(30)
+                    continue
+                # Lead the chase: aim where the bullseye will be after the next lateral IK.
+                chase_lead = self._estimate_ik_lead_steps(
+                    abs(float(center[0]) - float(tip[0])),
+                    min_steps=18,
+                    max_steps=55,
+                )
+                cx = float(self._target_x_at(self._step_count + chase_lead))
+                if self._dyn_threatens_tip(tip[0], tip[2], horizon=40):
                     self._safe_retreat_from_board(arm, side_sign, clear_need)
                     cleared = False
                     break
-                cx = float(self._target_center_world()[0])
                 if not self._any_blocker():
                     if cx * side_sign > 0.02:
                         self._move_tip_x(arm, cx, side_sign, clear_blockers=False)
@@ -1274,8 +1508,8 @@ class hit_target(Base_Task):
                 elif (
                     abs(cx) >= clear_need * 0.95
                     and cx * side_sign > 0
-                    and self._xz_clear_of_blockers(cx, tip[2], step=self._step_count + 10)
-                    and not self._dyn_threatens_tip(cx, tip[2], horizon=40)
+                    and self._xz_clear_of_blockers(cx, tip[2], step=self._step_count + chase_lead)
+                    and not self._dyn_threatens_tip(cx, tip[2], horizon=35)
                 ):
                     self._move_tip_x(arm, cx, side_sign, clear_blockers=True)
                     plant_x = float(self.dart.get_functional_point(0, "list")[0])
@@ -1288,7 +1522,7 @@ class hit_target(Base_Task):
                     )
                 if not self.plan_success:
                     break
-                self._dwell(45)
+                self._dwell(35)
             if self._stuck or self._hit_blocker:
                 break
             if cleared:
