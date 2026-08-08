@@ -99,8 +99,8 @@ BASIC_MAIN_REASONS: dict[str, str] = {
         "(opt1 / opt1+2)."
     ),
     "hit_target": (
-        "Default &amp; static blocker OK; fails when dynamic red blocker is on "
-        "(opt2 2/5, opt1+2 1/5) — blocked strike or miss."
+        "After better drop/chase lead timing: default &amp; opt1 are 5/5; "
+        "dynamic blocker still flakes (opt2 3/5, opt1+2 4/5) — IK fail or miss."
     ),
     "load_train": "Occasional miss of allowed wagon (esp. target-wagon + tunnel).",
     "marble_shelf_maze": "Marble misses bowl under continuous motion and/or oscillating bowl.",
