@@ -119,8 +119,8 @@
   <div class="stats">
     <div class="stat"><b>12</b><span>household tasks</span></div>
     <div class="stat"><b>120</b><span>total seed runs</span></div>
-    <div class="stat"><b>86</b><span>successes (72%)</span></div>
-    <div class="stat"><b>34</b><span>failures</span></div>
+    <div class="stat"><b>93</b><span>successes (78%)</span></div>
+    <div class="stat"><b>27</b><span>failures</span></div>
     <div class="stat"><b>4</b><span>tasks at 10/10</span></div>
   </div><table><thead><tr><th>Task</th><th>Rate</th><th>OK seeds</th><th>Fail seeds</th><th>Main failure mode(s)</th></tr></thead><tbody><tr><td><code>trap_bug</code></td><td><span class="bar"><i style="width:70%"></i></span><span class="rate mid">7/10</span></td><td class="seeds">0, 3, 4, 5, 6, 7, 8</td><td class="seeds">1, 2, 9</td><td>Trap placement misses moving bug (plan OK, check fails).</td></tr>
 <tr><td><code>boil_milk</code></td><td><span class="bar"><i style="width:100%"></i></span><span class="rate good">10/10</span></td><td class="seeds">0, 1, 2, 3, 4, 5, 6, 7, 8, 9</td><td class="seeds">—</td><td>—</td></tr>
@@ -128,7 +128,7 @@
 <tr><td><code>pour_beer</code></td><td><span class="bar"><i style="width:30%"></i></span><span class="rate bad">3/10</span></td><td class="seeds">2, 5, 6</td><td class="seeds">0, 1, 3, 4, 7, 8, 9</td><td>Foam/beer overflow, or underfill vs ~0.90 target.</td></tr>
 <tr><td><code>cook_food</code></td><td><span class="bar"><i style="width:70%"></i></span><span class="rate mid">7/10</span></td><td class="seeds">2, 3, 4, 5, 6, 7, 9</td><td class="seeds">0, 1, 8</td><td>Food not seated in pan after place (UnStableError); some check fails.</td></tr>
 <tr><td><code>cook_food_timer</code></td><td><span class="bar"><i style="width:70%"></i></span><span class="rate mid">7/10</span></td><td class="seeds">2, 3, 4, 5, 6, 7, 9</td><td class="seeds">0, 1, 8</td><td>Same as cook_food (shared placement path).</td></tr>
-<tr><td><code>measure_ingredient</code></td><td><span class="bar"><i style="width:20%"></i></span><span class="rate bad">2/10</span></td><td class="seeds">2, 5</td><td class="seeds">0, 1, 3, 4, 6, 7, 8, 9</td><td>Jar push misses nozzle; or fill overshoots 25%±5% band.</td></tr>
+<tr><td><code>measure_ingredient</code></td><td><span class="bar"><i style="width:90%"></i></span><span class="rate good">9/10</span></td><td class="seeds">1, 2, 3, 4, 5, 6, 7, 8, 9</td><td class="seeds">0</td><td>Rare 100% overshoot — late shutoff hits brim/spill (seed 0).</td></tr>
 <tr><td><code>make_soup</code></td><td><span class="bar"><i style="width:60%"></i></span><span class="rate mid">6/10</span></td><td class="seeds">0, 1, 3, 4, 5, 8</td><td class="seeds">2, 6, 7, 9</td><td>Tip incomplete on some seeds — pieces bounce out after pour (2–4 distinct produce; 6/10).</td></tr>
 <tr><td><code>catch_cup</code></td><td><span class="bar"><i style="width:100%"></i></span><span class="rate good">10/10</span></td><td class="seeds">0, 1, 2, 3, 4, 5, 6, 7, 8, 9</td><td class="seeds">—</td><td>—</td></tr>
 <tr><td><code>catch_mouse_object_drop</code></td><td><span class="bar"><i style="width:80%"></i></span><span class="rate mid">8/10</span></td><td class="seeds">0, 1, 2, 4, 5, 7, 8, 9</td><td class="seeds">3, 6</td><td>Basket placed but object not soft-caught.</td></tr>
@@ -144,10 +144,9 @@
     </ul>
   </div>
   <div class="card focus" id="measure_ingredient">
-    <h3><code>measure_ingredient</code> <span class="pill fail">2/10</span></h3>
+    <h3><code>measure_ingredient</code> <span class="pill warn">9/10</span></h3>
     <ul class="reasons">
-      <li><strong>Jar push miss (seeds 0, 1, 3, 4, 6, 9)</strong> — <code>jar push under nozzle failed</code>; jar off landing pose.</li>
-      <li><strong>Fill overshoot (seeds 7, 8)</strong> — under nozzle but final liq ~0.31–0.34 vs target 0.25±5%.</li>
+      <li><strong>100% overshoot (seed 0)</strong> — jar under nozzle and key OFF OK, but shutoff was late: liq reached 1.00 (brim) and tripped overflow/spill vs the 100%±5% band.</li>
     </ul>
   </div>
   <div class="card focus" id="make_soup">

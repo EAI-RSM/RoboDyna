@@ -246,7 +246,7 @@ def hh_section(hh: dict) -> str:
         "pour_beer": "Foam/beer overflow, or underfill vs ~0.90 target.",
         "cook_food": "Food not seated in pan after place (UnStableError); some check fails.",
         "cook_food_timer": "Same as cook_food (shared placement path).",
-        "measure_ingredient": "Jar push misses nozzle; or fill overshoots 25%±5% band.",
+        "measure_ingredient": "Rare 100% overshoot — late shutoff hits brim/spill (seed 0).",
         "make_soup": "Tip incomplete on some seeds — pieces bounce out after pour (2–4 distinct produce; 6/10).",
         "catch_cup": "—",
         "catch_mouse_object_drop": "Basket placed but object not soft-caught.",
@@ -401,10 +401,9 @@ def render(hh: dict, basic: dict | None, fail_map: dict) -> str:
     </ul>
   </div>
   <div class="card focus" id="measure_ingredient">
-    <h3><code>measure_ingredient</code> <span class="pill fail">2/10</span></h3>
+    <h3><code>measure_ingredient</code> <span class="pill warn">9/10</span></h3>
     <ul class="reasons">
-      <li><strong>Jar push miss (seeds 0, 1, 3, 4, 6, 9)</strong> — <code>jar push under nozzle failed</code>; jar off landing pose.</li>
-      <li><strong>Fill overshoot (seeds 7, 8)</strong> — under nozzle but final liq ~0.31–0.34 vs target 0.25±5%.</li>
+      <li><strong>100% overshoot (seed 0)</strong> — jar under nozzle and key OFF OK, but shutoff was late: liq reached 1.00 (brim) and tripped overflow/spill vs the 100%±5% band.</li>
     </ul>
   </div>
   <div class="card focus" id="make_soup">
