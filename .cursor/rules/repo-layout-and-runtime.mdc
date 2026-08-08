@@ -1,0 +1,41 @@
+---
+description: RoboDyna repo layout, scratch dirs, physics/grasp sanity, and where work belongs
+alwaysApply: true
+---
+
+# Repo layout and runtime
+
+## What lives where
+
+| Path | Role |
+|------|------|
+| `envs/<task>.py` | Task class: spawn, expert `play_once`, `check_success` |
+| `task_config/*.yml` | Configs; stock tree mostly gitignored — use `demo_*.yml` / `_*.yml` |
+| `description/task_instruction/<task>.json` | Language instructions |
+| `script_exp/` | Base interactive runners + suite GUI + basic sweeps |
+| `script_hh_exp/` | Household interactive runners + suite GUI + HH sweeps |
+| `script/bench_script/record_demo.py` | Shared demo recorder |
+| `final_task_demos/` | Curated gallery clips (side-by-side GIFs/MP4s, snapshots) |
+| `tmp/` / `tmp/tmp_<task>/` | Local scratch for demos, sweeps, probes (gitignored except keep) |
+| `task_gallery` (sibling repo under `Desktop/RoboReal/`) | Published web gallery; sync demos there when updating README cards |
+
+Do not dump probe scripts, one-off mp4s, or sweep junk into `final_task_demos/` or repo root — use `tmp/`.
+
+## Skills to follow
+
+- New / extended tasks or objects → `.claude/skills/SAPIEN-task-creator`
+- Demo video after task work → `.claude/skills/record-video-demo`
+- Interactive viewers → keep 2s wall-clock hold after terminal success/failure (see `interactive-post-success-hold.mdc`)
+
+## Physics / grasp sanity (always)
+
+From project practice (`basic_prompt.md`):
+
+- Spawned objects must not collide or overlap at init.
+- Prefer real physics: no silent teleport/attach of grasped objects; fingers close **around** the object, not through it.
+- Round objects roll; non-round objects slip on tilt when that is the intended contact model.
+- Objects should not appear/disappear without an explicit task mechanic.
+
+## Naming
+
+CLI / env class name must match `envs/<task>.py`. Alias: `place_block_task` → `place_block_belt`.

@@ -1,0 +1,52 @@
+---
+description: How to record demos vs training data; gallery publish paths for base and household
+alwaysApply: true
+---
+
+# Demo collection conventions
+
+Distinguish **demo videos** from **training data collection**. Prefer shared scripts; do not invent per-task `record_*_demo.py` helpers.
+
+## Runtime (always)
+
+```bash
+conda activate robodyna   # local; some docs say domino
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+unset DISPLAY
+```
+
+## Quick head-only demo (after changing a task)
+
+```bash
+python script/bench_script/record_demo.py <task>
+# scenario flags: --task-arg key=value   (or legacy --option 1 / 2)
+```
+
+- Writes `tmp/tmp_<task>/video/vN_head.mp4` (auto-increment `vN`; never overwrite).
+- Standard agent deliverable: **head view only** unless the user asks for top-down / side-by-side.
+- Show the user a GIF under `/tmp/robodyna_demos/` (see `.claude/skills/record-video-demo`).
+- Do **not** point at `data/<task>/<config>/video/episode0.mp4` as the demo.
+
+## Gallery / README side-by-side demos
+
+| Suite | Record / publish | Landing paths |
+|-------|------------------|---------------|
+| Base | `script_exp/run_basic_test_and_demos.py` (sweep + fill missing scenario GIFs) | `final_task_demos/<task>/<stem>_sidebyside.gif` (+ sync `/home/xuan/Desktop/RoboReal/task_gallery/final_task_demos/`) |
+| Household | `script/bench_script/publish_household_demos.py` or `script_hh_exp/run_hh_test_and_demos.py` | `final_task_demos/<task>/`, `household_demos/`, same gallery tree |
+
+- Base stems are usually `default_sidebyside`, `opt1_sidebyside`, `opt2_sidebyside`, `opt1+2_sidebyside` (exceptions in `run_basic_test_and_demos.SCENARIO_STEMS`).
+- Household publish pattern: on mixed results → 1 success + 1 failure; all-pass → 2 successes (prefer distinct seeds).
+- GUI card snapshots: `python script/bench_script/publish_gui_snapshots.py` (`--household-only` when needed).
+
+## Training trajectories (not demos)
+
+```bash
+bash collect_data.sh <task> <task_config> 0
+```
+
+→ HDF5/mp4 under `data/` + LeRobot under `data_lerobot/` (gitignored). Use for dataset gen, not gallery clips.
+
+## Success sweeps (no gallery publish)
+
+- Base: `python script_exp/_sweep_basic_success.py` → `logs/basic_sweep_results.json`
+- Household: `python script_hh_exp/_sweep_household_success.py`
