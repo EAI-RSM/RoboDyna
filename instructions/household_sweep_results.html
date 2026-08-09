@@ -119,13 +119,13 @@
   <div class="stats">
     <div class="stat"><b>12</b><span>household tasks</span></div>
     <div class="stat"><b>120</b><span>total seed runs</span></div>
-    <div class="stat"><b>93</b><span>successes (78%)</span></div>
-    <div class="stat"><b>27</b><span>failures</span></div>
+    <div class="stat"><b>97</b><span>successes (81%)</span></div>
+    <div class="stat"><b>23</b><span>failures</span></div>
     <div class="stat"><b>4</b><span>tasks at 10/10</span></div>
   </div><table><thead><tr><th>Task</th><th>Rate</th><th>OK seeds</th><th>Fail seeds</th><th>Main failure mode(s)</th></tr></thead><tbody><tr><td><code>trap_bug</code></td><td><span class="bar"><i style="width:70%"></i></span><span class="rate mid">7/10</span></td><td class="seeds">0, 3, 4, 5, 6, 7, 8</td><td class="seeds">1, 2, 9</td><td>Trap placement misses moving bug (plan OK, check fails).</td></tr>
 <tr><td><code>boil_milk</code></td><td><span class="bar"><i style="width:100%"></i></span><span class="rate good">10/10</span></td><td class="seeds">0, 1, 2, 3, 4, 5, 6, 7, 8, 9</td><td class="seeds">—</td><td>—</td></tr>
 <tr><td><code>fill_coffee_jar</code></td><td><span class="bar"><i style="width:100%"></i></span><span class="rate good">10/10</span></td><td class="seeds">0, 1, 2, 3, 4, 5, 6, 7, 8, 9</td><td class="seeds">—</td><td>—</td></tr>
-<tr><td><code>pour_beer</code></td><td><span class="bar"><i style="width:30%"></i></span><span class="rate bad">3/10</span></td><td class="seeds">2, 5, 6</td><td class="seeds">0, 1, 3, 4, 7, 8, 9</td><td>Foam/beer overflow, or underfill vs ~0.90 target.</td></tr>
+<tr><td><code>pour_beer</code></td><td><span class="bar"><i style="width:70%"></i></span><span class="rate mid">7/10</span></td><td class="seeds">0, 1, 2, 3, 5, 7, 8</td><td class="seeds">4, 6, 9</td><td>Micro-topup overflow near ~0.85 target (foam+beer over capacity).</td></tr>
 <tr><td><code>cook_food</code></td><td><span class="bar"><i style="width:70%"></i></span><span class="rate mid">7/10</span></td><td class="seeds">2, 3, 4, 5, 6, 7, 9</td><td class="seeds">0, 1, 8</td><td>Food not seated in pan after place (UnStableError); some check fails.</td></tr>
 <tr><td><code>cook_food_timer</code></td><td><span class="bar"><i style="width:70%"></i></span><span class="rate mid">7/10</span></td><td class="seeds">2, 3, 4, 5, 6, 7, 9</td><td class="seeds">0, 1, 8</td><td>Same as cook_food (shared placement path).</td></tr>
 <tr><td><code>measure_ingredient</code></td><td><span class="bar"><i style="width:90%"></i></span><span class="rate good">9/10</span></td><td class="seeds">1, 2, 3, 4, 5, 6, 7, 8, 9</td><td class="seeds">0</td><td>Rare 100% overshoot — late shutoff hits brim/spill (seed 0).</td></tr>
@@ -137,10 +137,9 @@
   
   <h2 id="hh-detail">Household failure analysis (weak tasks)</h2>
   <div class="card focus" id="pour_beer">
-    <h3><code>pour_beer</code> <span class="pill fail">1/10</span></h3>
+    <h3><code>pour_beer</code> <span class="pill warn">7/10</span></h3>
     <ul class="reasons">
-      <li><strong>Overflow (seeds 0, 2, 3, 4, 7, 9)</strong> — foam/beer exceeds capacity; yellow spill under the glass. Lever held too open/long for that layout’s pour rate.</li>
-      <li><strong>Underfill (seeds 5, 6, 8)</strong> — no overflow but liquid never reaches ~0.90 (seed 5 stalls ~0.47; 6/8 end ~0.88–0.89).</li>
+      <li><strong>Overflow on micro-topup (seeds 4, 6, 9)</strong> — beer near the ~0.85 success gate when a final crack pushes foam+liquid over capacity; yellow spill under the glass. Expert stops once liquid &gt; 0.85; remaining fails are late shutoff, not underfill.</li>
     </ul>
   </div>
   <div class="card focus" id="measure_ingredient">

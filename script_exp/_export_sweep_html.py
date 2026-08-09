@@ -243,7 +243,7 @@ def hh_section(hh: dict) -> str:
         "trap_bug": "Trap placement misses moving bug (plan OK, check fails).",
         "boil_milk": "—",
         "fill_coffee_jar": "—",
-        "pour_beer": "Foam/beer overflow, or underfill vs ~0.90 target.",
+        "pour_beer": "Micro-topup overflow near ~0.85 target (foam+beer over capacity).",
         "cook_food": "Food not seated in pan after place (UnStableError); some check fails.",
         "cook_food_timer": "Same as cook_food (shared placement path).",
         "measure_ingredient": "Rare 100% overshoot — late shutoff hits brim/spill (seed 0).",
@@ -394,10 +394,9 @@ def render(hh: dict, basic: dict | None, fail_map: dict) -> str:
     detail = r'''
   <h2 id="hh-detail">Household failure analysis (weak tasks)</h2>
   <div class="card focus" id="pour_beer">
-    <h3><code>pour_beer</code> <span class="pill fail">1/10</span></h3>
+    <h3><code>pour_beer</code> <span class="pill warn">7/10</span></h3>
     <ul class="reasons">
-      <li><strong>Overflow (seeds 0, 2, 3, 4, 7, 9)</strong> — foam/beer exceeds capacity; yellow spill under the glass. Lever held too open/long for that layout’s pour rate.</li>
-      <li><strong>Underfill (seeds 5, 6, 8)</strong> — no overflow but liquid never reaches ~0.90 (seed 5 stalls ~0.47; 6/8 end ~0.88–0.89).</li>
+      <li><strong>Overflow on micro-topup (seeds 4, 6, 9)</strong> — beer near the ~0.85 success gate when a final crack pushes foam+liquid over capacity; yellow spill under the glass. Expert stops once liquid &gt; 0.85; remaining fails are late shutoff, not underfill.</li>
     </ul>
   </div>
   <div class="card focus" id="measure_ingredient">
