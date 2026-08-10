@@ -6,7 +6,7 @@ import numpy as np
 
 
 class save_goal(Base_Task):
-    """Keep a moving ball out of the goal by placing a square blocker in time.
+    """Keep a moving ball out of the goal by placing a stylized goalkeeper in time.
 
     A ball travels across the table toward a goal on one side. Layout can be mirrored
     across the table midline (x → −x): default puts the goal/keeper on +x (right gripper);
@@ -14,8 +14,9 @@ class save_goal(Base_Task):
     the side is chosen per episode when ``mirrored`` is unset.
     A red deadline line marks the last moment the robot is allowed to reposition the save_goal;
     it sits on the field side of the green placement area with a clear gap (≥1 cm by default).
-    A green placement area sits directly in front of the goal. The robot must grasp the square
-    save_goal, place it fully inside that green area while the ball is still behind the red line,
+    A green placement area sits directly in front of the goal. The robot must grasp the
+    goalkeeper (yellow jersey / black shorts blocker), place it fully inside that green area
+    while the ball is still behind the red line,
     then release it before the ball reaches the goal mouth. A save requires the ball to hit the
     keeper's front face; the shot then rebounds with a mass-aware bounce (ball 100 g, keeper 300 g).
     Side grazes do not stop the ball. A soccer-style net bag
@@ -79,6 +80,13 @@ class save_goal(Base_Task):
     KEEPER_SPAWN_Y_DEFAULT = -0.12
     KEEPER_GOAL_CLEARANCE_DEFAULT = 0.05
     KEEPER_POSE_TOL_DEFAULT = 0.03
+    # Collision half-height as a multiple of ball_radius (XY still matches the ball).
+    # ~1.45 → modestly taller than the old cube so the figure reads as a keeper.
+    KEEPER_HALF_Z_MULT_DEFAULT = 1.45
+    KEEPER_SHIRT_COLOR = (0.95, 0.82, 0.10)   # yellow jersey
+    KEEPER_SHORTS_COLOR = (0.06, 0.06, 0.07)  # black shorts
+    KEEPER_SKIN_COLOR = (0.92, 0.72, 0.55)
+    KEEPER_BOOT_COLOR = (0.05, 0.05, 0.05)
 
     BALL_SETTLE_STEPS_DEFAULT = 120
 
@@ -733,6 +741,135 @@ class save_goal(Base_Task):
                 f"goal_net_top_x_{i}",
             )
 
+    def _build_goalkeeper(self, pose: sapien.Pose) -> Actor:
+        """Blocker with box collision + stylized yellow-shirt / black-shorts visuals."""
+        from .utils.create_actor import preprocess
+
+        scene, pose = preprocess(self, pose)
+        hx = float(self.keeper_half_x)
+        hy = float(self.keeper_half_y)
+        hz = float(self.keeper_half_z)
+        H = 2.0 * hz
+
+        # Vertical stack (bottom → top), fractions of total height.
+        boot_h = 0.10 * H
+        shorts_h = 0.30 * H
+        shirt_h = 0.38 * H
+        head_h = H - boot_h - shorts_h - shirt_h
+
+        def _mat(rgb):
+            return sapien.render.RenderMaterial(base_color=[float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0])
+
+        def _add_box(builder, z0, z1, half_xy, color, y_off=0.0, x_off=0.0):
+            half_z = 0.5 * (z1 - z0)
+            cz = 0.5 * (z0 + z1)
+            builder.add_box_visual(
+                pose=sapien.Pose([x_off, y_off, cz]),
+                half_size=[half_xy[0], half_xy[1], half_z],
+                material=_mat(color),
+            )
+
+        builder = scene.create_actor_builder()
+        builder.add_box_collision(
+            pose=sapien.Pose([0, 0, 0]),
+            half_size=[hx, hy, hz],
+            material=scene.default_physical_material,
+        )
+
+        z = -hz
+        # Boots
+        _add_box(builder, z, z + boot_h, [hx * 0.95, hy * 0.95], self.KEEPER_BOOT_COLOR)
+        z += boot_h
+        # Black shorts
+        _add_box(builder, z, z + shorts_h, [hx * 0.98, hy * 0.98], self.KEEPER_SHORTS_COLOR)
+        z += shorts_h
+        # Yellow shirt / torso
+        shirt_z0, shirt_z1 = z, z + shirt_h
+        _add_box(builder, shirt_z0, shirt_z1, [hx * 0.92, hy * 0.72], self.KEEPER_SHIRT_COLOR)
+        # Arms stay inside the collision footprint (±Y) so grasp/AABB stay consistent.
+        arm_half_y = hy * 0.22
+        arm_out = hy - arm_half_y
+        _add_box(
+            builder, shirt_z0 + 0.05 * shirt_h, shirt_z1 - 0.08 * shirt_h,
+            [hx * 0.50, arm_half_y], self.KEEPER_SHIRT_COLOR, y_off=arm_out,
+        )
+        _add_box(
+            builder, shirt_z0 + 0.05 * shirt_h, shirt_z1 - 0.08 * shirt_h,
+            [hx * 0.50, arm_half_y], self.KEEPER_SHIRT_COLOR, y_off=-arm_out,
+        )
+        z = shirt_z1
+        # Head (box reads better than a sphere at this tiny scale)
+        head_half = min(hx, hy, 0.48 * head_h) * 0.85
+        _add_box(
+            builder, z + 0.05 * head_h, z + head_h - 0.02 * head_h,
+            [head_half, head_half], self.KEEPER_SKIN_COLOR,
+        )
+
+        builder.set_initial_pose(pose)
+        entity = builder.build(name="goalkeeper")
+        # Match create_box contact groups so ball↔keeper PhysX contacts work after unlock.
+        for comp in entity.get_components():
+            if not isinstance(comp, sapien.physx.PhysxRigidBaseComponent):
+                continue
+            for shape in comp.get_collision_shapes():
+                shape.set_collision_groups([1, 1, 0, 0])
+            if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
+                comp.set_mass(float(self.KEEPER_MASS))
+
+        # Same contact/functional frames as create_box (scale = half_size).
+        data = {
+            "center": [0, 0, 0],
+            "extents": [hx, hy, hz],
+            "scale": [hx, hy, hz],
+            "target_pose": [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]]],
+            "contact_points_pose": [
+                [
+                    [0, 0, 1, 0],
+                    [1, 0, 0, 0],
+                    [0, 1, 0, 0.0],
+                    [0, 0, 0, 1],
+                ],
+                [
+                    [1, 0, 0, 0],
+                    [0, 0, -1, 0],
+                    [0, 1, 0, 0.0],
+                    [0, 0, 0, 1],
+                ],
+                [
+                    [-1, 0, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 1, 0, 0.0],
+                    [0, 0, 0, 1],
+                ],
+                [
+                    [0, 0, -1, 0],
+                    [-1, 0, 0, 0],
+                    [0, 1, 0, 0.0],
+                    [0, 0, 0, 1],
+                ],
+            ],
+            "transform_matrix": np.eye(4).tolist(),
+            "functional_matrix": [
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, -1.0, 0, 0.0],
+                    [0.0, 0, -1.0, -1],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, -1.0, 0, 0.0],
+                    [0.0, 0, -1.0, 1],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            ],
+            "contact_points_description": [],
+            "contact_points_group": [[0, 1, 2, 3], [4, 5, 6, 7]],
+            "contact_points_mask": [True, True],
+            "target_point_description": ["The center point on the bottom of the keeper."],
+        }
+        return Actor(entity, data, mass=float(self.KEEPER_MASS))
+
     def _keeper_in_zone(self):
         if getattr(self, "goalkeeper", None) is None:
             return False
@@ -750,19 +887,22 @@ class save_goal(Base_Task):
         )
 
     def _keeper_seated_on_table(self):
-        """True when the cube is on the table (can physically block), even outside green."""
+        """True when the keeper is on the table (can physically block), even outside green."""
         if getattr(self, "goalkeeper", None) is None:
             return False
         keeper_z = float(self.goalkeeper.get_pose().p[2])
         target_z = float(self.table_top_z + self.keeper_half_z)
-        return abs(keeper_z - target_z) <= 0.02
+        # Slightly looser than the old cube: taller figure + grasp offset.
+        return abs(keeper_z - target_z) <= max(0.025, 0.35 * float(self.keeper_half_z))
 
     def _try_front_face_bounce(self, prev_p, next_p):
-        """Bounce off the cube's ball-facing face if the path hits it.
+        """Bounce off the keeper's ball-facing face if the path hits it.
 
         Works inside or outside the green zone so the ball never tunnels through a
         seated keeper. Success / late-failure still require green-zone placement.
         """
+        # Keep the footprint upright before testing — tipped pose shrinks the face.
+        self._hold_keeper_upright()
         if not self._keeper_seated_on_table():
             return False
         bounds = self._keeper_xy_bounds()
@@ -821,8 +961,8 @@ class save_goal(Base_Task):
         if lift_dz > 1e-4:
             self.move(self.move_by_displacement(arm_tag=arm_tag, z=lift_dz))
 
-        # Approach over the goal, then iteratively correct XY so the *cube*
-        # (not just the EE) lands on the intercept before release.
+        # Approach over the goal, then iteratively correct XY so the *keeper*
+        # footprint lands fully inside the green zone (not just the EE on the intercept).
         keeper_p = np.asarray(self.goalkeeper.get_pose().p, dtype=np.float64)
         goal_over_x = float(self.goal_x - self.travel_dir * (self.keeper_half_x + 0.01))
         goal_over_y = float(self.goal_center_y)
@@ -877,36 +1017,90 @@ class save_goal(Base_Task):
             self.plan_success = True
 
     def _seat_keeper_dynamic(self):
-        """Seat the square on the table but leave it dynamic for mass-aware hits."""
+        """Seat the keeper upright on the table, ready for a mass-aware save.
+
+        Held kinematic until ``_begin_mass_bounce`` so the taller figure cannot tip
+        before the shot arrives (tipping breaks the front-face bounce test). Mass is
+        always 300 g so the rebound matches the old cube.
+        """
         if getattr(self, "goalkeeper", None) is None:
             return
         pose = self.goalkeeper.get_pose()
         p = np.asarray(pose.p, dtype=np.float64).copy()
         p[2] = float(self.table_top_z + self.keeper_half_z)
-        seat_pose = sapien.Pose(p.tolist(), list(pose.q))
-        if abs(float(pose.p[2]) - p[2]) > 1e-4:
+        # Force upright — grasp/release can leave a tilt that drops center-z.
+        seat_pose = sapien.Pose(p.tolist(), [1, 0, 0, 0])
+        try:
+            self.goalkeeper.set_pose(seat_pose)
+        except Exception:
             try:
-                self.goalkeeper.set_pose(seat_pose)
+                self.goalkeeper.actor.set_pose(seat_pose)
             except Exception:
-                try:
-                    self.goalkeeper.actor.set_pose(seat_pose)
-                except Exception:
-                    seat_pose = pose
-        else:
-            seat_pose = pose
+                seat_pose = pose
         self._keeper_drop_pose = seat_pose
         rigid = self._get_rigid(self.goalkeeper)
         if rigid is None:
             return
         try:
-            rigid.set_kinematic(False)
             rigid.set_mass(float(self.KEEPER_MASS))
+            # Box inertia about center (uniform density) — stable when unlocked.
+            hx, hy, hz = float(self.keeper_half_x), float(self.keeper_half_y), float(self.keeper_half_z)
+            m = float(self.KEEPER_MASS)
+            ix = (1.0 / 12.0) * m * ( (2 * hy) ** 2 + (2 * hz) ** 2 )
+            iy = (1.0 / 12.0) * m * ( (2 * hx) ** 2 + (2 * hz) ** 2 )
+            iz = (1.0 / 12.0) * m * ( (2 * hx) ** 2 + (2 * hy) ** 2 )
+            try:
+                rigid.set_inertia([ix, iy, iz])
+            except Exception:
+                pass
             rigid.set_linear_damping(2.5)
-            rigid.set_angular_damping(4.0)
+            rigid.set_angular_damping(8.0)
             rigid.set_linear_velocity(np.zeros(3))
             rigid.set_angular_velocity(np.zeros(3))
             self._set_restitution(rigid, self.BOUNCE_RESTITUTION, static_f=0.9, dynamic_f=0.7)
-            rigid.wake_up()
+            # Keep contacts on so the live PhysX rebound can also hit the face.
+            self._set_collision_enabled(self.goalkeeper, True)
+            # Freeze until the scripted front-face hit unlocks for mass transfer.
+            rigid.set_kinematic(True)
+        except Exception:
+            pass
+
+    def _hold_keeper_upright(self):
+        """Re-assert upright seated pose while waiting for the shot (pre-bounce)."""
+        if getattr(self, "goalkeeper", None) is None:
+            return
+        if getattr(self, "_ball_blocked", False) or getattr(self, "_ball_live", False):
+            return
+        if not getattr(self, "_keeper_deployed", False):
+            return
+        pose = self.goalkeeper.get_pose()
+        p = np.asarray(pose.p, dtype=np.float64)
+        target_z = float(self.table_top_z + self.keeper_half_z)
+        q = np.asarray(pose.q, dtype=np.float64)
+        need = (
+            abs(float(p[2]) - target_z) > 2e-3
+            or abs(float(q[0]) - 1.0) > 2e-3
+            or float(np.linalg.norm(q[1:])) > 2e-3
+        )
+        if not need:
+            return
+        seat = sapien.Pose([float(p[0]), float(p[1]), target_z], [1, 0, 0, 0])
+        try:
+            self.goalkeeper.set_pose(seat)
+        except Exception:
+            try:
+                self.goalkeeper.actor.set_pose(seat)
+            except Exception:
+                return
+        rigid = self._get_rigid(self.goalkeeper)
+        if rigid is None:
+            return
+        try:
+            # Pose-only correction; avoid set_kinematic_target spam (can stall PhysX).
+            if not rigid.get_kinematic():
+                rigid.set_kinematic(True)
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
         except Exception:
             pass
 
@@ -1067,7 +1261,11 @@ class save_goal(Base_Task):
         self.ball_speed = float(np.random.uniform(self.ball_speed_min, self.ball_speed_max))
         self.keeper_half_x = self.ball_radius
         self.keeper_half_y = self.ball_radius
-        self.keeper_half_z = self.ball_radius
+        keeper_z_mult = float(c.get("keeper_half_z_mult", self.KEEPER_HALF_Z_MULT_DEFAULT))
+        if "keeper_half_z" in c:
+            self.keeper_half_z = float(c["keeper_half_z"])
+        else:
+            self.keeper_half_z = float(self.ball_radius * keeper_z_mult)
         green_half_x = 0.5 * self.green_area_x_len
         green_half_y = self.goal_half_w + 0.5 * self.green_area_y_extra
         self.green_area_center_x = float(self.goal_x - self.travel_dir * green_half_x)
@@ -1188,23 +1386,20 @@ class save_goal(Base_Task):
         keeper_x0 = float(self.goal_x)
         goal_lower_y = float(self.goal_center_y - self.goal_half_w)
         keeper_y0 = float(goal_lower_y - self.keeper_goal_clearance - self.keeper_half_y)
-        self.goalkeeper = create_box(
-            self,
-            pose=sapien.Pose([keeper_x0, keeper_y0, self.table_top_z + self.keeper_half_z], [1, 0, 0, 0]),
-            half_size=[self.keeper_half_x, self.keeper_half_y, self.keeper_half_z],
-            color=(0.90, 0.70, 0.12),
-            name="goalkeeper_square",
-            is_static=False,
+        self.goalkeeper = self._build_goalkeeper(
+            sapien.Pose([keeper_x0, keeper_y0, self.table_top_z + self.keeper_half_z], [1, 0, 0, 0]),
         )
         self.goalkeeper.set_mass(float(self.KEEPER_MASS))
         keeper_rigid = self._get_rigid(self.goalkeeper)
         if keeper_rigid is not None:
             try:
+                keeper_rigid.set_mass(float(self.KEEPER_MASS))
                 keeper_rigid.set_linear_damping(2.5)
-                keeper_rigid.set_angular_damping(4.0)
+                keeper_rigid.set_angular_damping(8.0)
                 self._set_restitution(
                     keeper_rigid, self.BOUNCE_RESTITUTION, static_f=0.9, dynamic_f=0.7
                 )
+                self._set_collision_enabled(self.goalkeeper, True)
             except Exception:
                 pass
 
@@ -1248,7 +1443,7 @@ class save_goal(Base_Task):
             self._late_failure = True
 
         m1 = float(self.BALL_MASS)
-        m2 = float(self.KEEPER_MASS)
+        m2 = float(self.KEEPER_MASS)  # 300 g
         e = float(self._cfg.get("bounce_restitution", self.BOUNCE_RESTITUTION))
         # Signed speeds along +x (toward +goal when travel_dir>0).
         u1 = float(self.ball_speed) * float(self.travel_dir)
@@ -1283,14 +1478,33 @@ class save_goal(Base_Task):
             except Exception:
                 pass
 
-        # Ensure keeper is dynamic and receives the complementary impulse.
-        self._seat_keeper_dynamic()
+        # Ensure keeper is dynamic (was kinematic while waiting) and receives the impulse.
+        # Re-seat upright first, then unlock — do not call full _seat_keeper_dynamic
+        # (that would re-freeze kinematic=True).
+        if getattr(self, "goalkeeper", None) is not None:
+            kp = np.asarray(self.goalkeeper.get_pose().p, dtype=np.float64).copy()
+            kp[2] = float(self.table_top_z + self.keeper_half_z)
+            seat = sapien.Pose(kp.tolist(), [1, 0, 0, 0])
+            try:
+                self.goalkeeper.set_pose(seat)
+            except Exception:
+                try:
+                    self.goalkeeper.actor.set_pose(seat)
+                except Exception:
+                    pass
+        keeper_rigid = self._get_rigid(self.goalkeeper)
         if keeper_rigid is not None:
             try:
+                keeper_rigid.set_mass(float(self.KEEPER_MASS))
                 keeper_rigid.set_kinematic(False)
-                kv = np.array(keeper_rigid.get_linear_velocity(), dtype=np.float64)
+                self._set_collision_enabled(self.goalkeeper, True)
+                self._set_restitution(
+                    keeper_rigid, self.BOUNCE_RESTITUTION, static_f=0.9, dynamic_f=0.7
+                )
+                kv = np.zeros(3, dtype=np.float64)
                 kv[0] = v2_x
                 keeper_rigid.set_linear_velocity(kv.tolist())
+                keeper_rigid.set_angular_velocity(np.zeros(3))
                 keeper_rigid.wake_up()
             except Exception:
                 pass
@@ -1358,6 +1572,9 @@ class save_goal(Base_Task):
         if self._ball_rigid is None or getattr(self, "ball", None) is None:
             return
 
+        # Keep the deployed keeper upright while the shot approaches.
+        self._hold_keeper_upright()
+
         self._ball_step += 1
         progress = min(1.0, self._ball_step / float(self.ball_total_steps))
         prev_progress = min(1.0, (self._ball_step - 1) / float(self.ball_total_steps))
@@ -1369,7 +1586,7 @@ class save_goal(Base_Task):
         if (not self._late_failure) and (self.travel_dir * next_p[0] >= self.travel_dir * self.red_line_x) and (not keeper_ok):
             self._late_failure = True
 
-        # Seated cube always blocks a front-face hit (even outside the green zone).
+        # Seated keeper always blocks a front-face hit (even outside the green zone).
         # Outside-zone blocks still count as FAILURE via _block_was_legal / _late_failure.
         if self._try_front_face_bounce(prev_p, next_p):
             return
@@ -1422,15 +1639,15 @@ class save_goal(Base_Task):
         )
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.12, move_axis="arm"))
         self._place_keeper_from_top(arm_tag)
-        # After the yellow cube is dropped, always return the arm to its origin pose.
+        # After the keeper is dropped, always return the arm to its origin pose.
         self._retreat_arm_home(arm_tag, lift_z=0.08)
-        # Keep the cube dynamic (mass-aware bounce); only re-seat pose/damping.
+        # Keep the keeper dynamic (mass-aware bounce); only re-seat pose/damping.
         self._seat_keeper_dynamic()
 
         self._wait_for_outcome()
 
         self.info["info"] = {
-            "{A}": "goalkeeper_square",
+            "{A}": "goalkeeper",
             "{B}": "goal_frame",
             "{a}": str(arm_tag),
         }

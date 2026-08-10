@@ -1,6 +1,6 @@
 {
-  "full_description": "place the square blocker in the green zone before the red line to keep the ball out of the goal",
-  "schema": "{A} notifies the goalkeeper square, {B} notifies the goal frame, {a} notifies the arm that places the blocker, {o} notifies option 1 (field players) and/or option 2 (field cover) when enabled",
+  "full_description": "place the goalkeeper in the green zone before the red line to keep the ball out of the goal",
+  "schema": "{A} notifies the goalkeeper, {B} notifies the goal frame, {a} notifies the arm that places the goalkeeper, {o} notifies option 1 (field players) and/or option 2 (field cover) when enabled",
   "preference": "num of words should not exceed 14",
   "seen": [
     "Place {A} in the green zone to block the ball from {B}",
@@ -10,7 +10,7 @@
     "Block the ball from {B} by placing {A} in the green zone",
     "Put {A} fully inside the green zone before the deadline",
     "Use {a} to station {A} in front of {B}",
-    "Place the goalkeeper square to stop the ball at {B}",
+    "Place the goalkeeper to stop the ball at {B}",
     "Defend {B} by placing {A} in the green area",
     "Have {a} set {A} down before the red line",
     "Stop the ball from entering {B} with {A}",
