@@ -41,7 +41,7 @@ from _interactive_common import (  # noqa: E402
     print_instructions,
     print_mode_controls,
     report_task_result,
-    sleep_to_timestep,
+    RealtimePhysicsPacer,
     terminal_hold_should_close,
     print_episode_condition,
 )
@@ -509,10 +509,11 @@ def main():
         )
 
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
     try:
         while (not viewer.closed and (second_viewer is None or not second_viewer.closed)
                and (composite_view is None or composite_view.window_open)):
-            frame_start = time.perf_counter()
+            n_steps = pacer.begin_frame()
             if composite_view is None:
                 views.update(viewer.window)
             if composite_view is not None:
@@ -520,9 +521,26 @@ def main():
                 env._expert_hold = composite_view.action
             elif args.control == "keyboard":
                 _update_keyboard_control(env, viewer.window)
+
+            if n_steps == 0:
+                if composite_view is not None:
+                    refresh_composite = composite_view.needs_refresh()
+                    if refresh_composite:
+                        env.scene.update_render()
+                    composite_view.render(refresh_composite)
+                else:
+                    env.scene.update_render()
+                    viewer.render()
+                if composite_view is None and viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
             # Robot mode: gripper-Z reactive held_mask drives the diverter (no Space latch).
-            env._update_kinematic_tasks()
-            env.scene.step()
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
             if composite_view is not None:
                 refresh_composite = composite_view.needs_refresh()
                 if refresh_composite:
@@ -539,7 +557,6 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
             if args.record is not None and record_frame_count % record_every == 0:
                 frame = composite_frame if composite_frame is not None else _viewer_rgb_frame(viewer)
@@ -564,7 +581,6 @@ def main():
             if timed_out:
                 report_task_result(env, "timed_out")
                 terminal_started_at = time.perf_counter()
-                sleep_to_timestep(env, frame_start)
                 continue
             all_spawned = env._spawned >= env.n_apples
             belt_clear = all(not env._apple_on_belt(i) for i in range(env._spawned))
@@ -578,14 +594,9 @@ def main():
                         env, f"{correct}/{env.n_apples} apples sorted correctly"
                     )
                     terminal_started_at = time.perf_counter()
-                    sleep_to_timestep(env, frame_start)
                     continue
             else:
                 belt_clear_since = None
-            # Keep GUI interaction responsive while preserving the configured physics timestep.
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         try:
             _close_recorder(recorder)

@@ -30,7 +30,7 @@ from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     make_viewer_view_toggle,
     report_task_result,
-    sleep_to_timestep,
+    RealtimePhysicsPacer,
     terminal_hold_should_close,
     print_mode_controls,
     print_episode_condition,
@@ -306,19 +306,18 @@ def main():
         views.robot_controls = UniversalRobotControls(env)
     # Start rolling only after both grippers are parked above the keys.
     _start_belt(env)
-    last_frame_start = time.perf_counter()
-    simulation_credit = 0.0
 
     print(f"Tile colors: {env.tile_colors}")
     if args.control == "keyboard":
         print_instructions("Keyboard arrows still animate key taps as a sandbox shortcut.")
 
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
 
     try:
         while not viewer.closed:
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            frame_start = time.perf_counter()
             if stamp_controller is not None and arrow_presses is not None:
                 arrow_presses.update(viewer.window, stamp_controller)
                 stamp_controller.update()
@@ -328,17 +327,18 @@ def main():
             if under is not None:
                 last_under = under
 
-            # The task uses a 250 Hz physics clock. Catch it up to elapsed wall
-            # time so a 2-second, 500-step pause visibly lasts two seconds,
-            # rather than 500 rendered frames.
-            simulation_credit += frame_start - last_frame_start
-            last_frame_start = frame_start
-            timestep = float(env.scene.get_timestep())
-            steps = min(32, int(simulation_credit / timestep))
-            for _ in range(steps):
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
                 env._update_kinematic_tasks()
                 env.scene.step()
-            simulation_credit -= steps * timestep
             env.scene.update_render()
             viewer.render()
 
@@ -348,7 +348,6 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
 
             if _episode_done(env):
@@ -359,10 +358,6 @@ def main():
                     f"black_press={env.black_press}",
                 )
                 terminal_started_at = time.perf_counter()
-
-            remaining = (1.0 / 60.0) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         try:
             if stamp_controller is not None:

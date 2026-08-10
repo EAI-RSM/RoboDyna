@@ -30,7 +30,7 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
-    sleep_to_timestep,
+    RealtimePhysicsPacer,
     terminal_hold_should_close,
     print_episode_condition,
 )
@@ -184,11 +184,12 @@ def main():
 
     settle_after = None
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
 
     try:
         while not viewer.closed:
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            frame_start = time.perf_counter()
             grip.update(viewer.window)
 
             # Keep the box dynamic every frame (in case settle helpers re-freeze).
@@ -196,8 +197,18 @@ def main():
                 env._enable_box_physics()
                 env._push_active = True
 
-            env._update_kinematic_tasks()
-            env.scene.step()
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
             env.scene.update_render()
             viewer.render()
 
@@ -207,7 +218,6 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
 
             if getattr(env, "_ball_phase", None) == "released":
@@ -217,10 +227,6 @@ def main():
                 elif time.perf_counter() - settle_after >= 2.5:
                     report_task_result(env)
                     terminal_started_at = time.perf_counter()
-
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         env.close_env()
 

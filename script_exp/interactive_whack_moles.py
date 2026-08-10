@@ -27,11 +27,11 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    RealtimePhysicsPacer,
     action_failed,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
-    sleep_to_timestep,
     terminal_hold_should_close,
     require_selected_arms,
     print_episode_condition,
@@ -474,14 +474,25 @@ def main():
 
     done_since = None
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
     try:
         while not viewer.closed:
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            frame_start = time.perf_counter()
             controller.update(viewer.window)
 
-            env._update_kinematic_tasks()
-            env.scene.step()
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
             env.scene.update_render()
             viewer.render()
 
@@ -491,13 +502,11 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
 
             if env.distractor_hit:
                 report_task_result(env, "rabbit touched")
                 terminal_started_at = time.perf_counter()
-                sleep_to_timestep(env, frame_start)
                 continue
             if env.check_success():
                 if done_since is None:
@@ -506,12 +515,7 @@ def main():
                 elif time.perf_counter() - done_since >= 1.0:
                     report_task_result(env)
                     terminal_started_at = time.perf_counter()
-                    sleep_to_timestep(env, frame_start)
                     continue
-
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         env.close_env()
 

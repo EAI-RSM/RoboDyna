@@ -31,7 +31,7 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
-    sleep_to_timestep,
+    RealtimePhysicsPacer,
     terminal_hold_should_close,
     print_mode_controls,
     print_episode_condition,
@@ -369,11 +369,12 @@ def main():
         print_instructions("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")
 
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
 
     try:
         while not viewer.closed:
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            frame_start = time.perf_counter()
             if args.control == "keyboard":
                 fired = edge.poll(_requested_sides(viewer.window))
                 for side in fired:
@@ -385,8 +386,18 @@ def main():
             # Mark pages that slid past the stamp without a punch.
             env._mark_overdue_pages()
 
-            env._update_kinematic_tasks()
-            env.scene.step()
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
             env.scene.update_render()
             viewer.render()
 
@@ -396,7 +407,6 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
 
             if _all_pages_resolved(env):
@@ -410,10 +420,6 @@ def main():
                     f"empty_press={env.invalid_empty_press}",
                 )
                 terminal_started_at = time.perf_counter()
-
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         env.close_env()
 

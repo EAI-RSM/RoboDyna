@@ -34,7 +34,7 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
-    sleep_to_timestep,
+    RealtimePhysicsPacer,
     terminal_hold_should_close,
     resolve_action_arm,
     print_episode_condition,
@@ -367,17 +367,28 @@ def main():
 
     settle_after = None
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
 
     try:
         while not viewer.closed:
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            frame_start = time.perf_counter()
             controller.update(viewer.window)
 
-            env._update_kinematic_tasks()
-            env.scene.step()
-            if not env._stuck and not env._hit_blocker:
-                env._try_form_stick()
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
+                if not env._stuck and not env._hit_blocker:
+                    env._try_form_stick()
             env.scene.update_render()
             viewer.render()
 
@@ -387,13 +398,11 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
 
             if env._hit_blocker:
                 report_task_result(env, env.hit_result_detail())
                 terminal_started_at = time.perf_counter()
-                sleep_to_timestep(env, frame_start)
                 continue
             if env._stuck or getattr(controller, "done", False):
                 if settle_after is None:
@@ -403,12 +412,7 @@ def main():
                         env._record_board_hit()
                     report_task_result(env, env.hit_result_detail())
                     terminal_started_at = time.perf_counter()
-                    sleep_to_timestep(env, frame_start)
                     continue
-
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         env.close_env()
 

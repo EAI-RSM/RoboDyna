@@ -32,7 +32,7 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
-    sleep_to_timestep,
+    RealtimePhysicsPacer,
     terminal_hold_should_close,
     print_mode_controls,
     print_episode_condition,
@@ -288,11 +288,12 @@ def main():
     edges = EdgeDirection()
 
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
 
     try:
         while not viewer.closed:
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            frame_start = time.perf_counter()
             if args.control == "keyboard":
                 direction = edges.edge(viewer.window)
                 mode = str(getattr(env, "_ball_mode", ""))
@@ -306,10 +307,21 @@ def main():
                     print(f"Tilting shelf {idx} {direction} (keyboard)...")
                     ok = _with_live_viewer(env, viewer, lambda: env._press_tilt_direct(direction))
                     print(f"Tilt done. ball_mode={env._ball_mode} ok={ok}")
-            env._update_kinematic_tasks()
             if hasattr(env, "consume_pending_tilt") and getattr(env, "_pending_tilt_dir", None):
                 _with_live_viewer(env, viewer, env.consume_pending_tilt)
-            env.scene.step()
+
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
             env.scene.update_render()
             viewer.render()
             if viewer.window.key_down("escape"):
@@ -318,15 +330,11 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
             mode = str(getattr(env, "_ball_mode", ""))
             if mode in ("done", "missed") and int(getattr(env, "active_shelf_idx", 0)) < 0:
                 report_task_result(env, f"ball_mode={mode}")
                 terminal_started_at = time.perf_counter()
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         env.close_env()
 

@@ -36,7 +36,7 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
-    sleep_to_timestep,
+    RealtimePhysicsPacer,
     terminal_hold_should_close,
     print_mode_controls,
     require_selected_arms,
@@ -599,17 +599,29 @@ def main():
 
     last_status = None
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
 
     try:
         while not viewer.closed:
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            frame_start = time.perf_counter()
             if args.control == "keyboard":
                 keyboard.update(env, viewer.window)
             elif viewer.window.key_press("space"):
                 _toggle_steak_transfer(env, robot=True)
-            env._update_kinematic_tasks()
-            env.scene.step()
+
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
             env.scene.update_render()
             viewer.render()
             if viewer.window.key_down("escape"):
@@ -618,7 +630,6 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
             doneness = [round(float(st["doneness"]), 2) for st in env.stations]
             target_range = env.target_doneness_range
@@ -633,9 +644,6 @@ def main():
             if done:
                 report_task_result(env, detail)
                 terminal_started_at = time.perf_counter()
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         env.close_env()
 

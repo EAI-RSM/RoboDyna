@@ -30,7 +30,7 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
-    sleep_to_timestep,
+    RealtimePhysicsPacer,
     terminal_hold_should_close,
     require_selected_arms,
     print_episode_condition,
@@ -435,15 +435,26 @@ def main():
     cycles_done = 0
     prev_motion = list(getattr(env, "_cuboid_auto_motion", []) or [])
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
 
     try:
         while not viewer.closed:
-            frame_start = time.perf_counter()
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
             controller.update(viewer.window)
 
-            env._update_kinematic_tasks()
-            env.scene.step()
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
             env.scene.update_render()
             viewer.render()
 
@@ -453,7 +464,6 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
 
             motions = list(getattr(env, "_cuboid_auto_motion", []) or [])
@@ -479,10 +489,6 @@ def main():
                     )
                     report_task_result(env, detail)
                     terminal_started_at = time.perf_counter()
-
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         env.close_env()
 

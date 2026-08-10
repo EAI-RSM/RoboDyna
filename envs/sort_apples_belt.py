@@ -936,6 +936,16 @@ class sort_apples_belt(Base_Task):
         """Y of the front queue slot (just upstream of the plank)."""
         return self.BELT_Y_FORK + self.PHYSICS_RELEASE_DY
 
+    def _closed_dump_stop_y(self):
+        """Apple-center Y flush against the upstream face of the closed diverter.
+
+        Rest-pose halves span ``±_blade_half_w`` along belt Y about ``BELT_Y_FORK``.
+        Stopping at ``fork + half_w + APPLE_R`` puts the fruit in contact with the wood
+        (not at the divert release line, which sits several cm upstream).
+        """
+        half_w = float(getattr(self, "_blade_half_w", 0.007))
+        return float(self.BELT_Y_FORK) + half_w + float(self.APPLE_R)
+
     def _queue_indices(self):
         """Belt-riding undeposited apples, frontmost (lowest y) first."""
         idxs = []
@@ -1001,12 +1011,13 @@ class sort_apples_belt(Base_Task):
             if self._apple_mode[i] in ("physics", "done"):
                 continue
             y = float(self._apple_y[i])
-            # Opt 2: rotten stay kinematic on the belt. Closed hatch → stop at the plank
-            # face (do not teleport through wood). Open hatch → ride the parted gap past
-            # the belt end, then fall into the bin (physics cannot fall through the slab).
+            # Opt 2: rotten stay kinematic on the belt. Closed hatch → stop flush against
+            # the plank face (do not teleport through wood). Open hatch → ride the parted
+            # gap past the belt end, then fall into the bin (physics cannot fall through
+            # the slab).
             if self.apple_colors[i] == self.COLOR_ROTTEN:
                 if not self._dump_gap_open():
-                    self._apple_y[i] = max(y, release_y)
+                    self._apple_y[i] = max(y, self._closed_dump_stop_y())
                     continue
                 if y <= float(self.BELT_Y_END) - 0.03:
                     self._release_dump_fall(i)

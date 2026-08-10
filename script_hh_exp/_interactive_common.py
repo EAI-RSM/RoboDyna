@@ -32,6 +32,7 @@ if str(ROOT / "script_exp") not in sys.path:
     sys.path.insert(0, str(ROOT / "script_exp"))
 
 from script_exp._interactive_common import (  # noqa: E402
+    RealtimePhysicsPacer,
     action_failed,
     configure_task,
     flash_gripper_failure,
@@ -1105,18 +1106,64 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     terminal_started_at = None
     terminal_fill_detail = ""
     terminal_failure_reason = None
-    # Match script_exp run_viewer_loop: one teleop update → kinematics → step → render.
-    # Success checks every few frames keep kitchen eval cost off the teleop hot path.
+    # Match script_exp run_viewer_loop: teleop once per display frame, then
+    # fixed-dt physics catch-up so 60 Hz / 240 Hz monitors feel the same speed.
+    # Success checks every few *physics* steps keep kitchen eval cost down.
     SUCCESS_CHECK_EVERY = 5
+    pacer = RealtimePhysicsPacer(env)
+    physics_steps = 0
     try:
         while not viewer.closed:
-            frame_start = time.perf_counter()
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and time.perf_counter() - terminal_started_at >= 2.0:
+                    print(f"[{task}] closing after 2-second terminal-result display")
+                    break
+                continue
+
             controller.update(viewer.window)
-            if hasattr(env, "_update_kinematic_tasks"):
-                env._update_kinematic_tasks()
-            env.scene.step()
-            controller.after_step()
+            for _ in range(n_steps):
+                if hasattr(env, "_update_kinematic_tasks"):
+                    env._update_kinematic_tasks()
+                env.scene.step()
+                controller.after_step()
+                physics_steps += 1
+
+                if terminal_started_at is not None:
+                    continue
+                if physics_steps % SUCCESS_CHECK_EVERY == 0:
+                    try:
+                        succeeded = bool(env.check_success())
+                    except Exception as exc:
+                        print_failure(f"[{task}] success check failed: {exc}")
+                        succeeded = False
+                    failure = None if succeeded else _terminal_failure(env, task)
+                    fill = _fill_level_detail(env, task)
+                    if fill:
+                        terminal_fill_detail = fill
+                    if succeeded:
+                        msg = f"[{task}] terminal result: SUCCESS"
+                        if fill:
+                            msg = f"{msg} ({fill})"
+                        print_success(msg)
+                        terminal_result = True
+                        terminal_started_at = time.perf_counter()
+                    if failure is not None:
+                        if fill and fill not in failure:
+                            terminal_failure_reason = f"{failure}; {fill}"
+                        else:
+                            terminal_failure_reason = failure
+                        print_failure(
+                            f"[{task}] terminal result: FAILURE ({terminal_failure_reason})"
+                        )
+                        terminal_result = False
+                        terminal_started_at = time.perf_counter()
+
             env.scene.update_render()
             viewer.render()
             rendered_frames += 1
@@ -1127,50 +1174,9 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
             if args.smoke_test and rendered_frames >= 3:
                 print(f"[{task}] smoke test rendered {rendered_frames} frames")
                 break
-            if terminal_started_at is not None:
-                if time.perf_counter() - terminal_started_at >= 2.0:
-                    print(f"[{task}] closing after 2-second terminal-result display")
-                    break
-                remaining = float(env.scene.get_timestep()) - (
-                    time.perf_counter() - frame_start
-                )
-                if remaining > 0:
-                    time.sleep(remaining)
-                continue
-            if rendered_frames % SUCCESS_CHECK_EVERY == 0:
-                try:
-                    succeeded = bool(env.check_success())
-                except Exception as exc:
-                    print_failure(f"[{task}] success check failed: {exc}")
-                    succeeded = False
-                failure = None if succeeded else _terminal_failure(env, task)
-                fill = _fill_level_detail(env, task)
-                if fill:
-                    terminal_fill_detail = fill
-                if succeeded:
-                    msg = f"[{task}] terminal result: SUCCESS"
-                    if fill:
-                        msg = f"{msg} ({fill})"
-                    print_success(msg)
-                    terminal_result = True
-                    terminal_started_at = time.perf_counter()
-                if failure is not None:
-                    # Failure reasons from _terminal_failure already embed fill
-                    # for overflow / open-gap; append otherwise.
-                    if fill and fill not in failure:
-                        terminal_failure_reason = f"{failure}; {fill}"
-                    else:
-                        terminal_failure_reason = failure
-                    print_failure(
-                        f"[{task}] terminal result: FAILURE ({terminal_failure_reason})"
-                    )
-                    terminal_result = False
-                    terminal_started_at = time.perf_counter()
-            remaining = float(env.scene.get_timestep()) - (
-                time.perf_counter() - frame_start
-            )
-            if remaining > 0:
-                time.sleep(remaining)
+            if terminal_started_at is not None and time.perf_counter() - terminal_started_at >= 2.0:
+                print(f"[{task}] closing after 2-second terminal-result display")
+                break
     finally:
         try:
             if not terminal_fill_detail:

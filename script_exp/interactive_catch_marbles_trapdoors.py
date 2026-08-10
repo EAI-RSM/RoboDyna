@@ -27,13 +27,13 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
+    RealtimePhysicsPacer,
     UniversalRobotControls,
     add_robot_motion_arg,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
     report_task_result,
-    sleep_to_timestep,
     terminal_hold_should_close,
     print_episode_condition,
 )
@@ -145,13 +145,24 @@ def main():
     left_track_since = None
     settle_s = 0.6
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
 
     try:
         while not viewer.closed:
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            frame_start = time.perf_counter()
-            env._update_kinematic_tasks()
-            env.scene.step()
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for _ in range(n_steps):
+                env._update_kinematic_tasks()
+                env.scene.step()
             env.scene.update_render()
             viewer.render()
             if viewer.window.key_down("escape"):
@@ -160,7 +171,6 @@ def main():
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
                     break
-                sleep_to_timestep(env, frame_start)
                 continue
             mode = str(getattr(env, "_ball_mode", "track"))
             if mode != "track":
@@ -171,9 +181,6 @@ def main():
                     terminal_started_at = time.perf_counter()
             else:
                 left_track_since = None
-            remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
-            if remaining > 0:
-                time.sleep(remaining)
     finally:
         env.close_env()
 

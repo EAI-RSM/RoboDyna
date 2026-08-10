@@ -1256,9 +1256,46 @@ class UniversalRobotControls:
 # result is visible before the viewer closes (wall-clock, not sim time).
 TERMINAL_RESULT_HOLD_SECONDS = 2.0
 
+# Cap physics catch-up per display frame so a hitch cannot explode into a stall.
+REALTIME_MAX_SUBSTEPS = 8
+
+
+class RealtimePhysicsPacer:
+    """Keep sim time aligned with wall-clock across different monitor refresh rates.
+
+    Interactive loops used to do one ``scene.step()`` per display frame. With vsync
+    that makes motion ~4× slower on 60 Hz than on 240 Hz. This pacer accumulates
+    wall time and returns how many fixed ``dt`` physics steps to run before the
+    next render (typically ~1 at 240 Hz, ~4 at 60 Hz for dt=1/250).
+    """
+
+    def __init__(self, env, max_substeps: int = REALTIME_MAX_SUBSTEPS):
+        self.dt = float(env.scene.get_timestep())
+        self.max_substeps = max(1, int(max_substeps))
+        self._accum = 0.0
+        self._prev = time.perf_counter()
+
+    def begin_frame(self) -> int:
+        """Advance the wall-clock accumulator; return physics steps for this frame."""
+        now = time.perf_counter()
+        self._accum += now - self._prev
+        self._prev = now
+        # Drop excess after a long pause / hitch (accept temporary slow-mo).
+        self._accum = min(self._accum, self.dt * self.max_substeps)
+        n = 0
+        while self._accum >= self.dt and n < self.max_substeps:
+            self._accum -= self.dt
+            n += 1
+        return n
+
 
 def sleep_to_timestep(env, frame_start: float) -> None:
-    """Sleep the remainder of one physics timestep after a frame's work."""
+    """Legacy single-step padder — prefer :class:`RealtimePhysicsPacer`.
+
+    Only sleeps when a frame finished *faster* than one physics ``dt``. It cannot
+    catch up on slow (e.g. 60 Hz vsync) frames, so real-time motion still drifts
+    with monitor refresh if you keep one ``scene.step()`` per render.
+    """
     remaining = float(env.scene.get_timestep()) - (time.perf_counter() - frame_start)
     if remaining > 0:
         time.sleep(remaining)
@@ -1273,7 +1310,11 @@ def terminal_hold_should_close(terminal_started_at: float | None) -> bool:
 
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
                     overhead: bool = True, is_done=None):
-    """Standard interactive loop: callback → kinematics → step → render.
+    """Standard interactive loop: input → physics catch-up → render.
+
+    Physics uses a fixed timestep catch-up so wall-clock motion speed stays
+    roughly constant across 60 Hz / 240 Hz displays. ``on_step`` runs once per
+    display frame (first substep) so key/mouse edges are not multi-fired.
 
     ``is_done(step)`` may return ``True`` / ``False``, or ``(done, detail)``.
     When done, prints SUCCESS/FAILURE via ``report_task_result``, then continues
@@ -1296,47 +1337,57 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     views = make_viewer_view_toggle(env, viewer)
     step = 0
     terminal_started_at = None
+    pacer = RealtimePhysicsPacer(env)
     try:
         while not viewer.closed:
-            frame_start = time.perf_counter()
+            n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            if on_step is not None:
-                on_step(viewer.window, step)
-            env._update_kinematic_tasks()
-            env.scene.step()
+            # Still pump the window / Escape when a fast display frame needs 0 steps.
+            if n_steps == 0:
+                env.scene.update_render()
+                viewer.render()
+                if viewer.window.key_down("escape"):
+                    break
+                if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
+                    break
+                continue
+
+            for sub in range(n_steps):
+                if sub == 0 and on_step is not None:
+                    on_step(viewer.window, step)
+                env._update_kinematic_tasks()
+                env.scene.step()
+                step += 1
+
+                if terminal_started_at is not None:
+                    continue
+                if is_done is not None:
+                    result = is_done(step)
+                    if isinstance(result, tuple):
+                        done = bool(result[0])
+                        detail = result[1] if len(result) > 1 else None
+                    else:
+                        done, detail = bool(result), None
+                    if done:
+                        report_task_result(env, detail)
+                        terminal_started_at = time.perf_counter()
+                if should_stop is not None and should_stop(step):
+                    env.scene.update_render()
+                    viewer.render()
+                    return _LAST_TASK_RESULT
+                if max_steps is not None and step >= max_steps:
+                    print(f"Reached max_steps={max_steps}; evaluating.")
+                    report_task_result(env, f"max_steps={max_steps}")
+                    terminal_started_at = time.perf_counter()
+
             env.scene.update_render()
             viewer.render()
             # SAPIEN does not close its window on Escape consistently, so make
             # it an explicit launcher-level exit for every shared task loop.
             if viewer.window.key_down("escape"):
                 break
-            step += 1
-            if terminal_started_at is not None:
-                if terminal_hold_should_close(terminal_started_at):
-                    break
-                sleep_to_timestep(env, frame_start)
-                continue
-            if is_done is not None:
-                result = is_done(step)
-                if isinstance(result, tuple):
-                    done = bool(result[0])
-                    detail = result[1] if len(result) > 1 else None
-                else:
-                    done, detail = bool(result), None
-                if done:
-                    report_task_result(env, detail)
-                    terminal_started_at = time.perf_counter()
-                    sleep_to_timestep(env, frame_start)
-                    continue
-            if should_stop is not None and should_stop(step):
+            if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
                 break
-            if max_steps is not None and step >= max_steps:
-                print(f"Reached max_steps={max_steps}; evaluating.")
-                report_task_result(env, f"max_steps={max_steps}")
-                terminal_started_at = time.perf_counter()
-                sleep_to_timestep(env, frame_start)
-                continue
-            sleep_to_timestep(env, frame_start)
     finally:
         env.close_env()
     return _LAST_TASK_RESULT
