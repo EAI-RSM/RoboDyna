@@ -1,7 +1,8 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive sandbox for ``place_block_belt``.
 
-Grasp the tall block, hover/match over the belt, release before the place line.
+Grasp the tall block with G, teleop over the belt, open G to drop it so the
+belt can carry it. No Space auto-grasp / auto-release.
 
 Run from any directory:
 
@@ -15,22 +16,13 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
     print_instructions,
-    action_failed,
-    try_interactive_grasp,
     add_robot_motion_arg,
-    arrow_nudge_xy,
     bootstrap_repo,
     configure_task,
-    edge_pressed,
-    hold_dynamic_at,
     print_banner,
-    release_dynamic,
-    require_selected_arms,
     run_viewer_loop,
     print_episode_condition,
 )
@@ -38,112 +30,54 @@ from _interactive_common import (  # noqa: E402
 bootstrap_repo()
 
 
-def _match_geometry(env):
-    match_dist = max(0.02, env.belt_speed * 0.5)
-    max_match = max(
-        0.01,
-        abs(float(env.place_line_x) - float(env.belt_x_start)) - (env.block_half_w + 0.01),
-    )
-    match_dist = float(min(match_dist, max_match))
-    hover_x = float(env.belt_x_start)
-    release_x = hover_x + env.belt_dir * match_dist
-    preferred_y = (
-        float(env.bowl.get_pose().p[1])
-        if getattr(env, "bowl", None) is not None and not getattr(env, "bowl_move_enabled", False)
-        else float(env.belt_y)
-    )
-    lane_y = env._choose_release_lane_y(preferred_y)
-    return match_dist, hover_x, release_x, lane_y
-
-
-def _hover_z(env, clearance: float = 0.015) -> float:
-    return float(env.belt_surface_z + clearance + env.block_half_h)
-
-
-def _prepare_keyboard_hold(env):
-    match_dist, hover_x, release_x, lane_y = _match_geometry(env)
-    z = _hover_z(env)
-    # Start at hover (belt load); user can nudge toward release_x before Space.
-    xy = np.array([hover_x, lane_y], dtype=np.float64)
-    hold_dynamic_at(env._block_dyn, env.block, [xy[0], xy[1], z], quat=[1, 0, 0, 0])
-    if env._block_dyn is not None:
-        try:
-            env._block_dyn.set_kinematic(True)
-        except Exception:
-            pass
-    env._interactive_hold_xy = xy
-    env._interactive_hold_z = z
-    env._interactive_match_dist = match_dist
-    env._interactive_release_x = release_x
-    env._interactive_holding = True
-    env._interactive_released = False
-    env._released = False
-    env._belt_active = False
-    env._release_delay_left = 0
-
-
-def _prepare_robot_hold(env, arm_tag):
-    """Pick the block, then carry it to the normal belt hover position."""
-    match_dist, hover_x, release_x, lane_y = _match_geometry(env)
-    if not try_interactive_grasp(env, env.block, arm_tag, pre_grasp_dis=0.1):
+def _block_held(env) -> bool:
+    """True while fingers still contact the block (G-close grasp)."""
+    if getattr(env, "block", None) is None:
         return False
-    env.move(env.move_by_displacement(arm_tag=arm_tag, z=0.14, move_axis="arm"))
-    dx = hover_x - float(env.block.get_pose().p[0])
-    dy = lane_y - float(env.block.get_pose().p[1])
-    env.move(env.move_by_displacement(arm_tag=arm_tag, x=dx, y=dy))
-    env._move_block_to_belt_clearance(arm_tag=arm_tag, clearance=0.015)
-    env._interactive_arm = arm_tag
-    env._interactive_match_dist = match_dist
-    env._interactive_release_x = release_x
-    env._interactive_holding = True
-    env._interactive_released = False
-    env._interactive_matched = False
-    env._released = False
-    env._belt_active = False
-    env._release_delay_left = 0
-    return True
+    try:
+        return len(env.get_gripper_actor_contact_position(env.block.get_name())) > 0
+    except Exception:
+        return False
 
 
-def _do_release(env, use_robot: bool):
-    if getattr(env, "_interactive_released", False):
-        return
-    env._interactive_released = True
-    env._interactive_holding = False
-    match_dist = float(env._interactive_match_dist)
+class BlockReleaseMonitor:
+    """When the block leaves the hand, mark release so the belt drive can engage."""
 
-    if use_robot and getattr(env, "_interactive_arm", None) is not None:
-        # Match stroke then open (expert timing mechanic).
-        env.move(env.move_by_displacement(
-            arm_tag=env._interactive_arm, x=env.belt_dir * match_dist,
-        ))
-        env._release_q = [1.0, 0.0, 0.0, 0.0]
-        env._released = True
-        env.move(env.open_gripper(env._interactive_arm))
-        env._release_delay_left = int(env.belt_release_delay_steps)
-        print("Match stroke + open — belt will engage after release delay.")
-        return
+    def __init__(self, env):
+        self.env = env
+        self.holding = False
+        self._hold_contact_seen = False
+        self._no_contact_steps = 0
+        self._slip_no_contact_steps = 8
 
-    # Keyboard: drop onto the belt surface near the current hold / release_x.
-    x = float(np.clip(
-        env._interactive_hold_xy[0],
-        min(env.belt_x_start, env._interactive_release_x) - 0.02,
-        max(env.belt_x_start, env._interactive_release_x) + 0.02,
-    ))
-    y = float(env._interactive_hold_xy[1])
-    z = float(env.belt_surface_z + env.block_half_h + 0.002)
-    release_dynamic(env._block_dyn)
-    hold_dynamic_at(env._block_dyn, env.block, [x, y, z], quat=[1, 0, 0, 0])
-    release_dynamic(env._block_dyn)
-    # Impart approximate belt-direction momentum.
-    if env._block_dyn is not None:
-        try:
-            env._block_dyn.set_linear_velocity([env.belt_dir * env.belt_speed, 0.0, 0.0])
-        except Exception:
-            pass
-    env._release_q = [1.0, 0.0, 0.0, 0.0]
-    env._released = True
-    env._release_delay_left = int(env.belt_release_delay_steps)
-    print("Released block onto belt — ride to the bowl.")
+    def update(self):
+        if getattr(self.env, "_interactive_released", False):
+            return
+        held = _block_held(self.env)
+        if held:
+            if not self.holding:
+                self.holding = True
+                print("Block grasped — teleop over the belt, then G to open / release.")
+            self._hold_contact_seen = True
+            self._no_contact_steps = 0
+            return
+        if not self.holding:
+            return
+        self._no_contact_steps += 1
+        limit = (
+            self._slip_no_contact_steps
+            if self._hold_contact_seen
+            else self._slip_no_contact_steps * 4
+        )
+        if self._no_contact_steps < limit:
+            return
+        self.holding = False
+        self.env._interactive_released = True
+        self.env._interactive_holding = False
+        self.env._release_q = [1.0, 0.0, 0.0, 0.0]
+        self.env._released = True
+        self.env._release_delay_left = int(self.env.belt_release_delay_steps)
+        print("Block released — belt will engage after release delay.")
 
 
 def main():
@@ -168,10 +102,10 @@ def main():
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: place the tall block on the belt BEFORE the red place line;",
-            "      match belt velocity, stay in the clear lane if a blocker is present.",
+            "      stay in the clear lane if a blocker is present.",
             "1 / 2 / 3 — select left / right / both arms (robot mode)",
-            "Space  — (1) pick + lift above the belt  (2) match + release",
-            "Arrows — nudge hold XY before release",
+            "G — close to grasp / open to release (drop onto the belt)",
+            "Arrows / E / Q — teleop the selected arm(s)",
             "V — cycle view: head_camera ↔ gripper(s)",
             "Esc — close the viewer window to quit",
             "Release too late (past the red line) or into the blocker → failure.",
@@ -192,61 +126,17 @@ def main():
     env._belt_active = False
     env._release_delay_left = 0
     print_instructions(
-        f"Selected {selected_arm} arm. Press Space to pick the block and lift it over the belt."
-        if use_robot else "Press Space to lift the block into the virtual hold over the belt."
+        f"Selected {selected_arm} arm. G closes/opens the gripper to grasp/release the block. "
+        "When the block leaves the fingers on the belt, the conveyor engages."
     )
 
-    keys_prev: dict = {}
+    release_monitor = BlockReleaseMonitor(env)
     off_belt_since = None
     settle_steps = max(1, int(round(2.0 / float(env.scene.get_timestep()))))
 
     def on_step(window, step):
-        nonlocal off_belt_since, selected_arm
-        selected = tuple(getattr(env, "_interactive_selected_arms", ()))
-        if not env._interactive_holding and selected:
-            selected_arm = selected[0]
-
-        if edge_pressed(window, "space", keys_prev) and not env._interactive_released:
-            if not env._interactive_holding:
-                if use_robot:
-                    from envs.utils.action import ArmTag
-
-                    selected = require_selected_arms(env, exactly_one=True)
-                    if not selected:
-                        return
-                    selected_arm = selected[0]
-                    print(f"Robot: picking with {selected_arm} arm and lifting over the belt…")
-                    if _prepare_robot_hold(env, ArmTag(selected_arm)):
-                        print("Holding above the belt. Nudge with arrows, then press Space to release.")
-                else:
-                    _prepare_keyboard_hold(env)
-                    print("Holding above the belt. Nudge with arrows, then press Space to release.")
-            else:
-                _do_release(env, use_robot)
-
-        nudge = (arrow_nudge_xy(window, step=0.0025) if not use_robot
-                 else np.zeros(2, dtype=np.float64))
-        if float(np.linalg.norm(nudge)) > 0 and env._interactive_holding and not env._interactive_released:
-            if use_robot and getattr(env, "_interactive_arm", None) is not None:
-                if step % 8 == 0:
-                    env.move(env.move_by_displacement(
-                        arm_tag=env._interactive_arm,
-                        x=float(nudge[0]) * 4,
-                        y=float(nudge[1]) * 4,
-                    ))
-            else:
-                env._interactive_hold_xy = env._interactive_hold_xy + nudge
-                hold_dynamic_at(
-                    env._block_dyn, env.block,
-                    [env._interactive_hold_xy[0], env._interactive_hold_xy[1], env._interactive_hold_z],
-                    quat=[1, 0, 0, 0],
-                )
-        elif env._interactive_holding and not env._interactive_released and not use_robot:
-            hold_dynamic_at(
-                env._block_dyn, env.block,
-                [env._interactive_hold_xy[0], env._interactive_hold_xy[1], env._interactive_hold_z],
-                quat=[1, 0, 0, 0],
-            )
+        nonlocal off_belt_since
+        release_monitor.update()
 
         if env._interactive_released:
             if env._release_delay_left > 0:
