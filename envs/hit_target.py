@@ -910,9 +910,16 @@ class hit_target(Base_Task):
             return "no contact: tip stopped short of the board face"
         return "missed the board"
 
-    def _try_form_stick(self):
-        """Weld the dart only on a yellow-center hit; never after a blocker strike."""
-        if self._hit_blocker:
+    def _try_form_stick(self, *, any_ring: bool = False, exact_pose: bool = False):
+        """Weld the dart to the board when the tip contacts it.
+
+        Default (expert): only yellow-center hits weld, tip planted on the paint.
+        Interactive callers may pass ``any_ring=True`` / ``exact_pose=True`` so a
+        tip that reaches any painted ring freezes at that exact contact pose.
+        Never welds after a blocker strike. Success still requires yellow center
+        (``_hit_center``).
+        """
+        if self._hit_blocker or self._stuck:
             return False
         color = self._record_board_hit()
         tip = np.array(self.dart.get_functional_point(0, "list")[:3])
@@ -920,31 +927,36 @@ class hit_target(Base_Task):
         planar_offset = tip[[0, 2]] - target_center[[0, 2]]
         radial_offset = float(np.linalg.norm(planar_offset))
         on_center = radial_offset <= self.center_radius and color == "yellow"
-        if self._tip_on_board_plane(tip[1]) and on_center:
-            self._check_blocker_hit()
-            if self._hit_blocker:
-                return False
-            self._dart_rigid = self._get_rigid(self.dart)
-            if self._dart_rigid is None:
-                return False
-            self._dart_rigid.set_kinematic(True)
-            board_pose = self._target_rigid.entity.get_pose()
-            inv = np.linalg.inv(board_pose.to_transformation_matrix())
-            stick_local = (inv @ np.append(tip, 1.0))[:3]
+        on_board = color is not None and self._tip_on_board_plane(tip[1])
+        if not on_board:
+            return False
+        if not any_ring and not on_center:
+            return False
+        self._check_blocker_hit()
+        if self._hit_blocker:
+            return False
+        self._dart_rigid = self._get_rigid(self.dart)
+        if self._dart_rigid is None:
+            return False
+        self._dart_rigid.set_kinematic(True)
+        board_pose = self._target_rigid.entity.get_pose()
+        inv = np.linalg.inv(board_pose.to_transformation_matrix())
+        stick_local = (inv @ np.append(tip, 1.0))[:3]
+        if not exact_pose:
             # Plant the tip on the paint instead of freezing whatever approach gap
             # was left, so the black tip visibly meets the yellow center.
             stick_local[1] = self._board_face_local_y() - self._paint_front_offset() + 0.001
-            self._stick_local = stick_local
-            self._tip_offset_world = tip - np.array(self.dart.get_pose().p)
-            self._stick_dart_q = self.dart.get_pose().q
-            self._stuck = True
-            self._hit_planar_offset = planar_offset.astype(float)
-            self._hit_radial_offset = radial_offset
+        self._stick_local = stick_local
+        self._tip_offset_world = tip - np.array(self.dart.get_pose().p)
+        self._stick_dart_q = self.dart.get_pose().q
+        self._stuck = True
+        self._hit_planar_offset = planar_offset.astype(float)
+        self._hit_radial_offset = radial_offset
+        self._hit_color = color
+        if on_center:
             self._hit_center = True
-            self._hit_color = "yellow"
             self.hit_score = 1.0
-            return True
-        return False
+        return True
 
     def _advance(self, steps, try_stick=False):
         """Advance physics (target keeps moving), optionally attempting a center stick."""

@@ -179,7 +179,7 @@ class KeyboardDartController:
             )
             self.env._check_blocker_hit()
             if not self.env._hit_blocker:
-                self.env._try_form_stick()
+                self.env._try_form_stick(any_ring=True, exact_pose=True)
             self.done = True
             print(f"Thrust: {self.env.hit_result_detail()}.")
 
@@ -207,7 +207,11 @@ class RobotDartController:
             self.env.move(self.env.move_by_displacement(
                 self.arm, y=float(np.clip(dy, -0.06, 0.06)), move_axis="world",
             ))
-        self.env._dwell(30)
+        # Advance without the expert yellow plant — interactive attaches at the
+        # tip's exact contact pose below.
+        self.env._advance(30, try_stick=False)
+        if not self.env._hit_blocker:
+            self.env._try_form_stick(any_ring=True, exact_pose=True)
         if not self.env._hit_blocker and self.env._hit_color is None:
             self.env._record_board_hit()
         self.done = True
@@ -356,7 +360,7 @@ def main():
                 env._update_kinematic_tasks()
                 env.scene.step()
                 if not env._stuck and not env._hit_blocker:
-                    env._try_form_stick()
+                    env._try_form_stick(any_ring=True, exact_pose=True)
             env.scene.update_render()
             viewer.render()
 
