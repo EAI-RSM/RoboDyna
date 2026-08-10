@@ -184,6 +184,7 @@ def print_banner(title: str, lines: list[str]):
         lines[insert_at:insert_at] = [
             "Arrows — move selected arm(s) in XY | E/Q — move in Z",
             "1 / 2 / 3 — select left / right / both arms",
+            "O — return selected arm(s) to original position",
         ]
     lines = _ensure_view_help_lines(lines)
     width = max(len(title), *(len(line) for line in lines), 40)
@@ -1081,8 +1082,10 @@ class UniversalRobotControls:
     unseeded and returns elbow/wrist flips that are unusable for teleop.
 
     Z / X tip the gripper about world +Y (left / right) for pour-style motions.
-    G (open/close selected gripper; F alias) is handled by ``ViewerViewToggle``
-    so it also works when teleop is not attached.
+    O returns the selected arm(s) to the pose captured when teleop started
+    (task ``original`` / start pose). G (open/close selected gripper; F alias)
+    is handled by ``ViewerViewToggle`` so it also works when teleop is not
+    attached.
     """
 
     # Interactive teleop rates (m/s). 20% slower than the prior snappy sandbox
@@ -1103,16 +1106,104 @@ class UniversalRobotControls:
         self.env = env
         initial = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
         self.selected = initial or ("left",)
-        self._previous = {key: False for key in ("1", "2", "3")}
+        self._previous = {key: False for key in ("1", "2", "3", "o")}
         self._last_update = None
         self._command = {}
         self._highlight_materials = {}
+        self._origin_joints = {}
+        self._origin_pose = {}
         env._interactive_selected_arms = self.selected
         env._interactive_universal_controls = True
         env._interactive_robot_controls = self
         # Ensure the shared failure feedback exists for Space/action paths.
         gripper_failure_feedback(env)
+        self._capture_origin_poses()
         self._highlight_selected()
+
+    def _capture_origin_poses(self):
+        """Snapshot start arm joints / EE poses for the O reset key."""
+        robot = getattr(self.env, "robot", None)
+        for side in ("left", "right"):
+            joints = None
+            pose = None
+            try:
+                joints = self._drive_qpos(side).copy()
+            except Exception:
+                home = None
+                if robot is not None:
+                    home = (robot.left_homestate if side == "left"
+                            else robot.right_homestate)
+                if home is not None:
+                    joints = np.asarray(home, dtype=np.float64).copy()
+            try:
+                pose = self._ee_pose(side).copy()
+            except Exception:
+                if robot is not None:
+                    attr = ("left_original_pose" if side == "left"
+                            else "right_original_pose")
+                    stored = getattr(robot, attr, None)
+                    if stored is not None:
+                        pose = np.asarray(stored, dtype=np.float64).copy()
+            if joints is not None:
+                self._origin_joints[side] = joints
+            if pose is not None:
+                self._origin_pose[side] = pose
+
+    def _snap_arm_to_joints(self, side, joints):
+        """Instant joint reset: drive targets + articulation qpos."""
+        robot = self.env.robot
+        entity = robot.left_entity if side == "left" else robot.right_entity
+        arm_joints = robot.left_arm_joints if side == "left" else robot.right_arm_joints
+        target = np.asarray(joints, dtype=np.float64)
+        active = entity.get_active_joints()
+        qpos = np.asarray(entity.get_qpos(), dtype=np.float64)
+        for joint, value in zip(arm_joints, target):
+            try:
+                idx = active.index(joint)
+            except ValueError:
+                idx = next(
+                    (i for i, a in enumerate(active)
+                     if a.get_name() == joint.get_name()),
+                    None,
+                )
+            if idx is None:
+                continue
+            qpos[idx] = float(value)
+            try:
+                joint.set_drive_target(float(value))
+                joint.set_drive_velocity_target(0.0)
+            except Exception:
+                pass
+        entity.set_qpos(qpos)
+        self.env.robot.set_arm_joints(target, np.zeros_like(target), side)
+
+    def _return_selected_to_origin(self):
+        """O: snap currently selected arm(s) back to the captured start pose."""
+        restored = []
+        for side in self.selected:
+            joints = self._origin_joints.get(side)
+            if joints is None:
+                continue
+            self._snap_arm_to_joints(side, joints)
+            self._command.pop(side, None)
+            pose = self._origin_pose.get(side)
+            if pose is None:
+                try:
+                    pose = self._ee_pose(side).copy()
+                except Exception:
+                    pose = None
+            if pose is not None:
+                self._origin_pose[side] = pose
+                cmd = getattr(self.env, "_interactive_cmd_pose", None)
+                if not isinstance(cmd, dict):
+                    cmd = {}
+                    self.env._interactive_cmd_pose = cmd
+                cmd[side] = pose.copy()
+            restored.append(side)
+        if restored:
+            print("Returned arm(s) to original position: " + " + ".join(restored))
+        else:
+            print("No original arm pose available to restore.")
 
     def _highlight_selected(self):
         # A new selection cancels any failure tint so the highlight is readable.
@@ -1206,6 +1297,9 @@ class UniversalRobotControls:
                 "joints": measured[solver.arm_dofs],
             }
             self._command[side] = state
+            # Freeze the E ceiling band once per arm for this viewer session.
+            if side not in self._z_base:
+                self._z_base[side] = float(achieved[2])
 
         pose = state["pose"].copy()
         prev_z = float(pose[2])
@@ -1214,8 +1308,18 @@ class UniversalRobotControls:
         if abs(float(roll)) > 1e-9:
             dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
-        # Once a reactive key is pressed, block further -Z while over it so the
-        # gripper cannot drive through the keycap and ruin the arm pose.
+        # E ceiling relative to first teleop height (env may override).
+        z_base = float(self._z_base.get(side, achieved[2]))
+        z_ceil = z_base + float(self.MAX_EE_RAISE)
+        ceil_fn = getattr(self.env, "interactive_ee_z_ceiling", None)
+        if callable(ceil_fn):
+            override = ceil_fn(side, pose)
+            if override is not None:
+                z_ceil = float(override)
+        if float(pose[2]) > z_ceil:
+            pose[2] = z_ceil
+        # Once a reactive key is pressed, allow Q only down to full key travel
+        # so the press can finish, but not through the keycap/table.
         bank = getattr(self.env, "_reactive_buttons", None)
         if bank is not None and hasattr(bank, "min_ee_z_over_pressed"):
             z_floor = bank.min_ee_z_over_pressed(pose[:2])
@@ -1276,6 +1380,10 @@ class UniversalRobotControls:
     def update(self, window):
         self._select(window)
         gripper_failure_feedback(self.env).update()
+        if self._edge(window, "o"):
+            self._return_selected_to_origin()
+            self._last_update = time.perf_counter()
+            return
         now = time.perf_counter()
         dt = 0.0 if self._last_update is None else min(now - self._last_update, self.MAX_DT)
         self._last_update = now
@@ -1510,6 +1618,7 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
             "  E / Q             raise / lower selected arm(s)\n"
             "  Z / X             tip gripper left / right (world Y)\n"
             "  1 / 2 / 3         select left / right / both arms\n"
+            "  O                 return selected arm(s) to original position\n"
         )
         if not _line_documents_key(body.splitlines(), "G"):
             shared += "  G                 open / close selected gripper(s)\n"
