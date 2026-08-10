@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_save_goal.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_save_goal.py --control robot
 
-Place the square keeper in the green zone before the red line, then release so
-its front face can stop the ball.
+Place the square keeper in the green zone before the red line so its front
+face can bounce the ball (mass-aware: ball 100 g, keeper 300 g).
 """
 
 import argparse
@@ -135,12 +135,15 @@ def _start_shot(env):
     import sapien
     env._ball_step = 0
     env._ball_blocked = False
+    env._ball_live = False
     env._goal_conceded = False
     env._late_failure = False
     env._ball_crossed_goal = False
     env._keeper_deployed = False
     env._keeper_drop_pose = None
     env._ball_motion_active = True
+    if hasattr(env, "_set_collision_enabled"):
+        env._set_collision_enabled(env.ball, False)
     start = getattr(env, "ball_start_pose", None)
     if start is not None and env.ball is not None:
         pose = sapien.Pose(np.asarray(start, dtype=float).tolist(), [1, 0, 0, 0])
@@ -150,6 +153,8 @@ def _start_shot(env):
             try:
                 rigid.set_kinematic(True)
                 rigid.set_kinematic_target(pose)
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
             except Exception:
                 pass
 
@@ -265,7 +270,7 @@ def main():
                     break
                 continue
 
-            shot_done = (not getattr(env, "_ball_motion_active", False)) or env._goal_conceded or env._ball_blocked
+            shot_done = (not getattr(env, "_ball_motion_active", False)) or env._goal_conceded
             if shot_done:
                 if done_since is None:
                     done_since = time.perf_counter()

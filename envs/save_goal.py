@@ -15,8 +15,9 @@ class save_goal(Base_Task):
     A red deadline line marks the last moment the robot is allowed to reposition the save_goal.
     A green placement area sits directly in front of the goal. The robot must grasp the square
     save_goal, place it fully inside that green area while the ball is still behind the red line,
-    then release it before the ball reaches the goal mouth.     A save requires the ball to hit the
-    keeper's front face; side grazes do not stop the ball. A soccer-style net bag
+    then release it before the ball reaches the goal mouth. A save requires the ball to hit the
+    keeper's front face; the shot then rebounds with a mass-aware bounce (ball 100 g, keeper 300 g).
+    Side grazes do not stop the ball. A soccer-style net bag
     (visual lattice) hangs behind the goal mouth when ``net_enabled`` is true.
 
     Task options (set in ``task_args.save_goal``; independent toggles):
@@ -38,6 +39,12 @@ class save_goal(Base_Task):
     """
 
     BALL_RADIUS_DEFAULT = 0.018
+    BALL_MASS = 0.1          # kg (100 g)
+    KEEPER_MASS = 0.3        # kg (300 g)
+    # Coefficient of restitution for the mass-aware front-face bounce handoff.
+    BOUNCE_RESTITUTION = 0.85
+    # PhysX ignores restitution below bounce_threshold (default 2 m/s); our shot is slow.
+    BOUNCE_THRESHOLD_DEFAULT = 0.01
     # Nominal ball speed; each episode samples ±20% by default (scale 0.8–1.2).
     BALL_SPEED_DEFAULT = 0.05470  # -15% vs 0.06435; episode still samples ±20%
     BALL_SPEED_SCALE_MIN_DEFAULT = 0.8
@@ -117,6 +124,7 @@ class save_goal(Base_Task):
         self._ball_motion_active = False
         self._ball_step = 0
         self._ball_blocked = False
+        self._ball_live = False
         self._goal_conceded = False
         self._late_failure = False
         self.goalkeeper = None
@@ -214,12 +222,67 @@ class save_goal(Base_Task):
             parts.append("option 2")
         return ", ".join(parts) if parts else "baseline"
 
+    def setup_scene(self, **kwargs):
+        """Lower PhysX bounce_threshold so slow shot restitution can fire."""
+        bounce_th = float(
+            self._cfg.get("bounce_threshold", self.BOUNCE_THRESHOLD_DEFAULT)
+        )
+        orig_create = sapien.Engine.create_scene
+
+        def _create_with_bounce(engine, config=None):
+            if config is None:
+                config = sapien.SceneConfig()
+            config.bounce_threshold = bounce_th
+            return orig_create(engine, config)
+
+        sapien.Engine.create_scene = _create_with_bounce
+        try:
+            super().setup_scene(**kwargs)
+        finally:
+            sapien.Engine.create_scene = orig_create
+
     def _get_rigid(self, entity):
         obj = entity.actor if hasattr(entity, "actor") else entity
         for comp in obj.get_components():
             if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
                 return comp
         return None
+
+    def _set_collision_enabled(self, entity, enabled: bool):
+        """Toggle PhysX contacts. Disabled while the ball is kinematic on rails."""
+        if entity is None:
+            return
+        groups = [1, 1, 0, 0] if enabled else [0, 0, 0, 0]
+        obj = entity.actor if hasattr(entity, "actor") else entity
+        for comp in obj.get_components():
+            if not isinstance(comp, sapien.physx.PhysxRigidBaseComponent):
+                continue
+            for shape in comp.get_collision_shapes():
+                shape.set_collision_groups(list(groups))
+
+    def _set_restitution(self, rigid, restitution: float, static_f=0.4, dynamic_f=0.3):
+        if rigid is None:
+            return
+        try:
+            mat = sapien.physx.PhysxMaterial(
+                static_friction=float(static_f),
+                dynamic_friction=float(dynamic_f),
+                restitution=float(restitution),
+            )
+            for shape in rigid.get_collision_shapes():
+                shape.set_physical_material(mat)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _elastic_1d(u1: float, u2: float, m1: float, m2: float, e: float):
+        """1D collision with restitution e; returns (v1, v2)."""
+        m1 = max(float(m1), 1e-6)
+        m2 = max(float(m2), 1e-6)
+        e = float(np.clip(e, 0.0, 1.0))
+        v1 = (u1 * (m1 - e * m2) + u2 * m2 * (1.0 + e)) / (m1 + m2)
+        v2 = (u2 * (m2 - e * m1) + u1 * m1 * (1.0 + e)) / (m1 + m2)
+        return float(v1), float(v2)
 
     def _keeper_xy_bounds(self):
         if getattr(self, "goalkeeper", None) is None:
@@ -742,8 +805,8 @@ class save_goal(Base_Task):
         for _ in range(8):
             self._update_kinematic_tasks()
             self.scene.step()
-        # Freeze exactly where released — never snap/teleport to another XY.
-        self._freeze_keeper_in_place()
+        # Seat where released — stay dynamic so a save bounce can transfer mass.
+        self._seat_keeper_dynamic()
         self._keeper_deployed = True
 
     def _retreat_arm_home(self, arm_tag: ArmTag, lift_z: float = 0.08):
@@ -761,55 +824,47 @@ class save_goal(Base_Task):
         if deployed:
             self.plan_success = True
 
-    def _freeze_keeper_in_place(self):
-        """Hold the square at its current pose after the drop (never snap elsewhere)."""
+    def _seat_keeper_dynamic(self):
+        """Seat the square on the table but leave it dynamic for mass-aware hits."""
         if getattr(self, "goalkeeper", None) is None:
             return
         pose = self.goalkeeper.get_pose()
         p = np.asarray(pose.p, dtype=np.float64).copy()
-        # Seat on the table only; keep the dropped XY / orientation exactly.
         p[2] = float(self.table_top_z + self.keeper_half_z)
-        freeze_pose = sapien.Pose(p.tolist(), list(pose.q))
-        # Only adjust Z if we are seating; skip set_pose when already on the table
-        # within tolerance so we do not flash a visible jump.
+        seat_pose = sapien.Pose(p.tolist(), list(pose.q))
         if abs(float(pose.p[2]) - p[2]) > 1e-4:
             try:
-                self.goalkeeper.set_pose(freeze_pose)
+                self.goalkeeper.set_pose(seat_pose)
             except Exception:
                 try:
-                    self.goalkeeper.actor.set_pose(freeze_pose)
+                    self.goalkeeper.actor.set_pose(seat_pose)
                 except Exception:
-                    freeze_pose = pose
+                    seat_pose = pose
         else:
-            freeze_pose = pose
-        self._keeper_drop_pose = freeze_pose
+            seat_pose = pose
+        self._keeper_drop_pose = seat_pose
         rigid = self._get_rigid(self.goalkeeper)
         if rigid is None:
             return
         try:
+            rigid.set_kinematic(False)
+            rigid.set_mass(float(self.KEEPER_MASS))
+            rigid.set_linear_damping(2.5)
+            rigid.set_angular_damping(4.0)
             rigid.set_linear_velocity(np.zeros(3))
             rigid.set_angular_velocity(np.zeros(3))
-        except Exception:
-            pass
-        try:
-            rigid.set_kinematic(True)
+            self._set_restitution(rigid, self.BOUNCE_RESTITUTION, static_f=0.9, dynamic_f=0.7)
+            rigid.wake_up()
         except Exception:
             pass
 
+    def _freeze_keeper_in_place(self):
+        """Back-compat alias: seat dynamically (mass must stay in play for bounce)."""
+        self._seat_keeper_dynamic()
+
     def _hold_keeper_kinematic(self):
-        """Keep the dropped square fixed without changing its pose."""
-        rigid = self._get_rigid(getattr(self, "goalkeeper", None)) if getattr(self, "goalkeeper", None) is not None else None
-        if rigid is None:
-            return
-        try:
-            rigid.set_linear_velocity(np.zeros(3))
-            rigid.set_angular_velocity(np.zeros(3))
-        except Exception:
-            pass
-        try:
-            rigid.set_kinematic(True)
-        except Exception:
-            pass
+        """Back-compat: re-seat dynamically instead of locking kinematic."""
+        self._seat_keeper_dynamic()
 
     # ------------------------------------------------------------------ actors
     def load_actors(self):
@@ -1071,14 +1126,17 @@ class save_goal(Base_Task):
             name="goalkeeper_square",
             is_static=False,
         )
-        self.goalkeeper.set_mass(0.08)
-        for comp in self.goalkeeper.actor.get_components():
-            if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent):
-                try:
-                    comp.set_linear_damping(10.0)
-                    comp.set_angular_damping(10.0)
-                except Exception:
-                    pass
+        self.goalkeeper.set_mass(float(self.KEEPER_MASS))
+        keeper_rigid = self._get_rigid(self.goalkeeper)
+        if keeper_rigid is not None:
+            try:
+                keeper_rigid.set_linear_damping(2.5)
+                keeper_rigid.set_angular_damping(4.0)
+                self._set_restitution(
+                    keeper_rigid, self.BOUNCE_RESTITUTION, static_f=0.9, dynamic_f=0.7
+                )
+            except Exception:
+                pass
 
         self.ball = create_sphere(
             self.scene,
@@ -1091,15 +1149,124 @@ class save_goal(Base_Task):
         self._ball_rigid = self._get_rigid(self.ball)
         if self._ball_rigid is not None:
             try:
+                mass = float(self.BALL_MASS)
+                self._ball_rigid.set_mass(mass)
+                inertia = 0.4 * mass * (self.ball_radius ** 2)
+                self._ball_rigid.set_inertia([inertia, inertia, inertia])
                 self._ball_rigid.set_disable_gravity(True)
                 self._ball_rigid.set_kinematic(True)
+                self._ball_rigid.set_linear_damping(0.05)
+                self._ball_rigid.set_angular_damping(0.05)
+                self._ball_rigid.set_linear_velocity(np.zeros(3))
+                self._ball_rigid.set_angular_velocity(np.zeros(3))
+                self._set_restitution(
+                    self._ball_rigid, self.BOUNCE_RESTITUTION, static_f=0.2, dynamic_f=0.15
+                )
+            except Exception:
+                pass
+        # Kinematic approach must not PhysX-shove the keeper; contacts enable on bounce.
+        self._set_collision_enabled(self.ball, False)
+
+        self.add_prohibit_area(self.goalkeeper, padding=0.02)
+        self._loaded = True
+
+    def _begin_mass_bounce(self, hit_p):
+        """Hand the shot to PhysX with a mass-aware front-face rebound."""
+        m1 = float(self.BALL_MASS)
+        m2 = float(self.KEEPER_MASS)
+        e = float(self._cfg.get("bounce_restitution", self.BOUNCE_RESTITUTION))
+        # Signed speeds along +x (toward +goal when travel_dir>0).
+        u1 = float(self.ball_speed) * float(self.travel_dir)
+        u2 = 0.0
+        keeper_rigid = self._get_rigid(self.goalkeeper)
+        if keeper_rigid is not None:
+            try:
+                if not keeper_rigid.get_kinematic():
+                    u2 = float(keeper_rigid.get_linear_velocity()[0])
+            except Exception:
+                u2 = 0.0
+        v1_x, v2_x = self._elastic_1d(u1, u2, m1, m2, e)
+        # Keep the path's lateral component (sideways glance on a square face stays small).
+        vy = float(self.ball_dir[1]) * float(self.ball_speed)
+
+        # Slight separation so the solver does not start in deep penetration.
+        sep = 0.001
+        p = np.asarray(hit_p, dtype=np.float64).copy()
+        p[0] = float(p[0] - self.travel_dir * sep)
+        p[2] = float(self.table_top_z + self.ball_radius)
+        pose = sapien.Pose(p.tolist(), [1, 0, 0, 0])
+        self.ball.set_pose(pose)
+
+        self._set_collision_enabled(self.ball, True)
+        if self._ball_rigid is not None:
+            try:
+                self._ball_rigid.set_kinematic(False)
+                self._ball_rigid.set_disable_gravity(True)
+                self._ball_rigid.set_linear_velocity([v1_x, vy, 0.0])
+                self._ball_rigid.set_angular_velocity(np.zeros(3))
+                self._ball_rigid.wake_up()
+            except Exception:
+                pass
+
+        # Ensure keeper is dynamic and receives the complementary impulse.
+        self._seat_keeper_dynamic()
+        if keeper_rigid is not None:
+            try:
+                keeper_rigid.set_kinematic(False)
+                kv = np.array(keeper_rigid.get_linear_velocity(), dtype=np.float64)
+                kv[0] = v2_x
+                keeper_rigid.set_linear_velocity(kv.tolist())
+                keeper_rigid.wake_up()
+            except Exception:
+                pass
+
+        self._ball_blocked = True
+        self._ball_live = True
+        self._keeper_deployed = True
+
+    def _update_live_ball(self):
+        """After a save bounce: follow PhysX, pin to the table, watch for a late goal."""
+        if self._ball_rigid is None or getattr(self, "ball", None) is None:
+            self._ball_motion_active = False
+            return
+        try:
+            p = np.asarray(self.ball.get_pose().p, dtype=np.float64).copy()
+            v = np.asarray(self._ball_rigid.get_linear_velocity(), dtype=np.float64).copy()
+        except Exception:
+            self._ball_motion_active = False
+            return
+
+        z = float(self.table_top_z + self.ball_radius)
+        if abs(float(p[2]) - z) > 1e-3 or abs(float(v[2])) > 1e-3:
+            p[2] = z
+            v[2] = 0.0
+            pose = sapien.Pose(p.tolist(), list(self.ball.get_pose().q))
+            try:
+                self.ball.set_pose(pose)
+                self._ball_rigid.set_linear_velocity(v.tolist())
+            except Exception:
+                pass
+
+        if self.travel_dir * p[0] >= self.travel_dir * self.goal_x:
+            self._ball_crossed_goal = True
+        if (
+            (not self._goal_conceded)
+            and self.travel_dir * p[0] >= self.travel_dir * self.goal_x
+            and abs(float(p[1] - self.goal_center_y)) <= self.goal_half_w
+        ):
+            # A rebound that somehow still enters the mouth counts as conceded.
+            self._goal_conceded = True
+            self._ball_blocked = False
+
+        speed = float(np.linalg.norm(v[:2]))
+        self._ball_step += 1
+        if speed < 0.004 or self._ball_step > int(self.ball_total_steps + self.ball_settle_steps):
+            self._ball_motion_active = False
+            try:
                 self._ball_rigid.set_linear_velocity(np.zeros(3))
                 self._ball_rigid.set_angular_velocity(np.zeros(3))
             except Exception:
                 pass
-
-        self.add_prohibit_area(self.goalkeeper, padding=0.02)
-        self._loaded = True
 
     # ------------------------------------------------------------- motion / checks
     def _update_kinematic_tasks(self):
@@ -1107,6 +1274,9 @@ class save_goal(Base_Task):
         if not getattr(self, "_loaded", False):
             return
         if not getattr(self, "_ball_motion_active", False):
+            return
+        if getattr(self, "_ball_live", False):
+            self._update_live_ball()
             return
         if self._ball_blocked:
             return
@@ -1119,7 +1289,8 @@ class save_goal(Base_Task):
         prev_p = self._ball_pos_at_progress(prev_progress)
         next_p = self._ball_pos_at_progress(progress)
 
-        keeper_ok = bool(self._keeper_deployed and self._keeper_in_zone())
+        # Zone placement gates the geometric save / bounce handoff.
+        keeper_ok = bool(self._keeper_in_zone())
         if (not self._late_failure) and (self.travel_dir * next_p[0] >= self.travel_dir * self.red_line_x) and (not keeper_ok):
             self._late_failure = True
 
@@ -1133,8 +1304,6 @@ class save_goal(Base_Task):
                 if self.travel_dir > 0
                 else (x_max + self.ball_radius + 0.001)
             )
-            # Segment test against the face plane so large kinematic steps cannot
-            # tunnel through the keeper in a single update.
             crossed_face = (
                 self.travel_dir * prev_p[0] < self.travel_dir * face_x
                 and self.travel_dir * next_p[0] >= self.travel_dir * face_x
@@ -1149,21 +1318,13 @@ class save_goal(Base_Task):
                 else:
                     t = float((face_x - prev_p[0]) / dx)
                     hit_y = float(prev_p[1] + t * (next_p[1] - prev_p[1]))
-                # Small tolerance for placement / floating error on the narrow square.
                 y_tol = 0.002
                 hits_front = (y_min - y_tol) <= hit_y <= (y_max + y_tol)
                 if hits_front:
-                    next_p = next_p.copy()
-                    next_p[0] = face_x
-                    next_p[1] = hit_y
-                    self._ball_blocked = True
-                    self._ball_motion_active = False
-                    pose = sapien.Pose(next_p.tolist(), [1, 0, 0, 0])
-                    self.ball.set_pose(pose)
-                    try:
-                        self._ball_rigid.set_kinematic_target(pose)
-                    except Exception:
-                        pass
+                    hit_p = next_p.copy()
+                    hit_p[0] = face_x
+                    hit_p[1] = hit_y
+                    self._begin_mass_bounce(hit_p)
                     return
 
         if self.travel_dir * next_p[0] >= self.travel_dir * self.goal_x:
@@ -1189,12 +1350,14 @@ class save_goal(Base_Task):
         # Start the shot when the expert begins acting (deterministic across collector passes).
         self._ball_step = 0
         self._ball_blocked = False
+        self._ball_live = False
         self._goal_conceded = False
         self._late_failure = False
         self._ball_crossed_goal = False
         self._keeper_deployed = False
         self._keeper_drop_pose = None
         self._ball_motion_active = True
+        self._set_collision_enabled(self.ball, False)
 
         arm_tag = ArmTag("left" if self.mirrored else "right")
         grasp_contact_id = [0, 1, 2, 3]
@@ -1213,9 +1376,8 @@ class save_goal(Base_Task):
         self._place_keeper_from_top(arm_tag)
         # After the yellow cube is dropped, always return the arm to its origin pose.
         self._retreat_arm_home(arm_tag, lift_z=0.08)
-        # Do not re-set the cube pose after retreat (that caused a visible teleport).
-        # Only re-assert kinematic so contacts cannot drag it.
-        self._hold_keeper_kinematic()
+        # Keep the cube dynamic (mass-aware bounce); only re-seat pose/damping.
+        self._seat_keeper_dynamic()
 
         self._wait_for_outcome()
 
