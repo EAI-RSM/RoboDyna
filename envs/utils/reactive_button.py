@@ -370,23 +370,32 @@ class ReactivePushButtons:
     def held_ids(self) -> list:
         return [self.ids[i] for i, on in enumerate(self.held_mask()) if on]
 
-    def tip_z_at_trigger(self, idx: int) -> float:
-        """World tip Z that just reaches ``trigger_depth`` via the spring model."""
-        force_needed = (self.trigger_depth / self.max_depth) * self.force_full
+    def tip_z_at_depth(self, idx: int, depth: float) -> float:
+        """World tip Z that produces ``depth`` via the spring model."""
+        depth = float(np.clip(depth, 0.0, self.max_depth))
+        force_needed = (depth / self.max_depth) * self.force_full
         return float(
             self.tops_z[idx]
             + self.force_engage_slack
             - force_needed / max(self.force_stiffness, 1e-6)
         )
 
+    def tip_z_at_trigger(self, idx: int) -> float:
+        """World tip Z that just reaches ``trigger_depth`` via the spring model."""
+        return self.tip_z_at_depth(idx, self.trigger_depth)
+
+    def tip_z_at_full_press(self, idx: int) -> float:
+        """World tip Z that fully depresses the keycap (``max_depth``)."""
+        return self.tip_z_at_depth(idx, self.max_depth)
+
     def min_ee_z_over_pressed(self, xy, *, margin: float = 0.003) -> float | None:
         """Lowest allowed EE Z while ``xy`` is over a pressed key, else ``None``.
 
         Once a key has triggered (latched) or is held past the press threshold,
-        interactive teleop must not drive the tip any deeper — further Q
-        descent collapses the arm pose into the key/table.  The floor is the
-        EE height whose tip sits at the trigger spring depth (plus a small
-        hold margin).
+        interactive teleop may keep pushing Q only down to full key travel —
+        enough to finish the press, but not through the keycap/table (which
+        collapses other arm joints).  Floor = EE whose tip sits at full-press
+        spring depth, minus a small hold margin.
         """
         xy = np.asarray(xy, dtype=float)[:2]
         floor = None
@@ -397,6 +406,6 @@ class ReactivePushButtons:
             home_xy = np.asarray(self.home_poses[i].p[:2], dtype=float)
             if float(np.linalg.norm(xy - home_xy)) > self.xy_tol:
                 continue
-            ee_floor = self.tip_z_at_trigger(i) - float(margin) + self.ee_to_tcp
+            ee_floor = self.tip_z_at_full_press(i) - float(margin) + self.ee_to_tcp
             floor = ee_floor if floor is None else min(floor, ee_floor)
         return floor

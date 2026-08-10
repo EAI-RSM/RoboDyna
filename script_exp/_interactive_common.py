@@ -641,9 +641,6 @@ class ViewerViewToggle:
     sapien's ``focus_camera`` follow-path is disabled in this build
     (``_handle_focused_camera`` commented out), so we copy the active camera
     pose onto the free-fly viewer each frame instead.
-
-    Interactive physics / kinematic progress stays paused until the head camera
-    has been locked for at least one rendered frame (``progress_ready``).
     """
 
     # Kept for callers / legacy ``overhead=`` framing helpers; not used by V.
@@ -678,11 +675,6 @@ class ViewerViewToggle:
         self._head = head_camera
         self.robot_controls = robot_controls
         self._warned_missing_gripper = False
-        # Hold task progress until head view is actually live in the window.
-        self.progress_ready = False
-        self._head_view_seen = False
-        if self.env is not None:
-            self.env._interactive_progress_ready = False
         if self._head is None:
             self._head = resolve_head_camera(env, viewer)
         if self._head is None and warn_missing_head:
@@ -691,45 +683,7 @@ class ViewerViewToggle:
         self._disable_wasd_camera_move()
         modes = self._view_cycle_modes()
         self.mode = modes[0] if modes else "head"
-        # Apply framing now, but do not arm progress until update()+render.
         self.apply(announce=False)
-        self._install_progress_gate()
-        if self._head is None:
-            # No head camera: don't block the episode forever.
-            self._mark_progress_ready(silent=True)
-
-    def _install_progress_gate(self):
-        """Pause kinematic task advancement until the head camera is live."""
-        env = self.env
-        if env is None or getattr(env, "_interactive_progress_gate_installed", False):
-            return
-        orig = env._update_kinematic_tasks
-
-        def gated_update(*args, **kwargs):
-            if getattr(env, "_interactive_progress_ready", True) is False:
-                return None
-            return orig(*args, **kwargs)
-
-        env._update_kinematic_tasks = gated_update
-        env._interactive_progress_gate_installed = True
-
-    def _mark_progress_ready(self, *, silent: bool = False):
-        if self.progress_ready:
-            return
-        self.progress_ready = True
-        if self.env is not None:
-            self.env._interactive_progress_ready = True
-        if not silent:
-            print("Head camera ready — starting task.")
-
-    def _note_head_camera_frame(self):
-        """Arm progress after head has been locked for one prior display frame."""
-        if self.progress_ready:
-            return
-        if self._head_view_seen:
-            self._mark_progress_ready()
-        else:
-            self._head_view_seen = True
 
     def _control_window(self):
         for plugin in getattr(self.viewer, "plugins", []) or []:
@@ -946,16 +900,12 @@ class ViewerViewToggle:
         # Keep head / gripper views locked to the moving cameras.
         if self.mode == "head" and self._head is not None:
             self._set_viewer_pose(self._head.global_pose)
-            self._note_head_camera_frame()
         else:
             side = self._gripper_side()
             if side is not None:
                 pose = self._wrist_pose(side)
                 if pose is not None:
                     self._set_viewer_pose(self._gripper_viewer_pose(pose))
-            # Head unavailable this frame — still allow progress if we never had one.
-            if self._head is None:
-                self._mark_progress_ready(silent=True)
 
 
 def make_viewer_view_toggle(
@@ -1101,6 +1051,11 @@ class UniversalRobotControls:
     # Near a singularity a millimetre of Cartesian travel costs radians of
     # joint travel; slew at this cap instead of whipping the arm.
     MAX_JOINT_SPEED = 4.0
+    # Q/E world-Z band: ceiling = captured original EE height. Floor keeps the
+    # lowest gripper finger AABB at/above the table (measured, not the 0.12
+    # EE→TCP proxy which underestimates WSG finger extent).
+    EE_TO_TCP_FALLBACK = 0.18
+    FINGER_TABLE_CLEARANCE = 0.008
 
     def __init__(self, env):
         self.env = env
@@ -1277,6 +1232,87 @@ class UniversalRobotControls:
                   else self.env.robot.get_right_ee_pose)
         return np.asarray(getter(), dtype=np.float64)
 
+    def _table_top_z(self) -> float:
+        """World Z of the table surface (fallback: stock 0.74 + bias)."""
+        top = getattr(self.env, "table_top", None)
+        if top is not None:
+            return float(top)
+        bias = float(getattr(self.env, "table_z_bias", 0.0) or 0.0)
+        return 0.74 + bias
+
+    def _gripper_min_world_z(self, side: str) -> float | None:
+        """Lowest world Z of this arm's finger / gripper collision AABBs."""
+        robot = getattr(self.env, "robot", None)
+        if robot is None:
+            return None
+        entity = robot.left_entity if side == "left" else robot.right_entity
+        if entity is None:
+            return None
+        lo = None
+        for link in entity.get_links():
+            name = str(link.get_name() or "")
+            if name not in GRIPPER_LINK_NAMES and "finger" not in name.lower():
+                continue
+            try:
+                aabb = link.compute_global_aabb_tight()
+                z = float(aabb[0][2])
+            except Exception:
+                try:
+                    z = float(link.get_pose().p[2])
+                except Exception:
+                    continue
+            lo = z if lo is None else min(lo, z)
+        return lo
+
+    def _finger_below_ee(self, side: str, ee_z: float) -> float:
+        """How far below the EE the lowest finger geometry currently sits."""
+        finger_z = self._gripper_min_world_z(side)
+        if finger_z is None:
+            env_val = getattr(self.env, "EE_TO_TCP", None)
+            if env_val is not None:
+                return float(env_val)
+            bank = getattr(self.env, "_reactive_buttons", None)
+            if bank is not None and hasattr(bank, "ee_to_tcp"):
+                return max(float(bank.ee_to_tcp), float(self.EE_TO_TCP_FALLBACK))
+            return float(self.EE_TO_TCP_FALLBACK)
+        return max(float(ee_z) - float(finger_z), 0.05)
+
+    def _global_ee_z_band(self, side, pose) -> tuple[float, float]:
+        """Absolute world-frame (z_min, z_max) for Q/E teleop.
+
+        Max = original gripper EE height. Min keeps measured finger AABBs at or
+        above the table (plus a small clearance).
+        """
+        origin = self._origin_pose.get(side)
+        if origin is not None:
+            z_max = float(origin[2])
+        else:
+            z_max = float(pose[2])
+        # Prefer the live EE so the finger offset tracks contact compression.
+        try:
+            ee_z = float(self._ee_pose(side)[2])
+        except Exception:
+            ee_z = float(pose[2])
+        z_min = (
+            self._table_top_z()
+            + self._finger_below_ee(side, ee_z)
+            + float(self.FINGER_TABLE_CLEARANCE)
+        )
+        floor_fn = getattr(self.env, "interactive_ee_z_floor", None)
+        # Task floors only raise the band floor (never lower the ceiling here).
+        if callable(floor_fn):
+            override = floor_fn(side, pose)
+            if override is not None:
+                z_min = max(z_min, float(override))
+        ceil_fn = getattr(self.env, "interactive_ee_z_ceiling", None)
+        if callable(ceil_fn):
+            override = ceil_fn(side, pose)
+            if override is not None:
+                z_max = float(override)
+        if z_min > z_max:
+            z_min = z_max
+        return z_min, z_max
+
     def _drive(self, side, step, dt, roll: float = 0.0):
         """Advance this arm's commanded pose and track it with seeded IK."""
         from transforms3d.quaternions import axangle2quat, qmult
@@ -1297,9 +1333,6 @@ class UniversalRobotControls:
                 "joints": measured[solver.arm_dofs],
             }
             self._command[side] = state
-            # Freeze the E ceiling band once per arm for this viewer session.
-            if side not in self._z_base:
-                self._z_base[side] = float(achieved[2])
 
         pose = state["pose"].copy()
         prev_z = float(pose[2])
@@ -1308,23 +1341,15 @@ class UniversalRobotControls:
         if abs(float(roll)) > 1e-9:
             dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
-        # E ceiling relative to first teleop height (env may override).
-        z_base = float(self._z_base.get(side, achieved[2]))
-        z_ceil = z_base + float(self.MAX_EE_RAISE)
-        ceil_fn = getattr(self.env, "interactive_ee_z_ceiling", None)
-        if callable(ceil_fn):
-            override = ceil_fn(side, pose)
-            if override is not None:
-                z_ceil = float(override)
-        if float(pose[2]) > z_ceil:
-            pose[2] = z_ceil
+        # Absolute world-frame Q/E band (not relative to current EE height).
+        z_min, z_max = self._global_ee_z_band(side, pose)
         # Once a reactive key is pressed, allow Q only down to full key travel
         # so the press can finish, but not through the keycap/table.
         bank = getattr(self.env, "_reactive_buttons", None)
         if bank is not None and hasattr(bank, "min_ee_z_over_pressed"):
             z_floor = bank.min_ee_z_over_pressed(pose[:2])
-            if z_floor is not None and float(pose[2]) < float(z_floor):
-                pose[2] = float(z_floor)
+            if z_floor is not None:
+                z_min = max(z_min, float(z_floor))
         # Billiard / tool-on-surface: if the held cue is already on the felt,
         # reject further -Z on that arm so it stops with the stick.
         if float(step[2]) < -1e-9:
@@ -1332,11 +1357,10 @@ class UniversalRobotControls:
             cue_arm = str(getattr(self.env, "_cue_arm", "") or "")
             if cue_arm == side and callable(resting) and resting():
                 pose[2] = prev_z
-        floor_fn = getattr(self.env, "interactive_ee_z_floor", None)
-        if callable(floor_fn):
-            z_floor = floor_fn(side, pose)
-            if z_floor is not None and float(pose[2]) < float(z_floor):
-                pose[2] = float(z_floor)
+        if float(pose[2]) > z_max:
+            pose[2] = z_max
+        if float(pose[2]) < z_min:
+            pose[2] = z_min
         # Keep the command within reach of the achieved pose: a blocked or
         # joint-limited arm must not build up a lead it later snaps through.
         lead = pose[:3] - achieved[:3]
@@ -1433,11 +1457,6 @@ class RealtimePhysicsPacer:
         self._accum = 0.0
         self._prev = time.perf_counter()
 
-    def reset(self):
-        """Drop accumulated wall time (e.g. while waiting for head camera)."""
-        self._accum = 0.0
-        self._prev = time.perf_counter()
-
     def begin_frame(self) -> int:
         """Advance the wall-clock accumulator; return physics steps for this frame."""
         now = time.perf_counter()
@@ -1450,19 +1469,6 @@ class RealtimePhysicsPacer:
             self._accum -= self.dt
             n += 1
         return n
-
-
-def begin_interactive_frame(views, pacer, window) -> int:
-    """Update viewer controls; return physics steps (0 until head camera is live).
-
-    Call this instead of ``pacer.begin_frame()`` + ``views.update(...)`` so task
-    motion does not run during the free-fly → head_camera switch at startup.
-    """
-    views.update(window)
-    if not getattr(views, "progress_ready", True):
-        pacer.reset()
-        return 0
-    return pacer.begin_frame()
 
 
 def sleep_to_timestep(env, frame_start: float) -> None:
@@ -1516,7 +1522,8 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     pacer = RealtimePhysicsPacer(env)
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             # Still pump the window / Escape when a fast display frame needs 0 steps.
             if n_steps == 0:
                 env.scene.update_render()
