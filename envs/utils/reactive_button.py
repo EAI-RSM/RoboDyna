@@ -391,9 +391,9 @@ class ReactivePushButtons:
     def min_ee_z_over_key(self, xy, *, margin: float = 0.003) -> float | None:
         """Lowest allowed EE Z while ``xy`` is over any keycap, else ``None``.
 
-        Used by interactive teleop so Q can finish a press even after the
-        fingers contact the key (the plain table+finger floor would otherwise
-        lock descent as soon as the AABB stalls on the key top).
+        Floors teleop Q at the tip height that just reaches ``trigger_depth`` so
+        the press can finish after fingers contact the keycap, without the
+        continued drive down to full key travel (which collapses other joints).
         """
         xy = np.asarray(xy, dtype=float)[:2]
         floor = None
@@ -401,7 +401,7 @@ class ReactivePushButtons:
             home_xy = np.asarray(self.home_poses[i].p[:2], dtype=float)
             if float(np.linalg.norm(xy - home_xy)) > self.xy_tol:
                 continue
-            ee_floor = self.tip_z_at_full_press(i) - float(margin) + self.ee_to_tcp
+            ee_floor = self.tip_z_at_trigger(i) - float(margin) + self.ee_to_tcp
             floor = ee_floor if floor is None else min(floor, ee_floor)
         return floor
 
@@ -409,10 +409,8 @@ class ReactivePushButtons:
         """Lowest allowed EE Z while ``xy`` is over a pressed key, else ``None``.
 
         Once a key has triggered (latched) or is held past the press threshold,
-        interactive teleop may keep pushing Q only down to full key travel —
-        enough to finish the press, but not through the keycap/table (which
-        collapses other arm joints).  Floor = EE whose tip sits at full-press
-        spring depth, minus a small hold margin.
+        keep the same trigger-depth floor — enough to hold the press, not drive
+        through the keycap toward full travel.
         """
         xy = np.asarray(xy, dtype=float)[:2]
         floor = None
@@ -423,6 +421,6 @@ class ReactivePushButtons:
             home_xy = np.asarray(self.home_poses[i].p[:2], dtype=float)
             if float(np.linalg.norm(xy - home_xy)) > self.xy_tol:
                 continue
-            ee_floor = self.tip_z_at_full_press(i) - float(margin) + self.ee_to_tcp
+            ee_floor = self.tip_z_at_trigger(i) - float(margin) + self.ee_to_tcp
             floor = ee_floor if floor is None else min(floor, ee_floor)
         return floor

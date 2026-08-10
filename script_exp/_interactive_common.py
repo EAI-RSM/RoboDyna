@@ -1361,8 +1361,8 @@ class UniversalRobotControls:
         # Absolute world-frame Q/E band (not relative to current EE height).
         z_min, z_max = self._global_ee_z_band(side, pose)
         # Over a cook / reactive key: replace the table+finger floor with the
-        # full-press EE floor so Q can finish the press after fingers contact
-        # the keycap (AABB stall would otherwise lock descent immediately).
+        # trigger-depth EE floor so Q can finish the press after fingers contact
+        # the keycap, without continuing down to full key travel.
         bank = getattr(self.env, "_reactive_buttons", None)
         if bank is not None:
             key_floor = None
