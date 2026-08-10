@@ -848,6 +848,7 @@ class cook_meat(Base_Task):
             "awaiting_return_grasp": False,
             "cook_phase_done": False,
             "cook_on": False,  # latch mode: key latched ON
+            "_hold_cooked": False,  # Opt 1: True after at least one hold-cook tick
             "_pending_off": False,
             "_touch_latched": False,
             "_ignore_key": False,  # expert sets latch explicitly
@@ -1256,9 +1257,13 @@ class cook_meat(Base_Task):
                 if pressed and on_pan:
                     self._advance_station_cook(st)
                     st["grasp_doneness"] = None
+                    st["_hold_cooked"] = True
                 elif not pressed:
-                    # Freeze score whenever the key is up (success needs shutoff).
-                    st["grasp_doneness"] = float(st["doneness"])
+                    # Freeze score only after a real hold-cook cycle. Leaving
+                    # grasp_doneness=0.0 at episode start made interactive Opt 1
+                    # report FAILURE immediately (key up ⇒ "finished").
+                    if st.get("_hold_cooked") or float(st.get("max_doneness", 0.0)) > 0.0:
+                        st["grasp_doneness"] = float(st["doneness"])
             else:
                 # Latch: cook only while cook_on (OFF press clears it immediately).
                 if st.get("cook_on") and on_pan:

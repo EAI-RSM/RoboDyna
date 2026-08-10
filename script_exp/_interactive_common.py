@@ -1343,13 +1343,18 @@ class UniversalRobotControls:
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
         # Absolute world-frame Q/E band (not relative to current EE height).
         z_min, z_max = self._global_ee_z_band(side, pose)
-        # Once a reactive key is pressed, allow Q only down to full key travel
-        # so the press can finish, but not through the keycap/table.
+        # Over a cook / reactive key: replace the table+finger floor with the
+        # full-press EE floor so Q can finish the press after fingers contact
+        # the keycap (AABB stall would otherwise lock descent immediately).
         bank = getattr(self.env, "_reactive_buttons", None)
-        if bank is not None and hasattr(bank, "min_ee_z_over_pressed"):
-            z_floor = bank.min_ee_z_over_pressed(pose[:2])
-            if z_floor is not None:
-                z_min = max(z_min, float(z_floor))
+        if bank is not None:
+            key_floor = None
+            if hasattr(bank, "min_ee_z_over_key"):
+                key_floor = bank.min_ee_z_over_key(pose[:2])
+            elif hasattr(bank, "min_ee_z_over_pressed"):
+                key_floor = bank.min_ee_z_over_pressed(pose[:2])
+            if key_floor is not None:
+                z_min = float(key_floor)
         # Billiard / tool-on-surface: if the held cue is already on the felt,
         # reject further -Z on that arm so it stops with the stick.
         if float(step[2]) < -1e-9:

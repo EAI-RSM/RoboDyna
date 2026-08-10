@@ -388,6 +388,23 @@ class ReactivePushButtons:
         """World tip Z that fully depresses the keycap (``max_depth``)."""
         return self.tip_z_at_depth(idx, self.max_depth)
 
+    def min_ee_z_over_key(self, xy, *, margin: float = 0.003) -> float | None:
+        """Lowest allowed EE Z while ``xy`` is over any keycap, else ``None``.
+
+        Used by interactive teleop so Q can finish a press even after the
+        fingers contact the key (the plain table+finger floor would otherwise
+        lock descent as soon as the AABB stalls on the key top).
+        """
+        xy = np.asarray(xy, dtype=float)[:2]
+        floor = None
+        for i in range(self._n):
+            home_xy = np.asarray(self.home_poses[i].p[:2], dtype=float)
+            if float(np.linalg.norm(xy - home_xy)) > self.xy_tol:
+                continue
+            ee_floor = self.tip_z_at_full_press(i) - float(margin) + self.ee_to_tcp
+            floor = ee_floor if floor is None else min(floor, ee_floor)
+        return floor
+
     def min_ee_z_over_pressed(self, xy, *, margin: float = 0.003) -> float | None:
         """Lowest allowed EE Z while ``xy`` is over a pressed key, else ``None``.
 
