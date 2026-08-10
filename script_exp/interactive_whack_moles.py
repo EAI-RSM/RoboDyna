@@ -6,7 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_whack_moles.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_whack_moles.py --control robot
 
-Pick up a side-staged mallet, then jab moles mid-rise. Avoid rabbits (Opt1).
+Pick up a side-staged mallet by teleoping onto the handle and closing G, then
+jab moles mid-rise by lowering the mallet head. Avoid rabbits (Opt1).
 Success = all moles hit and no rabbit touch.
 """
 
@@ -29,11 +30,11 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 from _interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
     action_failed,
+    gripper_width,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
     terminal_hold_should_close,
-    require_selected_arms,
     print_episode_condition,
 )
 
@@ -41,12 +42,13 @@ from _interactive_common import (  # noqa: E402
 CONTROLS_KEYBOARD = """
   Q / E             select previous / next unhit mole
   1 .. N            select mole index directly
-  Space             jab selected mole
+  (Prefer --control robot to grasp mallets with G and strike by teleop.)
 """
 
 CONTROLS_ROBOT = """
   1 / 2 / 3         select left, right, or both arms
-  Space             pick up selected mallet(s) (both together when 3), then strike
+  G                 close on a cradle mallet handle to pick it up
+  Arrows / E / Q    teleop; lower the mallet head onto rising moles to strike
 """
 
 
@@ -168,37 +170,6 @@ def _set_cube_over_hole(env, arm_name, hole_xy, z=None):
             rigid.set_kinematic_target(pose)
         except Exception:
             pass
-    # Keep weld consistent with teleported cube for subsequent kinematics.
-    if arm_name in env._cube_weld:
-        ee = np.array(env.get_arm_pose(arm_name), dtype=float)
-        # Leave weld; cube will re-sync from EE in _update_hammer_cubes.
-        # For keyboard teleop, suppress EE weld by storing identity-ish local.
-        pass
-
-
-def _jab_cube_on_mole(env, idx, ArmTag):
-    """Lower the correct-side cube onto the mole crown and register a hit."""
-    arm = _arm_for_mole(env, idx, ArmTag)
-    arm_name = str(arm)
-    hole = env.holes[env.mole_holes[idx]]
-    # Hover then press.
-    hover_z = float(env.board_top_z + env.mole_height + float(env.cube_half) + 0.025)
-    _set_cube_over_hole(env, arm_name, hole, z=hover_z)
-    # Aim at current crown.
-    top = env._critter_top_z(env.moles, env._mole_state, idx)
-    press_z = float(top - float(env.cube_half) + 0.002)
-    _set_cube_over_hole(env, arm_name, hole, z=press_z)
-    # Geometric / contact hit, or force mark if cube is over a rising mole.
-    if env._mole_above_surface(idx) and not env.touched[idx]:
-        if env._cube_bottom_contact_with_critter(env.moles, env._mole_state, idx):
-            env._mark_touched(idx)
-        else:
-            cube_p = np.array(env.hammer_cubes[arm_name].get_pose().p, dtype=float)
-            if float(np.linalg.norm(cube_p[:2] - hole[:2])) < 0.05:
-                env._mark_touched(idx)
-    # Lift back.
-    _set_cube_over_hole(env, arm_name, hole, z=hover_z)
-    return bool(env.touched[idx])
 
 
 class KeyboardMoleController:
@@ -206,7 +177,6 @@ class KeyboardMoleController:
         self.env = env
         self.ArmTag = ArmTag
         self.selected = 0
-        self._space = EdgeKey()
         self._q = EdgeKey()
         self._e = EdgeKey()
         self._digit = {str(i): EdgeKey() for i in range(1, 10)}
@@ -253,171 +223,73 @@ class KeyboardMoleController:
             if self.env._mole_is_rising(self.selected) or self.env._mole_above_surface(self.selected):
                 hover_z = float(self.env.board_top_z + self.env.mole_height + float(self.env.cube_half) + 0.03)
                 _set_cube_over_hole(self.env, str(arm), hole, z=hover_z)
-        if self._space.poll(window.key_down("space")):
-            if self.env.touched[self.selected]:
-                self._select_next(+1)
-                return
-            ok = _jab_cube_on_mole(self.env, self.selected, self.ArmTag)
-            print(f"Jab mole {self.selected}: {'HIT' if ok else 'miss'} "
-                  f"(rising={self.env._mole_is_rising(self.selected)}).")
-            if ok:
-                unhit = self._unhit()
-                if unhit:
-                    self.selected = unhit[0]
-                    arm = _arm_for_mole(self.env, self.selected, self.ArmTag)
-                    hole = self.env.holes[self.env.mole_holes[self.selected]]
-                    _set_cube_over_hole(self.env, str(arm), hole)
 
 
 class RobotMoleController:
-    XY_STEP = 0.045
-    Z_STEP = 0.030
-    DURATION = 0.04
-    MAX_RAISE_ABOVE_HOVER = 0.12
-    MAX_JOINT_DELTA = 0.45
+    """Latch cradle mallets on G-close; strike by teleoping the head onto moles."""
 
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
         self.selected_arm = "left"
         self.busy = False
-        self._space = EdgeKey()
+        self._g = EdgeKey()
+        self._prev_width = {"left": 1.0, "right": 1.0}
         self.highlight = ArmGripperHighlight(env)
         self.highlight.set_selected(self.selected_arm)
-        self._start = None
-        self._target = None
-        self._started_at = None
-        self._moving_arm = None
 
-    def _arm(self):
-        return self.ArmTag(self.selected_arm)
-
-    def _drive_qpos(self, side):
-        joints = self.env.robot.left_arm_joints if side == "left" else self.env.robot.right_arm_joints
-        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
-
-    def _ee_pose(self, side):
-        getter = self.env.robot.get_left_ee_pose if side == "left" else self.env.robot.get_right_ee_pose
-        return np.asarray(getter(), dtype=np.float64)
-
-    def _advance_motion(self):
-        if self._started_at is None:
-            return
-        progress = min(1.0, (time.perf_counter() - self._started_at) / self.DURATION)
-        smooth = progress * progress * (3.0 - 2.0 * progress)
-        delta = self._target - self._start
-        position = self._start + delta * smooth
-        velocity = delta / self.DURATION if progress < 1.0 else np.zeros_like(delta)
-        self.env.robot.set_arm_joints(position, velocity, self._moving_arm)
-        if progress >= 1.0:
-            self._started_at = None
-            self._moving_arm = None
-
-    def _move_selected_arm(self, window):
-        if self._started_at is not None:
-            return
-        dx = self.XY_STEP * (window.key_down("right") - window.key_down("left"))
-        dy = self.XY_STEP * (window.key_down("up") - window.key_down("down"))
-        dz = self.Z_STEP * (window.key_down("e") - window.key_down("q"))
-        if not (dx or dy or dz):
-            return
-        side = self.selected_arm
-        pose = self._ee_pose(side).copy()
-        pose[:3] += np.asarray([dx, dy, dz], dtype=np.float64)
-        # The upper edge of reach can make IK switch to a radically different
-        # elbow configuration. Keep manual Z motion in the mallet's safe band.
-        hover_z = float(self.env._hover_ee_z(self._arm()))
-        pose[2] = np.clip(pose[2], hover_z, hover_z + self.MAX_RAISE_ABOVE_HOVER)
-        planner = self.env.robot.left_plan_path if side == "left" else self.env.robot.right_plan_path
-        start = self._drive_qpos(side)
-        result = planner(pose.tolist(), last_qpos=np.asarray(start, dtype=np.float32))
-        if result is None or result.get("status") != "Success":
-            return
-        target = np.asarray(result["position"][-1], dtype=np.float64)
-        if float(np.max(np.abs(target - start))) > self.MAX_JOINT_DELTA:
-            print("Requested arm move is outside the safe teleoperation range.")
-            return
-        self._start = start
-        self._target = target
-        self._moving_arm = side
-        self._started_at = time.perf_counter()
-
-    def jab(self):
+    def _try_latch(self, selected):
         self.busy = True
-        selected = require_selected_arms(self.env, exactly_one=False)
-        if not selected:
+        need = [s for s in selected if s not in self.env.hammer_cubes]
+        if not need:
             self.busy = False
             return
-        if len(selected) == 1:
-            self.selected_arm = selected[0]
-            self.highlight.set_selected(self.selected_arm)
-        self.env.plan_success = True
-
-        need_pickup = [s for s in selected if s not in self.env.hammer_cubes]
-        if need_pickup:
-            arms = tuple(self.ArmTag(s) for s in need_pickup)
-            if self.env.pickup_mallets(arms):
-                print(
-                    f"Picked up {', '.join(need_pickup)} mallet(s); "
-                    "ready at hover height."
-                )
+        latched = []
+        failed = []
+        for side in need:
+            # Let the shared G close settle before judging proximity.
+            try:
+                self.env.robot.set_gripper(0.0, side, gripper_eps=0.0)
+            except Exception:
+                pass
+            self.env._dwell(12)
+            if self.env.try_latch_staged_mallet(self.ArmTag(side)):
+                latched.append(side)
             else:
-                action_failed(self.env, need_pickup, detail="mallet pickup failed")
-                self.busy = False
-                return
-
-        pressers = []
-        for side in selected:
-            if side not in self.env.hammer_cubes:
-                continue
-            arm = self.ArmTag(side)
-            cube_p = self.env._mallet_head_center(arm)
-            idx = next(
-                (
-                    i
-                    for i, hole_idx in enumerate(self.env.mole_holes)
-                    if not self.env.touched[i]
-                    and float(
-                        np.linalg.norm(cube_p[:2] - self.env.holes[hole_idx][:2])
-                    )
-                    < 0.07
-                ),
-                None,
+                failed.append(side)
+        if latched:
+            print(
+                f"Picked up {', '.join(latched)} mallet(s). "
+                "Teleop over rising moles and press the head down to strike."
             )
-            if idx is not None and not any(i == idx for i, _ in pressers):
-                pressers.append((idx, arm))
-
-        if not pressers:
-            if need_pickup:
-                # Pickup-only Space press when both arms were just armed.
-                self.busy = False
-                return
-            action_failed(self.env, selected, detail="no mole under mallet")
-            self.busy = False
-            return
-
-        self.env._strike(pressers)
-        hits = ", ".join(
-            f"mole {i} ({'HIT' if self.env.touched[i] else 'miss'})"
-            for i, _ in pressers
-        )
-        print(f"Robot jab: {hits}.")
+        if failed:
+            action_failed(
+                self.env,
+                failed,
+                detail="close on the mallet handle to latch",
+            )
         self.busy = False
 
     def update(self, window):
         if self.busy or self.env.distractor_hit:
             return
-        self._advance_motion()
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", (self.selected_arm,)))
+        selected = tuple(
+            getattr(self.env, "_interactive_selected_arms", (self.selected_arm,))
+        )
         if len(selected) == 1 and selected[0] != self.selected_arm:
             self.selected_arm = selected[0]
             self.highlight.set_selected(self.selected_arm)
         elif len(selected) == 2:
-            # Both arms selected — keep highlight in sync with dual-arm mode.
             self.highlight.set_selected(selected)
-        # Universal viewer controls own arrow/E/Q motion.
-        if self._space.poll(window.key_down("space")):
-            self.jab()
+
+        arms = list(selected) if selected else []
+        g_close = self._g.poll(window.key_down("g")) and any(
+            self._prev_width.get(a, 1.0) > 0.5 for a in arms
+        )
+        for side in ("left", "right"):
+            self._prev_width[side] = gripper_width(self.env, side)
+        if g_close:
+            self._try_latch(arms)
 
 
 def main():
