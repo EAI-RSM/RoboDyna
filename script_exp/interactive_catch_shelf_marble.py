@@ -7,7 +7,11 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_shelf_marble.py --control robot
 
 Keyboard mode latches bowl keys directly via arrows. Robot mode: select an arm,
-move over the bowl key, lower with Q to press (gripper-Z / ReactivePushButtons). Sandbox only — not data collection.
+move over the bowl key, lower with Q to press (gripper-Z / ReactivePushButtons).
+
+Default / Opt 2: marble stays parked until a bowl key press edge.
+Opt 1 / Opt 1+2 (reactive_marble): marble starts descending at episode start.
+Sandbox only — not data collection.
 """
 
 import argparse
@@ -130,6 +134,10 @@ def main():
     env._osc_armed = True
     env._bowl_force_stop = False
     env._expert_hold = None
+    # Opt 1 (reactive_marble): match play_once — start descent immediately. Key-press
+    # release is disabled in that mode, so without this the marble stays parked forever.
+    if bool(getattr(env, "reactive_marble", False)):
+        env._release_marble()
 
     viewer = env.viewer
     if viewer is None:

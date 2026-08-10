@@ -53,11 +53,13 @@ class catch_shelf_marble(Base_Task):
       (the per-level spacing) is derived as `stack_height / (n_shelves - 1)` so taller stacks
       (more shelves) don't grow the scene's overall height. Set `level_gap` explicitly to pin a
       fixed per-level spacing instead (skips the derivation).
-    - `max_stack_span` (default 0.55m): cap on the cascade's total horizontal width (max minus min
-      shelf-centre x). Independently-random lean directions can occasionally compound into a long
-      same-direction run; if that would exceed this cap, only the sign combination is resampled
-      (offset *magnitudes*, and therefore shelf overlap, are never touched) so the belt this
-      produces never spills past the table's edge.
+    - `max_stack_span` (default 0.55m): soft cap on cascade centre-to-centre width. The
+      hard bound is the button window: shelves and belt must stay inside
+      ``[key_x_left - layout_pad_from_key, key_x_right + layout_pad_from_key]`` (default
+      ±15 cm past the green/blue keys) and are recentered on table ``x=0``. The layout may
+      be shorter than that window; it is never longer.
+    - `layout_pad_from_key` (default 0.15m): how far past each bowl key the shelf/belt
+      arrangement may extend along x.
     - `tilt_min_deg`/`tilt_max_deg`: the randomized range (degrees) each shelf's tilt magnitude is
       drawn from independently every episode (direction is separately, independently randomized per
       shelf and tied to that shelf's own zig-zag offset; see `load_actors`). Defaults 15-45.
@@ -84,10 +86,10 @@ class catch_shelf_marble(Base_Task):
     TILT_MIN_DEG_DEFAULT = 15.0
     TILT_MAX_DEG_DEFAULT = 45.0
     BOTTOM_CLEARANCE_DEFAULT = 0.22       # belt surface up to the bottom shelf's underside
-    STACK_SHIFT_RANGE_DEFAULT = 0.05      # random overall shift of the whole cascade along the belt
-    MAX_STACK_SPAN_DEFAULT = 0.55         # cap on (max - min) shelf-centre x, so independently-random
-                                           # lean directions can't compound into a cascade (+ belt) that
-                                           # spills past the table edge (table length is 1.2m -> half 0.6)
+    STACK_SHIFT_RANGE_DEFAULT = 0.0       # no random x-shift; cascade is centered on table x=0
+    MAX_STACK_SPAN_DEFAULT = 0.55         # soft cap on (max - min) shelf-centre x; further limited by
+                                           # the green/blue key window (+ layout_pad_from_key)
+    LAYOUT_PAD_FROM_KEY_DEFAULT = 0.15    # m; belt/shelves may extend this far past each bowl key (8+7 cm)
 
     OSCILLATING_SHELF_ENABLED_DEFAULT = False
     OSCILLATING_SHELF_PERIOD_DEFAULT = 3.0    # s, full -x -> +x -> -x cycle (runs even while marble parked)
@@ -632,6 +634,9 @@ class catch_shelf_marble(Base_Task):
         self.bottom_clearance = float(c.get("bottom_clearance", self.BOTTOM_CLEARANCE_DEFAULT))
         self.stack_shift_range = float(c.get("stack_shift_range", self.STACK_SHIFT_RANGE_DEFAULT))
         self.max_stack_span = float(c.get("max_stack_span", self.MAX_STACK_SPAN_DEFAULT))
+        self.layout_pad_from_key = float(
+            c.get("layout_pad_from_key", self.LAYOUT_PAD_FROM_KEY_DEFAULT)
+        )
 
         self.ball_radius = float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT))
         self.roll_speed = _pm(c.get("roll_speed", self.ROLL_SPEED_DEFAULT))
@@ -693,6 +698,15 @@ class catch_shelf_marble(Base_Task):
         self.key_x_right = float(c.get("key_x_right", self.KEY_X_RIGHT_DEFAULT))
         self.key_y = float(c.get("key_y", self.KEY_Y_DEFAULT))
 
+        # Hard x-window for shelves + belt: green key − pad … blue key + pad, centered on table.
+        self.layout_x_min = float(self.key_x_left) - float(self.layout_pad_from_key)
+        self.layout_x_max = float(self.key_x_right) + float(self.layout_pad_from_key)
+        if self.layout_x_max <= self.layout_x_min:
+            raise ValueError(
+                f"catch_shelf_marble layout window empty: "
+                f"[{self.layout_x_min:.3f}, {self.layout_x_max:.3f}]"
+            )
+
         self.press_loop_tol = float(c.get("press_loop_tol", self.PRESS_LOOP_TOL_DEFAULT))
         self.press_loop_max_steps = int(c.get("press_loop_max_steps", self.PRESS_LOOP_MAX_STEPS_DEFAULT))
         self.post_catch_dwell = int(c.get("post_catch_dwell", self.POST_CATCH_DWELL_DEFAULT))
@@ -705,6 +719,11 @@ class catch_shelf_marble(Base_Task):
         self.shelf_half_depth = self.shelf_depth / 2.0
         self.shelf_half_thick = self.shelf_thick / 2.0
 
+        # Cap centre-span so shelves + belt_margin fit inside the key window (may be smaller).
+        allowed_width = float(self.layout_x_max - self.layout_x_min)
+        fit_centers_span = allowed_width - self.shelf_length - 2.0 * self.belt_margin
+        self.max_stack_span = float(min(self.max_stack_span, max(0.05, fit_centers_span)))
+
         # ---- randomize the zig-zag positions: each consecutive shelf-to-shelf offset direction is
         # drawn independently (not forced to alternate left-right-left), so the cascade's net drift
         # varies a lot more episode to episode -- sometimes several shelves in a row drift the same
@@ -712,8 +731,10 @@ class catch_shelf_marble(Base_Task):
         # back and forth (small net displacement, marble drops near the middle). Magnitude is always
         # in [offset_min_frac, offset_max_frac] * shelf_length so consecutive shelves overlap by
         # somewhere in (0%, 50%] regardless of direction; only the *sign* combination is resampled
-        # (never the magnitudes) if it would push the total cascade width past `max_stack_span`, so a
-        # long run of same-direction shelves can't spill the belt off the edge of the table. ----
+        # (never the magnitudes) if it would push past `max_stack_span` / the key window. The whole
+        # cascade is then recentered on table x=0. ----
+        centers = [0.0]
+        offsets = []
         for _attempt in range(200):
             offset_signs = [float(np.random.choice([-1.0, 1.0])) for _ in range(self.n_shelves - 1)]
             offsets = [
@@ -725,10 +746,22 @@ class catch_shelf_marble(Base_Task):
             centers = [0.0]
             for off in offsets:
                 centers.append(centers[-1] + off)
-            if (max(centers) - min(centers)) <= self.max_stack_span:
+            if (max(centers) - min(centers)) > self.max_stack_span:
+                continue
+            mid = 0.5 * (min(centers) + max(centers))
+            # Optional micro-shift (default 0); reject if it would leave the key window.
+            shift = float(np.random.uniform(-self.stack_shift_range, self.stack_shift_range))
+            centered = [c - mid + shift for c in centers]
+            smin = min(centered) - self.shelf_half_len - self.belt_margin
+            smax = max(centered) + self.shelf_half_len + self.belt_margin
+            if smin >= self.layout_x_min - 1e-9 and smax <= self.layout_x_max + 1e-9:
+                centers = centered
                 break
-        shift = float(np.random.uniform(-self.stack_shift_range, self.stack_shift_range))
-        self.shelf_centers_x = [c + shift for c in centers]
+        else:
+            # Last attempt: force-center without shift and clamp span (should already fit).
+            mid = 0.5 * (min(centers) + max(centers))
+            centers = [c - mid for c in centers]
+        self.shelf_centers_x = list(centers)
 
         # ---- tilt: direction for shelves 0..N-2 is tied to the offset toward the shelf below it
         # (so the marble's downhill edge lines up with the shelf it must land on); the bottom
@@ -764,8 +797,19 @@ class catch_shelf_marble(Base_Task):
         shelf_max_x = max(self.shelf_centers_x) + self.shelf_half_len
         land_min_x = min(landing_xs)
         land_max_x = max(landing_xs)
-        self.belt_x_min = min(shelf_min_x, land_min_x) - self.belt_margin
-        self.belt_x_max = max(shelf_max_x, land_max_x) + self.belt_margin
+        # Size belt to content, then clamp into the key window (may be shorter; never longer).
+        self.belt_x_min = max(
+            self.layout_x_min,
+            min(shelf_min_x, land_min_x) - self.belt_margin,
+        )
+        self.belt_x_max = min(
+            self.layout_x_max,
+            max(shelf_max_x, land_max_x) + self.belt_margin,
+        )
+        if self.belt_x_max <= self.belt_x_min + 2.0 * (self.bowl_radius + 0.01):
+            # Degenerate clamp — fall back to the full allowed window centered on 0.
+            self.belt_x_min = float(self.layout_x_min)
+            self.belt_x_max = float(self.layout_x_max)
         self.bowl_x_min = self.belt_x_min + self.bowl_radius + 0.01
         self.bowl_x_max = self.belt_x_max - self.bowl_radius - 0.01
         self.target_catch_x = float(np.clip(self.target_catch_x, self.bowl_x_min, self.bowl_x_max))

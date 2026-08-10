@@ -269,9 +269,10 @@ task_args:
     bowl_radius: 0.05           # m; bowl catch geometry
     bowl_speed: 0.18            # m/s; bowl slide speed while key held
     bowl_catch_xy_tol: 0.035    # m; marble-in-bowl XY success tol
-    key_x_left: -0.26           # m; left bowl-key x
-    key_x_right: 0.26           # m; right bowl-key x
+    key_x_left: -0.26           # m; left (green) bowl-key x
+    key_x_right: 0.26           # m; right (blue) bowl-key x
     key_y: -0.13                # m; both keys’ y
+    layout_pad_from_key: 0.15   # m; shelves+belt stay in [key_left−pad, key_right+pad], centered at x=0
   catch_valley_ball_v1:
     # Options (independent toggles):
     #   Default — red ball goes straight to the exit edge
