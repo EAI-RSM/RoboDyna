@@ -10,7 +10,7 @@ The hang/tree/basket layout **and** the expert grasp/control strategy in `envs/p
 
 ## Locked geometry (setup)
 
-- **Tree**: `tree_x=0`, `tree_y≈0.05` (toward back wall); tall trunk; staggered high/low branches; visual-only foliage; thin trunk collision only.
+- **Tree**: `tree_x=0`, `tree_y≈0.05` (toward back wall); tall trunk; staggered high/low branches; visual-only foliage; trunk + branch collision match visuals (gripper cannot pass through).
 - **Stem**: black, thin, under the fruit branch; **same `hang_x` as the apple**.
 - **Apple quat**: identity `APPLE_HANG_Q = [1,0,0,0]` so visual top (+Z) faces up into the stem. Do not switch back to Rx±90° or board packing quats for hang.
 - **Drop / Y**: `APPLE_DROP_BELOW_BRANCH` so ~half the black stem shows; Y offset via `APPLE_MESH_CENTER_Y * APPLE_Y_CENTER_FRAC` so mesh bbox center sits on branch/stem Y.

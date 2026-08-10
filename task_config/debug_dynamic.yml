@@ -303,8 +303,8 @@ task_args:
     # Opt 1 — two_apples_enabled: spoiled yellow→black apple (do not pick)
     # Opt 2 — basket_move_enabled: oscillating basket
     ripen_steps: 2500   # slow ripening: apple stays ~red through the grasp
-    red_window_min: 0.48   # per-episode red target band (like cook_meat doneness)
-    red_window_max: 0.52
+    red_window_min: 0.78   # per-episode red target band (mean ~0.8)
+    red_window_max: 0.82
     red_tolerance: 0.12
     tree_x: 0.0
     tree_y: 0.05
