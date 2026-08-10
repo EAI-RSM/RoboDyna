@@ -937,8 +937,8 @@ task_args:
     #   Default — alternating red/green  →  color_mode: alternating
     #   Opt 1 — random red/green         →  color_mode: random   (--option 1)
     #   Opt 2 — rotten apple + dump bin  →  rotten_prob: 0.3     (--option 2)
-    #     With P=rotten_prob, one random apple is brown; both buttons open the
-    #     two-piece wooden plank so it rides into the garbage bin at lowest y.
+    #     Always one brown apple; with P=rotten_prob a second is also brown.
+    #     Both buttons open the two-piece plank into the garbage bin at lowest y.
     color_mode: alternating
     rotten_prob: 0.0
   toast_bread:

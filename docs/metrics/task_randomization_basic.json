@@ -1674,7 +1674,7 @@
           "config_keys": [
             "rotten_prob"
           ],
-          "what_it_does": "rotten_prob=0.3 — with P, one random apple is brown/rotten + dump bin"
+          "what_it_does": "rotten_prob=0.3 — always ≥1 brown/rotten; P=0.3 for a second + dump bin"
         },
         {
           "name": "opt1+2",
@@ -1682,7 +1682,7 @@
             "color_mode",
             "rotten_prob"
           ],
-          "what_it_does": "random colors + rotten chance"
+          "what_it_does": "random colors + always ≥1 rotten (P for a second)"
         }
       ],
       "randomized_params": [
@@ -1712,7 +1712,7 @@
         },
         {
           "param": "rotten index",
-          "how": "if enabled and U()<rotten_prob: randint apple index brown",
+          "how": "if rotten_prob>0: always one randint index brown; with P=rotten_prob a second",
           "config_key": "rotten_prob",
           "notes": "opt2"
         },

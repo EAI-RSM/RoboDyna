@@ -418,7 +418,7 @@ task_args:
     advance_every: 4
     gate_center_y: -0.03        # divert plank hinge center along belt Y (m)
     gate_default_left: true
-    # Default: alternating; Opt1 color_mode=random; Opt2 rotten_prob=0.3
+    # Default: alternating; Opt1 color_mode=random; Opt2 rotten_prob=0.3 (always ≥1; P for 2nd)
     color_mode: alternating
     rotten_prob: 0.0
   hit_target:
