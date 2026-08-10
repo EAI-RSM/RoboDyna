@@ -1031,6 +1031,7 @@ class UniversalRobotControls:
     unseeded and returns elbow/wrist flips that are unusable for teleop.
 
     Z / X tip the gripper about world +Y (left / right) for pour-style motions.
+    R / T yaw about world +Z (counter-clockwise / clockwise) continuously via IK.
     O returns the selected arm(s) to the pose captured when teleop started
     (task ``original`` / start pose). G opens/closes the selected gripper.
     is handled by ``ViewerViewToggle`` so it also works when teleop is not
@@ -1043,6 +1044,8 @@ class UniversalRobotControls:
     Z_SPEED = 0.224
     # World-Y tip rate for Z/X (rad/s) — enough to dump a board without feeling twitchy.
     ROLL_SPEED = 1.28
+    # World-Z yaw rate for R/T (rad/s).
+    YAW_SPEED = 0.64
     MAX_DT = 0.05
     # How far the commanded pose may run ahead of the achieved pose, so a
     # blocked or joint-limited arm cannot accumulate an unrecoverable lead.
@@ -1325,7 +1328,7 @@ class UniversalRobotControls:
             z_min = z_max
         return z_min, z_max
 
-    def _drive(self, side, step, dt, roll: float = 0.0):
+    def _drive(self, side, step, dt, roll: float = 0.0, yaw: float = 0.0):
         """Advance this arm's commanded pose and track it with seeded IK."""
         from transforms3d.quaternions import axangle2quat, qmult
 
@@ -1352,6 +1355,10 @@ class UniversalRobotControls:
         # World-Y tip (Z/X): rotate the commanded gripper orientation in place.
         if abs(float(roll)) > 1e-9:
             dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
+            pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
+        # World-Z yaw (R/T): table-plane spin, premultiply for fixed-axis turn.
+        if abs(float(yaw)) > 1e-9:
+            dq = axangle2quat([0.0, 0.0, 1.0], float(yaw))
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
         # Absolute world-frame Q/E band (not relative to current EE height).
         z_min, z_max = self._global_ee_z_band(side, pose)
@@ -1436,7 +1443,9 @@ class UniversalRobotControls:
         z_dir = float(window.key_down("e")) - float(window.key_down("q"))
         # Z tip left / X tip right about world +Y (pour axis for board tasks).
         roll_dir = float(window.key_down("x")) - float(window.key_down("z"))
-        if not (x_dir or y_dir or z_dir or roll_dir):
+        # R counter-clockwise / T clockwise about world +Z (table-plane yaw).
+        yaw_dir = float(window.key_down("r")) - float(window.key_down("t"))
+        if not (x_dir or y_dir or z_dir or roll_dir or yaw_dir):
             self._stop()
             return
         if dt <= 0.0:
@@ -1447,8 +1456,9 @@ class UniversalRobotControls:
             z_dir * self.Z_SPEED * dt,
         ], dtype=np.float64)
         roll = float(roll_dir) * self.ROLL_SPEED * dt
+        yaw = float(yaw_dir) * self.YAW_SPEED * dt
         for side in self.selected:
-            self._drive(side, step, dt, roll=roll)
+            self._drive(side, step, dt, roll=roll, yaw=yaw)
 
 
 # Keep stepping/rendering this long after a terminal SUCCESS/FAILURE so the
@@ -1466,17 +1476,32 @@ class RealtimePhysicsPacer:
     that makes motion ~4× slower on 60 Hz than on 240 Hz. This pacer accumulates
     wall time and returns how many fixed ``dt`` physics steps to run before the
     next render (typically ~1 at 240 Hz, ~4 at 60 Hz for dt=1/250).
+
+    Blocking planner moves (``env.move`` / ``take_dense_action``) should set
+    ``env._interactive_pacer_resync = True`` when they finish so the next frame
+    does not treat the blocked wall time as catch-up debt.
     """
 
     def __init__(self, env, max_substeps: int = REALTIME_MAX_SUBSTEPS):
+        self.env = env
         self.dt = float(env.scene.get_timestep())
         self.max_substeps = max(1, int(max_substeps))
+        self._accum = 0.0
+        self._prev = time.perf_counter()
+
+    def resync(self) -> None:
+        """Drop accumulated wall time after a blocking planner/dwell section."""
         self._accum = 0.0
         self._prev = time.perf_counter()
 
     def begin_frame(self) -> int:
         """Advance the wall-clock accumulator; return physics steps for this frame."""
         now = time.perf_counter()
+        if getattr(self.env, "_interactive_pacer_resync", False):
+            self.env._interactive_pacer_resync = False
+            self._accum = 0.0
+            self._prev = now
+            return 0
         self._accum += now - self._prev
         self._prev = now
         # Drop excess after a long pause / hitch (accept temporary slow-mo).
@@ -1641,6 +1666,7 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
             "  Arrow keys        move selected arm(s) in world XY\n"
             "  E / Q             raise / lower selected arm(s)\n"
             "  Z / X             tip gripper left / right (world Y)\n"
+            "  R / T             yaw gripper CCW / CW (world Z)\n"
             "  1 / 2 / 3         select left / right / both arms\n"
             "  O                 return selected arm(s) to original position\n"
         )

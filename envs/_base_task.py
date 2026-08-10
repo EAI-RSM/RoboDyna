@@ -1440,6 +1440,10 @@ class Base_Task(gym.Env):
 
         left_n_step = left_result["position"].shape[0] if left_success else 0
         right_n_step = right_result["position"].shape[0] if right_success else 0
+        pace_realtime = self._interactive_viewer_realtime_pace()
+        t_start = time.perf_counter()
+        last_render_t = t_start - 1.0
+        total_steps = max(left_n_step, right_n_step)
 
         while now_left_id < left_n_step or now_right_id < right_n_step:
             # set the joint positions and velocities for move group joints only.
@@ -1464,7 +1468,14 @@ class Base_Task(gym.Env):
 
             self._update_kinematic_tasks()
             self.scene.step()
-            if self.render_freq and i % self.render_freq == 0:
+            if pace_realtime:
+                last_render_t = self._pace_interactive_control_step(
+                    i,
+                    t_start,
+                    last_render_t,
+                    force_render=(i + 1 >= total_steps),
+                )
+            elif self.render_freq and i % self.render_freq == 0:
                 self._update_render()
                 self.viewer.render()
 
@@ -1472,6 +1483,9 @@ class Base_Task(gym.Env):
                 self._update_render()
                 self._take_picture()
             i += 1
+
+        if pace_realtime:
+            self._interactive_pacer_resync = True
 
         if save_freq != None:
             self._take_picture()
@@ -3890,6 +3904,40 @@ class Base_Task(gym.Env):
 
     # =========================================================== Control Robot ===========================================================
 
+    def _interactive_viewer_realtime_pace(self) -> bool:
+        """True when planner dense steps must track wall-clock (interactive viewer)."""
+        return bool(self.render_freq) and getattr(self, "viewer", None) is not None
+
+    def _pace_interactive_control_step(
+        self,
+        step_idx: int,
+        t_start: float,
+        last_render_t: float,
+        *,
+        force_render: bool = False,
+    ) -> float:
+        """Keep one dense control step near realtime; throttle renders off vsync.
+
+        Interactive configs use ``render_freq=1``. Rendering every physics step under
+        60 Hz vsync locks sim to ~60 Hz (~4× slow-mo vs dt=1/250). The shared
+        viewer loop then uses ``RealtimePhysicsPacer`` (true realtime), so balls
+        etc. suddenly look much faster once the arm stops. Sleep to the sim clock
+        and render at most ~60 Hz instead.
+        """
+        dt = float(self.scene.get_timestep())
+        target = float(t_start) + float(step_idx + 1) * dt
+        now = time.perf_counter()
+        remaining = target - now
+        if remaining > 5e-4:
+            time.sleep(remaining)
+            now = time.perf_counter()
+        render_interval = max(dt, 1.0 / 60.0) * float(max(1, int(self.render_freq)))
+        if force_render or (now - last_render_t) >= render_interval:
+            self._update_render()
+            self.viewer.render()
+            return time.perf_counter()
+        return last_render_t
+
     def take_dense_action(self, control_seq, save_freq=-1):
         """
         control_seq:
@@ -3916,6 +3964,10 @@ class Base_Task(gym.Env):
             max_control_len = max(max_control_len, right_arm["position"].shape[0])
         if right_gripper is not None:
             max_control_len = max(max_control_len, right_gripper["num_step"])
+
+        pace_realtime = self._interactive_viewer_realtime_pace()
+        t_start = time.perf_counter()
+        last_render_t = t_start - 1.0
 
         for control_idx in range(max_control_len):
 
@@ -3953,13 +4005,24 @@ class Base_Task(gym.Env):
             if not self.transient_event:
                 self._update_transient_checks()
 
-            if self.render_freq and control_idx % self.render_freq == 0:
+            if pace_realtime:
+                last_render_t = self._pace_interactive_control_step(
+                    control_idx,
+                    t_start,
+                    last_render_t,
+                    force_render=(control_idx + 1 == max_control_len),
+                )
+            elif self.render_freq and control_idx % self.render_freq == 0:
                 self._update_render()
                 self.viewer.render()
 
             if save_freq != None and control_idx % save_freq == 0:
                 self._update_render()
                 self._take_picture()
+
+        if pace_realtime:
+            # Blocking move held the shared viewer loop; drop catch-up debt.
+            self._interactive_pacer_resync = True
 
         if save_freq != None:
             self._take_picture()
