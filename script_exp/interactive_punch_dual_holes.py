@@ -335,7 +335,9 @@ def _update_interactive_belt(env):
         if k is not None:
             next_steps.append(env._page_arrival_step(side, k))
     if not next_steps:
-        env._belt_running = False
+        # All tiles stamped/missed — keep advancing so the last cards clear
+        # the stamp (matches play_once final belt runout).
+        env._belt_running = True
         return
 
     target = int(min(next_steps))
@@ -418,6 +420,7 @@ def main():
         print_instructions("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")
 
     terminal_started_at = None
+    runout_start_step = None
     pacer = RealtimePhysicsPacer(env)
 
     try:
@@ -464,17 +467,27 @@ def main():
                     break
                 continue
 
-            if _all_pages_resolved(env):
-                # check_success() initializes punch_score_L/R, but the detail
-                # string is evaluated before report_task_result calls it.
-                left_score = env._side_score("left")
-                right_score = env._side_score("right")
-                report_task_result(
-                    env,
-                    f"L={left_score:.2f} R={right_score:.2f} "
-                    f"empty_press={env.invalid_empty_press}",
-                )
-                terminal_started_at = time.perf_counter()
+            if not _all_pages_resolved(env):
+                runout_start_step = None
+                continue
+
+            # After the last tile, keep the belt moving (play_once runout) so
+            # stamped cards clear the heads before reporting the result.
+            if runout_start_step is None:
+                runout_start_step = int(env._belt_step)
+                print("Last tile resolved — running belt clear…")
+                continue
+            if int(env._belt_step) - runout_start_step < int(env._final_belt_runout_steps()):
+                continue
+
+            left_score = env._side_score("left")
+            right_score = env._side_score("right")
+            report_task_result(
+                env,
+                f"L={left_score:.2f} R={right_score:.2f} "
+                f"empty_press={env.invalid_empty_press}",
+            )
+            terminal_started_at = time.perf_counter()
     finally:
         env.close_env()
 
