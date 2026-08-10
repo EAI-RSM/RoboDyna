@@ -556,8 +556,10 @@ def main():
                         recorder = None
                         args.record = None
             record_frame_count += 1
-            timed_out = bool(getattr(env, "_timed_out", False)) or (
-                hasattr(env, "_episode_timed_out") and bool(env._episode_timed_out())
+            timed_out = (
+                bool(getattr(env, "_timed_out", False))
+                or bool(getattr(env, "_episode_timed_out", False))
+                or (hasattr(env, "_budget_exhausted") and bool(env._budget_exhausted()))
             )
             if timed_out:
                 report_task_result(env, "timed_out")

@@ -1158,7 +1158,7 @@ class sort_apples_belt(Base_Task):
     def _budget_left(self):
         return max(0, int(self.MAX_EPISODE_STEPS) - int(getattr(self, "_step_ctr", 0)))
 
-    def _episode_timed_out(self):
+    def _budget_exhausted(self):
         return int(getattr(self, "_step_ctr", 0)) >= int(self.MAX_EPISODE_STEPS)
 
     def _apple_on_belt(self, idx):
@@ -1192,7 +1192,7 @@ class sort_apples_belt(Base_Task):
         return all(bool(self._deposited[i]) for i in range(self.n_apples))
 
     def _step_record(self):
-        if self._episode_timed_out():
+        if self._budget_exhausted():
             self._timed_out = True
             return
         self._update_kinematic_tasks()
@@ -1200,7 +1200,7 @@ class sort_apples_belt(Base_Task):
         if self.save_freq and (self._pic_ctr % self.save_freq == 0):
             self._take_picture()
         self._pic_ctr += 1
-        if self._episode_timed_out():
+        if self._budget_exhausted():
             self._timed_out = True
 
     def _freeze_arm_drives(self, arms=("left", "right")):
@@ -1253,7 +1253,7 @@ class sort_apples_belt(Base_Task):
         Plank angle follows button/expert-hold state only. Rest targets are set
         *before* the arms lift so the hatch cannot keep opening after release.
         """
-        if self._episode_timed_out():
+        if self._budget_exhausted():
             self._timed_out = True
             self.plan_success = False
             return
@@ -1266,7 +1266,7 @@ class sort_apples_belt(Base_Task):
             self.grasp_actor(self.buttons["right"], arm_tag=right, pre_grasp_dis=0.09,
                              grasp_dis=0.09, contact_point_id=0, gripper_pos=0.0),
         )
-        if not self.plan_success or self._episode_timed_out():
+        if not self.plan_success or self._budget_exhausted():
             self._awaiting_dump_press = False
             self._release_gate_to_rest()
             self.plan_success = False
@@ -1277,7 +1277,7 @@ class sort_apples_belt(Base_Task):
             self.move_by_displacement(left, z=-dz_l),
             self.move_by_displacement(right, z=-dz_r),
         )
-        if not self.plan_success or self._episode_timed_out():
+        if not self.plan_success or self._budget_exhausted():
             self._awaiting_dump_press = False
             self._release_gate_to_rest()
             self.plan_success = False
@@ -1298,7 +1298,7 @@ class sort_apples_belt(Base_Task):
             self._step_record_holding(("left", "right"))
             if self._dump_gap_open():
                 gap_seen = True
-            if self._belt_stream_cleared() or self._episode_timed_out():
+            if self._belt_stream_cleared() or self._budget_exhausted():
                 break
             if gap_seen and (
                     self._deposited[apple_idx] or not self._apple_on_belt(apple_idx)):
@@ -1308,7 +1308,7 @@ class sort_apples_belt(Base_Task):
         self._awaiting_dump_press = True
         self._release_gate_to_rest()
         lift = 0.5 * (dz_l + dz_r)
-        if not self._episode_timed_out() and self.plan_success:
+        if not self._budget_exhausted() and self.plan_success:
             self.move(
                 self.move_by_displacement(left, z=lift),
                 self.move_by_displacement(right, z=lift),
@@ -1321,7 +1321,7 @@ class sort_apples_belt(Base_Task):
 
     def _hold_side_button_until(self, side, apple_idx, batch=None):
         """Hold one side button; every apple queued at the plank leaves with this divert."""
-        if self._episode_timed_out():
+        if self._budget_exhausted():
             self._timed_out = True
             self.plan_success = False
             return
@@ -1329,13 +1329,13 @@ class sort_apples_belt(Base_Task):
         hold_arm = "left" if side == "left" else "right"
         self.move(self.grasp_actor(self.buttons[side], arm_tag=arm_tag, pre_grasp_dis=0.08,
                                    grasp_dis=0.08, contact_point_id=0, gripper_pos=0.0))
-        if not self.plan_success or self._episode_timed_out():
+        if not self.plan_success or self._budget_exhausted():
             self._release_gate_to_rest()
             self.plan_success = False
             return
         dz = self._press_depth_from_ee(arm_tag)
         self.move(self.move_by_displacement(arm_tag, z=-dz))
-        if not self.plan_success or self._episode_timed_out():
+        if not self.plan_success or self._budget_exhausted():
             self._release_gate_to_rest()
             self.plan_success = False
             return
@@ -1354,7 +1354,7 @@ class sort_apples_belt(Base_Task):
         self._set_gate_target()
         for _ in range(min(self.HOLD_WAIT_MAX, self._budget_left())):
             self._step_record_holding((hold_arm,))
-            if self._episode_timed_out() or self._belt_stream_cleared():
+            if self._budget_exhausted() or self._belt_stream_cleared():
                 break
             # Release once every batch apple is deposited or has left the belt
             # footprint (mid-air fall finishes under play_once settle / wait).
@@ -1367,7 +1367,7 @@ class sort_apples_belt(Base_Task):
                 break
         self._divert_batch = []
         self._release_gate_to_rest()
-        if not self._episode_timed_out() and self.plan_success:
+        if not self._budget_exhausted() and self.plan_success:
             self.move(self.move_by_displacement(arm_tag, z=dz))
             for _ in range(min(16, self._budget_left())):
                 self._step_record()
@@ -1394,7 +1394,7 @@ class sort_apples_belt(Base_Task):
         max_steps = int(self.MAX_EPISODE_STEPS)
         guard = 0
         retries = [0] * self.n_apples
-        while guard < max_steps and not self._episode_timed_out():
+        while guard < max_steps and not self._budget_exhausted():
             guard += 1
             # End once every apple is deposited (not merely off the belt footprint).
             if self._belt_stream_cleared():
@@ -1417,7 +1417,7 @@ class sort_apples_belt(Base_Task):
                     ri = rotten_q[0]
                     self._decided[ri] = True
                     self._hold_both_buttons_until(ri)
-                    if self._episode_timed_out():
+                    if self._budget_exhausted():
                         break
                     if not self._deposited[ri] and retries[ri] < 2:
                         retries[ri] += 1
@@ -1441,7 +1441,7 @@ class sort_apples_belt(Base_Task):
                     self._decided[fi] = True
                     if side == "dump":
                         self._hold_both_buttons_until(fi)
-                        if self._episode_timed_out():
+                        if self._budget_exhausted():
                             break
                         if self._deposited[fi]:
                             continue
@@ -1457,7 +1457,7 @@ class sort_apples_belt(Base_Task):
                     # Matching colors at the plank leave with this divert.
                     batch = matching if matching else [fi]
                     self._hold_side_button_until(side, fi, batch=batch)
-                    if self._episode_timed_out():
+                    if self._budget_exhausted():
                         break
                     # Reseat any trailing apple that landed on the wrong side.
                     for i in list(queued):
@@ -1489,7 +1489,7 @@ class sort_apples_belt(Base_Task):
                         continue
                     continue
             self._step_record()
-        if self._episode_timed_out():
+        if self._budget_exhausted():
             self._timed_out = True
             self.plan_success = False
         self._expert_hold = None
@@ -1504,7 +1504,7 @@ class sort_apples_belt(Base_Task):
             if all(self._deposited[i] for i in range(self.n_apples)):
                 break
         # Final plan flag from deposits (per-hold overwrites can leave a stale False).
-        if self._timed_out or self._episode_timed_out():
+        if self._timed_out or self._budget_exhausted():
             self._timed_out = True
             self.plan_success = False
         else:
@@ -1631,7 +1631,11 @@ class sort_apples_belt(Base_Task):
         self.sorting_accuracy = correct / float(self.n_apples)
         self.macro_f1 = self._macro_f1()
         # Episode step budget exceeded → failure.
-        if getattr(self, "_timed_out", False) or self._episode_timed_out():
+        if (
+            getattr(self, "_timed_out", False)
+            or bool(getattr(self, "_episode_timed_out", False))
+            or self._budget_exhausted()
+        ):
             self._timed_out = True
             return False
         # Opt 2 hard rule: rotten apple in either basket → episode failure.

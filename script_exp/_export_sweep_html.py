@@ -12,8 +12,17 @@ HH_JSON = Path("/tmp/hh_sweep_results.json")
 if not HH_JSON.is_file():
     HH_JSON = ROOT / "logs/hh_sweep_results.json"
 BASIC_JSON = ROOT / "logs/basic_sweep_results.json"
-BASIC_LOG = ROOT / "logs/basic_test_and_demos.log"
+BASIC_LOG = ROOT / "logs/basic_sweep_n5_allscen.log"
+if not BASIC_LOG.is_file():
+    BASIC_LOG = ROOT / "logs/basic_test_and_demos.log"
 OUT = ROOT / "instructions/household_sweep_results.html"
+RUN_NOTE = (
+    "Sweep of 2026-08-08: base "
+    "<code>logs/basic_sweep_n5_allscen.log</code> (5×4) then household "
+    "<code>logs/household_sweep_n10.log</code> (10 seeds). "
+    "<code>sort_apples_belt</code> reswept 2026-08-08 after timeout-name fix "
+    "(<code>logs/sort_apples_belt_resweep_n5.log</code>)."
+)
 
 SCENARIOS = ("default", "opt1", "opt2", "opt1+2")
 
@@ -99,25 +108,26 @@ BASIC_MAIN_REASONS: dict[str, str] = {
         "(opt1 / opt1+2)."
     ),
     "hit_target": (
-        "After better drop/chase lead timing: default &amp; opt1 are 5/5; "
-        "dynamic blocker still flakes (opt2 3/5, opt1+2 4/5) — IK fail or miss."
+        "default &amp; opt1 are 5/5; dynamic blocker scenarios flake hard "
+        "(opt2 / opt1+2 both 2/5) — check miss or plan fail."
     ),
     "load_train": "Occasional miss of allowed wagon (esp. target-wagon + tunnel).",
     "marble_shelf_maze": "Marble misses bowl under continuous motion and/or oscillating bowl.",
-    "pack_fruits": "Fruit ends in wrong basket or dropped (check fail after plan).",
-    "pick_ripe_apple": "Occasional wrong apple / basket miss under oscillation + spoiled distractors.",
-    "place_block_belt": "Moving-bowl scenarios (opt1) tip/miss more often; blocker-only is solid.",
+    "pack_fruits": "Fruit ends in wrong basket or dropped (check fail after plan); 10/20 overall.",
+    "pick_ripe_apple": "Solid on default/opt1; opt1+2 drops to 2/5 (oscillation + spoiled distractors).",
+    "place_block_belt": "Moving-bowl scenarios (opt1) tip/miss more often (2/5); blocker-only is solid.",
     "play_billiard": (
         "Cue strike misses allowed pocket or plan fails mid-shot; "
-        "distractors (opt2) hardest."
+        "10/20 overall — weak on default / opt2 / opt1+2."
     ),
     "drop_ball_hole": (
-        "Open-fraction lead + reactive plate wait: 10/20. Remaining fails are late "
-        "finger-release vs hole (opt1 stick) or dummy-hole wedges (opt2)."
+        "Weak across conditions (9/20). Remaining fails are late finger-release "
+        "vs hole or dummy-hole wedges."
     ),
     "sort_apples_belt": (
-        "Default/opt1 struggle on belt sort timing; dump/rotten (opt2) is reliable; "
-        "opt1+2 mixed."
+        "Fixed name clash (<code>_episode_timed_out</code> bool vs method). "
+        "Default is solid; plan flakes on random colors (opt1) and especially "
+        "opt1+2 (rotten + random)."
     ),
 }
 
@@ -240,17 +250,17 @@ def hh_section(hh: dict) -> str:
     # Rebuild summary table from JSON.
     rows = []
     reasons_static = {
-        "trap_bug": "Trap placement misses moving bug (plan OK, check fails).",
+        "trap_bug": "Trap misses moving bug (plan OK, check fails) — seeds 1, 2, 5, 9.",
         "boil_milk": "—",
         "fill_coffee_jar": "—",
-        "pour_beer": "Foam/beer overflow, or underfill vs ~0.90 target.",
-        "cook_food": "Food not seated in pan after place (UnStableError); some check fails.",
-        "cook_food_timer": "Same as cook_food (shared placement path).",
-        "measure_ingredient": "Jar push misses nozzle; or fill overshoots 25%±5% band.",
-        "make_soup": "Tip incomplete on some seeds — pieces bounce out after pour (2–4 distinct produce; 6/10).",
+        "pour_beer": "Mostly plan fails (9/10); only seed 9 succeeds.",
+        "cook_food": "UnStableError food-not-in-pan (0, 8) + check fail (1).",
+        "cook_food_timer": "Same placement UnStableError path (0, 8, 9) + check fail (1).",
+        "measure_ingredient": "Single check fail on seed 0.",
+        "make_soup": "Plan fails on seeds 2, 6, 7 (tip/pour incomplete).",
         "catch_cup": "—",
-        "catch_mouse_object_drop": "Basket placed but object not soft-caught.",
-        "stop_ball": "Ball reaches edge / not intercepted in time.",
+        "catch_mouse_object_drop": "Basket placed but object not soft-caught (seeds 3, 6).",
+        "stop_ball": "Ball reaches edge / not intercepted (seeds 1, 5, 6, 8).",
         "clean_table": "—",
     }
     order = list(reasons_static.keys())
@@ -378,7 +388,8 @@ def render(hh: dict, basic: dict | None, fail_map: dict) -> str:
   <p class="muted">
     Expert <code>play_once</code>, seeds <code>0..4</code> for each of
     <code>default</code> / <code>opt1</code> / <code>opt2</code> / <code>opt1+2</code>
-    (20 runs per task). Source: <code>logs/basic_sweep_results.json</code>.
+    (20 runs per task). Source: <code>logs/basic_sweep_results.json</code>
+    (from <code>logs/basic_sweep_n5_allscen.log</code>).
   </p>
   {basic_body}
 """
@@ -388,29 +399,38 @@ def render(hh: dict, basic: dict | None, fail_map: dict) -> str:
   <p class="muted"><em>Results pending — sweep still running.</em></p>
 """
 
-    # Keep the detailed HH weak-task cards (static, high quality)
-    hh_detail = Path(__file__).with_name("_hh_failure_detail_snippet.html")
-    # Inline the known detail section
     detail = r'''
   <h2 id="hh-detail">Household failure analysis (weak tasks)</h2>
   <div class="card focus" id="pour_beer">
     <h3><code>pour_beer</code> <span class="pill fail">1/10</span></h3>
     <ul class="reasons">
-      <li><strong>Overflow (seeds 0, 2, 3, 4, 7, 9)</strong> — foam/beer exceeds capacity; yellow spill under the glass. Lever held too open/long for that layout’s pour rate.</li>
-      <li><strong>Underfill (seeds 5, 6, 8)</strong> — no overflow but liquid never reaches ~0.90 (seed 5 stalls ~0.47; 6/8 end ~0.88–0.89).</li>
+      <li><strong>Plan fails (seeds 0–4, 6–8)</strong> — expert aborts before a successful pour (often overflow / unstable foam path).</li>
+      <li><strong>Check fail (seed 5)</strong> — plan completes but fill/foam criteria miss; only <strong>seed 9</strong> passes.</li>
     </ul>
   </div>
-  <div class="card focus" id="measure_ingredient">
-    <h3><code>measure_ingredient</code> <span class="pill fail">2/10</span></h3>
+  <div class="card focus" id="trap_bug">
+    <h3><code>trap_bug</code> <span class="pill warn">6/10</span></h3>
     <ul class="reasons">
-      <li><strong>Jar push miss (seeds 0, 1, 3, 4, 6, 9)</strong> — <code>jar push under nozzle failed</code>; jar off landing pose.</li>
-      <li><strong>Fill overshoot (seeds 7, 8)</strong> — under nozzle but final liq ~0.31–0.34 vs target 0.25±5%.</li>
+      <li><strong>Check fails (seeds 1, 2, 5, 9)</strong> — trap placement misses the moving bug (plan OK).</li>
+    </ul>
+  </div>
+  <div class="card focus" id="cook_food">
+    <h3><code>cook_food</code> / <code>cook_food_timer</code> <span class="pill warn">7/10 · 6/10</span></h3>
+    <ul class="reasons">
+      <li><strong>UnStableError</strong> — food not in pan after place (shared seeds 0, 8) or leaves pan after retreat (timer seed 9).</li>
+      <li><strong>Check fail (seed 1)</strong> on both cook variants.</li>
     </ul>
   </div>
   <div class="card focus" id="make_soup">
-    <h3><code>make_soup</code> <span class="pill warn">6/10</span></h3>
+    <h3><code>make_soup</code> <span class="pill warn">7/10</span></h3>
     <ul class="reasons">
-      <li><strong>Incomplete tip (seeds 2, 6, 7, 9)</strong> — <code>pour incomplete fallen=True</code>; with 2–4 distinct produce, most seeds land all pieces, but some bounce out after the tip (e.g. seed 7 pour pose off-target → 0/4).</li>
+      <li><strong>Plan fails (seeds 2, 6, 7)</strong> — tip/pour incomplete; pieces do not all land in the pot.</li>
+    </ul>
+  </div>
+  <div class="card focus" id="stop_ball">
+    <h3><code>stop_ball</code> <span class="pill warn">6/10</span></h3>
+    <ul class="reasons">
+      <li><strong>Check fails (seeds 1, 5, 6, 8)</strong> — ball reaches the edge / not intercepted in time.</li>
     </ul>
   </div>
 '''
@@ -431,9 +451,15 @@ def render(hh: dict, basic: dict | None, fail_map: dict) -> str:
       Household: 10 seeds per task. Base: 5 seeds × 4 option conditions (20 runs/task).
       Scripted expert <code>play_once</code> with plan + <code>check_success</code>.
     </p>
+    <p class="muted">{RUN_NOTE}</p>
   </div>
 </header>
 <div class="wrap">
+  <div class="callout">
+    Overall: household <strong>90/120 (75%)</strong> · base <strong>378/460 (82%)</strong>.
+    <code>sort_apples_belt</code> recovered to <strong>14/20</strong> after fixing
+    the <code>_episode_timed_out</code> bool/method name clash (was 0/20 TypeError).
+  </div>
   <p class="muted">
     Jump: <a href="#household">Household</a> ·
     <a href="#hh-detail">HH failure detail</a> ·
@@ -441,7 +467,7 @@ def render(hh: dict, basic: dict | None, fail_map: dict) -> str:
   </p>
 
   <h2 id="household">Household tasks — 10-seed sweep</h2>
-  <p class="muted">Source: <code>{HH_JSON}</code>.</p>
+  <p class="muted">Source: <code>logs/hh_sweep_results.json</code> (from <code>logs/household_sweep_n10.log</code>).</p>
   {hh_body}
   {detail}
   {basic_block}
