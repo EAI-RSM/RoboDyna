@@ -124,8 +124,8 @@ task_args:
     # Option 2: opaque colored top lattice (false = glass / see-through).
     opaque_surface: false
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    cuboid_move_speed_min: 0.04
-    cuboid_move_speed_max: 0.10
+    cuboid_move_speed_min: 0.0224
+    cuboid_move_speed_max: 0.056
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
@@ -222,9 +222,9 @@ task_args:
     tilt_max_deg: 45.0        # independently randomized per shelf, see load_actors
     bottom_clearance: 0.22
     ball_radius: 0.014
-    roll_speed: 0.35          # non-reactive / Default slide speed
+    roll_speed: 0.175         # non-reactive / Default slide speed
     reactive_marble: false    # Opt 1: true = marble drops at play_once start (not on key-press)
-    reactive_roll_speed: 0.09 # Opt 1: slide speed used only when reactive_marble is true
+    reactive_roll_speed: 0.045 # Opt 1: slide speed used only when reactive_marble is true
     oscillating_shelf_enabled: false  # Opt 2: one random non-top shelf sweeps -x..+x
     bowl_radius: 0.05
     bowl_speed: 0.18

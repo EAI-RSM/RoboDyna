@@ -96,7 +96,7 @@ task_args:
                                 # matching left-side trapdoor → left arm; right-side → right arm
     shuffle_colors: true        # randomize left→right color order of doors + matching keys
     key_base_half: [0.032, 0.032, 0.005]  # larger/thinner black base under each colored keycap
-    ball_speed: 0.18            # m/s; nominal marble speed; episode speeds sample ±20%
+    ball_speed: 0.18           # m/s; nominal marble speed; episode speeds sample ±20%
     ball_speed_scale_min: 0.8   # target marble speed low scale vs ball_speed
     ball_speed_scale_max: 1.2   # target marble speed high scale vs ball_speed
     ball_bounce_height: 0.012   # m; vertical bounce amplitude
@@ -113,7 +113,7 @@ task_args:
     # Balls drop onto the top, then roll with a = g(sinθ − μ cosθ) scaled ~5× slower;
     # free-flight after the front lip uses PhysX (no lip freeze). Speeds sample
     # roll_speed × U(scale_min, scale_max) × BALL_SPEED_SCALE(0.2).
-    ramp_angle: 0.12            # rad; gentle incline (moderate roll)
+    ramp_angle: 0.0672          # rad; gentler incline (slower roll)
     ramp_back_y: 0.395          # m; high end world-y (meets back wall)
     ramp_front_y: 0.02          # m; low end world-y (catch side)
     ball_radius: 0.018          # m; ball radius
@@ -128,7 +128,7 @@ task_args:
     ball_path_mode: straight    # compat; overridden by wall_bounce_enabled
     angled_path_min_deg: 20.0   # deg; |wall rebound angle| low (Opt 1)
     angled_path_max_deg: 40.0   # deg; high
-    roll_speed: 0.10            # m/s; pre-scale initial speed (effective ≈ 0.02)
+    roll_speed: 0.049           # m/s; pre-scale initial speed (effective ≈ 0.0098)
     roll_speed_scale_min: 0.8   # per-ball speed low scale (±20%)
     roll_speed_scale_max: 1.2   # per-ball speed high scale
     fall_time: 0.55             # s; dwell budget after leaving the edge
@@ -145,9 +145,9 @@ task_args:
     opaque_surface: false
     randomize_cuboid_color: true  # sample cuboid RGB from cuboid_colors pool
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    # Mean 0.056 (= prior 0.07 × 0.8); range scaled −20% from [0.04, 0.10].
-    cuboid_move_speed_min: 0.032
-    cuboid_move_speed_max: 0.08
+    # Mean 0.0392 (= prior 0.056 × 0.7); range scaled −30% from [0.032, 0.08].
+    cuboid_move_speed_min: 0.0224
+    cuboid_move_speed_max: 0.056
     num_appearances: 5          # how many pop windows per episode
     pop_steps: 90               # sim steps cuboid stays raised per pop
     grasp_tol: 0.05             # m; catch offset scale (success uses ~2.5×)
@@ -260,9 +260,9 @@ task_args:
     tilt_max_deg: 45.0          # independently randomized per shelf, see load_actors
     bottom_clearance: 0.22      # m; bottom shelf underside → belt
     ball_radius: 0.014          # m; marble radius
-    roll_speed: 0.35            # m/s; scripted slide speed (non-reactive / Default)
+    roll_speed: 0.175           # m/s; scripted slide speed (non-reactive / Default)
     reactive_marble: false      # Opt 1: true = marble drops at play_once start (not on key-press)
-    reactive_roll_speed: 0.09   # m/s; slide speed used only when Opt 1 (reactive_marble) is on
+    reactive_roll_speed: 0.045  # m/s; slide speed used only when Opt 1 (reactive_marble) is on
     oscillating_shelf_enabled: false  # Opt 2: true = one random non-top shelf sweeps -x..+x
     oscillating_shelf_period: 3.0     # s; Opt 2 full sweep cycle (episode-absolute clock)
     # oscillating_shelf_index: 1      # optional: pin which shelf oscillates (0/top rejected; default: random 1..N-1)
@@ -308,14 +308,14 @@ task_args:
     drop_forward_angle_min_deg: -8.0  # deg; forward aim jitter low
     drop_forward_angle_max_deg: 12.0  # high
     # On-ramp roll is kinematic: average speed = initial_forward_speed
-    initial_forward_speed: 0.15 # m/s; along-track roll speed mean
+    initial_forward_speed: 0.105 # m/s; along-track roll speed mean
     physics_max_steps: 1200     # cap on physics-driven track phase
     red_line_gap: 0.05          # m; red line just past ramp exit
     landing_gap: 0.15           # m; ball landing past red line (~15 cm)
     roll_time_min: 4.0          # unused when speed-based roll is on (kept for compat)
     roll_time_max: 7.0          # unused when speed-based roll is on (kept for compat)
     roll_acceleration: 0.25     # along-track accel factor mean
-    launch_speed: 0.55          # m/s; exit-speed seed mean (retuned to landing_gap)
+    launch_speed: 0.385         # m/s; exit-speed seed mean (retuned to landing_gap)
     idle_time_min: 1.0          # s; idle before grasp low
     idle_time_max: 2.0          # s; high
     settle_steps: 150           # post-catch settle steps
@@ -361,14 +361,14 @@ task_args:
     angled_path_max_deg: 25.0
     drop_forward_angle_min_deg: -8.0
     drop_forward_angle_max_deg: 12.0
-    initial_forward_speed: 0.15
+    initial_forward_speed: 0.105
     physics_max_steps: 1200
     red_line_gap: 0.05
     landing_gap: 0.15
     roll_time_min: 4.0
     roll_time_max: 7.0
     roll_acceleration: 0.25
-    launch_speed: 0.55
+    launch_speed: 0.385
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
@@ -413,9 +413,9 @@ task_args:
     angled_path_max_deg: 25.0
     drop_forward_angle_min_deg: -8.0
     drop_forward_angle_max_deg: 12.0
-    initial_forward_speed: 0.22 # faster on-ramp roll
-    initial_forward_speed_min: 0.22
-    initial_forward_speed_max: 0.22
+    initial_forward_speed: 0.11 # on-ramp roll (−50% from 0.22)
+    initial_forward_speed_min: 0.11
+    initial_forward_speed_max: 0.11
     platform_length_scale_min: 1.0
     platform_length_scale_max: 1.0
     physics_max_steps: 1200
@@ -424,7 +424,7 @@ task_args:
     roll_time_min: 4.0
     roll_time_max: 7.0
     roll_acceleration: 0.25
-    launch_speed: 0.80          # faster exit flight
+    launch_speed: 0.40          # exit flight (−50% from 0.80)
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150

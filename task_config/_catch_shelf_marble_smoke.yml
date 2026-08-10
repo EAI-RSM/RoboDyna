@@ -82,7 +82,7 @@ task_args:
     button_press_depth: 0.03
     door_open_angle_deg: 95.0
     door_open_speed_deg: 220.0
-    ball_speed: 0.18
+    ball_speed: 0.144
     ball_bounce_height: 0.012
   catch_cuboid:
     num_appearances: 3
@@ -177,9 +177,9 @@ task_args:
     tilt_max_deg: 45.0        # independently randomized per shelf, see load_actors
     bottom_clearance: 0.22
     ball_radius: 0.014
-    roll_speed: 0.35          # non-reactive / Default slide speed
+    roll_speed: 0.175         # non-reactive / Default slide speed
     reactive_marble: false    # Opt 1: true = marble drops at play_once start (not on key-press)
-    reactive_roll_speed: 0.09 # Opt 1: slide speed used only when reactive_marble is true
+    reactive_roll_speed: 0.045 # Opt 1: slide speed used only when reactive_marble is true
     oscillating_shelf_enabled: true   # Opt 2 (smoke on): one random non-top shelf sweeps -x..+x
     oscillating_shelf_period: 3.0     # s; Opt 2 full sweep cycle (episode-absolute clock)
     # oscillating_shelf_index: 1      # optional: pin which shelf oscillates (0/top rejected; default: random 1..N-1)

@@ -12,7 +12,8 @@ class catch_cuboid(Base_Task):
 
       catch_two_cuboids (option 1, default false)
           Two cuboids pop from opposite-side holes at once; both arms must catch
-          them. Success requires BOTH cuboids held. When false: single cuboid.
+          them. Success requires BOTH cuboids held and pulled clear of the board.
+          When false: single cuboid.
 
       opaque_surface (option 2, default false)
           Opaque colored top lattice (current solid board color). When false:
@@ -20,7 +21,8 @@ class catch_cuboid(Base_Task):
 
     The cuboid(s) are kinematic actors: while retracted they sit hidden below the
     board top, and during the pop window a step-driven schedule raises them to a
-    grippable height, then drops them back down.
+    grippable height, then drops them back down. Success requires grasping and
+    lifting each required cuboid so its bottom clears the board.
     """
 
     # ---- task params (class defaults; override via task_args.catch_cuboid in the config) ----
@@ -36,10 +38,12 @@ class catch_cuboid(Base_Task):
     BOARD_PANEL_THICKNESS = 0.02      # wooden top lattice thickness
     POP_HEIGHT = 0.055                # how far above the board top the cuboid rises when popped
     HIDE_DEPTH = 0.070                # how far below the board top the cuboid hides when retracted
+    # Success requires the grasped cuboid bottom clear of the board by this margin.
+    PULL_OUT_CLEARANCE = 0.04
     # Per-episode rise/fall speed (m/s) is sampled uniformly from [min, max].
-    # Mean 0.056 (= 0.07 × 0.8); range scaled −20% from prior [0.04, 0.10].
-    CUBOID_MOVE_SPEED_MIN_DEFAULT = 0.032
-    CUBOID_MOVE_SPEED_MAX_DEFAULT = 0.08
+    # Mean 0.0392 (= 0.056 × 0.7); range scaled −30% from prior [0.032, 0.08].
+    CUBOID_MOVE_SPEED_MIN_DEFAULT = 0.0224
+    CUBOID_MOVE_SPEED_MAX_DEFAULT = 0.056
     RANDOMIZE_CUBOID_COLOR_DEFAULT = False
     CUBOID_COLOR_DEFAULT = [0.40, 0.40, 0.42]
     CUBOID_COLOR_POOL = (
@@ -650,18 +654,41 @@ class catch_cuboid(Base_Task):
         """Per-cuboid grasp flags (same order as self._cuboid_names)."""
         return [self._cuboid_in_gripper(n) for n in getattr(self, "_cuboid_names", [])]
 
+    def _cuboid_pulled_out(self, cuboid_idx):
+        """True when the cuboid bottom is clear of the board (lifted out of the hole)."""
+        if cuboid_idx >= len(getattr(self, "cuboids", [])):
+            return False
+        center_z = float(self.cuboids[cuboid_idx].get_pose().p[2])
+        bottom_z = center_z - float(self.cuboid_half[2])
+        return bool(bottom_z >= float(self.board_top_z) + float(self.PULL_OUT_CLEARANCE))
+
+    def _cuboids_pulled_out(self):
+        return [
+            self._cuboid_pulled_out(i)
+            for i in range(len(getattr(self, "cuboids", [])))
+        ]
+
     # ------------------------------------------------------------- success
     def check_success(self):
+        """Success only if each required cuboid is grasped and pulled out of its hole."""
         held = self._cuboids_held()
+        pulled = self._cuboids_pulled_out()
         if self.catch_two_cuboids:
-            # Option 1: both cuboids must be picked up; one catch is not enough.
-            return bool(len(held) == 2 and all(held) and self.catches >= 2)
-        return bool(held and held[0])
+            # Option 1: both cuboids must be picked up and lifted clear.
+            return bool(
+                len(held) == 2
+                and len(pulled) == 2
+                and all(held)
+                and all(pulled)
+                and self.catches >= 2
+            )
+        return bool(held and held[0] and pulled and pulled[0])
 
     # record per-frame whack-a-mole state into the trajectory
     def get_obs(self):
         obs = super().get_obs()
         held = self._cuboids_held()
+        pulled = self._cuboids_pulled_out()
         obs["catch_cuboid"] = {
             "catch_two_cuboids": bool(getattr(self, "catch_two_cuboids", False)),
             "opaque_surface": bool(getattr(self, "opaque_surface", False)),
@@ -670,6 +697,7 @@ class catch_cuboid(Base_Task):
             "holes": [int(h) for h in getattr(self, "_cuboid_holes", [])],
             "cuboid_raised": [bool(r) for r in getattr(self, "_cuboid_raised", [])],
             "cuboids_held": [bool(h) for h in held],
+            "cuboids_pulled_out": [bool(p) for p in pulled],
             "catches": int(getattr(self, "catches", 0)),
             "appearances": int(getattr(self, "appearances_done", 0)),
         }

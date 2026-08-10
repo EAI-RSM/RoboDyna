@@ -28,7 +28,7 @@ class catch_ramp_ball(Base_Task):
     # Wall front face ≈ y=0.4 (wall pose y=1, half_y=0.6).
     RAMP_BACK_Y_DEFAULT = 0.395
     RAMP_FRONT_Y_DEFAULT = 0.02
-    RAMP_ANGLE_DEFAULT = 0.12  # gentler incline → moderate roll
+    RAMP_ANGLE_DEFAULT = 0.0672  # gentler incline → slower roll
     RAMP_HALF_X = 0.20
     RAMP_HALF_Z = 0.008
     RAIL_H = 0.032
@@ -57,7 +57,7 @@ class catch_ramp_ball(Base_Task):
 
     # Initial along-ramp speed at the top after the drop (±20% sample).
     # Effective speeds are further multiplied by BALL_SPEED_SCALE (~5× slower).
-    ROLL_SPEED_DEFAULT = 0.10
+    ROLL_SPEED_DEFAULT = 0.049
     ROLL_SPEED_SCALE_MIN_DEFAULT = 0.8
     ROLL_SPEED_SCALE_MAX_DEFAULT = 1.2
     BALL_SPEED_SCALE = 0.2

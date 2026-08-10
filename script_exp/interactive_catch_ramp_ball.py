@@ -3,11 +3,10 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_catch_ramp_ball.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_catch_ramp_ball.py --control robot
 
-Keyboard mode nudges the cup with arrows and freezes it on Space.
-Robot mode: Space picks up the cup, Space again drops it in place.
+Teleop the arm(s) and close the gripper (G) to pick up the cup; place it under
+the predicted catch aim before the ball leaves the ramp. No Space auto-grasp.
 """
 
 import argparse
@@ -16,7 +15,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,26 +24,27 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    action_failed,
-    try_interactive_grasp,
+    UniversalRobotControls,
+    add_robot_motion_arg,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
     terminal_hold_should_close,
-    resolve_action_arm,
     print_episode_condition,
 )
 
 
 CONTROLS_KEYBOARD = """
-  Space             place / pick up the cup
-  Arrow keys        nudge cup in XY
+  Prefer --control robot. Teleop the arm and use G to grasp the cup.
 """
 
 CONTROLS_ROBOT = """
-  Space             pick up the cup; press again to drop it
+  G                 open / close selected gripper(s) to pick / place the cup
+
+  Manually grasp the cup and place it under the predicted catch aim.
+  There is no Space auto-grasp or keyboard teleport.
 """
 
 
@@ -54,7 +53,7 @@ def _embodiment_config(robot_file):
         return yaml.safe_load(handle)
 
 
-def _configure_task(config_name: str, seed: int, use_robot: bool = False):
+def _configure_task(config_name: str, seed: int, use_robot: bool = True):
     config_path = REPO_ROOT / "task_config" / f"{config_name}.yml"
     if not config_path.exists():
         raise SystemExit(f"Config not found: {config_path}")
@@ -90,188 +89,55 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
 
 
 def _aim_xy(env):
+    import numpy as np
     landing, _ = env._predict_landing()
     aim = np.asarray(getattr(env, "catch_aim", landing), dtype=float)
     return float(aim[0]), float(aim[1])
-
-
-def _set_cup_xy(env, x, y, z=None):
-    import sapien
-    pose = env.cup.get_pose()
-    if z is None:
-        z = float(env.table_top + env.CUP_CENTER_Z)
-    new_pose = sapien.Pose([float(x), float(y), float(z)], pose.q)
-    # ``create_actor`` returns an Actor wrapper; only its entity can be posed.
-    entity = getattr(env.cup, "actor", env.cup)
-    entity.set_pose(new_pose)
-    rigid = env._cup_comp()
-    if rigid is not None:
-        try:
-            rigid.set_kinematic(True)
-            rigid.set_linear_velocity(np.zeros(3))
-            rigid.set_angular_velocity(np.zeros(3))
-            rigid.set_kinematic_target(new_pose)
-        except Exception:
-            pass
-
-
-def _nudge_from_keys(window, step=0.008):
-    dx = dy = 0.0
-    if window.key_down("left"):
-        dx -= step
-    if window.key_down("right"):
-        dx += step
-    if window.key_down("up"):
-        dy += step
-    if window.key_down("down"):
-        dy -= step
-    return dx, dy
-
-
-def _clamp_table_xy(env, x, y):
-    """Keep the cup on a usable patch of the table near the ramp exit."""
-    x = float(np.clip(x, -0.40, 0.40))
-    y = float(np.clip(y, -0.50, 0.25))
-    return x, y
-
-
-class EdgeKey:
-    def __init__(self):
-        self._prev = False
-
-    def poll(self, down):
-        edge = bool(down) and not self._prev
-        self._prev = bool(down)
-        return edge
-
-
-class KeyboardCupController:
-    def __init__(self, env):
-        self.env = env
-        self.placed = False
-        self._space = EdgeKey()
-
-    def update(self, window):
-        if not self.placed:
-            dx, dy = _nudge_from_keys(window)
-            if dx or dy:
-                p = np.asarray(self.env.cup.get_pose().p, dtype=float)
-                x, y = _clamp_table_xy(self.env, p[0] + dx, p[1] + dy)
-                _set_cup_xy(self.env, x, y)
-        if self._space.poll(window.key_down("space")):
-            p = np.asarray(self.env.cup.get_pose().p, dtype=float)
-            x, y = _clamp_table_xy(self.env, p[0], p[1])
-            _set_cup_xy(self.env, x, y, self.env.table_top + self.env.CUP_CENTER_Z)
-            self.env._cup_ready = True
-            self.placed = True
-            print(f"Cup placed at ({x:.3f}, {y:.3f}).")
-
-
-class RobotCupController:
-    def __init__(self, env, ArmTag):
-        self.env = env
-        self.ArmTag = ArmTag
-        self.arm = None
-        self.holding = False
-        self.placed = False
-        self.busy = False
-        self._space = EdgeKey()
-
-    def _choose_arm(self):
-        return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
-
-    def grasp(self):
-        self.busy = True
-        self.arm = self._choose_arm()
-        if self.arm is None:
-            self.busy = False
-            return
-        if try_interactive_grasp(self.env, self.env.cup, self.arm, pre_grasp_dis=0.08):
-            self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
-            self.holding = True
-            print(f"Picked up cup with {self.arm} arm. Move, then Space to drop.")
-        self.busy = False
-
-    def drop(self):
-        if not self.holding or self.arm is None or self.placed:
-            return
-        self.busy = True
-        self.env.move(self.env.open_gripper(self.arm))
-        for _ in range(8):
-            self.env._update_kinematic_tasks()
-            self.env.scene.step()
-        p = np.asarray(self.env.cup.get_pose().p, dtype=float)
-        x, y = _clamp_table_xy(self.env, p[0], p[1])
-        _set_cup_xy(self.env, x, y, self.env.table_top + self.env.CUP_CENTER_Z)
-        self.env._cup_ready = True
-        self.holding = False
-        self.placed = True
-        print(f"Dropped cup at ({x:.3f}, {y:.3f}).")
-        self.busy = False
-
-    def update(self, window):
-        if self.busy or self.placed:
-            return
-        if self._space.poll(window.key_down("space")):
-            if not self.holding:
-                self.grasp()
-            else:
-                self.drop()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive catch_ramp_ball viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
-    parser.add_argument(
-        "--control",
-        choices=("keyboard", "robot"),
-        default="robot",
-        help="Interaction method (default: robot)",
-    )
-    parser.add_argument(
-        "--robot-motion",
-        choices=("planner", "interpolate"),
-        default="planner",
-        help="Robot motion backend (interpolate = faster joint interp when supported; default planner)",
-    )
+    add_robot_motion_arg(parser, robot_motion_default="interpolate")
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
     from envs.catch_ramp_ball import catch_ramp_ball
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
-    print_mode_controls("catch_ramp_ball", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
-    if args.robot_motion == "interpolate":
-        print(
-            "Note: --robot-motion interpolate uses planner motions for this teleop task "
-            "(key-press sandboxes use joint interpolation)."
-        )
+    print_mode_controls(
+        "catch_ramp_ball",
+        args.control,
+        keyboard=CONTROLS_KEYBOARD,
+        robot=CONTROLS_ROBOT,
+    )
 
     env = catch_ramp_ball()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env._interactive_robot_mode = True
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     print_episode_condition(env)
-    env._interactive_selected_arms = (
-        "right" if float(_aim_xy(env)[0]) > 0 else "left",
-    )
-    env._start_ball_motion(expert_demo=False)
-    x, y = _aim_xy(env)
-    print(f"Predicted catch aim ≈ ({x:.3f}, {y:.3f}). Ball is rolling.")
 
-    controller = (
-        RobotCupController(env, ArmTag) if args.control == "robot" else KeyboardCupController(env)
+    x, y = _aim_xy(env)
+    env._interactive_selected_arms = ("right" if x > 0 else "left",)
+    try:
+        env.together_open_gripper(save_freq=None)
+    except Exception:
+        pass
+
+    env._start_ball_motion(expert_demo=False)
+    print(
+        f"Predicted catch aim ≈ ({x:.3f}, {y:.3f}). Ball is rolling. "
+        "Teleop the arm and use G to grasp the cup."
     )
+    print_instructions("Arrows/E/Q move the arm; G opens/closes the gripper to pick the cup.")
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-
-    if args.control == "robot":
-        print_instructions("Space picks up the cup; Space again drops it.")
-    else:
-        print_instructions("Arrows nudge the cup; Space places it.")
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
 
     settle_after = None
     terminal_started_at = None
@@ -281,7 +147,6 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            controller.update(viewer.window)
 
             if n_steps == 0:
                 env.scene.update_render()

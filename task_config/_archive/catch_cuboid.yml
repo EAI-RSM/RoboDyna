@@ -37,8 +37,8 @@ collect_data: true
 eval_video_log: true
 task_args:
   catch_cuboid:
-    cuboid_move_speed_min: 0.032
-    cuboid_move_speed_max: 0.08
+    cuboid_move_speed_min: 0.0224
+    cuboid_move_speed_max: 0.056
     num_appearances: 5
     pop_steps: 90
     grasp_tol: 0.05

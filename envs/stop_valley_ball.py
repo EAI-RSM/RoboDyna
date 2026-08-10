@@ -26,8 +26,8 @@ class stop_valley_ball(catch_valley_ball_v1):
 
     # Wider track (+30% y) and faster ball than catch_valley_ball_v1.
     RAMP_HALF_WIDTH_DEFAULT = 0.1625  # 0.125 * 1.3
-    INITIAL_FORWARD_SPEED_DEFAULT = 0.22  # was 0.15
-    LAUNCH_SPEED_DEFAULT = 0.80  # was 0.55
+    INITIAL_FORWARD_SPEED_DEFAULT = 0.11  # was 0.22 (−50%)
+    LAUNCH_SPEED_DEFAULT = 0.40  # was 0.80 (−50%)
     DROP_TIME_DEFAULT = 0.40  # was 0.60
     # Small ping-pong bat head (radius); handle + holder sized relative to this.
     PANEL_RADIUS_DEFAULT = 0.055

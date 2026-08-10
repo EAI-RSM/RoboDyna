@@ -97,12 +97,12 @@ class catch_shelf_marble(Base_Task):
     OSC_KEY_APPROACH_LEAD_STEPS_DEFAULT = 280
 
     BALL_RADIUS_DEFAULT = 0.014
-    ROLL_SPEED_DEFAULT = 0.35             # m/s, constant scripted speed for both slide and fall legs
+    ROLL_SPEED_DEFAULT = 0.175            # m/s, constant scripted speed for both slide and fall legs
     MAX_FALL_STEPS_DEFAULT = 500          # safety cap (per leg) for the offline descent-plan search
     GRAVITY = 9.81
 
     REACTIVE_MARBLE_DEFAULT = False       # if True: release at play_once start, not on key-press
-    REACTIVE_ROLL_SPEED_DEFAULT = 0.09    # m/s; slower slide speed used only when reactive_marble
+    REACTIVE_ROLL_SPEED_DEFAULT = 0.045   # m/s; slower slide speed used only when reactive_marble
                                            # is on, so the descent lasts long enough for the arm's
                                            # fixed reach/press sequence to still catch up in time
 
