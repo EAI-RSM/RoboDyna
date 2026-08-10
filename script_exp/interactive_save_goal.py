@@ -26,28 +26,23 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    action_failed,
-    try_interactive_grasp,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
     terminal_hold_should_close,
-    resolve_action_arm,
     print_episode_condition,
 )
 
 
 CONTROLS_KEYBOARD = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
-  Space             deploy / freeze keeper in place
 
   Place the keeper before the ball crosses the red line.
 """
 
 CONTROLS_ROBOT = """
   Arrow keys        nudge keeper XY (stay inside the green zone)
-  Space             grasp, then release (arm returns home after drop)
 
   Place the keeper before the ball crosses the red line.
 """
@@ -159,111 +154,30 @@ def _start_shot(env):
                 pass
 
 
-class EdgeKey:
-    def __init__(self):
-        self._prev = False
-
-    def poll(self, down):
-        edge = bool(down) and not self._prev
-        self._prev = bool(down)
-        return edge
-
-
 class KeyboardKeeperController:
     def __init__(self, env):
         self.env = env
         self.deployed = False
-        self._space = EdgeKey()
 
     def update(self, window):
-        if not self.deployed:
-            dx, dy = _nudge_from_keys(window)
-            if dx or dy:
-                p = np.asarray(self.env.goalkeeper.get_pose().p, dtype=float)
-                _set_keeper_xy(self.env, p[0] + dx, p[1] + dy, clip=True)
-        if self._space.poll(window.key_down("space")):
+        if self.deployed:
+            return
+        dx, dy = _nudge_from_keys(window)
+        if dx or dy:
             p = np.asarray(self.env.goalkeeper.get_pose().p, dtype=float)
-            x, y = _set_keeper_xy(self.env, p[0], p[1], clip=True)
-            self.env._freeze_keeper_in_place()
-            self.env._keeper_deployed = True
-            self.deployed = True
-            in_zone = self.env._keeper_in_zone()
-            print(f"Keeper deployed at ({x:.3f}, {y:.3f}); in_zone={in_zone}.")
+            _set_keeper_xy(self.env, p[0] + dx, p[1] + dy, clip=True)
 
 
 class RobotKeeperController:
+    """Teleop only — no Space auto-grasp / auto-release."""
+
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
-        self.arm = None
-        self.holding = False
-        self.deployed = False
-        self.busy = False
-        self._space = EdgeKey()
-
-    def _choose_arm(self):
-        return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
-
-    def grasp(self):
-        self.busy = True
-        self.arm = self._choose_arm()
-        if self.arm is None:
-            self.busy = False
-            return
-        self.env.move(self.env.close_gripper(self.arm, pos=0.6))
-        if try_interactive_grasp(
-            self.env,
-            self.env.goalkeeper,
-            self.arm,
-            pre_grasp_dis=0.10,
-            grasp_dis=0.0,
-            contact_point_id=[0, 1, 2, 3],
-        ):
-            self.env.move(self.env.move_by_displacement(self.arm, z=0.12, move_axis="arm"))
-            self.holding = True
-            print(f"Grasped keeper with {self.arm} arm. Arrows nudge; Space releases.")
-        self.busy = False
-
-    def release(self):
-        if not self.holding:
-            return
-        self.busy = True
-        self.env.move(self.env.open_gripper(self.arm))
-        for _ in range(8):
-            self.env._update_kinematic_tasks()
-            self.env.scene.step()
-        self.env._freeze_keeper_in_place()
-        self.env._keeper_deployed = True
-        self.env._hold_keeper_kinematic()
-        # Match expert policy: clear the drop, then return the arm home.
-        self.env._retreat_arm_home(self.arm, lift_z=0.08)
-        self.holding = False
-        self.deployed = True
-        print(f"Keeper released; in_zone={self.env._keeper_in_zone()}.")
-        self.busy = False
-
-    def nudge(self, window):
-        if self.busy or not self.holding:
-            return
-        dx, dy = _nudge_from_keys(window, step=0.02)
-        if not (dx or dy):
-            return
-        self.busy = True
-        self.env.move(self.env.move_by_displacement(
-            arm_tag=self.arm, x=dx, y=dy, move_axis="world",
-        ))
-        self.busy = False
 
     def update(self, window):
-        if self.busy:
-            return
-        if self._space.poll(window.key_down("space")):
-            if not self.holding:
-                self.grasp()
-            else:
-                self.release()
-            return
-        # Universal viewer controls own arrow/E/Q motion.
+        # Shared viewer G / arrows / E/Q own gripper and arm motion.
+        return
 
 
 def main():
