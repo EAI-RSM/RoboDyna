@@ -28,7 +28,6 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     action_failed,
     make_viewer_view_toggle,
     print_mode_controls,
@@ -478,7 +477,8 @@ def main():
     pacer = RealtimePhysicsPacer(env)
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             controller.update(viewer.window)
 
             if n_steps == 0:

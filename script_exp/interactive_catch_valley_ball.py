@@ -31,7 +31,6 @@ from _interactive_common import (  # noqa: E402
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     terminal_hold_should_close,
     print_episode_condition,
 )
@@ -189,7 +188,8 @@ def main():
 
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             grip.update(viewer.window)
 
             # Keep the box dynamic every frame (in case settle helpers re-freeze).

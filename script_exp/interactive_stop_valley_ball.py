@@ -32,7 +32,6 @@ from _interactive_common import (  # noqa: E402
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     terminal_hold_should_close,
     resolve_action_arm,
     print_episode_condition,
@@ -117,8 +116,11 @@ def _bat_face_quat(env):
 
 def _clamp_bat_xyz(env, x, y, z):
     """Keep the bat mid-air past the red line and within a reachable band."""
-    min_clear = float(getattr(env, "INTERCEPT_MIN_CLEARANCE_DEFAULT", 0.06))
-    min_z = float(env.table_top + min_clear + 0.5 * float(env.panel_radius))
+    if hasattr(env, "_bat_min_center_z"):
+        min_z = float(env._bat_min_center_z())
+    else:
+        min_clear = float(getattr(env, "INTERCEPT_MIN_CLEARANCE_DEFAULT", 0.06))
+        min_z = float(env.table_top + min_clear + 0.5 * float(env.panel_radius))
     max_z = float(env.table_top + 0.28)
     z = float(np.clip(z, min_z, max_z))
     y = float(np.clip(y, -0.45, 0.30))
@@ -428,7 +430,8 @@ def main():
     pacer = RealtimePhysicsPacer(env)
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             controller.update(viewer.window)
 
             if n_steps == 0:

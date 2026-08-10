@@ -33,7 +33,6 @@ if str(ROOT / "script_exp") not in sys.path:
 
 from script_exp._interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     action_failed,
     configure_task,
     flash_gripper_failure,
@@ -1115,7 +1114,8 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     physics_steps = 0
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             if n_steps == 0:
                 env.scene.update_render()
                 viewer.render()

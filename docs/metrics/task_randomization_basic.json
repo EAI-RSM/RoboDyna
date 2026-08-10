@@ -52,7 +52,7 @@
             "door_open_once",
             "enable_distractor"
           ],
-          "what_it_does": "door_open_once=false, enable_distractor=false — each door reopens up to door_open_max (default 3) then locks; no black distractor"
+          "what_it_does": "door_open_once=false, enable_distractor=false — at most door_open_max total opens across all doors (default 3) then all lock; no black distractor"
         },
         {
           "name": "opt1",
@@ -124,7 +124,7 @@
       "fixed_but_configurable": [
         {
           "param": "door_open_angle_deg / door_open_speed_deg / door_open_duration_sec / door_open_max",
-          "notes": "trapdoor kinematics; door_open_max default 3 (door_open_once forces 1)"
+          "notes": "trapdoor kinematics; door_open_max default 3 total opens across doors (door_open_once: 1 per door)"
         },
         {
           "param": "press_hold_steps / button_press_depth / ball_bounce_height / marble_protrude_frac",

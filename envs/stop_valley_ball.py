@@ -492,6 +492,31 @@ class stop_valley_ball(catch_valley_ball_v1):
         """Identity quat: cylinder axis along +X, circular face toward the ramp."""
         return [1.0, 0.0, 0.0, 0.0]
 
+    def _bat_min_center_z(self) -> float:
+        """Lowest head-center Z that keeps bat geometry above the tabletop.
+
+        The head is a cylinder whose axis is +X, so the disc extends
+        ``panel_radius`` below the actor origin. The handle sits slightly lower.
+        Kinematic welding teleports the bat, so we clamp instead of relying on
+        PhysX table contacts.
+        """
+        head_below = float(getattr(self, "panel_radius", self.PANEL_RADIUS_DEFAULT))
+        handle_below = 0.012 + float(
+            getattr(self, "handle_half_w", self.HANDLE_HALF_W_DEFAULT)
+        )
+        return float(self.table_top) + max(head_below, handle_below) + 0.002
+
+    def interactive_ee_z_floor(self, side, pose=None):
+        """Keep the welded bat from tunneling through the table during teleop."""
+        if not bool(getattr(self, "_bowl_welded", False)):
+            return None
+        arm = str(getattr(self, "_bowl_arm", "") or "")
+        if arm and str(side) != arm:
+            return None
+        offset = getattr(self, "_bowl_ee_offset", None)
+        off_z = float(offset[2]) if offset is not None else 0.0
+        return float(self._bat_min_center_z() - off_z)
+
     def _weld_bowl_to_end_effector(self, arm_tag):
         """Weld like the parent, but keep the bat face locked toward the ramp."""
         # Snap orientation before measuring the EE offset so the weld carries the
@@ -512,7 +537,8 @@ class stop_valley_ball(catch_valley_ball_v1):
         target_position = (
             self._end_effector_position(self._bowl_arm) + self._bowl_ee_offset
         )
-        target_position[2] = max(float(target_position[2]), self.table_top)
+        # Clamp head center so the disc/handle cannot sink through the table.
+        target_position[2] = max(float(target_position[2]), self._bat_min_center_z())
         target = sapien.Pose(target_position.tolist(), self._bat_face_quat())
         self.bowl.actor.set_pose(target)
         if rigid is not None:

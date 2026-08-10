@@ -31,7 +31,6 @@ from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,
     report_task_result,
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     terminal_hold_should_close,
     print_mode_controls,
     print_episode_condition,
@@ -317,7 +316,8 @@ def main():
 
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             if stamp_controller is not None and arrow_presses is not None:
                 arrow_presses.update(viewer.window, stamp_controller)
                 stamp_controller.update()

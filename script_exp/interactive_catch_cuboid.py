@@ -33,7 +33,6 @@ from _interactive_common import (  # noqa: E402
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     terminal_hold_should_close,
     print_episode_condition,
 )
@@ -242,6 +241,14 @@ def _selected_arms(env, fallback=("right",)):
     return selected if selected else tuple(fallback)
 
 
+def _mark_latch_failure(controller, env, arms, detail="insufficient contact"):
+    """Closing without a solid pinch ends the episode as failure."""
+    action_failed(env, arms, detail=detail)
+    controller.done = True
+    controller.fail_detail = detail
+    print(f"Latch failed ({detail}) — episode FAILURE.")
+
+
 class KeyboardCatchController:
     """On G close, latch the cuboid; user lifts for success."""
 
@@ -260,6 +267,8 @@ class KeyboardCatchController:
         self._pending = None  # (arms, cuboid_indices, steps_left)
         self._prev_width = {"left": 1.0, "right": 1.0}
         self._latched = set()
+        self.done = False
+        self.fail_detail = None
 
     def _begin_latch(self, arms):
         indices = [_cuboid_idx_for_arm(self.dual, a) for a in arms]
@@ -277,13 +286,19 @@ class KeyboardCatchController:
             self._pending = (arms, indices, left)
             return
         self._pending = None
+        attempted = []
         for arm_name, idx in zip(arms, indices):
             if idx in self._latched:
                 continue
+            attempted.append(idx)
             if _try_latch_catch(self.env, idx, self.ArmTag(arm_name)):
                 self._latched.add(idx)
+        if attempted and not all(idx in self._latched for idx in attempted):
+            _mark_latch_failure(self, self.env, arms)
 
     def update(self, window):
+        if self.done:
+            return
         self._tick_pending()
         if self._pending:
             return
@@ -325,6 +340,8 @@ class RobotCatchController:
         self._highlight.set_selected(self.selected)
         self._prev_width = {"left": 1.0, "right": 1.0}
         self._latched = set()
+        self.done = False
+        self.fail_detail = None
 
     def _select(self, side):
         side = "left" if side == "left" else "right"
@@ -340,22 +357,20 @@ class RobotCatchController:
         for side in arms:
             _close_gripper_direct(self.env, side)
         self.env._dwell(15)
-        ok_any = False
+        attempted = []
         for side in arms:
             idx = _cuboid_idx_for_arm(self.dual, side)
             if idx in self._latched:
                 continue
+            attempted.append(idx)
             if _try_latch_catch(self.env, idx, self.ArmTag(side)):
                 self._latched.add(idx)
-                ok_any = True
-        if not ok_any and not any(
-            _cuboid_idx_for_arm(self.dual, s) in self._latched for s in arms
-        ):
-            action_failed(self.env, arms, detail="latch failed")
+        if attempted and not all(idx in self._latched for idx in attempted):
+            _mark_latch_failure(self, self.env, arms)
         self.busy = False
 
     def update(self, window):
-        if self.busy:
+        if self.done or self.busy:
             return
         selected = _selected_arms(self.env, (self.selected,))
         if len(selected) == 1:
@@ -455,7 +470,8 @@ def main():
 
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             controller.update(viewer.window)
 
             if n_steps == 0:
@@ -497,11 +513,12 @@ def main():
                 if settle_after is None:
                     settle_after = time.perf_counter()
                 elif time.perf_counter() - settle_after >= 1.0:
-                    detail = (
-                        f"missed after {cycles_done}/{num_appearances} appearances"
-                        if appearances_exhausted
-                        else f"catches={env.catches}"
-                    )
+                    if getattr(controller, "done", False) and not env.check_success():
+                        detail = getattr(controller, "fail_detail", None) or "insufficient contact"
+                    elif appearances_exhausted:
+                        detail = f"missed after {cycles_done}/{num_appearances} appearances"
+                    else:
+                        detail = f"catches={env.catches}"
                     report_task_result(env, detail)
                     terminal_started_at = time.perf_counter()
     finally:

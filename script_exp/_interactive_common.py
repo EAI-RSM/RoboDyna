@@ -1240,6 +1240,18 @@ class UniversalRobotControls:
         bias = float(getattr(self.env, "table_z_bias", 0.0) or 0.0)
         return 0.74 + bias
 
+    def _support_surface_z(self, side, pose) -> float:
+        """World Z that fingertips must stay at or above (table, or task override)."""
+        support_fn = getattr(self.env, "interactive_support_z", None)
+        if callable(support_fn):
+            try:
+                override = support_fn(side, pose)
+                if override is not None:
+                    return float(override)
+            except Exception:
+                pass
+        return self._table_top_z()
+
     def _gripper_min_world_z(self, side: str) -> float | None:
         """Lowest world Z of this arm's finger / gripper collision AABBs."""
         robot = getattr(self.env, "robot", None)
@@ -1281,7 +1293,8 @@ class UniversalRobotControls:
         """Absolute world-frame (z_min, z_max) for Q/E teleop.
 
         Max = original gripper EE height. Min keeps measured finger AABBs at or
-        above the table (plus a small clearance).
+        above the support surface (table, or task ``interactive_support_z`` such
+        as a box top) plus a small clearance.
         """
         origin = self._origin_pose.get(side)
         if origin is not None:
@@ -1294,7 +1307,7 @@ class UniversalRobotControls:
         except Exception:
             ee_z = float(pose[2])
         z_min = (
-            self._table_top_z()
+            self._support_surface_z(side, pose)
             + self._finger_below_ee(side, ee_z)
             + float(self.FINGER_TABLE_CLEARANCE)
         )

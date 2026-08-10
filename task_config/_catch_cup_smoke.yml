@@ -74,7 +74,7 @@ task_args:
     door_open_speed_deg: 220.0  # deg/s; trapdoor swing rate
     door_open_duration_sec: 0.5 # s; how long a door stays commanded open
     door_open_once: false       # opt1: true = each door opens only once then locks closed
-    door_open_max: 3            # max open/close cycles per door when door_open_once=false
+    door_open_max: 3            # max open/close cycles total (all doors) when door_open_once=false
     enable_distractor: false    # opt2: true = spawn black distractor marble (opposite direction)
     distractor_collide: false   # false = pass through, true = bounce on contact
     distractor_height_offset: 0.0  # m; keep 0 so distractor matches target marble height (Z)

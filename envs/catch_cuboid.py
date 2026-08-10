@@ -668,6 +668,10 @@ class catch_cuboid(Base_Task):
             for i in range(len(getattr(self, "cuboids", [])))
         ]
 
+    def interactive_support_z(self, side=None, pose=None):
+        """Interactive teleop: fingertips may not go below the hole-board top."""
+        return float(self.board_top_z)
+
     # ------------------------------------------------------------- success
     def check_success(self):
         """Success only if each required cuboid is grasped and pulled out of its hole."""

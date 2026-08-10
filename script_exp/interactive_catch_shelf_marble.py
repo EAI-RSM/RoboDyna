@@ -31,7 +31,6 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     report_task_result,
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     terminal_hold_should_close,
     print_mode_controls,
     print_episode_condition,
@@ -147,7 +146,8 @@ def main():
 
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             if args.control == "keyboard":
                 _update_keyboard(env, viewer.window)
 

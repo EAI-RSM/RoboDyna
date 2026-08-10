@@ -28,7 +28,6 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     UniversalRobotControls,
     add_robot_motion_arg,
     make_viewer_view_toggle,
@@ -150,7 +149,8 @@ def main():
 
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
             if n_steps == 0:
                 env.scene.update_render()
                 viewer.render()
@@ -179,6 +179,9 @@ def main():
                 elif time.perf_counter() - left_track_since >= settle_s:
                     report_task_result(env, f"ball_mode={mode}")
                     terminal_started_at = time.perf_counter()
+            elif bool(getattr(env, "doors_open_budget_exhausted", lambda: False)()):
+                report_task_result(env, "door_open_budget_exhausted")
+                terminal_started_at = time.perf_counter()
             else:
                 left_track_since = None
     finally:

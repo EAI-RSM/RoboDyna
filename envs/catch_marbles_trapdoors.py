@@ -23,10 +23,11 @@ class catch_marbles_trapdoors(Base_Task):
     (latched — a later bounce back onto the upper floor still counts).
 
     Config options (task_args.catch_marbles_trapdoors):
-      default — each door may open/close up to ``door_open_max`` times (default 3), then locks.
+      default — at most ``door_open_max`` open/close cycles **in total across all doors**
+          (default 3), then every door locks closed.
       door_open_once / opt1 — each door may be opened only once, then stays locked closed
-          (overrides ``door_open_max`` to 1).
-      door_open_max — max open/close cycles per door when not once-only (default 3).
+          (overrides ``door_open_max`` to 1 per door).
+      door_open_max — max open/close cycles across all doors when not once-only (default 3).
       enable_distractor / opt2 — spawn a black distractor marble from the opposite direction
           at the same height as the target, offset on Y so the lanes do not collide
           (pass-through by default).
@@ -72,13 +73,13 @@ class catch_marbles_trapdoors(Base_Task):
     DOOR_SLIDE_SPEED_DEFAULT = 0.40
     DOOR_OPEN_DURATION_SEC_DEFAULT = 0.5
     DOOR_OPEN_ONCE_DEFAULT = False
-    DOOR_OPEN_MAX_DEFAULT = 3  # open/close cycles per door (door_open_once forces 1)
+    DOOR_OPEN_MAX_DEFAULT = 3  # total open/close cycles across all doors (once-mode: 1/door)
     # Legacy hinge keys still accepted but ignored (slide replaces swing).
     DOOR_OPEN_ANGLE_DEG_DEFAULT = 95.0
     DOOR_OPEN_SPEED_DEG_DEFAULT = 220.0
 
     BALL_RADIUS_DEFAULT = 0.012
-    BALL_SPEED_DEFAULT = 0.18
+    BALL_SPEED_DEFAULT = 0.144  # -20% vs 0.18; episode still samples ±20%
     BALL_SPEED_SCALE_MIN_DEFAULT = 0.8   # sample marble speeds in [scale_min, scale_max] * ball_speed
     BALL_SPEED_SCALE_MAX_DEFAULT = 1.2
     BALL_X_MARGIN_DEFAULT = 0.02
@@ -216,7 +217,7 @@ class catch_marbles_trapdoors(Base_Task):
             default=self.DOOR_OPEN_ONCE_DEFAULT,
         )
         self.door_open_max = max(1, int(c.get("door_open_max", self.DOOR_OPEN_MAX_DEFAULT)))
-        # Once-only option overrides the reusable limit to a single open/close cycle.
+        # Once-only: 1 open per door. Otherwise: shared budget across all doors.
         self._door_open_limit = 1 if self.door_open_once else int(self.door_open_max)
         button_x_cfg = c.get("button_x", None)
         self.button_x = list(button_x_cfg) if button_x_cfg is not None else self._aligned_button_x_positions()
@@ -761,41 +762,89 @@ class catch_marbles_trapdoors(Base_Task):
         z_lo, z_hi = self._lower_box_z_bounds()
         return self._marble_in_box(self.distractor, z_lo, z_hi)
 
+    def _total_door_opens(self) -> int:
+        return int(sum(int(c) for c in self._door_open_count))
+
     def _door_at_open_limit(self, idx: int) -> bool:
+        """True when ``idx`` may not start a new open/close cycle.
+
+        ``door_open_once``: each door has its own 1-open budget.
+        Otherwise: shared ``door_open_max`` budget across every door/color.
+        """
         if idx < 0 or idx >= len(self._door_open_count):
             return True
-        return int(self._door_open_count[idx]) >= int(self._door_open_limit)
+        if self.door_open_once:
+            return int(self._door_open_count[idx]) >= int(self._door_open_limit)
+        return self._total_door_opens() >= int(self._door_open_limit)
+
+    def _lock_closed_doors_after_budget(self):
+        """After the global open budget is spent, lock doors that are fully closed."""
+        if self.door_open_once:
+            return
+        if self._total_door_opens() < int(self._door_open_limit):
+            return
+        for i in range(len(self.door_tiles)):
+            if self._door_locked_closed[i]:
+                continue
+            # Never lock mid-cycle — the timed close must still finish.
+            if (
+                bool(self._door_open[i])
+                or float(self._door_slide[i]) > 1e-4
+                or float(self._door_target_slide[i]) > 1e-4
+            ):
+                continue
+            self._door_locked_closed[i] = True
+
+    def doors_open_budget_exhausted(self) -> bool:
+        """True when the shared open budget is spent and every door has fully closed.
+
+        Interactive episodes treat this as failure unless the marble was already caught.
+        """
+        if self.door_open_once:
+            return False
+        if not self.door_tiles:
+            return False
+        if self._total_door_opens() < int(self._door_open_limit):
+            return False
+        return not any(
+            bool(self._door_open[i])
+            or float(self._door_slide[i]) > 1e-4
+            or float(self._door_target_slide[i]) > 1e-4
+            for i in range(len(self.door_tiles))
+        )
 
     def _advance_doors(self):
         dt = float(self.scene.get_timestep())
         step = abs(self.door_slide_speed) * dt
         for idx in range(len(self.door_tiles)):
-            if self._door_open[idx] and not self._door_locked_closed[idx]:
-                self._door_open_time_left[idx] = max(0.0, float(self._door_open_time_left[idx]) - dt)
+            # Timed auto-close always runs while the door is in an open cycle.
+            # Locking happens only after a full close (see below).
+            if self._door_open[idx]:
+                self._door_open_time_left[idx] = max(
+                    0.0, float(self._door_open_time_left[idx]) - dt
+                )
                 if self._door_open_time_left[idx] <= 1e-9:
                     self._door_target_slide[idx] = 0.0
-                    # Lock after the final allowed open/close cycle finishes.
-                    if self._door_at_open_limit(idx):
-                        self._door_locked_closed[idx] = True
             cur = float(self._door_slide[idx])
             tgt = float(self._door_target_slide[idx])
             if abs(cur - tgt) <= 1e-4:
-                # Fully closed again: allow reopening until the per-door open limit.
+                # Fully closed again: clear the cycle, then lock if budget is spent.
                 if (
                     self._door_open[idx]
                     and abs(cur) <= 1e-4
                     and abs(tgt) <= 1e-4
-                    and not self._door_locked_closed[idx]
-                    and not self._door_at_open_limit(idx)
                 ):
                     self._door_open[idx] = False
                     self._button_pressed[idx] = False
+                    if self._door_at_open_limit(idx):
+                        self._door_locked_closed[idx] = True
                 continue
             if cur < tgt:
                 cur = min(cur + step, tgt)
             else:
                 cur = max(cur - step, tgt)
             self._set_door_pose(idx, cur)
+        self._lock_closed_doors_after_budget()
 
     def _marble_over_door(self, marble, mode: str, door_idx: int) -> bool:
         if (
@@ -1012,12 +1061,20 @@ class catch_marbles_trapdoors(Base_Task):
                         if 0 <= idx < len(self.button_color_names)
                         else "?"
                     )
-                    used = int(self._door_open_count[idx]) if idx < len(self._door_open_count) else 0
+                    used = self._total_door_opens()
+                    if self.door_open_once:
+                        used = (
+                            int(self._door_open_count[idx])
+                            if idx < len(self._door_open_count)
+                            else 0
+                        )
+                        budget = f"{used}/{self._door_open_limit} opens for this door"
+                    else:
+                        budget = f"{used}/{self._door_open_limit} opens total"
                     print(
                         f"[catch_marbles_trapdoors] pressed button {idx} ({color}); "
                         f"door open ≤ {self.door_open_duration_sec:.2f}s "
-                        f"({used}/{self._door_open_limit} opens used; "
-                        f"release key fully to press again)"
+                        f"({budget}; release key fully to press again)"
                     )
         # Mirror held set from visual state so release clears the latch.
         self._buttons_held = {i for i, on in enumerate(bank.held_mask()) if on}
@@ -1199,9 +1256,9 @@ class catch_marbles_trapdoors(Base_Task):
         Holding the key does not extend the open window.  Another open needs a
         fresh press edge after the key has fully sprung back (enforced by
         ``ReactivePushButtons``).  While the door is already open, a new edge
-        restarts the timer without consuming another open-count slot.  Each door
-        locks after ``_door_open_limit`` open/close cycles (default 3; 1 if
-        ``door_open_once``).
+        restarts the timer without consuming another open-count slot.  Shared
+        budget: at most ``_door_open_limit`` open/close cycles across all doors
+        (default 3), unless ``door_open_once`` which locks each door after one.
         """
         if btn_idx < 0 or btn_idx >= self.n_buttons:
             return False
@@ -1223,6 +1280,9 @@ class catch_marbles_trapdoors(Base_Task):
         # Fresh edge → fresh open window (hold does not keep refreshing this).
         self._door_open_time_left[btn_idx] = max(0.0, float(self.door_open_duration_sec))
         self._door_target_slide[btn_idx] = float(self.door_slide_travel)
+        # Lock other fully-closed doors once the shared budget is spent; this
+        # door stays unlocked until its timed close finishes.
+        self._lock_closed_doors_after_budget()
         return True
 
     def _press_button(self, arm_tag: ArmTag, btn_idx: int):
@@ -1372,6 +1432,8 @@ class catch_marbles_trapdoors(Base_Task):
         self.info["door_open_max"] = int(self.door_open_max)
         self.info["door_open_limit"] = int(self._door_open_limit)
         self.info["door_open_count"] = list(self._door_open_count)
+        self.info["door_open_total"] = self._total_door_opens()
+        self.info["doors_open_budget_exhausted"] = bool(self.doors_open_budget_exhausted())
         self.info["enable_distractor"] = bool(self.enable_distractor)
         self.info["distractor_collide"] = bool(self.distractor_collide)
         self.info["mutex_violation"] = bool(self._mutex_violation)
@@ -1406,6 +1468,8 @@ class catch_marbles_trapdoors(Base_Task):
             "door_open_max": int(self.door_open_max),
             "door_open_limit": int(self._door_open_limit),
             "door_open_count": list(self._door_open_count),
+            "door_open_total": self._total_door_opens(),
+            "doors_open_budget_exhausted": bool(self.doors_open_budget_exhausted()),
             "buttons_held": held_mask,
             "buttons_held_count": int(sum(held_mask)),
             "mutex_violation": bool(self._mutex_violation),
