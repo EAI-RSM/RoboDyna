@@ -6,8 +6,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control robot
 
-Press Space to grasp the bat, then use arrow keys for world XY and E/Q for
-height while the gripper holds it.
+Close the gripper (G) on the bat handle to latch it, then teleop to the intercept.
 """
 
 import argparse
@@ -28,11 +27,12 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     action_failed,
-    try_interactive_grasp,
+    gripper_width,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
+    begin_interactive_frame,
     terminal_hold_should_close,
     resolve_action_arm,
     print_episode_condition,
@@ -40,14 +40,19 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Space             grasp the bat
   Arrow keys        move bat in XY
   E / Q             move bat height
 """
 
 CONTROLS_ROBOT = """
-  Space             grasp the bat
+  G                 open / close selected gripper (close on bat handle to latch; 1/2 pick arm)
+  Arrow keys        move selected arm in XY
+  E / Q             move selected arm in Z
 """
+
+# EE/TCP must be roughly this close to the handle to latch without contact.
+# Wrist EE sits above the fingers, so this is looser than a finger-pad check.
+_LATCH_PROXIMITY_M = 0.11
 
 
 def _embodiment_config(robot_file):
@@ -162,6 +167,106 @@ def _nudge_from_keys(window, xy_step=0.045, z_step=0.030):
     return float(dx), float(dy), float(dz)
 
 
+def _bat_handle_segment(env):
+    """World endpoints of the graspable handle (head rim → tip along −Y)."""
+    head = np.asarray(env.panel.get_pose().p, dtype=float)
+    head_r = float(getattr(env, "panel_radius", env.PANEL_RADIUS_DEFAULT))
+    h_len = float(getattr(env, "handle_half_len", env.HANDLE_HALF_LEN_DEFAULT))
+    # Handle center is at −(head_r + h_len) in Y; tip is a further h_len along −Y.
+    start = head + np.array([0.0, -head_r, -0.012], dtype=float)
+    end = head + np.array([0.0, -(head_r + 2.0 * h_len), -0.012], dtype=float)
+    return start, end
+
+
+def _point_segment_distance(point, start, end) -> float:
+    point = np.asarray(point, dtype=float)
+    start = np.asarray(start, dtype=float)
+    end = np.asarray(end, dtype=float)
+    span = end - start
+    denom = float(np.dot(span, span))
+    if denom < 1e-12:
+        return float(np.linalg.norm(point - start))
+    t = float(np.clip(np.dot(point - start, span) / denom, 0.0, 1.0))
+    return float(np.linalg.norm(point - (start + t * span)))
+
+
+def _gripper_probe_points(env, arm) -> list:
+    """World points to test nearness (TCP preferred, then EE). Works for left or right."""
+    side = str(arm)
+    points = []
+    robot = getattr(env, "robot", None)
+    if robot is not None:
+        tcp_fn = getattr(robot, f"get_{side}_tcp_pose", None)
+        if callable(tcp_fn):
+            try:
+                points.append(np.asarray(tcp_fn()[:3], dtype=float))
+            except Exception:
+                pass
+        ee_fn = getattr(robot, f"get_{side}_ee_pose", None)
+        if callable(ee_fn):
+            try:
+                points.append(np.asarray(ee_fn()[:3], dtype=float))
+            except Exception:
+                pass
+    if not points:
+        try:
+            points.append(np.asarray(env._end_effector_position(arm), dtype=float))
+        except Exception:
+            pass
+    return points
+
+
+def _selected_arm_gripper_link_names(env, arm) -> set[str]:
+    """Link names on the selected arm that count as gripper contact."""
+    side = str(arm)
+    names = set()
+    robot = getattr(env, "robot", None)
+    if robot is None:
+        return names
+    art = getattr(robot, f"{side}_entity", None)
+    if art is None:
+        return names
+    for link in art.get_links():
+        name = link.get_name()
+        if name in (
+            "finger_left",
+            "finger_right",
+            "gripper_left",
+            "gripper_right",
+            "wsg_50_base_link",
+            "base_link_gripper_left",
+            "base_link_gripper_right",
+        ) or "finger" in name or "gripper" in name:
+            names.add(name)
+    return names
+
+
+def _gripper_can_latch_bat(env, arm) -> bool:
+    """True when the selected arm's fingers contact the bat or sit on the handle.
+
+    Applies to left and right — uses the currently selected arm only.
+    """
+    bat_name = getattr(env, "BAT_NAME", "pingpong_bat")
+    arm_links = _selected_arm_gripper_link_names(env, arm)
+    try:
+        for contact in env.scene.get_contacts():
+            name0 = contact.bodies[0].entity.name
+            name1 = contact.bodies[1].entity.name
+            if bat_name not in (name0, name1):
+                continue
+            other = name1 if name0 == bat_name else name0
+            if other in arm_links or other in getattr(env.robot, "gripper_name", []):
+                return True
+    except Exception:
+        pass
+
+    start, end = _bat_handle_segment(env)
+    for point in _gripper_probe_points(env, arm):
+        if _point_segment_distance(point, start, end) <= _LATCH_PROXIMITY_M:
+            return True
+    return False
+
+
 class EdgeKey:
     def __init__(self):
         self._prev = False
@@ -173,137 +278,69 @@ class EdgeKey:
 
 
 class KeyboardBatController:
+    """Free bat teleport (no Space). Prefer --control robot for gripper latch."""
+
     def __init__(self, env):
         self.env = env
-        self.ready = False
-        self._space = EdgeKey()
-        # Start at the intercept plane; arrow keys provide all adjustments.
-        ix, iy, iz = _intercept_xyz(env)
-        _set_bat_xyz(env, ix, iy, iz)
+        env._bowl_ready = True
 
     def update(self, window):
-        if not self.ready:
-            dx, dy, dz = _nudge_from_keys(window)
-            if dx or dy or dz:
-                p = np.asarray(self.env.panel.get_pose().p, dtype=float)
-                _set_bat_xyz(self.env, p[0] + dx, p[1] + dy, p[2] + dz)
-        if self._space.poll(window.key_down("space")):
-            p = np.asarray(self.env.panel.get_pose().p, dtype=float)
-            x, y, z = _set_bat_xyz(self.env, p[0], p[1], p[2])
-            self.env._bowl_ready = True
-            self.ready = True
-            print(f"Bat armed mid-air at ({x:.3f}, {y:.3f}, {z:.3f}).")
-
-
-class RobotBatMotion:
-    """Fast non-blocking joint interpolation for a bat welded to one gripper."""
-
-    DURATION = 0.04
-
-    def __init__(self, env, arm):
-        self.env = env
-        self.arm = arm
-        self.side = str(arm)
-        self._start = None
-        self._target = None
-        self._started_at = None
-
-    def _drive_qpos(self):
-        joints = self.env.robot.left_arm_joints if self.side == "left" else self.env.robot.right_arm_joints
-        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
-
-    def _ee_pose(self):
-        get_pose = self.env.robot.get_left_ee_pose if self.side == "left" else self.env.robot.get_right_ee_pose
-        return np.asarray(get_pose(), dtype=np.float64)
-
-    def move_bat_to(self, x, y, z):
-        """Queue a short world-frame move; ignore new keys until it completes."""
-
-        if self._started_at is not None:
-            return False
-        x, y, z = _clamp_bat_xyz(self.env, x, y, z)
-        panel = np.asarray(self.env.panel.get_pose().p, dtype=np.float64)
-        pose = self._ee_pose().copy()
-        pose[:3] += np.asarray([x, y, z], dtype=np.float64) - panel
-        planner = self.env.robot.left_plan_path if self.side == "left" else self.env.robot.right_plan_path
-        result = planner(pose.tolist(), last_qpos=np.asarray(self._drive_qpos(), dtype=np.float32))
-        if result is None or result.get("status") != "Success":
-            return False
-        self._start = self._drive_qpos()
-        self._target = np.asarray(result["position"][-1], dtype=np.float64)
-        self._started_at = time.perf_counter()
-        return True
-
-    def update(self):
-        if self._started_at is None:
+        dx, dy, dz = _nudge_from_keys(window)
+        if not (dx or dy or dz):
             return
-        progress = min(1.0, (time.perf_counter() - self._started_at) / self.DURATION)
-        smooth = progress * progress * (3.0 - 2.0 * progress)
-        delta = self._target - self._start
-        position = self._start + delta * smooth
-        velocity = delta / self.DURATION if progress < 1.0 else np.zeros_like(delta)
-        self.env.robot.set_arm_joints(position, velocity, self.side)
-        if progress >= 1.0:
-            self._started_at = None
-
-    @property
-    def moving(self):
-        return self._started_at is not None
+        p = np.asarray(self.env.panel.get_pose().p, dtype=float)
+        _set_bat_xyz(self.env, p[0] + dx, p[1] + dy, p[2] + dz)
 
 
 class RobotBatController:
+    """Latch the bat when G closes the gripper on/near the handle (no Space)."""
+
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
         self.arm = None
         self.holding = False
         self.busy = False
-        self._space = EdgeKey()
-        self.motion = None
+        self._g = EdgeKey()
+        self._f = EdgeKey()
+        self._prev_width = {"left": 1.0, "right": 1.0}
 
-    def _choose_arm(self):
-        return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
-
-    def grasp(self):
+    def _latch(self):
         self.busy = True
-        self.arm = self._choose_arm()
+        self.arm = resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
         if self.arm is None:
             self.busy = False
             return
-        # Preserve the task's normal grasp sequence; it establishes the weld
-        # offset used by the held-bat controller.
-        if try_interactive_grasp(
-            self.env, self.env.panel, self.arm, pre_grasp_dis=0.025, grasp_dis=0.025,
-        ):
-            self.env._weld_bowl_to_end_effector(self.arm)
-            self.holding = True
-            self.env._bowl_ready = True
-            self.motion = RobotBatMotion(self.env, self.arm)
-            panel = np.asarray(self.env.panel.get_pose().p, dtype=np.float64)
-            # Clear the holder/table, then leave all lateral placement to teleop.
-            self.motion.move_bat_to(panel[0], panel[1], panel[2] + 0.10)
-            print(f"Picked up bat with {self.arm} arm. Use arrows/E/Q to adjust it.")
+        side = str(self.arm)
+        # Let the shared G close settle contacts before judging proximity.
+        try:
+            self.env.robot.set_gripper(0.0, side, gripper_eps=0.0)
+        except Exception:
+            pass
+        self.env._dwell(12)
+        if not _gripper_can_latch_bat(self.env, self.arm):
+            action_failed(self.env, (side,), detail="close on the bat handle to latch")
+            self.busy = False
+            return
+        self.env.bowl = self.env.panel
+        self.env._weld_bowl_to_end_effector(self.arm)
+        self.holding = True
+        self.env._bowl_ready = True
+        print(f"Latched bat to {side} gripper. Teleop to the intercept.")
         self.busy = False
 
-    def nudge(self, window):
-        if self.busy or not self.holding or self.motion is None:
-            return
-        dx, dy, dz = _nudge_from_keys(window)
-        if not (dx or dy or dz):
-            return
-        p = np.asarray(self.env.panel.get_pose().p, dtype=np.float64)
-        self.motion.move_bat_to(p[0] + dx, p[1] + dy, p[2] + dz)
-
     def update(self, window):
-        if self.motion is not None:
-            self.motion.update()
-        if self.busy:
+        if self.busy or self.holding:
             return
-        if self._space.poll(window.key_down("space")):
-            if not self.holding:
-                self.grasp()
-            return
-        # Universal viewer controls own arrow/E/Q motion.
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
+        arms = list(selected) if selected else []
+        g_close = (
+            self._g.poll(window.key_down("g")) or self._f.poll(window.key_down("f"))
+        ) and any(self._prev_width.get(a, 1.0) > 0.5 for a in arms)
+        for side in ("left", "right"):
+            self._prev_width[side] = gripper_width(self.env, side)
+        if g_close:
+            self._latch()
 
 
 def main():
@@ -320,7 +357,7 @@ def main():
         "--robot-motion",
         choices=("planner", "interpolate"),
         default="interpolate",
-        help="Retained for compatibility; held-bat teleoperation uses fast interpolation.",
+        help="Retained for compatibility; arm teleop uses UniversalRobotControls.",
     )
     parser.add_argument(
         "--task-arg",
@@ -359,6 +396,10 @@ def main():
         "left" if env.mirrored else "right",
     )
     print_episode_condition(env)
+    try:
+        env.together_open_gripper(save_freq=None)
+    except Exception:
+        pass
     # setup_demo already starts ball motion with expert_demo=False.
     ix, iy, iz = _intercept_xyz(env)
     print(
@@ -375,15 +416,19 @@ def main():
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
 
-    print_instructions("Press Space to grasp the bat; arrows move XY and E/Q move height.")
+    if args.control == "robot":
+        print_instructions(
+            "Teleop to the bat handle, close with G to latch, then move to the intercept."
+        )
+    else:
+        print_instructions("Arrow keys move the bat in XY; E/Q change height.")
 
     settle_after = None
     terminal_started_at = None
     pacer = RealtimePhysicsPacer(env)
     try:
         while not viewer.closed:
-            n_steps = pacer.begin_frame()
-            views.update(viewer.window)
+            n_steps = begin_interactive_frame(views, pacer, viewer.window)
             controller.update(viewer.window)
 
             if n_steps == 0:

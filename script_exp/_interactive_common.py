@@ -640,6 +640,9 @@ class ViewerViewToggle:
     sapien's ``focus_camera`` follow-path is disabled in this build
     (``_handle_focused_camera`` commented out), so we copy the active camera
     pose onto the free-fly viewer each frame instead.
+
+    Interactive physics / kinematic progress stays paused until the head camera
+    has been locked for at least one rendered frame (``progress_ready``).
     """
 
     # Kept for callers / legacy ``overhead=`` framing helpers; not used by V.
@@ -674,6 +677,11 @@ class ViewerViewToggle:
         self._head = head_camera
         self.robot_controls = robot_controls
         self._warned_missing_gripper = False
+        # Hold task progress until head view is actually live in the window.
+        self.progress_ready = False
+        self._head_view_seen = False
+        if self.env is not None:
+            self.env._interactive_progress_ready = False
         if self._head is None:
             self._head = resolve_head_camera(env, viewer)
         if self._head is None and warn_missing_head:
@@ -682,7 +690,45 @@ class ViewerViewToggle:
         self._disable_wasd_camera_move()
         modes = self._view_cycle_modes()
         self.mode = modes[0] if modes else "head"
+        # Apply framing now, but do not arm progress until update()+render.
         self.apply(announce=False)
+        self._install_progress_gate()
+        if self._head is None:
+            # No head camera: don't block the episode forever.
+            self._mark_progress_ready(silent=True)
+
+    def _install_progress_gate(self):
+        """Pause kinematic task advancement until the head camera is live."""
+        env = self.env
+        if env is None or getattr(env, "_interactive_progress_gate_installed", False):
+            return
+        orig = env._update_kinematic_tasks
+
+        def gated_update(*args, **kwargs):
+            if getattr(env, "_interactive_progress_ready", True) is False:
+                return None
+            return orig(*args, **kwargs)
+
+        env._update_kinematic_tasks = gated_update
+        env._interactive_progress_gate_installed = True
+
+    def _mark_progress_ready(self, *, silent: bool = False):
+        if self.progress_ready:
+            return
+        self.progress_ready = True
+        if self.env is not None:
+            self.env._interactive_progress_ready = True
+        if not silent:
+            print("Head camera ready — starting task.")
+
+    def _note_head_camera_frame(self):
+        """Arm progress after head has been locked for one prior display frame."""
+        if self.progress_ready:
+            return
+        if self._head_view_seen:
+            self._mark_progress_ready()
+        else:
+            self._head_view_seen = True
 
     def _control_window(self):
         for plugin in getattr(self.viewer, "plugins", []) or []:
@@ -899,12 +945,16 @@ class ViewerViewToggle:
         # Keep head / gripper views locked to the moving cameras.
         if self.mode == "head" and self._head is not None:
             self._set_viewer_pose(self._head.global_pose)
+            self._note_head_camera_frame()
         else:
             side = self._gripper_side()
             if side is not None:
                 pose = self._wrist_pose(side)
                 if pose is not None:
                     self._set_viewer_pose(self._gripper_viewer_pose(pose))
+            # Head unavailable this frame — still allow progress if we never had one.
+            if self._head is None:
+                self._mark_progress_ready(silent=True)
 
 
 def make_viewer_view_toggle(
@@ -1275,6 +1325,11 @@ class RealtimePhysicsPacer:
         self._accum = 0.0
         self._prev = time.perf_counter()
 
+    def reset(self):
+        """Drop accumulated wall time (e.g. while waiting for head camera)."""
+        self._accum = 0.0
+        self._prev = time.perf_counter()
+
     def begin_frame(self) -> int:
         """Advance the wall-clock accumulator; return physics steps for this frame."""
         now = time.perf_counter()
@@ -1287,6 +1342,19 @@ class RealtimePhysicsPacer:
             self._accum -= self.dt
             n += 1
         return n
+
+
+def begin_interactive_frame(views, pacer, window) -> int:
+    """Update viewer controls; return physics steps (0 until head camera is live).
+
+    Call this instead of ``pacer.begin_frame()`` + ``views.update(...)`` so task
+    motion does not run during the free-fly → head_camera switch at startup.
+    """
+    views.update(window)
+    if not getattr(views, "progress_ready", True):
+        pacer.reset()
+        return 0
+    return pacer.begin_frame()
 
 
 def sleep_to_timestep(env, frame_start: float) -> None:
@@ -1340,8 +1408,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     pacer = RealtimePhysicsPacer(env)
     try:
         while not viewer.closed:
-            n_steps = pacer.begin_frame()
-            views.update(viewer.window)
+            n_steps = begin_interactive_frame(views, pacer, viewer.window)
             # Still pump the window / Escape when a fast display frame needs 0 steps.
             if n_steps == 0:
                 env.scene.update_render()

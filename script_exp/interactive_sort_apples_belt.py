@@ -42,6 +42,7 @@ from _interactive_common import (  # noqa: E402
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
+    begin_interactive_frame,
     terminal_hold_should_close,
     print_episode_condition,
 )
@@ -513,9 +514,13 @@ def main():
     try:
         while (not viewer.closed and (second_viewer is None or not second_viewer.closed)
                and (composite_view is None or composite_view.window_open)):
-            n_steps = pacer.begin_frame()
             if composite_view is None:
-                views.update(viewer.window)
+                n_steps = begin_interactive_frame(views, pacer, viewer.window)
+            else:
+                # Composite window has no head-camera handoff; start immediately.
+                if not getattr(views, "progress_ready", True):
+                    views._mark_progress_ready(silent=True)
+                n_steps = pacer.begin_frame()
             if composite_view is not None:
                 # Composite mode has no SAPIEN key window; retain its click action.
                 env._expert_hold = composite_view.action

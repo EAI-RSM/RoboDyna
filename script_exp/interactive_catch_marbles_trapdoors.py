@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
+    begin_interactive_frame,
     UniversalRobotControls,
     add_robot_motion_arg,
     make_viewer_view_toggle,
@@ -149,8 +150,7 @@ def main():
 
     try:
         while not viewer.closed:
-            n_steps = pacer.begin_frame()
-            views.update(viewer.window)
+            n_steps = begin_interactive_frame(views, pacer, viewer.window)
             if n_steps == 0:
                 env.scene.update_render()
                 viewer.render()
