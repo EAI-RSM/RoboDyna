@@ -257,7 +257,7 @@ def main():
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
-    views = make_viewer_view_toggle(env, viewer, allow_f_gripper=False)
+    views = make_viewer_view_toggle(env, viewer)
     if views.robot_controls is None:
         views.robot_controls = UniversalRobotControls(env)
 

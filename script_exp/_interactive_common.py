@@ -636,7 +636,6 @@ class ViewerViewToggle:
     """V cycles head_camera ↔ gripper/wrist views (no top-down).
 
     G (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
-    F is kept as an alias for the same action unless ``allow_f_gripper=False``.
     Camera switching is V-only.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
@@ -665,18 +664,18 @@ class ViewerViewToggle:
         capture_current_as_topdown: bool = False,
         warn_missing_head: bool = False,
         robot_controls=None,
-        allow_f_gripper: bool = True,
+        allow_f_gripper: bool = False,
     ):
         # topdown_* / capture_current_as_topdown kept for API compat; ignored.
+        # allow_f_gripper kept for API compat; F is never a gripper alias.
         del topdown_xyz, topdown_rpy, topdown_fovy, capture_current_as_topdown
+        del allow_f_gripper
         self.viewer = viewer
         self.env = env
         self._prev_v = False
         self._prev_g = False
-        self._prev_f = False
         self._head = head_camera
         self.robot_controls = robot_controls
-        self.allow_f_gripper = bool(allow_f_gripper)
         self._warned_missing_gripper = False
         if self._head is None:
             self._head = resolve_head_camera(env, viewer)
@@ -866,9 +865,6 @@ class ViewerViewToggle:
     def _g_pressed(self, window) -> bool:
         return self._edge_key(window, "g", "_prev_g")
 
-    def _f_pressed(self, window) -> bool:
-        return self._edge_key(window, "f", "_prev_f")
-
     def _cycle_view(self):
         """Cycle head_camera ↔ active gripper/wrist view(s)."""
         modes = self._view_cycle_modes()
@@ -894,9 +890,8 @@ class ViewerViewToggle:
             # Restore red failure tint when UniversalRobotControls is absent
             # (keyboard mode still uses Space / G action paths).
             gripper_failure_feedback(self.env).update()
-        # G opens/closes selected gripper(s). F is an optional alias.
-        use_f = bool(getattr(self, "allow_f_gripper", True)) and self._f_pressed(window)
-        if self.env is not None and (self._g_pressed(window) or use_f):
+        # G opens/closes selected gripper(s).
+        if self.env is not None and self._g_pressed(window):
             toggle_selected_grippers(self.env)
         if self._v_pressed(window):
             self._cycle_view()
@@ -1037,7 +1032,7 @@ class UniversalRobotControls:
 
     Z / X tip the gripper about world +Y (left / right) for pour-style motions.
     O returns the selected arm(s) to the pose captured when teleop started
-    (task ``original`` / start pose). G (open/close selected gripper; F alias)
+    (task ``original`` / start pose). G opens/closes the selected gripper.
     is handled by ``ViewerViewToggle`` so it also works when teleop is not
     attached.
     """

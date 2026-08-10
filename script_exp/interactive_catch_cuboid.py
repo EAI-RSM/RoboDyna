@@ -261,7 +261,6 @@ class KeyboardCatchController:
             hole = env._cuboid_holes[0]
             self.selected = "right" if env.holes[hole][0] > 0 else "left"
         self._g = EdgeKey()
-        self._f = EdgeKey()
         self._q = EdgeKey()
         self._e = EdgeKey()
         self._pending = None  # (arms, cuboid_indices, steps_left)
@@ -313,9 +312,9 @@ class KeyboardCatchController:
                 print("Selected RIGHT arm.")
 
         arms = list(_selected_arms(self.env, (self.selected,)))
-        g_close = (
-            self._g.poll(window.key_down("g")) or self._f.poll(window.key_down("f"))
-        ) and any(self._prev_width.get(a, 1.0) > 0.5 for a in arms)
+        g_close = self._g.poll(window.key_down("g")) and any(
+            self._prev_width.get(a, 1.0) > 0.5 for a in arms
+        )
         for side in ("left", "right"):
             self._prev_width[side] = gripper_width(self.env, side)
         if g_close:
@@ -331,7 +330,6 @@ class RobotCatchController:
         self.dual = bool(env.dual_catch)
         self.busy = False
         self._g = EdgeKey()
-        self._f = EdgeKey()
         self.selected = "right"
         if not self.dual:
             hole = env._cuboid_holes[0]
@@ -377,9 +375,9 @@ class RobotCatchController:
             self._select(selected[0])
 
         arms = list(selected)
-        g_close = (
-            self._g.poll(window.key_down("g")) or self._f.poll(window.key_down("f"))
-        ) and any(self._prev_width.get(a, 1.0) > 0.5 for a in arms)
+        g_close = self._g.poll(window.key_down("g")) and any(
+            self._prev_width.get(a, 1.0) > 0.5 for a in arms
+        )
         for side in ("left", "right"):
             self._prev_width[side] = gripper_width(self.env, side)
         if g_close:

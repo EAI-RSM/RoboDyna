@@ -304,7 +304,6 @@ class RobotBatController:
         self.holding = False
         self.busy = False
         self._g = EdgeKey()
-        self._f = EdgeKey()
         self._prev_width = {"left": 1.0, "right": 1.0}
 
     def _latch(self):
@@ -336,9 +335,9 @@ class RobotBatController:
             return
         selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
         arms = list(selected) if selected else []
-        g_close = (
-            self._g.poll(window.key_down("g")) or self._f.poll(window.key_down("f"))
-        ) and any(self._prev_width.get(a, 1.0) > 0.5 for a in arms)
+        g_close = self._g.poll(window.key_down("g")) and any(
+            self._prev_width.get(a, 1.0) > 0.5 for a in arms
+        )
         for side in ("left", "right"):
             self._prev_width[side] = gripper_width(self.env, side)
         if g_close:
