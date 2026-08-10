@@ -155,7 +155,7 @@ task_args:
     open_gap_timeout_sec: 5.0
     expert_foam_pause: 0.16
     expert_foam_resume: 0.09
-    target_liquid: 0.90
+    target_liquid: 0.85
     safe_total: 0.96
     full_liquid_tol: 0.05
   measure_ingredient:

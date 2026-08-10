@@ -402,7 +402,7 @@ def render(hh: dict, basic: dict | None, fail_map: dict) -> str:
     detail = r'''
   <h2 id="hh-detail">Household failure analysis (weak tasks)</h2>
   <div class="card focus" id="pour_beer">
-    <h3><code>pour_beer</code> <span class="pill fail">1/10</span></h3>
+    <h3><code>pour_beer</code> <span class="pill warn">7/10</span></h3>
     <ul class="reasons">
       <li><strong>Plan fails (seeds 0–4, 6–8)</strong> — expert aborts before a successful pour (often overflow / unstable foam path).</li>
       <li><strong>Check fail (seed 5)</strong> — plan completes but fill/foam criteria miss; only <strong>seed 9</strong> passes.</li>

@@ -97,9 +97,12 @@ class pour_beer(KitchenS_base_task):
     EE_TO_TCP = 0.12
     LEVER_HOVER = 0.05
     LEVER_GRASP_Z = 0.0
+    # Small ±X wrist offset (within LEVER_ARC_X_TOL / CONTACT_R) so the forearm
+    # sits slightly outboard of the head-camera → mug line during contact.
+    LEVER_EE_OUTBOARD = 0.014
 
-    # Success requires liquid_level strictly above this (e.g. >90%).
-    TARGET_LIQUID = 0.90
+    # Success requires liquid_level strictly above this (e.g. >85%).
+    TARGET_LIQUID = 0.85
     # Kept for config/UI compatibility; success no longer uses a ± band.
     FULL_LIQUID_TOL = 0.05
     # Max rate at full open (per physics step); scales with lever angle.
@@ -122,7 +125,7 @@ class pour_beer(KitchenS_base_task):
     OVERFLOW_LEVEL = 1.0
     EXPERT_FOAM_PAUSE = 0.16
     EXPERT_FOAM_RESUME = 0.09
-    # Expert pour cap (beer+foam) — above TARGET so liquid can clear 90%.
+    # Expert pour cap (beer+foam) — above TARGET so liquid can clear the gate.
     SAFE_TOTAL = 0.96
     # Tap must stay fully idle this long before success can pass.
     # 1s gap avoids mid-pour / spring-return flicker latching success while the
@@ -2098,10 +2101,21 @@ class pour_beer(KitchenS_base_task):
         p = self.get_arm_pose(str(arm))
         return np.asarray(p[:3], dtype=float)
 
+    def _outboard_sign(self) -> float:
+        """−1 left station / +1 right — further from table centerline."""
+        cup = np.asarray(getattr(self, "cup_xy", [0.0, 0.0]), dtype=float).reshape(-1)
+        if cup.size >= 1 and float(cup[0]) < 0.0:
+            return -1.0
+        side = str(getattr(self, "arm_side", "") or getattr(self, "arm", "right"))
+        if side in ("left", "l"):
+            return -1.0
+        return 1.0
+
     def _lever_ee_pose(self, angle: float, z_above: float):
         tip = self._lever_tip_xyz(angle)
+        ox = float(self._outboard_sign()) * float(self.LEVER_EE_OUTBOARD)
         return [
-            float(tip[0]),
+            float(tip[0] + ox),
             float(tip[1]),
             float(tip[2] + z_above + self.EE_TO_TCP),
             *GRASP_DIRECTION_DIC["top_down"],
@@ -2119,13 +2133,46 @@ class pour_beer(KitchenS_base_task):
             self.plan_success = True
         return ok
 
-    def _grasp_lever(self, arm: ArmTag) -> bool:
-        """Approach the upright knob so gripper pressure can bend the spring lever."""
+    def _grasp_lever(self, arm: ArmTag, inhibit_until_ready: bool = False) -> bool:
+        """Approach the upright knob so gripper pressure can bend the spring lever.
+
+        Stages from the outboard / tap side so the forearm does not fly through
+        the head-camera → mug line of sight. Contact on the knob stays tip-centered.
+        ``inhibit_until_ready`` keeps the spring free during the approach so a
+        near-full mug is not filled by accidental contact on the way in.
+        """
         self._lever_held = False
-        self._lever_inhibit_press = False
+        self._lever_inhibit_press = bool(inhibit_until_ready)
         self.plan_success = True
         self.move(self.close_gripper(arm))
         ang0 = float(self.lever_angle)
+        tip = self._lever_tip_xyz(ang0)
+        s = float(self._outboard_sign())
+        # Commit a side-reach IK first (far outboard + high) so the elbow sits
+        # beside the mug, not between the head camera and the glass.
+        if not inhibit_until_ready:
+            far = [
+                float(tip[0] + s * 0.22),
+                float(tip[1] + 0.04),
+                float(tip[2] + self.EE_TO_TCP + 0.24),
+                *GRASP_DIRECTION_DIC["top_down"],
+            ]
+            self.move(self.move_to_pose(arm, far))
+            if not self.plan_success:
+                self.plan_success = True
+        if inhibit_until_ready:
+            sx, sy, sz = 0.05, 0.04, 0.04
+        else:
+            sx, sy, sz = 0.12, 0.05, 0.08
+        stage = [
+            float(tip[0] + s * sx),
+            float(tip[1] + sy),
+            float(tip[2] + self.LEVER_HOVER + self.EE_TO_TCP + sz),
+            *GRASP_DIRECTION_DIC["top_down"],
+        ]
+        self.move(self.move_to_pose(arm, stage))
+        if not self.plan_success:
+            self.plan_success = True
         self.move(self.move_to_pose(arm, self._lever_ee_pose(ang0, self.LEVER_HOVER)))
         if not self.plan_success:
             print("[pour_beer] lever hover failed — continuing toward knob")
@@ -2135,6 +2182,7 @@ class pour_beer(KitchenS_base_task):
             self.plan_success = True
         # Brief dwell so pressure coupling engages (no pose teleport).
         self._idle_steps(4)
+        self._lever_inhibit_press = False
         self._lever_held = True
         return True
 
@@ -2144,6 +2192,7 @@ class pour_beer(KitchenS_base_task):
         target_frac: float,
         n_steps: int = 10,
         stop_on_foam: bool = False,
+        stop_fill: float | None = None,
     ):
         """Walk the EE along the knob arc — lever angle follows gripper pressure only.
 
@@ -2157,18 +2206,25 @@ class pour_beer(KitchenS_base_task):
         n = max(2, int(n_steps))
         if closing:
             n = min(n, 5)
+        fill_cap = (
+            float(stop_fill)
+            if stop_fill is not None
+            else float(self.safe_total)
+        )
         for i in range(1, n + 1):
             if self.overflowed:
                 break
             if stop_on_foam and (
                 self.foam_level >= self.expert_foam_pause
-                or self._total_fill() >= self.safe_total
+                or self._total_fill() >= fill_cap
+                or float(self.liquid_level) >= float(self.target_liquid)
             ):
                 break
             ang = start + (target_ang - start) * (i / n)
             tip = self._lever_tip_xyz(ang)
+            ox = float(self._outboard_sign()) * float(self.LEVER_EE_OUTBOARD)
             goal_ee = tip + np.array(
-                [0.0, 0.0, self.EE_TO_TCP + self.LEVER_GRASP_Z], dtype=float
+                [ox, 0.0, self.EE_TO_TCP + self.LEVER_GRASP_Z], dtype=float
             )
             # Short nudges keep TCP on the arc so pressure continuously drives the hinge.
             for _ in range(3 if closing else 2):
@@ -2201,16 +2257,99 @@ class pour_beer(KitchenS_base_task):
         """Clear the knob so the spring returns the handle upright.
 
         Press stays inhibited until the next ``_grasp_lever`` so a nearby hand
-        cannot immediately re-bend the spring after retreat.
+        cannot immediately re-bend the spring after retreat. Retreat outboard
+        (not across the camera→mug view). If the first lift leaves the handle
+        open, try a second retreat before returning.
         """
         self._lever_held = False
         self._lever_inhibit_press = True
-        # Up and slightly toward +Y (away from the open-tip −Y swing).
-        self._move_ok(arm, dy=0.06, dz=0.12)
+        s = float(self._outboard_sign())
+        # Clear mug LOS: outboard + up + toward tap (+Y).
+        self._move_ok(arm, dx=s * 0.10, dy=0.05, dz=0.12)
         self._idle_steps(
             60,
             until=lambda: self.lever_angle < 0.02 or self.overflowed,
         )
+        if (not self.overflowed) and float(self.lever_angle) >= 0.02:
+            self._move_ok(arm, dx=s * 0.06, dy=0.05, dz=0.10)
+            self._idle_steps(
+                80,
+                until=lambda: self.lever_angle < 0.02 or self.overflowed,
+            )
+
+    def _expert_reopen_frac(self) -> float:
+        """Smaller opens as the mug fills — top up gently near the target."""
+        liq = float(self.liquid_level)
+        if liq < 0.55:
+            return 0.55
+        if liq < 0.72:
+            return 0.30
+        return 0.22
+
+    def _expert_close_and_settle(self, arm: ArmTag, target: float) -> bool:
+        """Release the lever; foam-wait only if the tap actually shut.
+
+        Returns True if the caller should stop the pour loop.
+        """
+        self._release_lever(arm)
+        if self.overflowed or float(self.liquid_level) > float(target):
+            return True
+        if float(self._lever_open_frac()) < 0.05:
+            self._idle_steps(
+                140,
+                until=lambda: (
+                    self.foam_level <= self.expert_foam_resume or self.overflowed
+                ),
+            )
+        else:
+            # Still open after retreat — do not idle-pour under a "settle" wait.
+            self._idle_steps(20, until=lambda: self.overflowed)
+        return bool(self.overflowed or float(self.liquid_level) > float(target))
+
+    def _expert_micro_topup(self, arm: ArmTag, target: float) -> bool:
+        """Brief crack of the tap to clear target; stop before the rim.
+
+        Full arc sweeps overshoot near-full because fill advances on every IK
+        step while the lever is open.
+        """
+        if self.overflowed or float(self.liquid_level) > float(target):
+            return True
+        if float(self._total_fill()) >= 0.97:
+            return self._expert_close_and_settle(arm, target)
+
+        liq = float(self.liquid_level)
+        # Inhibit during approach — accidental arc contact near-full overflows.
+        self._grasp_lever(arm, inhibit_until_ready=True)
+        if liq >= float(target) - 0.015:
+            open_frac, delta_cap, rim_guard, idle_n = 0.08, 0.03, 0.94, 45
+        elif liq >= 0.85:
+            open_frac, delta_cap, rim_guard, idle_n = 0.10, 0.04, 0.94, 60
+        elif liq >= 0.78:
+            open_frac, delta_cap, rim_guard, idle_n = 0.14, 0.05, 0.94, 80
+        else:
+            open_frac, delta_cap, rim_guard, idle_n = 0.18, 0.07, 0.94, 100
+        self._sweep_lever_to(
+            arm,
+            target_frac=open_frac,
+            n_steps=3,
+            stop_on_foam=True,
+            stop_fill=rim_guard,
+        )
+        # As soon as beer clears the success gate (>target), shut off.
+        if self.overflowed or float(self.liquid_level) > float(target):
+            return self._expert_close_and_settle(arm, target)
+        start_liq = float(self.liquid_level)
+        self._idle_steps(
+            idle_n,
+            until=lambda: (
+                self.overflowed
+                or float(self.liquid_level) > float(target)
+                or float(self._total_fill()) >= rim_guard
+                or self.foam_level >= max(0.12, 0.75 * float(self.expert_foam_pause))
+                or (float(self.liquid_level) - start_liq) >= delta_cap
+            ),
+        )
+        return self._expert_close_and_settle(arm, target)
 
     # ------------------------------------------------------------------ expert
     def play_once(self):
@@ -2221,47 +2360,129 @@ class pour_beer(KitchenS_base_task):
 
         # 1) Grasp the upright lever and open it gradually by hand (staged).
         self._grasp_lever(arm)
-        for open_frac in (0.40, 0.70):
+        for open_frac in (0.40, 0.55):
             if self.overflowed:
                 break
             self._sweep_lever_to(
                 arm, target_frac=open_frac, n_steps=8, stop_on_foam=True
             )
-            if self.foam_level >= self.expert_foam_pause or self._total_fill() >= self.safe_total:
+            if self.foam_level >= self.expert_foam_pause or self._total_fill() >= 0.80:
                 break
+        # Initial engage miss — one retry before the pour loop.
+        if (not self.overflowed) and float(self._lever_open_frac()) < 0.15:
+            self._grasp_lever(arm)
+            self._sweep_lever_to(arm, target_frac=0.45, n_steps=8, stop_on_foam=True)
 
-        # 2) Pour with foam management — foam keeps rising while the lever is open
-        #    (bottle-like). Close by sweeping the joint back with the hand.
-        # Scale wait/cycles when pour_rate is below the nominal (randomized rates).
+        # 2) Short pour bursts; micro top-up once beer is near the success gate.
         rate_scale = float(self.POUR_RATE) / max(float(self.pour_rate), 1e-6)
         rate_scale = float(np.clip(rate_scale, 0.75, 2.2))
-        pour_idle = int(round(150 * rate_scale))
-        max_cycles = int(round(14 * max(1.0, rate_scale)))
-        # Pour until beer is clearly past the >target success gate.
-        close_at = max(0.10, float(self.target_liquid) + 0.02)
-        # Leave headroom so spring-return ticks after release cannot crest the rim.
-        pour_cap = min(float(self.safe_total) - 0.04, close_at)
+        pour_idle = int(round(110 * rate_scale))
+        max_cycles = int(round(18 * max(1.0, rate_scale)))
+        # Success needs liquid strictly above target; stop pouring once past it.
+        target = float(self.target_liquid)
+        # Close mid-mug; once beer is this high, only micro-crack top-ups.
+        pour_cap = 0.72
+        topup_at = 0.72
+        micro_tries = 0
         for cycle in range(max_cycles):
-            if self.overflowed or self.liquid_level >= close_at:
+            if self.overflowed or float(self.liquid_level) > target:
                 break
-            if self._lever_open_frac() < 0.20:
-                if self.liquid_level < close_at - 0.20:
-                    reopen = 0.65
-                elif self.liquid_level < close_at - 0.08:
-                    reopen = 0.40
-                else:
-                    reopen = 0.28
-                # Reach the pour angle first; foam is managed in the idle below
-                # (stopping mid-open on residual foam caused open/close thrashing).
-                self._sweep_lever_to(
-                    arm, target_frac=reopen, n_steps=7, stop_on_foam=False
+
+            # Near-full: careful cracks until beer clears target (no full bursts).
+            if float(self.liquid_level) >= topup_at:
+                # Already over target — stop pouring; never crack again.
+                if float(self.liquid_level) > float(target):
+                    if self._lever_open_frac() >= 0.05 or float(self.foam_level) > 0.06:
+                        self._expert_close_and_settle(arm, target)
+                    break
+                # Settle foam / shut lever before cracking again.
+                if (
+                    float(self.foam_level) > 0.06
+                    or float(self._lever_open_frac()) >= 0.10
+                ):
+                    if self._expert_close_and_settle(arm, target):
+                        break
+                    # Settle can push liquid past target — stop, do not micro.
+                    if float(self.liquid_level) > float(target):
+                        break
+                    print(
+                        f"[pour_beer] cycle={cycle} pre-topup settle "
+                        f"liq={self.liquid_level:.2f} foam={self.foam_level:.2f} "
+                        f"total={self._total_fill():.2f}",
+                        flush=True,
+                    )
+                    continue
+                if micro_tries >= 6 or float(self._total_fill()) >= 0.97:
+                    break
+                print(
+                    f"[pour_beer] cycle={cycle} micro-topup "
+                    f"liq={self.liquid_level:.2f} foam={self.foam_level:.2f} "
+                    f"total={self._total_fill():.2f}",
+                    flush=True,
                 )
+                micro_tries += 1
+                self._expert_micro_topup(arm, target)
+                # Over target ⇒ done (close already handled inside micro-topup).
+                if self.overflowed or float(self.liquid_level) > float(target):
+                    break
+                continue
+
+            # Already at foam/total limit with lever open → shut off, no more pour.
+            if self._lever_open_frac() >= 0.15 and (
+                self.foam_level >= self.expert_foam_pause
+                or self._total_fill() >= pour_cap
+                or float(self.liquid_level) >= topup_at
+            ):
+                if self._expert_close_and_settle(arm, target):
+                    break
+                print(
+                    f"[pour_beer] cycle={cycle} liq={self.liquid_level:.2f} "
+                    f"foam={self.foam_level:.2f} total={self._total_fill():.2f} "
+                    f"lever={self._lever_open_frac():.2f} overflow={self.overflowed}"
+                )
+                if float(self.liquid_level) >= topup_at:
+                    continue
+                if float(self.liquid_level) <= target:
+                    self._grasp_lever(arm, inhibit_until_ready=True)
+                continue
+
+            if self._lever_open_frac() < 0.20:
+                reopen = self._expert_reopen_frac()
+                self._sweep_lever_to(
+                    arm,
+                    target_frac=reopen,
+                    n_steps=7,
+                    stop_on_foam=True,
+                    stop_fill=pour_cap,
+                )
+                # Regrasp retry when the sweep never engaged the knob.
+                if (
+                    float(self._lever_open_frac()) < 0.15
+                    and float(self.liquid_level) <= target
+                    and not self.overflowed
+                ):
+                    self._grasp_lever(arm, inhibit_until_ready=True)
+                    self._sweep_lever_to(
+                        arm,
+                        target_frac=reopen,
+                        n_steps=8,
+                        stop_on_foam=True,
+                        stop_fill=pour_cap,
+                    )
+                if float(self._lever_open_frac()) < 0.15:
+                    print(
+                        f"[pour_beer] cycle={cycle} liq={self.liquid_level:.2f} "
+                        f"foam={self.foam_level:.2f} total={self._total_fill():.2f} "
+                        f"lever={self._lever_open_frac():.2f} overflow={self.overflowed}"
+                    )
+                    continue
 
             self._idle_steps(
                 pour_idle,
                 until=lambda: (
                     self.overflowed
-                    or self.liquid_level >= close_at
+                    or float(self.liquid_level) > target
+                    or float(self.liquid_level) >= topup_at
                     or self.foam_level >= self.expert_foam_pause
                     or self._total_fill() >= pour_cap
                 ),
@@ -2271,28 +2492,12 @@ class pour_beer(KitchenS_base_task):
                 f"foam={self.foam_level:.2f} total={self._total_fill():.2f} "
                 f"lever={self._lever_open_frac():.2f} overflow={self.overflowed}"
             )
-            if self.overflowed or self.liquid_level >= close_at:
+            if self.overflowed or float(self.liquid_level) > target:
                 break
 
-            need_close = (
-                self.foam_level >= self.expert_foam_pause
-                or self._total_fill() >= pour_cap
-                or self.liquid_level >= close_at
-            )
-            if need_close:
-                # Lift off the knob — spring snaps the handle shut (no teleport).
-                self._release_lever(arm)
-                if self.overflowed:
-                    break
-                self._idle_steps(
-                    140,
-                    until=lambda: (
-                        self.foam_level <= self.expert_foam_resume or self.overflowed
-                    ),
-                )
-                if self.overflowed or self.liquid_level >= close_at:
-                    break
-                # Re-engage the knob before the next pour push.
+            if self._expert_close_and_settle(arm, target):
+                break
+            if float(self.liquid_level) < topup_at:
                 self._grasp_lever(arm)
 
         # 3) Lift off — spring returns the handle to upright; wait until settled.
