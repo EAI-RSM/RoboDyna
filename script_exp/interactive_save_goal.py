@@ -136,6 +136,7 @@ def _start_shot(env):
     env._ball_step = 0
     env._ball_blocked = False
     env._ball_live = False
+    env._block_was_legal = False
     env._goal_conceded = False
     env._late_failure = False
     env._ball_crossed_goal = False
@@ -277,8 +278,8 @@ def main():
                 elif time.perf_counter() - done_since >= 1.0:
                     report_task_result(
                         env,
-                        f"in_zone={env._keeper_in_zone()}, blocked={env._ball_blocked}, "
-                        f"late={env._late_failure}, conceded={env._goal_conceded}",
+                        f"in_zone={env._keeper_in_zone()}, legal_block={getattr(env, '_block_was_legal', False)}, "
+                        f"blocked={env._ball_blocked}, late={env._late_failure}, conceded={env._goal_conceded}",
                     )
                     terminal_started_at = time.perf_counter()
     finally:

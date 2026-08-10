@@ -635,9 +635,10 @@ task_args:
     goal_center_y_jitter: 0.0   # m; ± uniform jitter on goal_center_y
     green_area_x_len: 0.10      # m; keeper placement zone depth (toward field)
     green_area_y_extra: 0.05    # m; extra half-width beyond goal posts
-    red_line_x: 0.10            # m; deadline offset from goal (last legal place)
-    randomize_red_line: true    # sample from green border up to red_line_inward_max into green
-    red_line_inward_max: 0.05   # m; max distance from green border toward goal
+    red_line_green_gap: 0.01    # m; clear gap between red line and green field edge
+    red_line_x: 0.11            # m; deadline offset from goal (≥ green_area_x_len + gap)
+    randomize_red_line: true    # sample further toward the field from the min gap
+    red_line_outward_max: 0.05  # m; extra field-side range when randomize_red_line is on
     goal_x: 0.30                # m; |goal x|; side randomized ±
     keeper_x: 0.16              # m; |target keeper x| in green zone
     keeper_goal_clearance: 0.05 # m; keep keeper clear of goal frame

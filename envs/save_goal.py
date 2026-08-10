@@ -12,7 +12,8 @@ class save_goal(Base_Task):
     across the table midline (x → −x): default puts the goal/keeper on +x (right gripper);
     ``mirrored: true`` puts them on −x (left gripper). With ``random_mirror: true`` (default)
     the side is chosen per episode when ``mirrored`` is unset.
-    A red deadline line marks the last moment the robot is allowed to reposition the save_goal.
+    A red deadline line marks the last moment the robot is allowed to reposition the save_goal;
+    it sits on the field side of the green placement area with a clear gap (≥1 cm by default).
     A green placement area sits directly in front of the goal. The robot must grasp the square
     save_goal, place it fully inside that green area while the ball is still behind the red line,
     then release it before the ball reaches the goal mouth. A save requires the ball to hit the
@@ -65,7 +66,10 @@ class save_goal(Base_Task):
     GOAL_BAR_T_DEFAULT = 0.01
     GREEN_AREA_X_LEN_DEFAULT = 0.10
     GREEN_AREA_Y_EXTRA_DEFAULT = 0.05
-    RED_LINE_X_DEFAULT = 0.2
+    # Deadline offset from goal; must be ≥ green_area_x_len + red_line_green_gap.
+    RED_LINE_X_DEFAULT = 0.11
+    RED_LINE_GREEN_GAP_DEFAULT = 0.01  # m; min clear gap between red line and green field edge
+    RED_LINE_OUTWARD_MAX_DEFAULT = 0.05  # m; randomize further toward the field from the min gap
     # Layout mirror across y-axis (x → −x): left gripper when mirrored.
     RANDOM_MIRROR_DEFAULT = True
     MIRRORED_DEFAULT = None  # None → sample when random_mirror, else use explicit bool
@@ -125,6 +129,7 @@ class save_goal(Base_Task):
         self._ball_step = 0
         self._ball_blocked = False
         self._ball_live = False
+        self._block_was_legal = False
         self._goal_conceded = False
         self._late_failure = False
         self.goalkeeper = None
@@ -735,16 +740,63 @@ class save_goal(Base_Task):
         if bounds is None:
             return False
         x_min, x_max, y_min, y_max = bounds
-        keeper_z = float(self.goalkeeper.get_pose().p[2])
-        target_z = float(self.table_top_z + self.keeper_half_z)
-        z_ok = abs(keeper_z - target_z) <= 0.02
+        if not self._keeper_seated_on_table():
+            return False
         return bool(
             x_min >= (self.green_area_x_min - 1e-4)
             and x_max <= (self.green_area_x_max + 1e-4)
             and y_min >= (self.green_area_y_min - 1e-4)
             and y_max <= (self.green_area_y_max + 1e-4)
-            and z_ok
         )
+
+    def _keeper_seated_on_table(self):
+        """True when the cube is on the table (can physically block), even outside green."""
+        if getattr(self, "goalkeeper", None) is None:
+            return False
+        keeper_z = float(self.goalkeeper.get_pose().p[2])
+        target_z = float(self.table_top_z + self.keeper_half_z)
+        return abs(keeper_z - target_z) <= 0.02
+
+    def _try_front_face_bounce(self, prev_p, next_p):
+        """Bounce off the cube's ball-facing face if the path hits it.
+
+        Works inside or outside the green zone so the ball never tunnels through a
+        seated keeper. Success / late-failure still require green-zone placement.
+        """
+        if not self._keeper_seated_on_table():
+            return False
+        bounds = self._keeper_xy_bounds()
+        if bounds is None:
+            return False
+        x_min, x_max, y_min, y_max = bounds
+        face_x = float(
+            (x_min - self.ball_radius - 0.001)
+            if self.travel_dir > 0
+            else (x_max + self.ball_radius + 0.001)
+        )
+        crossed_face = (
+            self.travel_dir * prev_p[0] < self.travel_dir * face_x
+            and self.travel_dir * next_p[0] >= self.travel_dir * face_x
+        ) or (
+            abs(float(next_p[0] - face_x)) <= 1e-4
+            and self.travel_dir * next_p[0] >= self.travel_dir * face_x
+        )
+        if not crossed_face:
+            return False
+        dx = float(next_p[0] - prev_p[0])
+        if abs(dx) < 1e-9:
+            hit_y = float(next_p[1])
+        else:
+            t = float((face_x - prev_p[0]) / dx)
+            hit_y = float(prev_p[1] + t * (next_p[1] - prev_p[1]))
+        y_tol = 0.002
+        if not ((y_min - y_tol) <= hit_y <= (y_max + y_tol)):
+            return False
+        hit_p = np.asarray(next_p, dtype=np.float64).copy()
+        hit_p[0] = face_x
+        hit_p[1] = hit_y
+        self._begin_mass_bounce(hit_p)
+        return True
 
     def _wait_for_outcome(self):
         max_steps = int(self.ball_total_steps + self.ball_settle_steps)
@@ -884,16 +936,31 @@ class save_goal(Base_Task):
         self.goal_bar_t = float(c.get("goal_bar_t", self.GOAL_BAR_T_DEFAULT))
         self.green_area_x_len = float(c.get("green_area_x_len", self.GREEN_AREA_X_LEN_DEFAULT))
         self.green_area_y_extra = float(c.get("green_area_y_extra", self.GREEN_AREA_Y_EXTRA_DEFAULT))
-        self.red_line_goal_offset = float(c.get("red_line_x", c.get("red_line_y", self.RED_LINE_X_DEFAULT)))
-        # When on: red line starts at the field-side green border and may move up to
-        # red_line_inward_max (default 5 cm) into the green toward the goal.
+        self.red_line_green_gap = abs(
+            float(c.get("red_line_green_gap", self.RED_LINE_GREEN_GAP_DEFAULT))
+        )
+        # Min deadline offset: fully before the green zone + required clear gap.
+        min_red_offset = float(self.green_area_x_len + self.red_line_green_gap)
+        self.red_line_goal_offset = float(
+            c.get("red_line_x", c.get("red_line_y", self.RED_LINE_X_DEFAULT))
+        )
+        # When on: sample the red line on the field side of green (never into/onto green).
+        # Legacy ``red_line_inward_max`` is treated as outward range toward the field.
         self.randomize_red_line = bool(c.get("randomize_red_line", False))
-        inward_max = abs(float(c.get("red_line_inward_max", 0.05)))
+        outward_max = abs(
+            float(
+                c.get(
+                    "red_line_outward_max",
+                    c.get("red_line_inward_max", self.RED_LINE_OUTWARD_MAX_DEFAULT),
+                )
+            )
+        )
         if self.randomize_red_line:
-            border = float(self.green_area_x_len)
-            lo = max(1e-3, border - inward_max)
-            hi = max(lo, border)
+            lo = min_red_offset
+            hi = min_red_offset + outward_max
             self.red_line_goal_offset = float(np.random.uniform(lo, hi))
+        else:
+            self.red_line_goal_offset = float(max(abs(self.red_line_goal_offset), min_red_offset))
 
         self.keeper_x_abs = float(c.get("keeper_x", c.get("keeper_y", self.KEEPER_X_DEFAULT)))
         self.keeper_pose_tol = float(c.get("keeper_pose_tol", self.KEEPER_POSE_TOL_DEFAULT))
@@ -993,7 +1060,10 @@ class save_goal(Base_Task):
         self.mirrored = self._parse_mirrored(c)
         self.travel_dir = -1.0 if self.mirrored else 1.0
         self.goal_x = float(self.travel_dir * abs(self.goal_x_abs))
-        self.red_line_x = float(self.goal_x - self.travel_dir * abs(self.red_line_goal_offset))
+        # Clamp again in case green length / gap changed after offset sampling.
+        min_red_offset = float(self.green_area_x_len + self.red_line_green_gap)
+        self.red_line_goal_offset = float(max(abs(self.red_line_goal_offset), min_red_offset))
+        self.red_line_x = float(self.goal_x - self.travel_dir * self.red_line_goal_offset)
         self.ball_speed = float(np.random.uniform(self.ball_speed_min, self.ball_speed_max))
         self.keeper_half_x = self.ball_radius
         self.keeper_half_y = self.ball_radius
@@ -1172,6 +1242,11 @@ class save_goal(Base_Task):
 
     def _begin_mass_bounce(self, hit_p):
         """Hand the shot to PhysX with a mass-aware front-face rebound."""
+        # Snapshot legality before any pose/velocity changes from the bounce.
+        self._block_was_legal = bool(self._keeper_in_zone())
+        if not self._block_was_legal:
+            self._late_failure = True
+
         m1 = float(self.BALL_MASS)
         m2 = float(self.KEEPER_MASS)
         e = float(self._cfg.get("bounce_restitution", self.BOUNCE_RESTITUTION))
@@ -1289,43 +1364,15 @@ class save_goal(Base_Task):
         prev_p = self._ball_pos_at_progress(prev_progress)
         next_p = self._ball_pos_at_progress(progress)
 
-        # Zone placement gates the geometric save / bounce handoff.
+        # Green-zone placement gates late-failure / success, not physical blocking.
         keeper_ok = bool(self._keeper_in_zone())
         if (not self._late_failure) and (self.travel_dir * next_p[0] >= self.travel_dir * self.red_line_x) and (not keeper_ok):
             self._late_failure = True
 
-        if keeper_ok:
-            x_min, x_max, y_min, y_max = self._keeper_xy_bounds()
-            # Front face = ball-facing side of the square. Only a front-face hit
-            # stops the ball; a side graze (ball center outside [y_min, y_max])
-            # lets the ball keep moving through toward the goal.
-            face_x = float(
-                (x_min - self.ball_radius - 0.001)
-                if self.travel_dir > 0
-                else (x_max + self.ball_radius + 0.001)
-            )
-            crossed_face = (
-                self.travel_dir * prev_p[0] < self.travel_dir * face_x
-                and self.travel_dir * next_p[0] >= self.travel_dir * face_x
-            ) or (
-                abs(float(next_p[0] - face_x)) <= 1e-4
-                and self.travel_dir * next_p[0] >= self.travel_dir * face_x
-            )
-            if crossed_face:
-                dx = float(next_p[0] - prev_p[0])
-                if abs(dx) < 1e-9:
-                    hit_y = float(next_p[1])
-                else:
-                    t = float((face_x - prev_p[0]) / dx)
-                    hit_y = float(prev_p[1] + t * (next_p[1] - prev_p[1]))
-                y_tol = 0.002
-                hits_front = (y_min - y_tol) <= hit_y <= (y_max + y_tol)
-                if hits_front:
-                    hit_p = next_p.copy()
-                    hit_p[0] = face_x
-                    hit_p[1] = hit_y
-                    self._begin_mass_bounce(hit_p)
-                    return
+        # Seated cube always blocks a front-face hit (even outside the green zone).
+        # Outside-zone blocks still count as FAILURE via _block_was_legal / _late_failure.
+        if self._try_front_face_bounce(prev_p, next_p):
+            return
 
         if self.travel_dir * next_p[0] >= self.travel_dir * self.goal_x:
             self._ball_crossed_goal = True
@@ -1351,6 +1398,7 @@ class save_goal(Base_Task):
         self._ball_step = 0
         self._ball_blocked = False
         self._ball_live = False
+        self._block_was_legal = False
         self._goal_conceded = False
         self._late_failure = False
         self._ball_crossed_goal = False
@@ -1394,8 +1442,10 @@ class save_goal(Base_Task):
     # ---------------------------------------------------------------- success / obs
     def check_success(self):
         keeper_ok = self._keeper_in_zone()
+        block_legal = bool(getattr(self, "_block_was_legal", False))
         success = bool(
             keeper_ok
+            and block_legal
             and self._ball_blocked
             and (not self._late_failure)
             and (not self._goal_conceded)
@@ -1404,6 +1454,7 @@ class save_goal(Base_Task):
         )
         self.info["save_goal"] = {
             "keeper_in_zone": bool(keeper_ok),
+            "block_was_legal": block_legal,
             "ball_blocked": bool(self._ball_blocked),
             "ball_crossed_goal": bool(self._ball_crossed_goal),
             "late_failure": bool(self._late_failure),
