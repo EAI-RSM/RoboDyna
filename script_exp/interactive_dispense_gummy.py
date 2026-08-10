@@ -169,7 +169,7 @@ def _nearest_key_for_arm(env, side: str, max_dist: float = _KEY_XY_TOL):
 
 
 class KeyboardState:
-    """Arrow latches for belt only — dispense is gripper-Z (no Space)."""
+    """Arrow latches for belt only — dispense is gripper-Z (Space = gripper open/close)."""
 
     def update(self, env, window):
         env._expert_belt_hold = _belt_side(window)
@@ -394,7 +394,7 @@ def main():
     print_mode_controls("dispense_gummy", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = dispense_gummy()
-    # Always enable arm teleop: presses are gripper-Z only (no Space).
+    # Always enable arm teleop: button presses are gripper-Z; Space opens/closes grippers.
     env._interactive_robot_mode = True
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)

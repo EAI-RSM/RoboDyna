@@ -124,7 +124,7 @@ def main():
     print_mode_controls("catch_shelf_marble", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = catch_shelf_marble()
-    # Always enable arm teleop: presses are gripper-Z only (no Space).
+    # Always enable arm teleop: button presses are gripper-Z; Space opens/closes grippers.
     env._interactive_robot_mode = True
     # Raster viewer: pour_beer-style plain-alpha shelves (transmission is invisible here).
     env._plain_glass = True

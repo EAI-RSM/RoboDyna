@@ -6,8 +6,9 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_hit_target.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_hit_target.py --control robot
 
-Keyboard mode aims the dart tip with arrows and thrusts on Space. Robot mode
-grasps the dart with G, aims with the movement keys, then jabs on Space.
+Keyboard mode aims the dart tip with arrows and drives it into the board.
+Robot mode: grasp the dart with Space, aim with the movement keys, then jab the
+tip into the yellow center by teleop.
 """
 
 import argparse
@@ -33,7 +34,6 @@ from _interactive_common import (  # noqa: E402
     report_task_result,
     RealtimePhysicsPacer,
     terminal_hold_should_close,
-    resolve_action_arm,
     print_episode_condition,
 )
 
@@ -41,12 +41,12 @@ from _interactive_common import (  # noqa: E402
 CONTROLS_KEYBOARD = """
   Arrow keys        aim dart tip (L/R = x, U/D = y / depth)
   E / Q             raise/lower dart tip
-  Space             thrust tip at yellow center
+  Drive the tip into the yellow center to stick.
 """
 
 CONTROLS_ROBOT = """
-  G                 open / close gripper to grasp the dart
-  Space             jab / thrust tip at yellow center
+  Space             open / close gripper to grasp the dart
+  Drive the tip into the yellow center with teleop to jab / stick.
 """
 
 
@@ -145,151 +145,34 @@ def _nudge_from_keys(window, step=0.008):
     return dx, dy, dz
 
 
-class EdgeKey:
-    def __init__(self):
-        self._prev = False
-
-    def poll(self, down):
-        edge = bool(down) and not self._prev
-        self._prev = bool(down)
-        return edge
-
-
 class KeyboardDartController:
     def __init__(self, env):
         self.env = env
-        self.done = False
-        self._space = EdgeKey()
         tip = _tip(env)
         _set_tip_xyz(env, tip, kinematic=True)
 
     def update(self, window):
-        if self.done or self.env._stuck or self.env._hit_blocker:
+        if self.env._stuck or self.env._hit_blocker:
             return
         dx, dy, dz = _nudge_from_keys(window)
         if dx or dy or dz:
             tip = _tip(self.env)
             _set_tip_xyz(self.env, tip + np.array([dx, dy, dz]), kinematic=True)
-        if self._space.poll(window.key_down("space")):
-            # Preserve the user's X/Z aim and thrust only along world Y, stopping
-            # with the black tip on the painted face.
-            tip = _tip(self.env)
-            _set_tip_xyz(
-                self.env, [tip[0], self.env._plant_tip_y(), tip[2]], kinematic=True
-            )
-            self.env._check_blocker_hit()
-            if not self.env._hit_blocker:
-                self.env._try_form_stick(any_ring=True, exact_pose=True)
-            self.done = True
-            print(f"Thrust: {self.env.hit_result_detail()}.")
 
 
 class RobotDartController:
+    """Teleop aim only — Space gripper toggle is shared; jab by driving tip in."""
+
     def __init__(self, env, ArmTag, robot_motion="interpolate"):
         self.env = env
         self.ArmTag = ArmTag
         self.arm = ArmTag("right" if env.dart_side > 0 else "left")
-        self.done = False
         self.busy = False
         self.robot_motion = robot_motion
-        self._space = EdgeKey()
-        self.MAX_LOCAL_JOINT_DELTA = 0.70
-
-    def jab(self):
-        self.busy = True
-        self.arm = resolve_action_arm(self.env, self.ArmTag, exactly_one=True) or self.arm
-        tip = _tip(self.env)
-        # Cup-curtain-style placement: retain the position selected with the
-        # movement keys and perform only the task-specific forward jab, ending
-        # with the tip against the painted face.
-        dy = float(self.env._plant_tip_y() - tip[1])
-        if abs(dy) > 0.004:
-            self.env.move(self.env.move_by_displacement(
-                self.arm, y=float(np.clip(dy, -0.06, 0.06)), move_axis="world",
-            ))
-        # Advance without the expert yellow plant — interactive attaches at the
-        # tip's exact contact pose below.
-        self.env._advance(30, try_stick=False)
-        if not self.env._hit_blocker:
-            self.env._try_form_stick(any_ring=True, exact_pose=True)
-        if not self.env._hit_blocker and self.env._hit_color is None:
-            self.env._record_board_hit()
-        self.done = True
-        print(f"Jab: {self.env.hit_result_detail()}.")
-        self.busy = False
-
-    def _drive_qpos(self):
-        joints = (
-            self.env.robot.left_arm_joints
-            if str(self.arm) == "left"
-            else self.env.robot.right_arm_joints
-        )
-        return np.asarray([joint.get_drive_target()[0] for joint in joints], dtype=np.float64)
-
-    def _interpolate_to_ee_pose(self, ee_pose):
-        planner = (
-            self.env.robot.left_plan_path
-            if str(self.arm) == "left"
-            else self.env.robot.right_plan_path
-        )
-        result = planner(
-            np.asarray(ee_pose, dtype=np.float64).tolist(),
-            constraint_pose=[1, 1, 1, 0, 0, 0],
-        )
-        if result is None or result.get("status") != "Success":
-            return False
-        positions = result.get("position")
-        if positions is None or len(positions) == 0:
-            return False
-        start = self._drive_qpos()
-        target = np.asarray(positions[-1], dtype=np.float64).reshape(-1)
-        if target.shape != start.shape:
-            return False
-        if float(np.max(np.abs(target - start))) > self.MAX_LOCAL_JOINT_DELTA:
-            return False
-        delta = target - start
-        for index in range(1, 11):
-            alpha = index / 10.0
-            smooth = alpha * alpha * (3.0 - 2.0 * alpha)
-            self.env.robot.set_arm_joints(
-                start + delta * smooth,
-                delta / 10.0,
-                str(self.arm),
-            )
-            self.env._update_kinematic_tasks()
-            self.env.scene.step()
-            viewer = getattr(self.env, "viewer", None)
-            if viewer is not None:
-                self.env.scene.update_render()
-                viewer.render()
-        self.env.robot.set_arm_joints(target, np.zeros_like(target), str(self.arm))
-        self.env.plan_success = True
-        self.env._last_plan_fail = None
-        return True
-
-    def _nudge(self, dx, dy, dz):
-        if self.robot_motion != "interpolate":
-            self.env.move(self.env.move_by_displacement(
-                self.arm, x=dx, y=dy, z=dz, move_axis="world",
-            ))
-            return
-        ee_pose = np.asarray(
-            self.env.robot.get_left_ee_pose()
-            if str(self.arm) == "left"
-            else self.env.robot.get_right_ee_pose(),
-            dtype=np.float64,
-        )
-        ee_pose[:3] += np.asarray([dx, dy, dz], dtype=np.float64)
-        if not self._interpolate_to_ee_pose(ee_pose):
-            print("Dart nudge could not reach the requested pose.")
 
     def update(self, window):
-        if self.busy or self.done or self.env._stuck or self.env._hit_blocker:
-            return
-        if self._space.poll(window.key_down("space")):
-            self.jab()
-            return
-        # Universal viewer controls own arrow/E/Q / G motion.
+        # Universal viewer controls own arrow/E/Q / Space gripper motion.
+        del window
 
 
 def main():
@@ -376,7 +259,7 @@ def main():
                 report_task_result(env, env.hit_result_detail())
                 terminal_started_at = time.perf_counter()
                 continue
-            if env._stuck or getattr(controller, "done", False):
+            if env._stuck or env._hit_color is not None:
                 if settle_after is None:
                     settle_after = time.perf_counter()
                 elif time.perf_counter() - settle_after >= 1.0:

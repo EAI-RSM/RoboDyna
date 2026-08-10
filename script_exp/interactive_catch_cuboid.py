@@ -6,7 +6,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_cuboid.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_catch_cuboid.py --control robot
 
-Close the gripper (G) while the cuboid is rising to latch it, then lift it out.
+Close the gripper (Space) while the cuboid is rising to latch it, then lift it out.
 Opt1 supports dual arms.
 """
 
@@ -52,11 +52,11 @@ _ARM_HIGHLIGHT = {
 
 
 CONTROLS_KEYBOARD = """
-  G                 open / close gripper (closing latches a rising cuboid; you lift it out)
+  Space             open / close gripper (closing latches a rising cuboid; you lift it out)
 """
 
 CONTROLS_ROBOT = """
-  G                 open / close gripper (closing latches a rising cuboid; you lift it out)
+  Space             open / close gripper (closing latches a rising cuboid; you lift it out)
   Arrow keys        move selected arm in XY
   E / Q             move selected arm in Z
 """
@@ -250,7 +250,7 @@ def _mark_latch_failure(controller, env, arms, detail="insufficient contact"):
 
 
 class KeyboardCatchController:
-    """On G close, latch the cuboid; user lifts for success."""
+    """On Space close, latch the cuboid; user lifts for success."""
 
     def __init__(self, env, ArmTag):
         self.env = env
@@ -260,7 +260,7 @@ class KeyboardCatchController:
         if not self.dual:
             hole = env._cuboid_holes[0]
             self.selected = "right" if env.holes[hole][0] > 0 else "left"
-        self._g = EdgeKey()
+        self._space = EdgeKey()
         self._q = EdgeKey()
         self._e = EdgeKey()
         self._pending = None  # (arms, cuboid_indices, steps_left)
@@ -312,30 +312,30 @@ class KeyboardCatchController:
                 print("Selected RIGHT arm.")
 
         arms = list(_selected_arms(self.env, (self.selected,)))
-        g_close = self._g.poll(window.key_down("g")) and any(
+        space_close = self._space.poll(window.key_down("space")) and any(
             self._prev_width.get(a, 1.0) > 0.5 for a in arms
         )
         for side in ("left", "right"):
             self._prev_width[side] = gripper_width(self.env, side)
-        if g_close:
+        if space_close:
             self._begin_latch(arms)
 
 
 class RobotCatchController:
-    """On G close, latch the cuboid; user teleops the lift."""
+    """On Space close, latch the cuboid; user teleops the lift."""
 
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
         self.dual = bool(env.dual_catch)
         self.busy = False
-        self._g = EdgeKey()
+        self._space = EdgeKey()
         self.selected = "right"
         if not self.dual:
             hole = env._cuboid_holes[0]
             self.selected = "right" if env.holes[hole][0] > 0 else "left"
         self._highlight = ArmGripperHighlight(env)
-        self._highlight.set_selected(self.selected)
+        # Stay gray until 1 / 2 / 3 selects an arm (shared UniversalRobotControls).
         self._prev_width = {"left": 1.0, "right": 1.0}
         self._latched = set()
         self.done = False
@@ -370,17 +370,22 @@ class RobotCatchController:
     def update(self, window):
         if self.done or self.busy:
             return
-        selected = _selected_arms(self.env, (self.selected,))
+        # Do not fall back to a default arm — wait for 1 / 2 / 3.
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
+        if not selected:
+            return
         if len(selected) == 1:
             self._select(selected[0])
+        elif len(selected) == 2:
+            self._highlight.set_selected(selected)
 
         arms = list(selected)
-        g_close = self._g.poll(window.key_down("g")) and any(
+        space_close = self._space.poll(window.key_down("space")) and any(
             self._prev_width.get(a, 1.0) > 0.5 for a in arms
         )
         for side in ("left", "right"):
             self._prev_width[side] = gripper_width(self.env, side)
-        if g_close:
+        if space_close:
             self._latch_selected(arms)
 
 def main():
@@ -431,7 +436,7 @@ def main():
         env._interactive_selected_arms = (
             "right" if env.holes[hole][0] > 0 else "left",
         )
-    # Start with open grippers so G close has an effect.
+    # Start with open grippers so Space close has an effect.
     try:
         env.together_open_gripper(save_freq=None)
     except Exception:
@@ -442,11 +447,11 @@ def main():
     )
     if args.control == "robot":
         print_instructions(
-            "Arrows/E/Q move the arm; close with G to latch, then lift the cuboid out."
+            "Arrows/E/Q move the arm; close with Space to latch, then lift the cuboid out."
         )
     else:
         print_instructions(
-            "Wait for the cuboid to rise, close with G to latch, then lift it out."
+            "Wait for the cuboid to rise, close with Space to latch, then lift it out."
         )
     controller = (
         RobotCatchController(env, ArmTag) if args.control == "robot"

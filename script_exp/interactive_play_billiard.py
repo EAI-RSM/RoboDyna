@@ -7,7 +7,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_play_billiard.py --control robot
 
 Keyboard mode aims the cue; slide the tip into the ball to hit (blue tip only,
-one contact). Robot mode: grasp/release with G, aim with arrows/E/Q/R/T, and
+one contact). Robot mode: grasp/release with Space, aim with arrows/E/Q/R/T, and
 drive the blue tip into the ball for a single hit.
 """
 
@@ -46,7 +46,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  G                 open / close gripper to grasp or release the cue
+  Space             open / close gripper to grasp or release the cue
   (hit)             move the blue tip into the ball — one tip contact only
 """
 
@@ -187,7 +187,7 @@ class KeyboardCueController:
 
 
 class RobotCueController:
-    """G physics grasp; shared teleop aims; tip-only one-shot hit (no Space)."""
+    """Space physics grasp; shared teleop aims; tip-only one-shot hit."""
 
     def __init__(self, env, ArmTag):
         self.env = env
@@ -238,7 +238,7 @@ def main():
         )
 
     env = play_billiard()
-    # Always enable arm teleop + G grasp/release; hit by driving the tip into the ball.
+    # Always enable arm teleop + Space grasp/release; hit by driving the tip into the ball.
     env._interactive_robot_mode = True
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env._interactive_selected_arms = (env._arm_side,)

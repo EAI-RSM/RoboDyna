@@ -127,7 +127,7 @@ def main():
     )
 
     env = catch_marbles_trapdoors()
-    # Always enable arm teleop: presses are gripper-Z only (no Space).
+    # Always enable arm teleop: button presses are gripper-Z; Space opens/closes grippers.
     env._interactive_robot_mode = True
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env.together_close_gripper(save_freq=None)

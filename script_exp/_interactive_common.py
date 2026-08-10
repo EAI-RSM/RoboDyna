@@ -635,7 +635,7 @@ def toggle_selected_grippers(env, *, fallback=("left", "right"), threshold: floa
 class ViewerViewToggle:
     """V cycles head_camera ↔ gripper/wrist views (no top-down).
 
-    G (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
+    Space (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
     Camera switching is V-only.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
@@ -673,7 +673,7 @@ class ViewerViewToggle:
         self.viewer = viewer
         self.env = env
         self._prev_v = False
-        self._prev_g = False
+        self._prev_space = False
         self._head = head_camera
         self.robot_controls = robot_controls
         self._warned_missing_gripper = False
@@ -862,8 +862,8 @@ class ViewerViewToggle:
     def _v_pressed(self, window) -> bool:
         return self._edge_key(window, "v", "_prev_v")
 
-    def _g_pressed(self, window) -> bool:
-        return self._edge_key(window, "g", "_prev_g")
+    def _space_pressed(self, window) -> bool:
+        return self._edge_key(window, "space", "_prev_space")
 
     def _cycle_view(self):
         """Cycle head_camera ↔ active gripper/wrist view(s)."""
@@ -888,10 +888,10 @@ class ViewerViewToggle:
             self.robot_controls.update(window)
         elif self.env is not None:
             # Restore red failure tint when UniversalRobotControls is absent
-            # (keyboard mode still uses Space / G action paths).
+            # (keyboard mode still uses Space gripper / task action paths).
             gripper_failure_feedback(self.env).update()
-        # G opens/closes selected gripper(s).
-        if self.env is not None and self._g_pressed(window):
+        # Space opens/closes selected gripper(s).
+        if self.env is not None and self._space_pressed(window):
             toggle_selected_grippers(self.env)
         if self._v_pressed(window):
             self._cycle_view()
@@ -1033,9 +1033,11 @@ class UniversalRobotControls:
     Z / X tip the gripper about world +Y (left / right) for pour-style motions.
     R / T yaw about world +Z (counter-clockwise / clockwise) continuously via IK.
     O returns the selected arm(s) to the pose captured when teleop started
-    (task ``original`` / start pose). G opens/closes the selected gripper.
-    is handled by ``ViewerViewToggle`` so it also works when teleop is not
-    attached.
+    (task ``original`` / start pose). Space opens/closes the selected gripper
+    via ``ViewerViewToggle`` so it also works when teleop is not attached.
+
+    No arm is highlighted at start — press 1 / 2 / 3 to activate left / right /
+    both (until then both grippers stay gray and teleop / Space do nothing).
     """
 
     # Interactive teleop rates (m/s). 20% slower than the prior snappy sandbox
@@ -1061,15 +1063,17 @@ class UniversalRobotControls:
 
     def __init__(self, env):
         self.env = env
-        initial = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
-        self.selected = initial or ("left",)
+        # No arm is active until the user presses 1 / 2 / 3 for the first time
+        # (both grippers stay gray). Task pre-seeds of ``_interactive_selected_arms``
+        # are ignored for highlight / teleop until that explicit selection.
+        self.selected = ()
         self._previous = {key: False for key in ("1", "2", "3", "o")}
         self._last_update = None
         self._command = {}
         self._highlight_materials = {}
         self._origin_joints = {}
         self._origin_pose = {}
-        env._interactive_selected_arms = self.selected
+        env._interactive_selected_arms = ()
         env._interactive_universal_controls = True
         env._interactive_robot_controls = self
         # Ensure the shared failure feedback exists for Space/action paths.
@@ -1644,24 +1648,55 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
 
 def _line_documents_key(lines: list[str], key: str) -> bool:
     """True when a control banner line already documents ``key`` as a binding."""
-    key = key.strip().upper()
+    key_u = key.strip().upper()
     for ln in lines:
         s = ln.strip()
-        if s.startswith(f"{key} ") or s.startswith(f"{key}:") or s.startswith(f"{key}\t"):
+        s_u = s.upper()
+        if (
+            s_u.startswith(f"{key_u} ")
+            or s_u.startswith(f"{key_u}:")
+            or s_u.startswith(f"{key_u}\t")
+            or s_u.startswith(f"{key_u} —")
+            or s_u.startswith(f"{key_u} -")
+        ):
             return True
-        if f"{key}                 " in ln or f"{key}: " in ln:
+        if f"{key_u}                 " in ln.upper() or f"{key_u}: " in ln.upper():
             return True
-        # Compact banners: "V: camera | G: open/close | Escape"
-        if f"{key}:" in s or f"| {key}:" in s or f"|{key}:" in s:
+        # Compact banners: "V: camera | Space: open/close | Escape"
+        if f"{key_u}:" in s_u or f"| {key_u}:" in s_u or f"|{key_u}:" in s_u:
             return True
     return False
+
+
+_GRIPPER_TOGGLE_HELP = "Space             open / close selected gripper(s)"
+
+
+def _is_gripper_toggle_help_line(line: str) -> bool:
+    """True for F/G/Space lines that document open/close gripper."""
+    s = line.strip()
+    if not (
+        s.startswith("F ")
+        or s.startswith("F:")
+        or s.startswith("F\t")
+        or s.startswith("G ")
+        or s.startswith("G:")
+        or s.startswith("G\t")
+        or s.startswith("G —")
+        or s.startswith("Space ")
+        or s.startswith("Space:")
+        or s.startswith("Space\t")
+        or s.startswith("Space —")
+    ):
+        return False
+    low = line.lower()
+    return "gripper" in low and ("open" in low or "close" in low or "grasp" in low)
 
 
 def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str) -> None:
     """Print only the help block for the selected ``--control`` mode."""
     body = (robot if mode == "robot" else keyboard).strip("\n")
     if mode == "robot":
-        # Shared teleop keys; skip G here when the task banner already lists it.
+        # Shared teleop keys; skip Space here when the task banner already lists it.
         shared = (
             "  Arrow keys        move selected arm(s) in world XY\n"
             "  E / Q             raise / lower selected arm(s)\n"
@@ -1670,26 +1705,24 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
             "  1 / 2 / 3         select left / right / both arms\n"
             "  O                 return selected arm(s) to original position\n"
         )
-        if not _line_documents_key(body.splitlines(), "G"):
-            shared += "  G                 open / close selected gripper(s)\n"
+        if not _line_documents_key(body.splitlines(), "Space"):
+            shared += f"  {_GRIPPER_TOGGLE_HELP}\n"
         body = shared + body
     lines = _normalize_view_help_lines(body.splitlines())
-    # Rewrite stale F gripper-toggle help to G; inject G when missing.
+    # Rewrite stale F/G gripper-toggle help to Space; inject Space when missing.
     rewritten = []
+    saw_space_grip = False
     for ln in lines:
-        s = ln.strip()
-        if (
-            (s.startswith("F ") or s.startswith("F:") or s.startswith("F\t"))
-            and "open" in ln.lower()
-            and "close" in ln.lower()
-            and "gripper" in ln.lower()
-        ):
+        if _is_gripper_toggle_help_line(ln):
+            if saw_space_grip:
+                continue
             indent = ln[: len(ln) - len(ln.lstrip(" "))]
-            rewritten.append(f"{indent}G                 open / close selected gripper(s)")
+            rewritten.append(f"{indent}{_GRIPPER_TOGGLE_HELP}")
+            saw_space_grip = True
         else:
             rewritten.append(ln)
     lines = rewritten
-    if not _line_documents_key(lines, "G"):
+    if not _line_documents_key(lines, "Space"):
         inserted = False
         for i, ln in enumerate(lines):
             if (
@@ -1700,14 +1733,11 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
                 or "V                 " in ln
             ):
                 indent = ln[: len(ln) - len(ln.lstrip(" "))]
-                lines.insert(
-                    i + 1,
-                    f"{indent}G                 open / close selected gripper(s)",
-                )
+                lines.insert(i + 1, f"{indent}{_GRIPPER_TOGGLE_HELP}")
                 inserted = True
                 break
         if not inserted:
-            lines.append("  G                 open / close selected gripper(s)")
+            lines.append(f"  {_GRIPPER_TOGGLE_HELP}")
     body = "\n".join(lines)
     bar = "=" * 60
     print_instructions(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
@@ -1721,10 +1751,17 @@ def default_arms_for_mode(mode):
 
 
 def selected_robot_arms(env, fallback=("left",)):
-    """Return the arms selected by the universal 1/2/3 robot controls."""
+    """Return the arms selected by the universal 1/2/3 robot controls.
 
+    When universal controls are active and nothing is selected yet, returns
+    ``()`` (no fallback) so grippers stay inactive until 1 / 2 / 3.
+    """
     selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
-    return selected or tuple(fallback)
+    if selected:
+        return selected
+    if bool(getattr(env, "_interactive_universal_controls", False)):
+        return ()
+    return tuple(fallback)
 
 
 GRIPPER_LINK_NAMES = frozenset({

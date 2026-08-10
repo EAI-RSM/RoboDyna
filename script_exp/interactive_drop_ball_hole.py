@@ -62,7 +62,7 @@ def main():
         "left" if env.ball_side == "left" else "right",
     )
     env._interactive_released = False
-    # Spin the platform for the interactive session (Space pickup used to arm this).
+    # Spin the platform for the interactive session.
     env._cap_tracking = True
 
     print_banner(
@@ -75,14 +75,14 @@ def main():
             "E / Q — move the ball up / down",
             "V — cycle view: head_camera ↔ gripper(s)",
             "Esc — close the viewer window to quit",
-            "Use teleop / G to grasp and release (no Space auto-grasp).",
+            "Use teleop / Space to grasp and release.",
             "Watch the spinning platform; release only when the hole passes under.",
             "Default / Opt2: after release the ball has 2s to fall into the box.",
             "--robot-motion planner|interpolate",
         ],
     )
     print_instructions(
-        "Robot: close G on the ball to grasp, open G to drop. "
+        "Robot: close Space on the ball to grasp, open Space to drop. "
         "Keyboard: arrows/E/Q to move; release keys to drop."
     )
     if env._uses_drop_timeout():
@@ -135,7 +135,7 @@ def main():
     def on_step(window, step):
         nonlocal prev_gripper_closed, grasped_ball, keyboard_moved
         # Robot: mark release only after a real manual grasp (closed near ball),
-        # then G-open. Opening before pickup must not start the drop timeout.
+        # then Space-open. Opening before pickup must not start the drop timeout.
         if use_robot and not bool(getattr(env, "ball_released", False)):
             arms = selected_robot_arms(env, fallback=env._interactive_selected_arms)
             if arms:
@@ -155,7 +155,7 @@ def main():
                     grasped_ball = False
                 prev_gripper_closed = closed_now
 
-        # Keyboard: arrows / E/Q still move the ball; key-up drops it (replaces Space).
+        # Keyboard: arrows / E/Q still move the ball; key-up drops it.
         if not use_robot and not env._interactive_released:
             dx, dy, dz = _nudge_from_keys(window)
             keys_down = any(

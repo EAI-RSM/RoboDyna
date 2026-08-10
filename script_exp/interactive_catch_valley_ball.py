@@ -37,15 +37,12 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Space             close/open gripper for pushing
-
   Prefer --control robot. The box is PhysX-dynamic — shove it with the closed gripper.
 """
 
 CONTROLS_ROBOT = """
-  Space             close/open gripper for pushing
-
   The catch box is PhysX-dynamic — it moves only under gripper contact (no teleport).
+  Close the gripper (Space), then shove the box into the catch zone.
 """
 
 
@@ -87,50 +84,6 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = True):
     config["left_embodiment_config"] = _embodiment_config(config["left_robot_file"])
     config["right_embodiment_config"] = _embodiment_config(config["right_robot_file"])
     return config
-
-
-class EdgeKey:
-    def __init__(self):
-        self._prev = False
-
-    def poll(self, down: bool) -> bool:
-        edge = bool(down) and not self._prev
-        self._prev = bool(down)
-        return edge
-
-
-class PushGripToggle:
-    """Space closes/opens the selected gripper for a physical shove (no weld)."""
-
-    def __init__(self, env):
-        self.env = env
-        self.closed = True
-        self._space = EdgeKey()
-
-    def update(self, window):
-        if not self._space.poll(window.key_down("space")):
-            return
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
-        if not selected:
-            print("[catch_valley_ball] select an arm with 1/2/3 before toggling the gripper")
-            return
-        from envs.utils.action import ArmTag
-
-        self.env.plan_success = True
-        try:
-            if self.closed:
-                for side in selected:
-                    self.env.move(self.env.open_gripper(ArmTag(side)))
-                self.closed = False
-                print("[catch_valley_ball] gripper opened")
-            else:
-                for side in selected:
-                    self.env.move(self.env.close_gripper(ArmTag(side)))
-                self.closed = True
-                print("[catch_valley_ball] gripper closed — shove the box with contact")
-        except Exception as exc:
-            print(f"[catch_valley_ball] gripper toggle failed: {exc}")
-        self.env.plan_success = True
 
 
 def main():
@@ -180,7 +133,6 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
     if views.robot_controls is None:
         views.robot_controls = UniversalRobotControls(env)
-    grip = PushGripToggle(env)
 
     settle_after = None
     terminal_started_at = None
@@ -190,7 +142,6 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            grip.update(viewer.window)
 
             # Keep the box dynamic every frame (in case settle helpers re-freeze).
             if not bool(getattr(env, "_push_active", False)):

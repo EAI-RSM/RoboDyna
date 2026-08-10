@@ -1,8 +1,8 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive sandbox for ``place_block_belt``.
 
-Grasp the tall block with G, teleop over the belt, open G to drop it so the
-belt can carry it. No Space auto-grasp / auto-release.
+Grasp the tall block with Space, teleop over the belt, open Space to drop it so the
+belt can carry it. Space opens/closes the gripper only.
 
 Run from any directory:
 
@@ -31,7 +31,7 @@ bootstrap_repo()
 
 
 def _block_held(env) -> bool:
-    """True while fingers still contact the block (G-close grasp)."""
+    """True while fingers still contact the block (Space-close grasp)."""
     if getattr(env, "block", None) is None:
         return False
     try:
@@ -57,7 +57,7 @@ class BlockReleaseMonitor:
         if held:
             if not self.holding:
                 self.holding = True
-                print("Block grasped — teleop over the belt, then G to open / release.")
+                print("Block grasped — teleop over the belt, then Space to open / release.")
             self._hold_contact_seen = True
             self._no_contact_steps = 0
             return
@@ -104,7 +104,7 @@ def main():
             "Goal: place the tall block on the belt BEFORE the red place line;",
             "      stay in the clear lane if a blocker is present.",
             "1 / 2 / 3 — select left / right / both arms (robot mode)",
-            "G — close to grasp / open to release (drop onto the belt)",
+            "Space — close to grasp / open to release (drop onto the belt)",
             "Arrows / E / Q — teleop the selected arm(s)",
             "V — cycle view: head_camera ↔ gripper(s)",
             "Esc — close the viewer window to quit",
@@ -126,7 +126,7 @@ def main():
     env._belt_active = False
     env._release_delay_left = 0
     print_instructions(
-        f"Selected {selected_arm} arm. G closes/opens the gripper to grasp/release the block. "
+        f"Selected {selected_arm} arm. Space closes/opens the gripper to grasp/release the block. "
         "When the block leaves the fingers on the belt, the conveyor engages."
     )
 

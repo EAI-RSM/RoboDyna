@@ -6,7 +6,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_whack_moles.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_whack_moles.py --control robot
 
-Pick up a side-staged mallet by teleoping onto the handle and closing G, then
+Pick up a side-staged mallet by teleoping onto the handle and closing Space, then
 jab moles mid-rise by lowering the mallet head. Avoid rabbits (Opt1).
 Success = all moles hit and no rabbit touch.
 """
@@ -42,12 +42,12 @@ from _interactive_common import (  # noqa: E402
 CONTROLS_KEYBOARD = """
   Q / E             select previous / next unhit mole
   1 .. N            select mole index directly
-  (Prefer --control robot to grasp mallets with G and strike by teleop.)
+  (Prefer --control robot to grasp mallets with Space and strike by teleop.)
 """
 
 CONTROLS_ROBOT = """
   1 / 2 / 3         select left, right, or both arms
-  G                 close on a cradle mallet handle to pick it up
+  Space             close on a cradle mallet handle to pick it up
   Arrows / E / Q    teleop; lower the mallet head onto rising moles to strike
 """
 
@@ -226,17 +226,17 @@ class KeyboardMoleController:
 
 
 class RobotMoleController:
-    """Latch cradle mallets on G-close; strike by teleoping the head onto moles."""
+    """Latch cradle mallets on Space-close; strike by teleoping the head onto moles."""
 
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
         self.selected_arm = "left"
         self.busy = False
-        self._g = EdgeKey()
+        self._space = EdgeKey()
         self._prev_width = {"left": 1.0, "right": 1.0}
         self.highlight = ArmGripperHighlight(env)
-        self.highlight.set_selected(self.selected_arm)
+        # Stay gray until 1 / 2 / 3 selects an arm (shared UniversalRobotControls).
 
     def _try_latch(self, selected):
         self.busy = True
@@ -247,7 +247,7 @@ class RobotMoleController:
         latched = []
         failed = []
         for side in need:
-            # Let the shared G close settle before judging proximity.
+            # Let the shared Space close settle before judging proximity.
             try:
                 self.env.robot.set_gripper(0.0, side, gripper_eps=0.0)
             except Exception:
@@ -273,22 +273,24 @@ class RobotMoleController:
     def update(self, window):
         if self.busy or self.env.distractor_hit:
             return
-        selected = tuple(
-            getattr(self.env, "_interactive_selected_arms", (self.selected_arm,))
-        )
-        if len(selected) == 1 and selected[0] != self.selected_arm:
-            self.selected_arm = selected[0]
+        # Do not fall back to a default arm — wait for 1 / 2 / 3.
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
+        if not selected:
+            return
+        if len(selected) == 1:
+            if selected[0] != self.selected_arm:
+                self.selected_arm = selected[0]
             self.highlight.set_selected(self.selected_arm)
         elif len(selected) == 2:
             self.highlight.set_selected(selected)
 
-        arms = list(selected) if selected else []
-        g_close = self._g.poll(window.key_down("g")) and any(
+        arms = list(selected)
+        space_close = self._space.poll(window.key_down("space")) and any(
             self._prev_width.get(a, 1.0) > 0.5 for a in arms
         )
         for side in ("left", "right"):
             self._prev_width[side] = gripper_width(self.env, side)
-        if g_close:
+        if space_close:
             self._try_latch(arms)
 
 

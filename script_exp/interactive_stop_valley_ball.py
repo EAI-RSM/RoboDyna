@@ -6,7 +6,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control robot
 
-Close the gripper (G) on the bat handle to latch it, then teleop to the intercept.
+Close the gripper (Space) on the bat handle to latch it, then teleop to the intercept.
 """
 
 import argparse
@@ -44,7 +44,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  G                 open / close selected gripper (close on bat handle to latch; 1/2 pick arm)
+  Space             open / close selected gripper (close on bat handle to latch; 1/2 pick arm)
   Arrow keys        move selected arm in XY
   E / Q             move selected arm in Z
 """
@@ -280,7 +280,7 @@ class EdgeKey:
 
 
 class KeyboardBatController:
-    """Free bat teleport (no Space). Prefer --control robot for gripper latch."""
+    """Free bat teleport. Prefer --control robot for gripper latch."""
 
     def __init__(self, env):
         self.env = env
@@ -295,7 +295,7 @@ class KeyboardBatController:
 
 
 class RobotBatController:
-    """Latch the bat when G closes the gripper on/near the handle (no Space)."""
+    """Latch the bat when Space closes the gripper on/near the handle."""
 
     def __init__(self, env, ArmTag):
         self.env = env
@@ -303,7 +303,7 @@ class RobotBatController:
         self.arm = None
         self.holding = False
         self.busy = False
-        self._g = EdgeKey()
+        self._space = EdgeKey()
         self._prev_width = {"left": 1.0, "right": 1.0}
 
     def _latch(self):
@@ -313,7 +313,7 @@ class RobotBatController:
             self.busy = False
             return
         side = str(self.arm)
-        # Let the shared G close settle contacts before judging proximity.
+        # Let the shared Space close settle contacts before judging proximity.
         try:
             self.env.robot.set_gripper(0.0, side, gripper_eps=0.0)
         except Exception:
@@ -335,12 +335,12 @@ class RobotBatController:
             return
         selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
         arms = list(selected) if selected else []
-        g_close = self._g.poll(window.key_down("g")) and any(
+        space_close = self._space.poll(window.key_down("space")) and any(
             self._prev_width.get(a, 1.0) > 0.5 for a in arms
         )
         for side in ("left", "right"):
             self._prev_width[side] = gripper_width(self.env, side)
-        if g_close:
+        if space_close:
             self._latch()
 
 
@@ -419,7 +419,7 @@ def main():
 
     if args.control == "robot":
         print_instructions(
-            "Teleop to the bat handle, close with G to latch, then move to the intercept."
+            "Teleop to the bat handle, close with Space to latch, then move to the intercept."
         )
     else:
         print_instructions("Arrow keys move the bat in XY; E/Q change height.")

@@ -443,7 +443,7 @@ def main():
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     env = sort_apples_belt()
-    # Always enable arm teleop when robot mode: presses are gripper-Z only (no Space).
+    # Always enable arm teleop when robot mode: button presses are gripper-Z; Space = gripper.
     if args.control == "robot":
         env._interactive_robot_mode = True
     env.setup_demo(**_configure_default_task(
@@ -537,7 +537,7 @@ def main():
                     break
                 continue
 
-            # Robot mode: gripper-Z reactive held_mask drives the diverter (no Space latch).
+            # Robot mode: gripper-Z reactive held_mask drives the diverter (no dedicated latch key).
             for _ in range(n_steps):
                 env._update_kinematic_tasks()
                 env.scene.step()
