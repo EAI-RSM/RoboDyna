@@ -7,7 +7,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_hit_target.py --control robot
 
 Keyboard mode aims the dart tip with arrows and thrusts on Space. Robot mode
-grasps the dart, aims with the movement keys, then jabs on the second Space press.
+grasps the dart with G, aims with the movement keys, then jabs on Space.
 """
 
 import argparse
@@ -19,7 +19,6 @@ from pathlib import Path
 import numpy as np
 import sapien
 import sapien.physx
-import transforms3d as t3d
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,8 +28,6 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    action_failed,
-    try_interactive_grasp,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
@@ -48,7 +45,8 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Space             grasp dart, then jab / thrust
+  G                 open / close gripper to grasp the dart
+  Space             jab / thrust tip at yellow center
 """
 
 
@@ -191,42 +189,15 @@ class RobotDartController:
         self.env = env
         self.ArmTag = ArmTag
         self.arm = ArmTag("right" if env.dart_side > 0 else "left")
-        self.side = float(env.dart_side)
-        self.holding = False
         self.done = False
         self.busy = False
         self.robot_motion = robot_motion
         self._space = EdgeKey()
         self.MAX_LOCAL_JOINT_DELTA = 0.70
 
-    def grasp(self):
-        self.busy = True
-        self.arm = resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
-        if self.arm is None:
-            self.busy = False
-            return
-        if try_interactive_grasp(
-            self.env, self.env.dart, self.arm, pre_grasp_dis=0.08, contact_point_id=0,
-        ):
-            # Match hit_target's main rollout: rotate the wrist around world Z
-            # while lifting so the side-spawned dart tip faces the board (+Y).
-            cur_q = np.asarray(self.env.get_arm_pose(str(self.arm))[3:], dtype=np.float64)
-            yaw = t3d.quaternions.axangle2quat(
-                [0.0, 0.0, 1.0],
-                np.pi / 2.0 if self.side > 0 else -np.pi / 2.0,
-            )
-            new_q = t3d.quaternions.qmult(yaw, cur_q)
-            self.env.move(self.env.move_by_displacement(
-                self.arm, z=0.10, quat=list(new_q), move_axis="world",
-            ))
-            self.holding = True
-            print(f"Grasped dart with {self.arm}. Arrows/E/Q aim; Space jabs.")
-        self.busy = False
-
     def jab(self):
-        if not self.holding:
-            return
         self.busy = True
+        self.arm = resolve_action_arm(self.env, self.ArmTag, exactly_one=True) or self.arm
         tip = _tip(self.env)
         # Cup-curtain-style placement: retain the position selected with the
         # movement keys and perform only the task-specific forward jab, ending
@@ -312,12 +283,9 @@ class RobotDartController:
         if self.busy or self.done or self.env._stuck or self.env._hit_blocker:
             return
         if self._space.poll(window.key_down("space")):
-            if not self.holding:
-                self.grasp()
-            else:
-                self.jab()
+            self.jab()
             return
-        # Universal viewer controls own arrow/E/Q motion.
+        # Universal viewer controls own arrow/E/Q / G motion.
 
 
 def main():

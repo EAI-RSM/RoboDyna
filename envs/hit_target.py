@@ -225,15 +225,12 @@ class hit_target(Base_Task):
         self.target_center_x = float(self.dart_side * 0.5 * self.side_span)
         self.sway_amp = float(self.side_span)  # expert prefer uses sway_amp as peak |x|
 
-        # ---- dart: tip points outward; matching arm grasps.
+        # ---- dart: tip along +Y (toward the board); matching arm grasps.
         # Left is the exact mirror of right (x → −x).
         dart_x = self.dart_side * float(np.random.uniform(0.10, 0.22))
         dart_y = float(np.random.uniform(-0.12, -0.04))
-        # Right: identity → tip along +X. Left: 180° about Z → tip along −X (mirror).
-        if self.dart_side > 0:
-            dart_q = [1.0, 0.0, 0.0, 0.0]
-        else:
-            dart_q = list(t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], np.pi))
+        # Local +X shaft → world +Y so the dart sits along the y axis.
+        dart_q = list(t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], np.pi / 2.0))
         dart_pose = sapien.Pose(
             [dart_x, dart_y, 0.74 + self.table_z_bias + self.DART_SHAFT_HALF[2]],
             dart_q,
@@ -333,7 +330,8 @@ class hit_target(Base_Task):
             "extents": [2 * tip_x, 2 * sh[1], 2 * sh[2]],
             "transform_matrix": np.eye(4).tolist(),
             "target_pose": [np.eye(4).tolist()],
-            # Top-down grasp frames: gripper forward -Z, pre-grasp above the shaft.
+            # Top-down grasp frames in dart-local coords (local +X = tip / shaft).
+            # With spawn yaw π/2, local +X is world +Y so fingers pinch across ±X.
             "contact_points_pose": [
                 [[1, 0, 0, -0.004],
                  [0, 0, -1, 0.0],
@@ -1140,6 +1138,30 @@ class hit_target(Base_Task):
         if abs(cz - tip[2]) > 0.004:
             self.move(self.move_by_displacement(arm_tag=arm, z=float(cz - tip[2]), move_axis="world"))
 
+    def _lift_and_align_tip_to_board(self, arm, lift_z=0.10):
+        """Post-grasp: lift and yaw so the tip faces the board (+Y).
+
+        Replaces the old fixed ±π/2 yaw that assumed an X-aligned spawn. The dart
+        already sits along +Y; this only corrects if the planner grasp flipped it.
+        """
+        tip = np.array(self.dart.get_functional_point(0, "list")[:3], dtype=float)
+        body = np.array(self.dart.get_pose().p, dtype=float)
+        planar = tip - body
+        planar[2] = 0.0
+        n = float(np.linalg.norm(planar))
+        quat = None
+        if n > 1e-4:
+            # Angle of tip from +Y toward +X; rotate by −θ about world Z.
+            theta = float(np.arctan2(planar[0], planar[1]))
+            if abs(theta) > 0.05:
+                cur_q = np.asarray(self.get_arm_pose(str(arm))[3:], dtype=np.float64)
+                yaw = t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], -theta)
+                quat = list(t3d.quaternions.qmult(yaw, cur_q))
+        kwargs = dict(arm_tag=arm, z=float(lift_z), move_axis="world")
+        if quat is not None:
+            kwargs["quat"] = quat
+        self.move(self.move_by_displacement(**kwargs))
+
     def _strike_clearance_z(self):
         if not self._any_blocker():
             return float(self._target_center_world()[2])
@@ -1234,17 +1256,13 @@ class hit_target(Base_Task):
         side_sign = float(self.dart_side)
         self._dbg("start")
 
-        self.move(self.grasp_actor(self.dart, arm_tag=arm, pre_grasp_dis=0.08, contact_point_id=0))
+        self.move(self.grasp_actor(
+            self.dart, arm_tag=arm, pre_grasp_dis=0.08, contact_point_id=[0, 1],
+        ))
         self._dbg("after grasp")
 
-        # Yaw tip toward the board (+Y): +π/2 from +X (right), −π/2 from −X (left mirror).
-        cur_q = np.array(self.get_arm_pose(str(arm))[3:])
-        yaw = t3d.quaternions.axangle2quat(
-            [0, 0, 1], (np.pi / 2.0) if side_sign > 0 else (-np.pi / 2.0)
-        )
-        new_q = t3d.quaternions.qmult(yaw, cur_q)
-        self.move(self.move_by_displacement(arm_tag=arm, z=0.10, quat=list(new_q), move_axis="world"))
-        self._dbg("after lift+yaw")
+        self._lift_and_align_tip_to_board(arm, lift_z=0.10)
+        self._dbg("after lift+align")
 
         self._align_tip_z(arm)
         self._go_to_standoff(arm)
