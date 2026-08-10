@@ -718,11 +718,11 @@ class put_cup_belt(Base_Task):
         return bool((lo + margin) < cup_x < (hi - margin))
 
     def _cup_held(self):
-        """True while the cup is still attached to the hand (gripper or teleop hold).
+        """True while the cup is still attached to the hand (gripper contact).
 
         Gripper-open is not required for release: loss of finger contact (slip-off)
-        counts as detached. Interactive keyboard hold keeps the cup kinematic until
-        Space, which is treated as still held.
+        counts as detached. Interactive play uses G to open/close; kinematic
+        teleop holds are no longer used.
         """
         if getattr(self, "cup", None) is None:
             return False

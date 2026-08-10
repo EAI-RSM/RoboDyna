@@ -275,44 +275,93 @@ def _start_belts(env):
     env._belt_active = True
     # Continuous mode advances from the task's mode flag.  Discrete mode is
     # started by _update_interactive_belt below and pauses at each punch stop.
-    env._belt_running = bool(getattr(env, "belt_continous_motion", False))
+    continuous = bool(getattr(env, "belt_continous_motion", False))
+    env._belt_running = continuous
     env._interactive_discrete_stop_started = None
-    print("Belts started.")
+    env._interactive_discrete_stop_pages = None
+    if continuous:
+        print("Belts started (continuous motion).")
+    else:
+        pause = float(getattr(env, "tile_pause_s", 2.0))
+        print(
+            f"Belts started (discrete: hold under stamp ≤{pause:.2f}s "
+            "or until stamped, whichever first)."
+        )
 
 
 def _update_interactive_belt(env):
     """Drive the belt according to the task's configured motion mode.
 
-    ``punch_dual_holes`` uses ``_belt_running`` only as an explicit dwell-loop
-    override. Keeping it true every frame turns the discrete option into a
-    continuously moving belt, which is not the behavior of demo_dynamic.yml.
+    Discrete (default): advance to the next tile arrival step, snap under the
+    stamp, and HOLD until every ready tile is stamped OR ``tile_pause_s``
+    elapses (miss then resume) — whichever comes first.
+
+    Must run once per physics step so multi-step display frames cannot skip
+    the single-step arrival window.
     """
     if bool(getattr(env, "belt_continous_motion", False)):
         env._belt_running = True
         return
 
-    ready = env._ready_pages_at_current_step()
-    if ready:
-        now = time.perf_counter()
-        if env._interactive_discrete_stop_started is None:
-            env._interactive_discrete_stop_started = now
-        # Match the normal discrete rollout: stop and center each ready page
-        # under its punch head until the user presses the corresponding key.
-        for side, page_idx in ready.items():
-            env._align_page_under_punch(side, page_idx)
-        pause_s = max(0.0, float(getattr(env, "tile_pause_s", 2.0)))
-        if now - env._interactive_discrete_stop_started >= pause_s:
-            # Match _handle_discrete_stamp_stop: an unpunched tile is a miss
-            # when the finite pause window expires, then the belt resumes.
-            for side, page_idx in ready.items():
-                env._mark_missed_page(side, page_idx)
+    stop = getattr(env, "_interactive_discrete_stop_pages", None)
+    if stop:
+        env._belt_running = False
+        for side, page_idx in list(stop.items()):
+            if not env.page_punched[side][page_idx]:
+                env._align_page_under_punch(side, page_idx)
+
+        # Stamp-first: resume as soon as every tile in this stop is punched.
+        if all(bool(env.page_punched[side][k]) for side, k in stop.items()):
+            env._interactive_discrete_stop_pages = None
             env._interactive_discrete_stop_started = None
             env._belt_running = True
-        else:
-            env._belt_running = False
-    else:
-        env._interactive_discrete_stop_started = None
+            return
+
+        pause_s = max(0.0, float(getattr(env, "tile_pause_s", 2.0)))
+        started = env._interactive_discrete_stop_started
+        if started is not None and (time.perf_counter() - started) >= pause_s:
+            for side, page_idx in stop.items():
+                if not env.page_punched[side][page_idx]:
+                    env._mark_missed_page(side, page_idx)
+            env._interactive_discrete_stop_pages = None
+            env._interactive_discrete_stop_started = None
+            env._belt_running = True
+        return
+
+    # Cruise until the next unpunched tile's arrival step (play_once style).
+    next_steps = []
+    for side in ("left", "right"):
+        k = env._next_unpunched_page(side)
+        if k is not None:
+            next_steps.append(env._page_arrival_step(side, k))
+    if not next_steps:
+        env._belt_running = False
+        return
+
+    target = int(min(next_steps))
+    if int(env._belt_step) < target:
         env._belt_running = True
+        return
+
+    ready = {}
+    for side in ("left", "right"):
+        k = env._next_unpunched_page(side)
+        if k is None:
+            continue
+        if int(env._page_arrival_step(side, k)) == target:
+            ready[side] = k
+    if not ready:
+        # Fallback: overlap-based ready (should be rare once arrival is hit).
+        ready = dict(env._ready_pages_at_current_step())
+    if not ready:
+        env._belt_running = True
+        return
+
+    for side, page_idx in ready.items():
+        env._align_page_under_punch(side, page_idx)
+    env._interactive_discrete_stop_pages = dict(ready)
+    env._interactive_discrete_stop_started = time.perf_counter()
+    env._belt_running = False
 
 
 def _all_pages_resolved(env):
@@ -382,11 +431,10 @@ def main():
                 if fired:
                     print(f"Punch fired: {', '.join(fired)}")
 
-            _update_interactive_belt(env)
-            # Mark pages that slid past the stamp without a punch.
-            env._mark_overdue_pages()
+            continuous = bool(getattr(env, "belt_continous_motion", False))
 
             if n_steps == 0:
+                _update_interactive_belt(env)
                 env.scene.update_render()
                 viewer.render()
                 if viewer.window.key_down("escape"):
@@ -396,8 +444,15 @@ def main():
                 continue
 
             for _ in range(n_steps):
+                # Discrete: decide stop/go every physics step so multi-step
+                # display frames cannot skip the single-step arrival window.
+                _update_interactive_belt(env)
                 env._update_kinematic_tasks()
                 env.scene.step()
+            # Continuous only: miss tiles that slid past without a punch.
+            # Discrete misses are handled by the stop timeout.
+            if continuous:
+                env._mark_overdue_pages()
             env.scene.update_render()
             viewer.render()
 

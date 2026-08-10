@@ -636,7 +636,8 @@ class ViewerViewToggle:
     """V cycles head_camera ↔ gripper/wrist views (no top-down).
 
     G (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
-    F is kept as an alias for the same action. Camera switching is V-only.
+    F is kept as an alias for the same action unless ``allow_f_gripper=False``.
+    Camera switching is V-only.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
     (``_handle_focused_camera`` commented out), so we copy the active camera
@@ -664,6 +665,7 @@ class ViewerViewToggle:
         capture_current_as_topdown: bool = False,
         warn_missing_head: bool = False,
         robot_controls=None,
+        allow_f_gripper: bool = True,
     ):
         # topdown_* / capture_current_as_topdown kept for API compat; ignored.
         del topdown_xyz, topdown_rpy, topdown_fovy, capture_current_as_topdown
@@ -674,6 +676,7 @@ class ViewerViewToggle:
         self._prev_f = False
         self._head = head_camera
         self.robot_controls = robot_controls
+        self.allow_f_gripper = bool(allow_f_gripper)
         self._warned_missing_gripper = False
         if self._head is None:
             self._head = resolve_head_camera(env, viewer)
@@ -891,8 +894,9 @@ class ViewerViewToggle:
             # Restore red failure tint when UniversalRobotControls is absent
             # (keyboard mode still uses Space / G action paths).
             gripper_failure_feedback(self.env).update()
-        # G (F alias): open/close selected gripper(s). Independent of Space helpers.
-        if self.env is not None and (self._g_pressed(window) or self._f_pressed(window)):
+        # G opens/closes selected gripper(s). F is an optional alias.
+        use_f = bool(getattr(self, "allow_f_gripper", True)) and self._f_pressed(window)
+        if self.env is not None and (self._g_pressed(window) or use_f):
             toggle_selected_grippers(self.env)
         if self._v_pressed(window):
             self._cycle_view()

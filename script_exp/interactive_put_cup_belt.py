@@ -5,12 +5,10 @@ Run from any directory:
 
     /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control robot
-    /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control robot --robot-motion planner
 
-Keyboard mode moves the cup in X/Y/Z. Robot mode grasps the cup on the first
-Space press, moves it with the controls, then releases it at its current pose
-on the second Space press. If the cup slips off the gripper, landing pose is
-still scored (gripper open is not required).
+Grasp / release with G (open/close selected gripper). Teleop the cup onto the
+belt gap; when the cup leaves the fingers (open gripper or slip), landing pose
+is scored after a short settle — gripper open is not required for success.
 """
 
 import argparse
@@ -31,15 +29,13 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
-    action_failed,
+    UniversalRobotControls,
     make_viewer_view_toggle,
+    print_instructions,
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
-    begin_interactive_frame,
     terminal_hold_should_close,
-    resolve_action_arm,
-    try_interactive_grasp,
     print_episode_condition,
 )
 
@@ -53,14 +49,14 @@ INTERACTIVE_CUP_SOUTH_CLEARANCE = 0.05
 
 
 CONTROLS_KEYBOARD = """
-  Left / Right      move cup left/right (world X)
-  Up / Down         move cup forward/backward (world Y)
-  E / Q             raise/lower cup (world Z)
-  Space             release cup at its current position
+  (Same as robot) G grasp/release; arrows / E / Q teleop the arm.
 """
 
 CONTROLS_ROBOT = """
-  Space             first press: grasp; second press: release at current pose
+  G                 open / close selected gripper to grasp or release the cup
+  1 / 2 / 3         select left / right / both arms
+  Arrows / E / Q    teleop the selected arm(s)
+  When the cup leaves the fingers, landing is scored after a short settle.
 """
 
 
@@ -139,8 +135,8 @@ def _set_cup_pose(env, x, y, z=None, kinematic=True, quat=None):
         pass
 
 
-def _place_cup_south_of_belt(env, hold_kinematic):
-    """Place the cup 5 cm clear of the belt's south edge."""
+def _place_cup_south_of_belt(env):
+    """Place the cup 5 cm clear of the belt's south edge (dynamic for G grasp)."""
     pose = env.cup.get_pose()
     belt_half_y = float(getattr(env, "belt_plate_half_size", [0.0, 0.0])[1])
     cup_half_y = 0.5 * float(env._actor_world_size(env.cup)[1])
@@ -155,33 +151,11 @@ def _place_cup_south_of_belt(env, hold_kinematic):
         float(pose.p[0]),
         target_y,
         0.74 + float(env.table_z_bias),
-        kinematic=hold_kinematic,
+        kinematic=False,
         quat=env.CUP_UPRIGHT_QPOS,
     )
     env.cup_y = target_y
     print(f"Starting cup 5 cm south of belt at y={target_y:.3f}.")
-
-
-def _nudge_from_keys(
-    window, lateral_step=0.012, longitudinal_step=0.012, vertical_step=0.018
-):
-    """Return the requested (world X, world Y, world Z) displacement."""
-    dx = 0.0
-    if window.key_down("left"):
-        dx -= lateral_step
-    if window.key_down("right"):
-        dx += lateral_step
-    dy = 0.0
-    if window.key_down("up"):
-        dy += longitudinal_step
-    if window.key_down("down"):
-        dy -= longitudinal_step
-    dz = 0.0
-    if window.key_down("q"):
-        dz += vertical_step
-    if window.key_down("e"):
-        dz -= vertical_step
-    return dx, dy, dz
 
 
 def _mark_deposit(env):
@@ -190,284 +164,53 @@ def _mark_deposit(env):
     env._slot_x_at_deposit = float(env.slot_x())
 
 
-class EdgeKey:
-    def __init__(self):
-        self._prev = False
+class CupReleaseMonitor:
+    """Watch finger contact; when the cup leaves the hand, score the landing.
 
-    def poll(self, down):
-        edge = bool(down) and not self._prev
-        self._prev = bool(down)
-        return edge
+    Mirrors the previous slip / Space-release path: mark deposit on detach,
+    settle briefly, then ``check_success`` / placement score.
+    """
 
-
-class KeyboardCupController:
     def __init__(self, env):
         self.env = env
-        self.placed = False
-        self._space = EdgeKey()
-        # Hold cup kinematic until place.
-        p = np.asarray(env.cup.get_pose().p, dtype=float)
-        _set_cup_pose(env, p[0], p[1], p[2], kinematic=True)
-
-    def update(self, window):
-        if not self.placed:
-            dx, dy, dz = _nudge_from_keys(window)
-            if dx or dy or dz:
-                p = np.asarray(self.env.cup.get_pose().p, dtype=float)
-                _set_cup_pose(
-                    self.env, p[0] + dx, p[1] + dy, p[2] + dz, kinematic=True
-                )
-        if self._space.poll(window.key_down("space")) and not self.placed:
-            p = np.asarray(self.env.cup.get_pose().p, dtype=float)
-            _set_cup_pose(self.env, p[0], p[1], p[2], kinematic=False)
-            _mark_deposit(self.env)
-            self.placed = True
-            print(f"Cup released at ({p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f}).")
-
-
-class RobotCupController:
-    DIRECT_CARTESIAN_STEP = 0.035
-    DIRECT_JOINT_STEPS = 10
-    MAX_LOCAL_JOINT_DELTA = 0.70
-
-    def __init__(self, env, ArmTag, robot_motion="interpolate"):
-        self.env = env
-        self.ArmTag = ArmTag
-        self.arm = ArmTag("left" if env.mirrored else "right")
-        self.side = str(self.arm)
-        self.robot_motion = robot_motion
         self.holding = False
         self.placed = False
-        self.busy = False
-        self._space = EdgeKey()
-        # Require sustained loss of finger contact before treating a drop as a slip
-        # (avoids one-frame PhysX contact flicker right after grasp).
+        # Require sustained contact before treating a later drop as detach
+        # (avoids one-frame PhysX flicker right after grasp).
         self._hold_contact_seen = False
         self._no_contact_steps = 0
         self._slip_no_contact_steps = 8
 
-    def _drive_qpos(self):
-        joints = (
-            self.env.robot.left_arm_joints
-            if self.side == "left"
-            else self.env.robot.right_arm_joints
-        )
-        return np.asarray(
-            [joint.get_drive_target()[0] for joint in joints], dtype=np.float64
-        )
-
-    def _render_physics_step(self):
-        self.env._update_kinematic_tasks()
-        self.env.scene.step()
-        viewer = getattr(self.env, "viewer", None)
-        if viewer is not None:
-            self.env.scene.update_render()
-            viewer.render()
-
-    def _direct_joint_target(self, ee_pose):
-        """Plan a nearby endpoint, rejecting IK branches that would flip the arm."""
-        planner = (
-            self.env.robot.left_plan_path
-            if self.side == "left"
-            else self.env.robot.right_plan_path
-        )
-        result = planner(
-            np.asarray(ee_pose, dtype=np.float64).tolist(),
-            constraint_pose=[1, 1, 1, 0, 0, 0],
-        )
-        if result is None or result.get("status") != "Success":
-            reason = "no result" if result is None else result.get("reason", "unknown")
-            print(f"Direct placement endpoint failed: {reason}.")
-            return None
-        positions = result.get("position")
-        if positions is None or len(positions) == 0:
-            print("Direct placement endpoint returned no joint target.")
-            return None
-        start = self._drive_qpos()
-        target = np.asarray(positions[-1], dtype=np.float64).reshape(-1)
-        if target.shape != start.shape:
-            print(
-                f"Direct placement joint mismatch: start={start.shape}, "
-                f"target={target.shape}."
-            )
-            return None
-        largest_delta = float(np.max(np.abs(target - start)))
-        if largest_delta > self.MAX_LOCAL_JOINT_DELTA:
-            print(
-                "Direct placement refused an IK branch change "
-                f"({largest_delta:.2f} rad joint jump)."
-            )
-            return None
-        return start, target
-
-    def _interpolate_to_ee_pose(self, ee_pose):
-        endpoints = self._direct_joint_target(ee_pose)
-        if endpoints is None:
-            return False
-        start, target = endpoints
-        delta = target - start
-        for index in range(1, self.DIRECT_JOINT_STEPS + 1):
-            alpha = index / float(self.DIRECT_JOINT_STEPS)
-            smooth = alpha * alpha * (3.0 - 2.0 * alpha)
-            position = start + delta * smooth
-            velocity = delta / float(self.DIRECT_JOINT_STEPS)
-            self.env.robot.set_arm_joints(position, velocity, self.side)
-            self._render_physics_step()
-        self.env.robot.set_arm_joints(target, np.zeros_like(target), self.side)
-        for _ in range(2):
-            self._render_physics_step()
-        self.env.plan_success = True
-        self.env._last_plan_fail = None
-        return True
-
-    def _interpolate_cup_axis(self, axis, target_value, selected_x, tolerance):
-        """Move the held cup along one world axis using short local IK segments."""
-        axis_index = {"y": 1, "z": 2}[axis]
-        max_segments = 10
-        for _ in range(max_segments):
-            cup_p = np.asarray(self.env.cup.get_pose().p, dtype=np.float64)
-            remaining = float(target_value - cup_p[axis_index])
-            x_error = float(selected_x - cup_p[0])
-            if abs(remaining) <= tolerance and abs(x_error) <= 0.004:
-                return True
-            ee_pose = np.asarray(
-                self.env.robot.get_left_ee_pose()
-                if self.side == "left"
-                else self.env.robot.get_right_ee_pose(),
-                dtype=np.float64,
-            ).copy()
-            ee_pose[0] += x_error
-            ee_pose[axis_index] += float(
-                np.clip(
-                    remaining,
-                    -self.DIRECT_CARTESIAN_STEP,
-                    self.DIRECT_CARTESIAN_STEP,
-                )
-            )
-            if not self._interpolate_to_ee_pose(ee_pose):
-                return False
-        cup_value = float(self.env.cup.get_pose().p[axis_index])
-        print(
-            f"Direct placement could not reach cup {axis}={target_value:.3f}; "
-            f"stopped at {cup_value:.3f}."
-        )
-        return False
-
-    def _interpolate_ee_lift(self, distance):
-        remaining = float(distance)
-        while remaining > 0.003:
-            step = min(remaining, self.DIRECT_CARTESIAN_STEP)
-            ee_pose = np.asarray(
-                self.env.robot.get_left_ee_pose()
-                if self.side == "left"
-                else self.env.robot.get_right_ee_pose(),
-                dtype=np.float64,
-            ).copy()
-            ee_pose[2] += step
-            if not self._interpolate_to_ee_pose(ee_pose):
-                return False
-            remaining -= step
-        return True
-
-    def _interpolate_ee_nudge(self, dx, dy, dz):
-        """Move the held cup responsively with one nearby IK endpoint."""
-        ee_pose = np.asarray(
-            self.env.robot.get_left_ee_pose()
-            if self.side == "left"
-            else self.env.robot.get_right_ee_pose(),
-            dtype=np.float64,
-        ).copy()
-        ee_pose[:3] += np.asarray([dx, dy, dz], dtype=np.float64)
-        return self._interpolate_to_ee_pose(ee_pose)
-
-    def grasp(self):
-        self.busy = True
-        self.arm = resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
-        if self.arm is None:
-            self.busy = False
+    def update(self, _window=None):
+        if self.placed:
             return
-        self.side = str(self.arm)
-        contact_id, pre = self.env._find_cup_grasp(self.arm)
-        if pre is None:
-            action_failed(self.env, (self.side,), detail="no cup grasp pose")
-            self.busy = False
-            return
-        self.env.move(self.env.close_gripper(self.arm, pos=0.6))
-        if try_interactive_grasp(
-            self.env, self.env.cup, self.arm, pre_grasp_dis=pre,
-            gripper_pos=0.0, contact_point_id=contact_id,
-        ):
-            half = 0.5 * float(self.env.lift_z)
-            self.env.move(self.env.move_by_displacement(self.arm, z=half))
-            self.env.move(self.env.move_by_displacement(self.arm, z=self.env.lift_z - half))
-            self.holding = True
-            self._hold_contact_seen = bool(self.env._cup_held())
+        held = bool(self.env._cup_held())
+        if held:
+            if not self.holding:
+                self.holding = True
+                self.env._attempt_active = True
+                print("Cup grasped — teleop to the belt gap, then G to open / release.")
+            self._hold_contact_seen = True
             self._no_contact_steps = 0
-            self.env._attempt_active = True
-            print(
-                f"Grasped cup with {self.arm}. Use arrows for X/Y, E/Q for Z; "
-                "Space releases here."
-            )
-        self.busy = False
-
-    def place(self):
+            return
         if not self.holding:
             return
-        self.busy = True
-        # Do not reposition automatically: release at exactly the pose selected
-        # by the user with the universal Cartesian controls.
-        released_pose = np.asarray(self.env.cup.get_pose().p, dtype=float)
+        self._no_contact_steps += 1
+        limit = (
+            self._slip_no_contact_steps
+            if self._hold_contact_seen
+            else self._slip_no_contact_steps * 4
+        )
+        if self._no_contact_steps < limit:
+            return
+        p = np.asarray(self.env.cup.get_pose().p, dtype=float)
         _mark_deposit(self.env)
-        self.env.move(self.env.open_gripper(self.arm))
         self.holding = False
         self.placed = True
-        if self.robot_motion == "interpolate":
-            if not self._interpolate_ee_lift(float(self.env.post_place_lift_z)):
-                print("Cup released, but the direct post-place lift could not finish.")
-        else:
-            self.env.move(self.env.move_by_displacement(
-                self.arm, z=float(self.env.post_place_lift_z), move_axis="world",
-            ))
         print(
-            f"Cup released at ({released_pose[0]:.3f}, {released_pose[1]:.3f}, "
-            f"{released_pose[2]:.3f})."
+            f"Cup detached at ({p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f}); "
+            "evaluating landing…"
         )
-        self.busy = False
-
-    def update(self, window):
-        if self.busy:
-            return
-        # Slip-off: sustained loss of finger contact (gripper need not open).
-        if self.holding and not self.placed:
-            if self.env._cup_held():
-                self._hold_contact_seen = True
-                self._no_contact_steps = 0
-            else:
-                self._no_contact_steps += 1
-                # After a real pinch, a short no-contact streak means slip; if grasp
-                # never registered contact, wait longer before giving up.
-                limit = (
-                    self._slip_no_contact_steps
-                    if self._hold_contact_seen
-                    else self._slip_no_contact_steps * 4
-                )
-                if self._no_contact_steps >= limit:
-                    p = np.asarray(self.env.cup.get_pose().p, dtype=float)
-                    _mark_deposit(self.env)
-                    self.holding = False
-                    self.placed = True
-                    print(
-                        f"Cup slipped from gripper at ({p[0]:.3f}, {p[1]:.3f}, "
-                        f"{p[2]:.3f}); evaluating landing…"
-                    )
-                    return
-        if self._space.poll(window.key_down("space")):
-            if not self.holding and not self.placed:
-                self.grasp()
-            elif self.holding:
-                self.place()
-            return
-        # Universal viewer controls own arrow/E/Q motion.
 
 
 def main():
@@ -484,44 +227,44 @@ def main():
         "--robot-motion",
         choices=("planner", "interpolate"),
         default="interpolate",
-        help="Backend for vertical nudges and post-release arm lift (default: interpolate)",
+        help="Retained for compatibility; arm teleop uses UniversalRobotControls.",
     )
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
     from envs.put_cup_belt import put_cup_belt
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("put_cup_belt", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
-    if args.control == "robot" and args.robot_motion == "interpolate":
-        print(
-            "X/Y/Z nudges and the post-release lift use short joint interpolations "
-            "with orientation-constrained IK endpoints."
-        )
 
     env = put_cup_belt()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    # Always enable arm teleop + G grasp/release (Space is not used).
+    env._interactive_robot_mode = True
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env._interactive_selected_arms = (
         "left" if env.mirrored else "right",
     )
     print_episode_condition(env)
-    _place_cup_south_of_belt(env, hold_kinematic=args.control == "keyboard")
+    _place_cup_south_of_belt(env)
     print(
         f"Side={'left' if env.mirrored else 'right'}; "
         f"curtains={env.blue_curtains_enabled}; "
         f"gap x≈{env.slot_x():.3f}."
     )
 
-    controller = (
-        RobotCupController(env, ArmTag, args.robot_motion) if args.control == "robot"
-        else KeyboardCupController(env)
-    )
+    release_monitor = CupReleaseMonitor(env)
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
-    views = make_viewer_view_toggle(env, viewer)
+    views = make_viewer_view_toggle(env, viewer, allow_f_gripper=False)
+    if views.robot_controls is None:
+        views.robot_controls = UniversalRobotControls(env)
+
+    print_instructions(
+        "G opens/closes the gripper to grasp/release the cup. "
+        "When the cup leaves the fingers, landing is scored."
+    )
 
     placed_since = None
     terminal_started_at = None
@@ -529,8 +272,9 @@ def main():
 
     try:
         while not viewer.closed:
-            n_steps = begin_interactive_frame(views, pacer, viewer.window)
-            controller.update(viewer.window)
+            n_steps = pacer.begin_frame()
+            views.update(viewer.window)
+            release_monitor.update(viewer.window)
 
             if n_steps == 0:
                 env.scene.update_render()
@@ -559,7 +303,7 @@ def main():
                 report_task_result(env, "curtain contact")
                 terminal_started_at = time.perf_counter()
                 continue
-            if getattr(controller, "placed", False):
+            if release_monitor.placed:
                 if placed_since is None:
                     placed_since = time.perf_counter()
                     print("Cup detached; settling…")

@@ -582,9 +582,10 @@ task_args:
     punch_tol: 0.035            # m; punch alignment tolerance
     belt_inward_reach: 0.13     # m; belt travel toward table center
     belt_outward_scale: 2.0     # outward_reach = inward_reach × scale
-    missing_tile_mode: true    # Opt 1: true = one random missing tile (1- vs 2-arm stops)
-    belt_continous_motion: true # Opt 2: false = discrete stop-per-tile (default); true = continuous
-    tile_pause_s: 2.0           # Opt 2 discrete: seconds the tile holds under the stamp
+    missing_tile_mode: false   # Opt 1: true = one random missing tile (1- vs 2-arm stops)
+    belt_continous_motion: false # Opt 2: false = discrete stop-per-tile (default); true = continuous
+    tile_pause_s: 2.0           # discrete: seconds the tile holds under the stamp
+    tile_pause_jitter: 0.40     # discrete: ±40% per-episode pause around tile_pause_s
     belt_speed: 0.0002          # m per physics step (discrete); continuous uses × scale below
     belt_continuous_speed_scale: 1.6  # Opt 2: multiply belt_speed when continuous
     square_gap_min: 0.010       # m; variable-spacing min gap

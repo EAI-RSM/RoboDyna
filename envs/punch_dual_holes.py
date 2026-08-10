@@ -27,9 +27,10 @@ class punch_dual_holes(Base_Task):
           CLI: --task-arg missing_tile_mode=true   or   --option 1
       Opt 2 — belt motion      → belt_continous_motion  (alias: belt_continuous_motion)
           false / "discrete" / "stop_per_tile" = DEFAULT: tiles advance then STOP under
-              the stamps so both arms can press together. Hold duration is capped by
-              tile_pause_s (default 2.0 s); unpressed ready tiles are marked missed
-              when the pause expires, then the belts resume.
+              the stamps so both arms can press together. Hold duration is
+              tile_pause_s (default 2.0 s) scaled by U(1±tile_pause_jitter)
+              (default ±40%); unpressed ready tiles are marked missed when the
+              pause expires, then the belts resume.
           true / "continuous" = belts never stop; press while the tile overlaps the stamp.
               Continuous belt speed is belt_speed × belt_continuous_speed_scale (default 1.6×).
           CLI: --task-arg belt_continous_motion=true   or   --option 2
@@ -82,7 +83,8 @@ class punch_dual_holes(Base_Task):
     BELT_Y = -0.05
     SURF_DZ = 0.016                     # page sits this high above belt-slab center top
     PUNCH_ANIM_STEPS = 24
-    TILE_PAUSE_S_DEFAULT = 2.0          # Opt 3 discrete: max hold under stamp (seconds)
+    TILE_PAUSE_S_DEFAULT = 2.0          # discrete: nominal hold under stamp (seconds)
+    TILE_PAUSE_JITTER_DEFAULT = 0.40    # discrete: ± fraction on tile_pause_s per episode
     PAGE_EXIT_MARGIN = 0.002
     HIDE_Z = -10.0
     PUNCH_REST_Z_EXTRA = 0.03
@@ -179,7 +181,8 @@ class punch_dual_holes(Base_Task):
         """Discrete-mode max hold under the stamp, in physics steps.
 
         Prefer tile_pause_s (seconds, default 2.0). Explicit tile_pause_steps still
-        wins when provided without tile_pause_s, for older configs.
+        wins when provided without tile_pause_s, for older configs. When using
+        seconds, apply per-episode ``tile_pause_jitter`` (default ±40%).
         """
         has_steps = "tile_pause_steps" in self._cfg
         has_secs = "tile_pause_s" in self._cfg or "tile_pause_sec" in self._cfg
@@ -192,6 +195,13 @@ class punch_dual_holes(Base_Task):
             )
         )
         pause_s = max(0.0, pause_s)
+        jitter = float(
+            self._cfg.get("tile_pause_jitter", self.TILE_PAUSE_JITTER_DEFAULT)
+        )
+        jitter = float(np.clip(jitter, 0.0, 0.95))
+        if jitter > 0.0 and pause_s > 0.0:
+            scale = float(np.random.uniform(1.0 - jitter, 1.0 + jitter))
+            pause_s *= scale
         dt = float(self.scene.get_timestep()) if hasattr(self, "scene") else (1.0 / 250.0)
         return max(1, int(round(pause_s / max(dt, 1e-8))))
 
