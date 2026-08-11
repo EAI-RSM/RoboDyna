@@ -1,12 +1,9 @@
 """Pour beer from a bar tap into a beer mug (KitchenS).
 
-Chrome draft tower with a low-resistance wooden lever. The handle has collision
-so the gripper can press the knob; while contacted it free-follows the hand,
-and a snappy spring returns it upright (cutting flow) as soon as contact is
-lost. Beer stream thickness and fill rate scale with how far the handle is
-turned. Foaminess of the stream
-ramps up the longer the tap stays open in one continuous pour, and resets when
-the tap is closed then reopened. Overflow fails with a yellow stain.
+Chrome draft tower with a fancy spring push-button on the tap head. Hold the
+button down to pour; release to stop. Fill rate is randomized per episode.
+Foaminess of the stream ramps the longer the button stays held and resets when
+released. Overflow fails with a yellow stain.
 
 The drinking vessel is a simple procedural glass beer mug (body + D-handle).
 Demo cameras use transmission glass; the interactive viewer uses a hollow
@@ -15,7 +12,7 @@ alpha shell so beer composites through the walls.
 Episode randomization (task_args.pour_beer):
   - ``randomize_layout``: cup/tap station + bar props with AABB non-overlap
   - ``randomize_rates`` / ``pour_rate_range`` / ``foam_gain_range``: fill & peak foam %
-  - ``foam_gain_start`` / ``foam_ramp_steps``: stream foam % ramp over open time
+  - ``foam_gain_start`` / ``foam_ramp_steps``: stream foam % ramp over hold time
 """
 from __future__ import annotations
 
@@ -34,7 +31,7 @@ from .utils.create_actor import create_actor
 
 
 class pour_beer(KitchenS_base_task):
-    """Drive the tap lever by hand to fill the mug without foam overflow."""
+    """Hold the tap push-button to fill the mug without foam overflow."""
 
     GLASS_MODEL = "beer_mug"
     GLASS_UPRIGHT_Q = [0.70710678, 0.70710678, 0.0, 0.0]
@@ -62,64 +59,49 @@ class pour_beer(KitchenS_base_task):
     ARM_LEN = 0.055
     SPOUT_DROP = 0.035
     NOZZLE_R = 0.007
-    LEVER_LEN = 0.085
-    LEVER_R = 0.012
-    LEVER_OPEN_RAD = 0.55 * np.pi  # ~99° forward (−Y) when fully open
-    LEVER_DEADZONE = 0.03  # rad — small; past this, flow starts promptly
-    LEVER_OPEN_THRESH = 0.18  # rad — counts as "opened" for success
-    # Snappy spring return (rad/tick) — only when the gripper is NOT contacting.
-    # ~0.06 rad/tick closes a full open (~1.73 rad) in ~0.12s and cuts flow fast.
-    LEVER_RETURN_STEP = 0.06
-    # Gripper↔knob engagement (pressure proxy + contact).
-    # Keep engage tight; release radius is larger so the spring doesn't flick
-    # back into the hand from brief proximity gaps (that shoved the arm).
-    LEVER_ARC_RADIAL_TOL = 0.016  # m; |r_yz − LEVER_LEN| (~lever radius + slack)
-    LEVER_ARC_X_TOL = 0.016  # m; lateral off the hinge plane
-    LEVER_CONTACT_R = 0.022  # m; must be near the current tip to engage
-    LEVER_RELEASE_R = 0.055  # m; stay engaged until this far from the tip
-    LEVER_CONTACT_FORCE_N = 1.2  # N; light finger contact on the knob engages
-    LEVER_HOLD_FORCE_N = 0.4  # N; residual contact keeps hold (no spring)
-    LEVER_PRESS_LOST_GRACE = 12  # ~50ms at 250Hz before spring snaps shut
-    # Slow track + hold deadband: stable TCP must freeze the lever (no bounce).
-    LEVER_TRACK_STEP = 0.028  # rad/tick while pressed (~1.6°/tick)
-    LEVER_HOLD_DEADBAND = 0.035  # rad; |target−cur| below this → hold pose
-    LEVER_TARGET_EMA = 0.22  # blend toward new TCP angle while pressed
-    LEVER_CONTACT_FORCE_GAIN = 0.0  # disabled — impulse spikes caused bounce
-    # Flow vs open fraction: near-linear (exp≈1). Mild floor so the first
-    # meaningful crack of the tap already pours instead of a long dead start.
-    FLOW_START_FRAC = 0.22
-    FLOW_CURVE_EXP = 1.0
-    FLOW_RATE_SCALE = 1.55
-    # Stream cylinder radius at trickle → full open (meters).
-    STREAM_R_MIN = 0.0025
-    STREAM_R_MAX = 0.014
 
+    # Fancy spring push-button on the tap head (hold = pour).
+    BTN_HALF = (0.016, 0.016, 0.011)  # keycap half-extents (m)
+    BTN_BEZEL_MARGIN = 0.007
+    BTN_MAX_TRAVEL = 0.010  # visual depress depth (m)
+    # Virtual spring (same model as fill_coffee_jar / ReactivePushButtons).
+    # Slack must be large: the gripper usually collides / plans short of the
+    # physical key top, while the spring already builds pour force above it.
+    FORCE_STIFFNESS = 800.0  # N/m — match fill_coffee_jar
+    FORCE_ENGAGE_SLACK = 0.05
+    PRESS_FORCE_ON = 3.5   # N; start pouring
+    PRESS_FORCE_OFF = 1.5  # N; stop pouring (hysteresis)
+    BUTTON_VISUAL_STEP = 0.0008
+    BTN_TOUCH_XY_TOL = 0.055
     EE_TO_TCP = 0.12
-    LEVER_HOVER = 0.05
-    LEVER_GRASP_Z = 0.0
-    # Small ±X wrist offset (within LEVER_ARC_X_TOL / CONTACT_R) so the forearm
-    # sits slightly outboard of the head-camera → mug line during contact.
-    LEVER_EE_OUTBOARD = 0.014
+    KEY_HOVER_DIS = 0.060
+    # Depress from hover so tip enters the spring band past PRESS_FORCE_ON.
+    KEY_PRESS_DEPTH = 0.050
+    KEY_PRESS_SAMPLE_S = 0.35
+
 
     # Success requires liquid_level strictly above this (e.g. >85%).
     TARGET_LIQUID = 0.85
     # Kept for config/UI compatibility; success no longer uses a ± band.
     FULL_LIQUID_TOL = 0.05
-    # Max rate at full open (per physics step); scales with lever angle.
-    # Keep modest — long IK arcs while open still advance fill every tick.
+    # Max rate while button held (per physics step); randomized per episode.
     POUR_RATE = 0.000715
-    # Foam % of the stream ramps with continuous open time (resets on close).
-    # Start low so a fresh crack is mostly beer; peak encourages pause-and-pour.
-    FOAM_GAIN_START = 0.18
-    FOAM_GAIN = 0.85  # peak foam fraction after FOAM_RAMP_STEPS of continuous flow
-    FOAM_RAMP_STEPS = 70  # sim steps of continuous pour to reach peak foam %
+    FLOW_RATE_SCALE = 1.55
+    # Stream cylinder radius while pouring (meters).
+    STREAM_R_MIN = 0.006
+    STREAM_R_MAX = 0.014
+    # Foam % of the stream ramps with continuous hold time (resets on release).
+    # Start low so a fresh press is mostly beer; peak encourages pause-and-pour.
+    FOAM_GAIN_START = 0.12
+    FOAM_GAIN = 0.55  # peak foam fraction of the stream (beer + foam = pour volume)
+    FOAM_RAMP_STEPS = 90  # sim steps of continuous pour to reach peak foam %
     FOAM_DECAY = 0.0045
     # Fraction of collapsing foam that becomes beer (modest — no end surge).
     FOAM_TO_LIQUID = 0.28
     # Per-episode sample ranges when randomize_rates / [lo,hi] yaml values are used.
-    POUR_RATE_RANGE = (0.00052, 0.000975)
-    FOAM_GAIN_RANGE = (0.65, 1.05)  # peak foam % range when randomize_rates
-    FOAM_GAIN_START_RANGE = (0.10, 0.28)
+    POUR_RATE_RANGE = (0.00045, 0.00105)  # fill-speed range across runs
+    FOAM_GAIN_RANGE = (0.40, 0.70)  # peak foam % of stream when randomize_rates
+    FOAM_GAIN_START_RANGE = (0.08, 0.20)
     FOAM_RAMP_STEPS_RANGE = (50, 100)
     FOAM_DECAY_RANGE = (0.0035, 0.0060)
     OVERFLOW_LEVEL = 1.0
@@ -185,7 +167,7 @@ class pour_beer(KitchenS_base_task):
         self._layout_seed = int(kwags.get("seed", 0) or 0)
 
         self._loaded = False
-        self.lever_angle = 0.0
+        self.lever_angle = 0.0  # compat alias: 1.0 when pouring
         self._lever_angle_max = 0.0
         self.overflowed = False
         self.opened_once = False
@@ -198,19 +180,22 @@ class pour_beer(KitchenS_base_task):
         self._stream_entity = None
         self._stain_entity = None
         self._drip_entity = None
-        self._lever_entity = None
-        self._lever_comp = None
         self._tap_parts = []
         self._bar_props = []
         self._prop_footprints = []
         self._liquid_half_h_cached = -1.0
         self._foam_half_h_cached = -1.0
-        self._lever_held = False
-        self._lever_pressed = False
-        self._lever_inhibit_press = False
-        self._lever_press_lost_steps = 0
+        self._button_actor = None
+        self._button_bezel = []
+        self._button_home_pose = None
+        self._button_target_depth = 0.0
+        self._button_visual_depth = 0.0
+        self._button_pouring = False
+        self._button_force = 0.0
+        self._pressing_arm_side = ""
+        self._lever_held = False  # compat
+        self._lever_pressed = False  # True while pouring (button held)
         self._lever_ang_vel = 0.0
-        self._lever_target_filt = None
         self._tap_idle_steps = 0
         self._liquid_stable_steps = 0
         self._liquid_level_prev = 0.0
@@ -811,7 +796,6 @@ class pour_beer(KitchenS_base_task):
         self.expert_foam_pause = float(cfg.get("expert_foam_pause", self.EXPERT_FOAM_PAUSE))
         self.expert_foam_resume = float(cfg.get("expert_foam_resume", self.EXPERT_FOAM_RESUME))
         self.safe_total = float(cfg.get("safe_total", self.SAFE_TOTAL))
-        self.lever_open_rad = float(cfg.get("lever_open_rad", self.LEVER_OPEN_RAD))
         self.flow_rate_scale = float(cfg.get("flow_rate_scale", self.FLOW_RATE_SCALE))
         self.tap_settle_sec = float(cfg.get("tap_settle_sec", self.TAP_SETTLE_SEC))
         self.tap_settle_sec = float(np.clip(self.tap_settle_sec, 0.05, 10.0))
@@ -831,7 +815,7 @@ class pour_beer(KitchenS_base_task):
         self.liquid_level = 0.0
         self.foam_level = 0.0
         self._foam_open_steps = 0
-        self.lever_angle = 0.0
+        self.lever_angle = 0.0  # compat alias: 1.0 when pouring
         self._lever_angle_max = 0.0
         self.overflowed = False
         self.opened_once = False
@@ -841,18 +825,19 @@ class pour_beer(KitchenS_base_task):
         self._stream_entity = None
         self._stain_entity = self._remove_entity(getattr(self, "_stain_entity", None))
         self._drip_entity = self._remove_entity(getattr(self, "_drip_entity", None))
-        self._lever_entity = None
-        self._lever_comp = None
+        self._remove_tap_button()
         self._tap_parts = []
         self._liquid_half_h_cached = -1.0
         self._foam_half_h_cached = -1.0
         self._stream_frac_cached = -1.0
+        self._button_target_depth = 0.0
+        self._button_visual_depth = 0.0
+        self._button_pouring = False
+        self._button_force = 0.0
+        self._pressing_arm_side = ""
         self._lever_held = False
         self._lever_pressed = False
-        self._lever_inhibit_press = False
-        self._lever_press_lost_steps = 0
         self._lever_ang_vel = 0.0
-        self._lever_target_filt = None
         self._tap_idle_steps = 0
         self._liquid_stable_steps = 0
         self._liquid_level_prev = 0.0
@@ -881,8 +866,7 @@ class pour_beer(KitchenS_base_task):
         self._spawn_coaster()
         self._spawn_glass()
         self._build_tap()
-        self._spawn_lever()
-        self._apply_lever_pose(0.0)
+        self._spawn_tap_button()
         self._rebuild_fluids(force=True)
         self._sync_stream(force=True)
 
@@ -890,7 +874,7 @@ class pour_beer(KitchenS_base_task):
         print(
             f"[pour_beer] tap scene={self.scene_id} arm={self.arm} seed={self._layout_seed} "
             f"cup={self.cup_xy} tap={self.tap_xy} spout={self.nozzle_outlet_xyz} "
-            f"pivot={self.lever_pivot_xyz} target={self.target_liquid:.2f} "
+            f"btn={self.touch_xy} target={self.target_liquid:.2f} "
             f"pour_rate={self.pour_rate:.5f} foam_gain={self.foam_gain_start:.2f}→"
             f"{self.foam_gain:.2f}/{self.foam_ramp_steps}steps "
             f"foam_decay={self.foam_decay:.4f} bar_props={len(self._bar_props)}"
@@ -1362,363 +1346,281 @@ class pour_beer(KitchenS_base_task):
         self._tap_parts.append(opening)
 
         self.nozzle_outlet_xyz = spout_out.astype(float)
-        self.lever_pivot_xyz = np.array([x, y - 0.012, head_z + 0.016], dtype=float)
+        # Button sits on the tap head (top-down press).
+        # Seat the key on the spout-side apron of the head (not over the column)
+        # so a top-down press clears the tower collision.
+        self._tap_btn_xyz = np.array([x, y - 0.026, head_z + 0.014], dtype=float)
 
-    # ------------------------------------------------------------------ hinged lever
-    def _lever_tip_xyz(self, angle: float | None = None) -> np.ndarray:
-        if angle is None:
-            angle = float(self.lever_angle)
-        ang = float(np.clip(angle, 0.0, self.lever_open_rad))
-        pivot = np.asarray(self.lever_pivot_xyz, dtype=float)
-        # Closed: +Z. Open: rotate about +X toward −Y.
-        dy = -np.sin(ang) * self.LEVER_LEN
-        dz = np.cos(ang) * self.LEVER_LEN
-        return pivot + np.array([0.0, dy, dz], dtype=float)
+    # ------------------------------------------------------------------ tap push-button
+    def _remove_tap_button(self):
+        for ent in list(getattr(self, "_button_bezel", None) or []):
+            self._remove_entity(ent)
+        self._button_bezel = []
+        self._button_actor = self._remove_entity(getattr(self, "_button_actor", None))
+        self._button_jewel = self._remove_entity(getattr(self, "_button_jewel", None))
+        self._button_rim = self._remove_entity(getattr(self, "_button_rim", None))
+        self._button_home_pose = None
 
-    def _lever_open_frac(self, angle: float | None = None) -> float:
-        if angle is None:
-            angle = float(self.lever_angle)
-        span = max(1e-6, float(self.lever_open_rad) - float(self.LEVER_DEADZONE))
-        return float(np.clip((angle - self.LEVER_DEADZONE) / span, 0.0, 1.0))
+    def _spawn_tap_button(self):
+        """Fancy brass/chrome spring key on the tap head (hold to pour)."""
+        from .utils.reactive_button import add_key_base_border
 
-    def _flow_frac(self, angle: float | None = None) -> float:
-        """Pour strength vs lever open fraction (linear + small start floor)."""
-        frac = self._lever_open_frac(angle)
-        if frac <= 0.0:
-            return 0.0
-        exp = float(getattr(self, "FLOW_CURVE_EXP", 1.0))
-        shaped = float(frac ** exp) if abs(exp - 1.0) > 1e-6 else float(frac)
-        start = float(getattr(self, "FLOW_START_FRAC", 0.0))
-        return float(np.clip(start + (1.0 - start) * shaped, 0.0, 1.0))
-
-    def _spawn_lever(self):
-        """Kinematic wooden handle hinged at the faucet head (pose updated each step).
-
-        Collision is enabled so gripper fingers contact the knob (shaft + tip
-        ball). Motion is still soft free-follow while pressed and a gentle
-        spring only when free, so the kinematic body does not shove the arm.
-        """
-        self._lever_entity = self._remove_entity(self._lever_entity)
-        self._lever_comp = None
-        wood = self._opaque_material(self.WOOD)
-        length = float(self.LEVER_LEN)
-        tip_r = float(self.LEVER_R) * 1.35
-        builder = self.scene.create_actor_builder()
-        # Dynamic + set_kinematic: PhysX contacts with the gripper work reliably.
-        builder.set_physx_body_type("dynamic")
-        builder.add_cylinder_collision(
-            pose=sapien.Pose(),
-            radius=self.LEVER_R,
-            half_length=0.5 * length,
-            material=self.scene.default_physical_material,
+        self._remove_tap_button()
+        xyz = np.asarray(self._tap_btn_xyz, dtype=float)
+        bh = np.asarray(self.BTN_HALF, dtype=float)
+        table_z = float(xyz[2])  # bezel rests on the head top plane
+        # Dark bezel frame around the key.
+        self._button_bezel = add_key_base_border(
+            self,
+            float(xyz[0]),
+            float(xyz[1]),
+            table_z,
+            bh,
+            margin=float(self.BTN_BEZEL_MARGIN),
+            color=(0.12, 0.10, 0.09),
+            name_prefix="beer_btn_bezel",
+            is_static=True,
         )
-        builder.add_sphere_collision(
-            pose=sapien.Pose([0.5 * length, 0.0, 0.0]),
-            radius=tip_r,
-            material=self.scene.default_physical_material,
+        # Brass stem / keycap body — visual only; press uses the virtual spring
+        # (PhysX collision on the key blocks the tip before the pour latch).
+        brass = self._metallic_material([0.78, 0.58, 0.22], roughness=0.28, metallic=0.95)
+        chrome = self._metallic_material(self.CHROME, roughness=0.18, metallic=0.98)
+        jewel = self._opaque_material([0.75, 0.08, 0.12, 1.0])
+        try:
+            jewel.set_roughness(0.22)
+        except Exception:
+            pass
+
+        btn_z = table_z + float(bh[2]) + 0.001
+        home = sapien.Pose([float(xyz[0]), float(xyz[1]), btn_z])
+        self._button_actor = self._add_static_box(
+            pose=home,
+            half_size=list(bh),
+            material=brass,
+            name="beer_tap_button",
+            collision=False,
         )
-        builder.add_cylinder_visual(
-            pose=sapien.Pose(),
-            radius=self.LEVER_R,
-            half_length=0.5 * length,
-            material=wood,
+        self._button_home_pose = sapien.Pose(list(home.p), list(home.q))
+        # Chrome collar ring on top of the brass cap.
+        rim_z = btn_z + float(bh[2]) + 0.0015
+        self._button_rim = self._add_static_cylinder(
+            pose=sapien.Pose([float(xyz[0]), float(xyz[1]), rim_z]),
+            radius=float(bh[0]) * 0.92,
+            half_h=0.0015,
+            material=chrome,
+            name="beer_tap_button_rim",
+            collision=False,
         )
-        builder.add_sphere_visual(
-            pose=sapien.Pose([0.5 * length, 0.0, 0.0]),
-            radius=tip_r,
-            material=wood,
+        # Deep-red jewel dome (visual only).
+        jewel_z = rim_z + 0.004
+        self._button_jewel = self._add_static_cylinder(
+            pose=sapien.Pose([float(xyz[0]), float(xyz[1]), jewel_z]),
+            radius=float(bh[0]) * 0.62,
+            half_h=0.0035,
+            material=jewel,
+            name="beer_tap_button_jewel",
+            collision=False,
         )
-        tip0 = self._lever_tip_xyz(0.0)
-        mid0 = 0.5 * (np.asarray(self.lever_pivot_xyz, dtype=float) + tip0)
-        # Local +X along lever; upright → +Z world.
-        quat0 = t3d.quaternions.axangle2quat([0.0, 1.0, 0.0], -0.5 * np.pi)
-        builder.set_initial_pose(sapien.Pose(mid0.tolist(), quat0.tolist()))
-        self._lever_entity = builder.build(name="beer_tap_lever")
-        for c in self._lever_entity.get_components():
-            if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
-                self._lever_comp = c
-                try:
-                    c.set_mass(0.05)
-                except Exception:
-                    pass
-                try:
-                    c.set_disable_gravity(True)
-                except Exception:
-                    pass
-                c.set_kinematic(True)
-                break
+        self.touch_xy = np.array([float(xyz[0]), float(xyz[1])], dtype=float)
+        self.touch_top_z = float(btn_z + bh[2])
+        # EE floor: allow tip down to just past PRESS_FORCE_ON, then hard-stop
+        # (same idea as ReactivePushButtons.min_ee_z_over_key).
+        stiff = max(float(self.FORCE_STIFFNESS), 1e-6)
+        slack = float(self.FORCE_ENGAGE_SLACK)
+        tip_at_on = float(self.touch_top_z) + slack - (
+            float(self.PRESS_FORCE_ON) / stiff
+        )
+        self._button_tip_z_floor = float(tip_at_on - 0.003)
+        self._button_ee_z_floor = float(self._button_tip_z_floor + float(self.EE_TO_TCP))
+        self._button_target_depth = 0.0
+        self._button_visual_depth = 0.0
+        self._button_pouring = False
+        self._button_force = 0.0
+        self.lever_angle = 0.0
+        self._lever_pressed = False
 
-    def _apply_lever_pose(self, angle: float):
-        """Set lever pose for a hinge angle about +X at the pivot (0 = upright)."""
-        prev = float(getattr(self, "lever_angle", 0.0))
-        ang = float(np.clip(angle, 0.0, self.lever_open_rad))
-        self._lever_ang_vel = ang - prev
-        self.lever_angle = ang
-        self._lever_angle_max = max(self._lever_angle_max, ang)
-        if ang >= self.LEVER_OPEN_THRESH:
-            self.opened_once = True
+    def _set_button_press_depth(self, depth: float) -> None:
+        max_depth = float(getattr(self, "BTN_MAX_TRAVEL", self.BTN_HALF[2]))
+        self._button_target_depth = float(np.clip(depth, 0.0, max_depth))
 
-        pivot = np.asarray(self.lever_pivot_xyz, dtype=float)
-        tip = self._lever_tip_xyz(ang)
-        mid = 0.5 * (pivot + tip)
-        direction = tip - pivot
-        length = float(np.linalg.norm(direction))
-        if length < 1e-6:
-            direction = np.array([0.0, 0.0, 1.0])
-            length = self.LEVER_LEN
-        direction = direction / length
-
-        # Cylinder local +X → aim along ``direction``.
-        x_axis = np.array([1.0, 0.0, 0.0])
-        axis = np.cross(x_axis, direction)
-        n = float(np.linalg.norm(axis))
-        if n < 1e-8:
-            quat = np.array([1.0, 0.0, 0.0, 0.0]) if direction[0] >= 0 else np.array(
-                [0.0, 0.0, 1.0, 0.0]
-            )
-        else:
-            axis = axis / n
-            rot = float(np.arccos(np.clip(np.dot(x_axis, direction), -1.0, 1.0)))
-            quat = t3d.quaternions.axangle2quat(axis, rot)
-
-        pose = sapien.Pose(mid.tolist(), quat.tolist())
-        if self._lever_entity is None:
+    def _advance_button_press_visual(self) -> None:
+        button = getattr(self, "_button_actor", None)
+        home = getattr(self, "_button_home_pose", None)
+        if button is None or home is None:
             return
-        if self._lever_comp is not None:
+        max_depth = float(getattr(self, "BTN_MAX_TRAVEL", self.BTN_HALF[2]))
+        target = float(np.clip(getattr(self, "_button_target_depth", 0.0), 0.0, max_depth))
+        current = float(np.clip(getattr(self, "_button_visual_depth", 0.0), 0.0, max_depth))
+        step = float(getattr(self, "BUTTON_VISUAL_STEP", 0.0008))
+        if target > current:
+            current = min(target, current + step)
+        elif target < current:
+            current = max(target, current - step)
+        self._button_visual_depth = current
+        z = float(home.p[2] - current)
+        try:
+            button.set_pose(sapien.Pose([float(home.p[0]), float(home.p[1]), z], list(home.q)))
+        except Exception:
+            pass
+        # Keep jewel + rim seated on the moving cap.
+        bh = float(self.BTN_HALF[2])
+        rim = getattr(self, "_button_rim", None)
+        jewel = getattr(self, "_button_jewel", None)
+        if rim is not None:
             try:
-                self._lever_comp.set_kinematic_target(pose)
+                rim.set_pose(sapien.Pose([float(home.p[0]), float(home.p[1]), z + bh + 0.0015]))
             except Exception:
-                self._lever_entity.set_pose(pose)
-        else:
-            self._lever_entity.set_pose(pose)
-        self.lever_tip_xyz = tip.copy()
-        self.touch_xy = tip[:2].copy()
-        self.touch_top_z = float(tip[2])
+                pass
+        if jewel is not None:
+            try:
+                jewel.set_pose(sapien.Pose([float(home.p[0]), float(home.p[1]), z + bh + 0.0055]))
+            except Exception:
+                pass
 
-    def _angle_from_tip_point(self, tip_xyz: np.ndarray) -> float:
-        """Hinge angle implied by a world tip point near the lever arc."""
-        pivot = np.asarray(self.lever_pivot_xyz, dtype=float)
-        v = np.asarray(tip_xyz, dtype=float) - pivot
-        # Angle from +Z toward −Y in the YZ plane.
-        ang = float(np.arctan2(-v[1], v[2]))
-        return float(np.clip(ang, 0.0, self.lever_open_rad))
-
-    def _sim_dt(self) -> float:
-        try:
-            return float(self.scene.get_timestep())
-        except Exception:
-            return 1.0 / 250.0
-
-    def _lever_contact_force(self) -> float:
-        """PhysX contact force (N) between gripper links and the wooden lever."""
-        if not hasattr(self, "robot") or self._lever_entity is None:
-            return 0.0
-        dt = self._sim_dt()
-        lever_name = "beer_tap_lever"
-        grip = set(getattr(self.robot, "gripper_name", []) or [])
-        imp = 0.0
-        try:
-            for contact in self.scene.get_contacts():
-                n0 = contact.bodies[0].entity.name
-                n1 = contact.bodies[1].entity.name
-                if lever_name not in (n0, n1):
-                    continue
-                other = n1 if n0 == lever_name else n0
-                o = str(other).lower()
-                if grip and other not in grip:
-                    if not (
-                        o.startswith("left")
-                        or o.startswith("right")
-                        or "finger" in o
-                        or "pad" in o
-                        or "hand" in o
-                        or "gripper" in o
-                    ):
-                        continue
-                for pt in getattr(contact, "points", None) or []:
-                    v = np.asarray(getattr(pt, "impulse", [0.0, 0.0, 0.0]), dtype=float)
-                    imp += float(np.linalg.norm(v))
-        except Exception:
-            return 0.0
-        return float(imp / max(dt, 1e-6))
-
-    def _tcp_for_arm(self, arm: ArmTag) -> np.ndarray | None:
-        side = str(arm)
-        # Prefer interactive teleop command (same UniversalRobotControls as other
-        # household tasks) so the spring lever tracks the hand without lag.
+    def _tcp_tip_for_side(self, side: str) -> np.ndarray | None:
+        """Virtual press tip (EE − EE_TO_TCP), matching fill_coffee_jar."""
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return None
+        # Prefer teleop command tip (leads into the spring band).
         cmd = getattr(self, "_interactive_cmd_pose", None)
         if isinstance(cmd, dict) and side in cmd:
             ee = np.asarray(cmd[side][:3], dtype=float)
-            return ee - np.array([0.0, 0.0, self.EE_TO_TCP], dtype=float)
+            return ee - np.array([0.0, 0.0, float(self.EE_TO_TCP)], dtype=float)
         try:
-            ee = self._ee_pos(arm)
+            get_ee = (
+                robot.get_left_ee_pose if side == "left" else robot.get_right_ee_pose
+            )
+            ee = np.asarray(get_ee()[:3], dtype=float)
+            tip = np.asarray(ee, dtype=float).copy()
+            tip[2] -= float(self.EE_TO_TCP)
+            return tip
         except Exception:
-            return None
-        return ee - np.array([0.0, 0.0, self.EE_TO_TCP], dtype=float)
+            try:
+                get_tcp = (
+                    robot.get_left_tcp_pose if side == "left" else robot.get_right_tcp_pose
+                )
+                return np.asarray(get_tcp()[:3], dtype=float)
+            except Exception:
+                return None
 
-    def _lever_press_signal(self):
-        """Best gripper press on the knob/arc — drives the spring lever.
-
-        Engagement is tip proximity and/or PhysX contact on the lever collider.
-        Release radius is larger than engage radius so brief gaps don't drop
-        contact into spring-return. While already pressed, residual contact
-        alone keeps engagement even if the tip briefly leaves the engage ball.
-        """
-        if self.overflowed or not hasattr(self, "robot"):
+    def _button_press_signal(self):
+        """Best arm pressing the tap button (virtual spring force)."""
+        if not hasattr(self, "robot"):
             return None
-        if bool(getattr(self, "_lever_inhibit_press", False)):
+        touch_xy = np.asarray(getattr(self, "touch_xy", None), dtype=float)
+        if touch_xy.size != 2:
             return None
-        pivot = np.asarray(self.lever_pivot_xyz, dtype=float)
-        tip = self._lever_tip_xyz()
-        contact_n = self._lever_contact_force()
-        engage_r = float(self.LEVER_CONTACT_R)
-        release_r = float(getattr(self, "LEVER_RELEASE_R", engage_r * 2.0))
-        tip_r = release_r if bool(getattr(self, "_lever_pressed", False)) else engage_r
-        hold_n = float(getattr(self, "LEVER_HOLD_FORCE_N", 0.4))
-        force_n = float(getattr(self, "LEVER_CONTACT_FORCE_N", 2.5))
-        pressed = bool(getattr(self, "_lever_pressed", False))
-        sides = []
-        try:
-            sides.append(self.arm)
-        except Exception:
-            pass
-        for side in ("left", "right"):
-            tag = ArmTag(side)
-            if tag not in sides:
-                sides.append(tag)
-
+        preferred = str(getattr(self, "_pressing_arm_side", "") or "")
+        sides = [preferred] if preferred in ("left", "right") else []
+        sides += [s for s in ("left", "right") if s not in sides]
         best = None
-        for arm in sides:
-            tcp = self._tcp_for_arm(arm)
+        stiff = float(self.FORCE_STIFFNESS)
+        slack = float(self.FORCE_ENGAGE_SLACK)
+        top = float(self.touch_top_z)
+        tol = float(self.BTN_TOUCH_XY_TOL)
+        for side in sides:
+            tcp = self._tcp_tip_for_side(side)
             if tcp is None:
                 continue
-            v = tcp - pivot
-            r_yz = float(np.hypot(v[1], v[2]))
-            x_err = abs(float(tcp[0] - pivot[0]))
-            tip_dist = float(np.linalg.norm(tcp - tip))
-            on_arc = (
-                abs(r_yz - float(self.LEVER_LEN)) <= float(self.LEVER_ARC_RADIAL_TOL)
-                and x_err <= float(self.LEVER_ARC_X_TOL)
-                and float(v[2]) > -0.02
-            )
-            near_tip = tip_dist <= tip_r
-            # Engage: near tip or firm contact. Stay: near tip OR any hold force.
-            if pressed:
-                engaged = near_tip or contact_n > hold_n
-            else:
-                engaged = near_tip or contact_n > force_n
-            if not engaged:
+            if float(np.linalg.norm(tcp[:2] - touch_xy)) > tol:
                 continue
-            # If only contact is keeping us engaged (TCP far from tip), freeze at
-            # the current hinge angle so kinematic tip motion can't chase itself.
-            if near_tip or on_arc:
-                ang = self._angle_from_tip_point(tcp)
-                follow = True
-            else:
-                ang = float(self.lever_angle)
-                follow = False
-            score = (
-                -abs(r_yz - float(self.LEVER_LEN))
-                - 0.5 * x_err
-                - 0.35 * tip_dist
-                + 0.001 * contact_n
-                + (0.01 if on_arc else 0.0)
-                + (0.02 if near_tip else 0.0)
-            )
-            cand = {
-                "arm": arm,
-                "tcp": tcp,
-                "angle": ang,
-                "score": score,
-                "contact_n": contact_n,
-                "follow": follow,
-            }
-            if best is None or cand["score"] > best["score"]:
+            spring = stiff * max(0.0, top + slack - float(tcp[2]))
+            cand = {"side": side, "tcp": tcp, "force": float(spring)}
+            if best is None or cand["force"] > best["force"]:
                 best = cand
+        if best is not None:
+            self._pressing_arm_side = best["side"]
         return best
 
-    def _update_lever_from_pressure(self):
-        """Hold while gripper presses; spring only when free.
-
-        Stable TCP ⇒ lever freezes at the commanded angle (hold deadband + EMA).
-        No spring while contacted / in grace, so flow does not flicker.
-        """
+    def _update_tap_button(self):
+        """Spring visual + pour latch with hysteresis."""
         if self.overflowed:
-            # Snap shut after a spill so the stream cuts immediately.
-            if self.lever_angle > 1e-4:
-                self._apply_lever_pose(0.0)
+            self._button_pouring = False
             self._lever_pressed = False
-            self._lever_press_lost_steps = 0
-            self._lever_target_filt = None
+            self.lever_angle = 0.0
+            self._set_button_press_depth(0.0)
+            self._advance_button_press_visual()
             return
+        sig = self._button_press_signal()
+        force = float(sig["force"]) if sig is not None else 0.0
+        self._button_force = force
+        max_depth = float(getattr(self, "BTN_MAX_TRAVEL", self.BTN_HALF[2]))
+        on_n = float(self.PRESS_FORCE_ON)
+        off_n = float(self.PRESS_FORCE_OFF)
+        if self._button_pouring:
+            self._button_pouring = force >= off_n
+        else:
+            self._button_pouring = force >= on_n
+        self._lever_pressed = bool(self._button_pouring)
+        # Compat: treat pouring as fully "open".
+        self.lever_angle = 1.0 if self._button_pouring else 0.0
+        if self._button_pouring:
+            self.opened_once = True
+            self._lever_angle_max = max(float(self._lever_angle_max), 1.0)
+        depth = 0.0
+        if force > 1e-6:
+            depth = max_depth * min(1.0, force / max(on_n, 1e-6))
+        self._set_button_press_depth(depth)
+        self._advance_button_press_visual()
 
-        contact_n = self._lever_contact_force()
-        hold_n = float(getattr(self, "LEVER_HOLD_FORCE_N", 0.4))
-        still_touching = contact_n > hold_n
-        sig = self._lever_press_signal()
+    def _lever_open_frac(self, angle: float | None = None) -> float:
+        """Compat: 1 while pouring, else 0."""
+        return 1.0 if bool(getattr(self, "_button_pouring", False)) else 0.0
 
-        if sig is not None or (
-            bool(getattr(self, "_lever_pressed", False)) and still_touching
-        ):
-            self._lever_pressed = True
-            self._lever_press_lost_steps = 0
-            cur = float(self.lever_angle)
-            if sig is not None and bool(sig.get("follow", True)):
-                raw = float(
-                    np.clip(
-                        float(sig["angle"])
-                        + float(self.LEVER_CONTACT_FORCE_GAIN)
-                        * min(float(sig.get("contact_n", 0.0)), 40.0),
-                        0.0,
-                        float(self.lever_open_rad),
-                    )
-                )
-                alpha = float(getattr(self, "LEVER_TARGET_EMA", 0.22))
-                prev = getattr(self, "_lever_target_filt", None)
-                if prev is None:
-                    self._lever_target_filt = raw
-                else:
-                    self._lever_target_filt = (1.0 - alpha) * float(prev) + alpha * raw
-                target = float(self._lever_target_filt)
-            else:
-                # Contact hold without a reliable TCP arc reading — freeze.
-                target = cur
-                if getattr(self, "_lever_target_filt", None) is None:
-                    self._lever_target_filt = cur
+    def _flow_frac(self, angle: float | None = None) -> float:
+        """Full stream while the button is held past the press latch."""
+        if bool(getattr(self, "_button_pouring", False)):
+            return 1.0
+        return 0.0
 
-            dead = float(getattr(self, "LEVER_HOLD_DEADBAND", 0.035))
-            err = target - cur
-            if abs(err) <= dead:
-                # Arm stable → lever stable (zero hinge velocity, keep pose).
-                self._lever_ang_vel = 0.0
-                return
-            step = float(self.LEVER_TRACK_STEP)
-            self._apply_lever_pose(cur + float(np.clip(err, -step, step)))
-            return
+    def _over_tap_button(self, side, pose) -> bool:
+        touch_xy = getattr(self, "touch_xy", None)
+        if touch_xy is None:
+            return False
+        target = np.asarray(touch_xy, dtype=float)
+        tol = float(self.BTN_TOUCH_XY_TOL) * 1.25
+        samples = []
+        p = np.asarray(pose, dtype=float).reshape(-1) if pose is not None else None
+        if p is not None and p.size >= 2:
+            samples.append(p[:2].astype(float))
+        tcp = self._tcp_tip_for_side(str(side))
+        if tcp is not None:
+            samples.append(tcp[:2])
+        for xy in samples:
+            if float(np.linalg.norm(xy - target)) <= tol:
+                return True
+        return False
 
-        # Lost signal: hold briefly so tip motion / teleop jitter doesn't spring
-        # the handle back into the hand.
-        if bool(getattr(self, "_lever_pressed", False)):
-            grace = int(getattr(self, "LEVER_PRESS_LOST_GRACE", 50))
-            self._lever_press_lost_steps = int(
-                getattr(self, "_lever_press_lost_steps", 0)
-            ) + 1
-            if self._lever_press_lost_steps < grace or still_touching:
-                self._lever_ang_vel = 0.0
-                return
+    def interactive_ee_z_floor(self, side, pose):
+        """Hard EE floor over the tap button — Q cannot dive through the key."""
+        if not self._over_tap_button(side, pose):
+            return None
+        cached = getattr(self, "_button_ee_z_floor", None)
+        if cached is not None:
+            return float(cached)
+        tip = getattr(self, "_button_tip_z_floor", None)
+        if tip is None:
+            return None
+        return float(tip) + float(self.EE_TO_TCP)
 
-        # Truly free → snappy spring shut (constant rate so flow cuts promptly).
-        self._lever_pressed = False
-        self._lever_press_lost_steps = 0
-        self._lever_target_filt = None
-        if self.lever_angle <= 1e-4:
-            self._lever_ang_vel = 0.0
-            return
-        cur = float(self.lever_angle)
-        rate = float(self.LEVER_RETURN_STEP)
-        self._apply_lever_pose(max(0.0, cur - rate))
+    def interactive_ee_z_ceiling(self, side, pose):
+        """Raise Q/E Z max 5 cm above the captured home EE height."""
+        side = "left" if str(side) == "left" else "right"
+        controls = getattr(self, "_interactive_robot_controls", None)
+        home = None
+        if controls is not None:
+            home = getattr(controls, "_origin_pose", {}).get(side)
+        home_z = float(home[2]) if home is not None else float(np.asarray(pose, dtype=float)[2])
+        return float(home_z + 0.05)
 
-    # ------------------------------------------------------------------ fluids
+    def interactive_teleop_z_speed_scale(self, side, pose, z_delta: float):
+        if float(z_delta) >= 0.0:
+            return None
+        if not self._over_tap_button(side, pose):
+            return None
+        return 0.45
+
     def _cup_center_xy(self) -> np.ndarray:
         return np.asarray(self.cup_xy, dtype=float)
 
@@ -1917,8 +1819,9 @@ class pour_beer(KitchenS_base_task):
             # Cut the tap once it crests — spring / force-cut shuts the handle.
             self._lever_held = False
             self._lever_pressed = False
-            self._lever_target_filt = None
-            self._apply_lever_pose(0.0)
+            self._button_pouring = False
+            self.lever_angle = 0.0
+            self._set_button_press_depth(0.0)
 
     def _effective_foam_gain(self) -> float:
         """Foam % of the current stream; ramps with continuous open time.
@@ -1949,8 +1852,10 @@ class pour_beer(KitchenS_base_task):
         if frac > 1e-4 and not self.overflowed:
             scale = float(getattr(self, "flow_rate_scale", self.FLOW_RATE_SCALE))
             d = float(self.pour_rate) * frac * scale
-            add_liq = d
-            add_foam = d * foam_gain
+            # One stream volume split into beer + foam (not beer plus extra foam).
+            foam_frac = float(np.clip(foam_gain, 0.0, 0.95))
+            add_foam = d * foam_frac
+            add_liq = d * (1.0 - foam_frac)
             new_liq = float(self.liquid_level) + add_liq
             new_foam = float(self.foam_level) + add_foam
             if new_liq + new_foam >= float(self.overflow_level) - 1e-6:
@@ -1968,7 +1873,7 @@ class pour_beer(KitchenS_base_task):
             # Extra beer after crest keeps growing the counter puddle.
             scale = float(getattr(self, "flow_rate_scale", self.FLOW_RATE_SCALE))
             d = float(self.pour_rate) * frac * scale
-            self.spill_amount = float(self.spill_amount) + d * (1.0 + foam_gain)
+            self.spill_amount = float(self.spill_amount) + d
             self._rebuild_spill_puddle()
         elif (not self.overflowed) and self.foam_level > 1e-6:
             # Collapse foam into a little beer (not 1:1 — avoids an end surge).
@@ -1982,6 +1887,12 @@ class pour_beer(KitchenS_base_task):
             self._mark_overflow(spilled=0.08)
         self._rebuild_fluids(force=False)
         self._sync_stream(force=False)
+
+    def _sim_dt(self) -> float:
+        try:
+            return float(self.scene.get_timestep())
+        except Exception:
+            return 1.0 / 250.0
 
     def _tap_settle_steps(self) -> int:
         """Consecutive idle sim steps required before success (~TAP_SETTLE_SEC)."""
@@ -2027,7 +1938,7 @@ class pour_beer(KitchenS_base_task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
             return
-        self._update_lever_from_pressure()
+        self._update_tap_button()
         if self._tap_is_idle_instant():
             self._tap_idle_steps = int(getattr(self, "_tap_idle_steps", 0)) + 1
         else:
@@ -2096,205 +2007,75 @@ class pour_beer(KitchenS_base_task):
             if self.save_freq is not None and i % save_freq == 0:
                 self._take_picture()
 
-    # ------------------------------------------------------------------ arm / lever control
+    # ------------------------------------------------------------------ arm / button control
     def _ee_pos(self, arm: ArmTag) -> np.ndarray:
         p = self.get_arm_pose(str(arm))
         return np.asarray(p[:3], dtype=float)
 
-    def _outboard_sign(self) -> float:
-        """−1 left station / +1 right — further from table centerline."""
-        cup = np.asarray(getattr(self, "cup_xy", [0.0, 0.0]), dtype=float).reshape(-1)
-        if cup.size >= 1 and float(cup[0]) < 0.0:
-            return -1.0
-        side = str(getattr(self, "arm_side", "") or getattr(self, "arm", "right"))
-        if side in ("left", "l"):
-            return -1.0
-        return 1.0
-
-    def _lever_ee_pose(self, angle: float, z_above: float):
-        tip = self._lever_tip_xyz(angle)
-        ox = float(self._outboard_sign()) * float(self.LEVER_EE_OUTBOARD)
+    def _button_ee_pose(self, z_above: float):
+        xy = np.asarray(self.touch_xy, dtype=float)
+        top = float(self.touch_top_z)
         return [
-            float(tip[0] + ox),
-            float(tip[1]),
-            float(tip[2] + z_above + self.EE_TO_TCP),
+            float(xy[0]),
+            float(xy[1]),
+            float(top + z_above + self.EE_TO_TCP),
             *GRASP_DIRECTION_DIC["top_down"],
         ]
 
     def _move_ok(self, arm: ArmTag, dx=0.0, dy=0.0, dz=0.0) -> bool:
         self.plan_success = True
-        self.move(
-            self.move_by_displacement(
-                arm, x=float(dx), y=float(dy), z=float(dz), move_axis="world"
-            )
-        )
+        self.move(self.move_by_displacement(arm, x=dx, y=dy, z=dz))
         ok = bool(self.plan_success)
         if not ok:
             self.plan_success = True
         return ok
 
-    def _grasp_lever(self, arm: ArmTag, inhibit_until_ready: bool = False) -> bool:
-        """Approach the upright knob so gripper pressure can bend the spring lever.
-
-        Stages from the outboard / tap side so the forearm does not fly through
-        the head-camera → mug line of sight. Contact on the knob stays tip-centered.
-        ``inhibit_until_ready`` keeps the spring free during the approach so a
-        near-full mug is not filled by accidental contact on the way in.
-        """
-        self._lever_held = False
-        self._lever_inhibit_press = bool(inhibit_until_ready)
+    def _press_button(self, arm: ArmTag) -> bool:
+        """Hover then depress the tap button (hold = pour)."""
+        self._pressing_arm_side = str(arm)
+        self._lever_held = True
         self.plan_success = True
         self.move(self.close_gripper(arm))
-        ang0 = float(self.lever_angle)
-        tip = self._lever_tip_xyz(ang0)
-        s = float(self._outboard_sign())
-        # Commit a side-reach IK first (far outboard + high) so the elbow sits
-        # beside the mug, not between the head camera and the glass.
-        if not inhibit_until_ready:
-            far = [
-                float(tip[0] + s * 0.22),
-                float(tip[1] + 0.04),
-                float(tip[2] + self.EE_TO_TCP + 0.24),
-                *GRASP_DIRECTION_DIC["top_down"],
-            ]
-            self.move(self.move_to_pose(arm, far))
-            if not self.plan_success:
-                self.plan_success = True
-        if inhibit_until_ready:
-            sx, sy, sz = 0.05, 0.04, 0.04
+        if not self.plan_success:
+            print("[pour_beer] could not close gripper for button press")
+            self.plan_success = True
+        # Two-stage approach (fill_coffee_jar): high waypoint → hover → displace.
+        high_dis = float(self.KEY_HOVER_DIS) + 0.08
+        self.move(self.move_to_pose(arm, self._button_ee_pose(high_dis)))
+        if not self.plan_success:
+            self.plan_success = True
+            self.move(self.move_to_pose(arm, self._button_ee_pose(self.KEY_HOVER_DIS)))
         else:
-            sx, sy, sz = 0.12, 0.05, 0.08
-        stage = [
-            float(tip[0] + s * sx),
-            float(tip[1] + sy),
-            float(tip[2] + self.LEVER_HOVER + self.EE_TO_TCP + sz),
-            *GRASP_DIRECTION_DIC["top_down"],
-        ]
-        self.move(self.move_to_pose(arm, stage))
+            self.move(self.move_by_displacement(
+                arm, z=-(high_dis - float(self.KEY_HOVER_DIS))
+            ))
+        if not self.plan_success:
+            print("[pour_beer] button hover failed — continuing")
+            self.plan_success = True
+        self.move(self.move_by_displacement(arm, z=-float(self.KEY_PRESS_DEPTH)))
         if not self.plan_success:
             self.plan_success = True
-        self.move(self.move_to_pose(arm, self._lever_ee_pose(ang0, self.LEVER_HOVER)))
-        if not self.plan_success:
-            print("[pour_beer] lever hover failed — continuing toward knob")
-            self.plan_success = True
-        self.move(self.move_to_pose(arm, self._lever_ee_pose(ang0, self.LEVER_GRASP_Z)))
-        if not self.plan_success:
-            self.plan_success = True
-        # Brief dwell so pressure coupling engages (no pose teleport).
-        self._idle_steps(4)
-        self._lever_inhibit_press = False
-        self._lever_held = True
+        # Dwell so the spring latch engages and fill starts.
+        dt = float(getattr(self, "timestep", None) or getattr(self, "sim_timestep", 0.004) or 0.004)
+        hold = max(1, int(round(float(self.KEY_PRESS_SAMPLE_S) / max(dt, 1e-4))))
+        self._idle_steps(min(hold, 20))
         return True
 
-    def _sweep_lever_to(
-        self,
-        arm: ArmTag,
-        target_frac: float,
-        n_steps: int = 10,
-        stop_on_foam: bool = False,
-        stop_fill: float | None = None,
-    ):
-        """Walk the EE along the knob arc — lever angle follows gripper pressure only.
-
-        The handle is never teleported here; ``_update_lever_from_pressure`` bends
-        it when the TCP presses the knob and springs it back when contact is lost.
-        """
-        self._lever_held = True
-        target_ang = float(np.clip(target_frac, 0.0, 1.0)) * float(self.lever_open_rad)
-        start = float(self.lever_angle)
-        closing = target_ang < start - 1e-3
-        n = max(2, int(n_steps))
-        if closing:
-            n = min(n, 5)
-        fill_cap = (
-            float(stop_fill)
-            if stop_fill is not None
-            else float(self.safe_total)
-        )
-        for i in range(1, n + 1):
-            if self.overflowed:
-                break
-            if stop_on_foam and (
-                self.foam_level >= self.expert_foam_pause
-                or self._total_fill() >= fill_cap
-                or float(self.liquid_level) >= float(self.target_liquid)
-            ):
-                break
-            ang = start + (target_ang - start) * (i / n)
-            tip = self._lever_tip_xyz(ang)
-            ox = float(self._outboard_sign()) * float(self.LEVER_EE_OUTBOARD)
-            goal_ee = tip + np.array(
-                [ox, 0.0, self.EE_TO_TCP + self.LEVER_GRASP_Z], dtype=float
-            )
-            # Short nudges keep TCP on the arc so pressure continuously drives the hinge.
-            for _ in range(3 if closing else 2):
-                if self.overflowed:
-                    break
-                ee = self._ee_pos(arm)
-                delta = goal_ee - ee
-                if float(np.linalg.norm(delta)) < 0.028:
-                    break
-                step = 0.055 if closing else 0.035
-                self._move_ok(
-                    arm,
-                    dx=float(np.clip(delta[0], -step, step)),
-                    dy=float(np.clip(delta[1], -step, step)),
-                    dz=float(np.clip(delta[2], -step, step)),
-                )
-            if self.overflowed:
-                break
-            self._idle_steps(3)
-            if self.overflowed:
-                break
-        print(
-            f"[pour_beer] lever→{self._lever_open_frac():.2f} "
-            f"ang={np.degrees(self.lever_angle):.1f}° "
-            f"pressed={self._lever_pressed} "
-            f"liq={self.liquid_level:.2f} foam={self.foam_level:.2f}"
-        )
-
-    def _release_lever(self, arm: ArmTag):
-        """Clear the knob so the spring returns the handle upright.
-
-        Press stays inhibited until the next ``_grasp_lever`` so a nearby hand
-        cannot immediately re-bend the spring after retreat. Retreat outboard
-        (not across the camera→mug view). If the first lift leaves the handle
-        open, try a second retreat before returning.
-        """
+    def _release_button(self, arm: ArmTag):
+        """Lift off the key so pouring stops and the spring returns."""
         self._lever_held = False
-        self._lever_inhibit_press = True
-        s = float(self._outboard_sign())
-        # Clear mug LOS: outboard + up + toward tap (+Y).
-        self._move_ok(arm, dx=s * 0.10, dy=0.05, dz=0.12)
+        self._move_ok(arm, dz=0.10)
         self._idle_steps(
-            60,
-            until=lambda: self.lever_angle < 0.02 or self.overflowed,
+            40,
+            until=lambda: (not bool(getattr(self, "_button_pouring", False)))
+            or self.overflowed,
         )
-        if (not self.overflowed) and float(self.lever_angle) >= 0.02:
-            self._move_ok(arm, dx=s * 0.06, dy=0.05, dz=0.10)
-            self._idle_steps(
-                80,
-                until=lambda: self.lever_angle < 0.02 or self.overflowed,
-            )
-
-    def _expert_reopen_frac(self) -> float:
-        """Smaller opens as the mug fills — top up gently near the target."""
-        liq = float(self.liquid_level)
-        if liq < 0.55:
-            return 0.55
-        if liq < 0.72:
-            return 0.30
-        return 0.22
 
     def _expert_close_and_settle(self, arm: ArmTag, target: float) -> bool:
-        """Release the lever; foam-wait only if the tap actually shut.
-
-        Returns True if the caller should stop the pour loop.
-        """
-        self._release_lever(arm)
+        self._release_button(arm)
         if self.overflowed or float(self.liquid_level) > float(target):
             return True
-        if float(self._lever_open_frac()) < 0.05:
+        if not bool(getattr(self, "_button_pouring", False)):
             self._idle_steps(
                 140,
                 until=lambda: (
@@ -2302,186 +2083,89 @@ class pour_beer(KitchenS_base_task):
                 ),
             )
         else:
-            # Still open after retreat — do not idle-pour under a "settle" wait.
             self._idle_steps(20, until=lambda: self.overflowed)
         return bool(self.overflowed or float(self.liquid_level) > float(target))
 
-    def _expert_micro_topup(self, arm: ArmTag, target: float) -> bool:
-        """Brief crack of the tap to clear target; stop before the rim.
-
-        Full arc sweeps overshoot near-full because fill advances on every IK
-        step while the lever is open.
-        """
-        if self.overflowed or float(self.liquid_level) > float(target):
-            return True
-        if float(self._total_fill()) >= 0.97:
-            return self._expert_close_and_settle(arm, target)
-
-        liq = float(self.liquid_level)
-        # Inhibit during approach — accidental arc contact near-full overflows.
-        self._grasp_lever(arm, inhibit_until_ready=True)
-        if liq >= float(target) - 0.015:
-            open_frac, delta_cap, rim_guard, idle_n = 0.08, 0.03, 0.94, 45
-        elif liq >= 0.85:
-            open_frac, delta_cap, rim_guard, idle_n = 0.10, 0.04, 0.94, 60
-        elif liq >= 0.78:
-            open_frac, delta_cap, rim_guard, idle_n = 0.14, 0.05, 0.94, 80
-        else:
-            open_frac, delta_cap, rim_guard, idle_n = 0.18, 0.07, 0.94, 100
-        self._sweep_lever_to(
-            arm,
-            target_frac=open_frac,
-            n_steps=3,
-            stop_on_foam=True,
-            stop_fill=rim_guard,
-        )
-        # As soon as beer clears the success gate (>target), shut off.
-        if self.overflowed or float(self.liquid_level) > float(target):
-            return self._expert_close_and_settle(arm, target)
-        start_liq = float(self.liquid_level)
-        self._idle_steps(
-            idle_n,
-            until=lambda: (
-                self.overflowed
-                or float(self.liquid_level) > float(target)
-                or float(self._total_fill()) >= rim_guard
-                or self.foam_level >= max(0.12, 0.75 * float(self.expert_foam_pause))
-                or (float(self.liquid_level) - start_liq) >= delta_cap
-            ),
-        )
-        return self._expert_close_and_settle(arm, target)
-
-    # ------------------------------------------------------------------ expert
     def play_once(self):
         arm = self.arm
-        self.plan_success = True
         self._lever_held = False
-        self.move(self.close_gripper(arm))
-
-        # 1) Grasp the upright lever and open it gradually by hand (staged).
-        self._grasp_lever(arm)
-        for open_frac in (0.40, 0.55):
-            if self.overflowed:
-                break
-            self._sweep_lever_to(
-                arm, target_frac=open_frac, n_steps=8, stop_on_foam=True
-            )
-            if self.foam_level >= self.expert_foam_pause or self._total_fill() >= 0.80:
-                break
-        # Initial engage miss — one retry before the pour loop.
-        if (not self.overflowed) and float(self._lever_open_frac()) < 0.15:
-            self._grasp_lever(arm)
-            self._sweep_lever_to(arm, target_frac=0.45, n_steps=8, stop_on_foam=True)
-
-        # 2) Short pour bursts; micro top-up once beer is near the success gate.
+        target = float(self.target_liquid)
         rate_scale = float(self.POUR_RATE) / max(float(self.pour_rate), 1e-6)
         rate_scale = float(np.clip(rate_scale, 0.75, 2.2))
         pour_idle = int(round(110 * rate_scale))
-        max_cycles = int(round(18 * max(1.0, rate_scale)))
-        # Success needs liquid strictly above target; stop pouring once past it.
-        target = float(self.target_liquid)
-        # Close mid-mug; once beer is this high, only micro-crack top-ups.
-        pour_cap = 0.72
-        topup_at = 0.72
+        max_cycles = int(round(20 * max(1.0, rate_scale)))
+        pour_cap = 0.78
+        topup_at = 0.78
+        # Aim slightly above the success gate so foam settle stays > target.
+        fill_target = min(0.92, float(target) + 0.04)
+
+        # 1) Press and hold to start pouring.
+        self._press_button(arm)
+        self._idle_steps(
+            pour_idle,
+            until=lambda: (
+                self.overflowed
+                or self.foam_level >= self.expert_foam_pause
+                or self._total_fill() >= 0.80
+                or float(self.liquid_level) >= topup_at
+            ),
+        )
+
         micro_tries = 0
         for cycle in range(max_cycles):
-            if self.overflowed or float(self.liquid_level) > target:
+            if self.overflowed or float(self.liquid_level) > fill_target:
                 break
 
-            # Near-full: careful cracks until beer clears target (no full bursts).
             if float(self.liquid_level) >= topup_at:
-                # Already over target — stop pouring; never crack again.
-                if float(self.liquid_level) > float(target):
-                    if self._lever_open_frac() >= 0.05 or float(self.foam_level) > 0.06:
-                        self._expert_close_and_settle(arm, target)
+                if float(self.liquid_level) > float(fill_target):
+                    if self._button_pouring or float(self.foam_level) > 0.06:
+                        self._expert_close_and_settle(arm, fill_target)
                     break
-                # Settle foam / shut lever before cracking again.
-                if (
-                    float(self.foam_level) > 0.06
-                    or float(self._lever_open_frac()) >= 0.10
-                ):
-                    if self._expert_close_and_settle(arm, target):
+                if float(self.foam_level) > 0.06 or self._button_pouring:
+                    if self._expert_close_and_settle(arm, fill_target):
                         break
-                    # Settle can push liquid past target — stop, do not micro.
-                    if float(self.liquid_level) > float(target):
+                    if float(self.liquid_level) > float(fill_target):
                         break
-                    print(
-                        f"[pour_beer] cycle={cycle} pre-topup settle "
-                        f"liq={self.liquid_level:.2f} foam={self.foam_level:.2f} "
-                        f"total={self._total_fill():.2f}",
-                        flush=True,
-                    )
                     continue
-                if micro_tries >= 6 or float(self._total_fill()) >= 0.97:
+                if micro_tries >= 8 or float(self._total_fill()) >= 0.97:
                     break
-                print(
-                    f"[pour_beer] cycle={cycle} micro-topup "
-                    f"liq={self.liquid_level:.2f} foam={self.foam_level:.2f} "
-                    f"total={self._total_fill():.2f}",
-                    flush=True,
-                )
                 micro_tries += 1
-                self._expert_micro_topup(arm, target)
-                # Over target ⇒ done (close already handled inside micro-topup).
-                if self.overflowed or float(self.liquid_level) > float(target):
+                self._press_button(arm)
+                self._idle_steps(
+                    55,
+                    until=lambda: (
+                        self.overflowed
+                        or float(self.liquid_level) > float(fill_target)
+                        or float(self._total_fill()) >= 0.94
+                        or self.foam_level >= 0.12
+                    ),
+                )
+                if self._expert_close_and_settle(arm, fill_target):
                     break
                 continue
 
-            # Already at foam/total limit with lever open → shut off, no more pour.
-            if self._lever_open_frac() >= 0.15 and (
+            # Foam / fill pause — release, settle, repress.
+            if self._button_pouring and (
                 self.foam_level >= self.expert_foam_pause
                 or self._total_fill() >= pour_cap
                 or float(self.liquid_level) >= topup_at
             ):
-                if self._expert_close_and_settle(arm, target):
+                if self._expert_close_and_settle(arm, fill_target):
                     break
-                print(
-                    f"[pour_beer] cycle={cycle} liq={self.liquid_level:.2f} "
-                    f"foam={self.foam_level:.2f} total={self._total_fill():.2f} "
-                    f"lever={self._lever_open_frac():.2f} overflow={self.overflowed}"
-                )
                 if float(self.liquid_level) >= topup_at:
                     continue
-                if float(self.liquid_level) <= target:
-                    self._grasp_lever(arm, inhibit_until_ready=True)
+                if float(self.liquid_level) <= fill_target:
+                    self._press_button(arm)
                 continue
 
-            if self._lever_open_frac() < 0.20:
-                reopen = self._expert_reopen_frac()
-                self._sweep_lever_to(
-                    arm,
-                    target_frac=reopen,
-                    n_steps=7,
-                    stop_on_foam=True,
-                    stop_fill=pour_cap,
-                )
-                # Regrasp retry when the sweep never engaged the knob.
-                if (
-                    float(self._lever_open_frac()) < 0.15
-                    and float(self.liquid_level) <= target
-                    and not self.overflowed
-                ):
-                    self._grasp_lever(arm, inhibit_until_ready=True)
-                    self._sweep_lever_to(
-                        arm,
-                        target_frac=reopen,
-                        n_steps=8,
-                        stop_on_foam=True,
-                        stop_fill=pour_cap,
-                    )
-                if float(self._lever_open_frac()) < 0.15:
-                    print(
-                        f"[pour_beer] cycle={cycle} liq={self.liquid_level:.2f} "
-                        f"foam={self.foam_level:.2f} total={self._total_fill():.2f} "
-                        f"lever={self._lever_open_frac():.2f} overflow={self.overflowed}"
-                    )
-                    continue
+            if not self._button_pouring:
+                self._press_button(arm)
 
             self._idle_steps(
                 pour_idle,
                 until=lambda: (
                     self.overflowed
-                    or float(self.liquid_level) > target
+                    or float(self.liquid_level) > fill_target
                     or float(self.liquid_level) >= topup_at
                     or self.foam_level >= self.expert_foam_pause
                     or self._total_fill() >= pour_cap
@@ -2490,79 +2174,92 @@ class pour_beer(KitchenS_base_task):
             print(
                 f"[pour_beer] cycle={cycle} liq={self.liquid_level:.2f} "
                 f"foam={self.foam_level:.2f} total={self._total_fill():.2f} "
-                f"lever={self._lever_open_frac():.2f} overflow={self.overflowed}"
+                f"pouring={self._button_pouring} overflow={self.overflowed}"
             )
-            if self.overflowed or float(self.liquid_level) > target:
-                break
 
-            if self._expert_close_and_settle(arm, target):
-                break
-            if float(self.liquid_level) < topup_at:
-                self._grasp_lever(arm)
-
-        # 3) Lift off — spring returns the handle to upright; wait until settled.
-        self._release_lever(arm)
-        settle_need = int(self._tap_settle_steps())
+        if self._button_pouring or float(self.lever_angle) > 0.0:
+            self._release_button(arm)
+        # Hold long enough for TAP_SETTLE_SEC idle + liquid stability gates.
+        settle_n = int(self._tap_settle_steps()) + 60
         self._idle_steps(
-            max(settle_need + 50, settle_need * 2),
-            until=lambda: (
-                self.overflowed
-                or (
-                    self.foam_level < 0.05
-                    and not bool(self.tab_open)
-                    and float(self._flow_frac()) <= 1e-4
-                    and self._tap_fully_stopped()
-                    and self._liquid_fully_stable()
-                )
-            ),
+            settle_n,
+            until=lambda: self.overflowed or self.check_success(),
         )
-
-        if self.overflowed:
-            self.plan_success = False
-        elif self.check_success():
-            self.plan_success = True
-
-        self.info["info"] = {
-            "{A}": "beer tap",
-            "{B}": self.GLASS_MODEL,
-            "{C}": "tap lever",
-            "{a}": str(arm),
-        }
-        return self.info
+        self.closed_after_pour = (
+            (not bool(self._button_pouring))
+            and not bool(self.tab_open)
+            and float(self.liquid_level) > 0.05
+        )
 
     def check_success(self):
         if self.overflowed:
             return False
-        if not self.opened_once:
+        if not bool(getattr(self, "opened_once", False)):
             return False
-        # Hard gate: never succeed while tap is open, flowing, or pressed.
-        # Also require ~1s continuous idle (TAP_SETTLE_SEC) so brief spring-shut
-        # / contact flicker cannot latch success mid-pour.
-        if (
-            bool(self.tab_open)
-            or float(self._flow_frac()) > 1e-4
-            or bool(getattr(self, "_lever_pressed", False))
-        ):
-            return False
-        if not self._tap_fully_stopped():
-            return False
-        # Foam collapse still raises liquid — wait until level stops rising.
-        if not self._liquid_fully_stable():
-            return False
-        # Foam should have settled before judging beer level.
         foam_cap = max(0.08, float(getattr(self, "expert_foam_resume", 0.09)))
         if float(self.foam_level) > foam_cap:
+            return False
+        if bool(getattr(self, "_button_pouring", False)) or bool(self.tab_open):
+            return False
+        if bool(getattr(self, "_lever_pressed", False)):
             return False
         if not bool(getattr(self, "closed_after_pour", False)):
             return False
         liquid_ok = float(self.liquid_level) > float(self.target_liquid)
+        if not liquid_ok:
+            return False
         not_overfull = self._total_fill() < float(self.overflow_level) - 0.02
-        return bool(liquid_ok and not_overfull)
+        if not not_overfull:
+            return False
+        if not self._tap_fully_stopped():
+            return False
+        if not self._liquid_fully_stable():
+            return False
+        return True
+
+    def get_language_instruction(self):
+        return [
+            {
+                "{A}": "beer tap",
+                "{B}": "beer mug",
+                "{C}": "tap button",
+                "{a}": str(self.arm),
+            }
+        ]
 
     @property
     def tab_open(self) -> bool:
-        """Compatibility: treat lever past deadzone as open."""
-        return self._lever_open_frac() > 0.02
+        return bool(getattr(self, "_button_pouring", False))
+
+    def get_info(self):
+        return {
+            "liquid_level": float(self.liquid_level),
+            "foam_level": float(self.foam_level),
+            "total_fill": float(self._total_fill()),
+            "button_force": float(getattr(self, "_button_force", 0.0)),
+            "button_pouring": bool(getattr(self, "_button_pouring", False)),
+            "lever_open_frac": float(self._lever_open_frac()),
+            "lever_pressed": bool(getattr(self, "_lever_pressed", False)),
+            "tab_open": bool(self.tab_open),
+            "opened_once": bool(getattr(self, "opened_once", False)),
+            "overflowed": bool(self.overflowed),
+            "spill_amount": float(getattr(self, "spill_amount", 0.0)),
+            "target_liquid": float(self.target_liquid),
+            "pour_rate": float(getattr(self, "pour_rate", self.POUR_RATE)),
+            "foam_gain": float(getattr(self, "foam_gain", self.FOAM_GAIN)),
+            "foam_gain_start": float(
+                getattr(self, "foam_gain_start", self.FOAM_GAIN_START)
+            ),
+            "foam_ramp_steps": int(
+                getattr(self, "foam_ramp_steps", self.FOAM_RAMP_STEPS)
+            ),
+            "foam_open_steps": int(getattr(self, "_foam_open_steps", 0)),
+            "effective_foam_gain": float(self._effective_foam_gain()),
+            "foam_decay": float(getattr(self, "foam_decay", self.FOAM_DECAY)),
+            "cup_xy": np.asarray(self.cup_xy, dtype=float).tolist(),
+            "tap_xy": np.asarray(self.tap_xy, dtype=float).tolist(),
+            "touch_xy": np.asarray(getattr(self, "touch_xy", [0, 0]), dtype=float).tolist(),
+        }
 
     def get_obs(self):
         obs = super().get_obs()
@@ -2570,6 +2267,8 @@ class pour_beer(KitchenS_base_task):
             "liquid_level": float(self.liquid_level),
             "foam_level": float(self.foam_level),
             "total_fill": float(self._total_fill()),
+            "button_force": float(getattr(self, "_button_force", 0.0)),
+            "button_pouring": bool(getattr(self, "_button_pouring", False)),
             "lever_angle": float(self.lever_angle),
             "lever_open_frac": float(self._lever_open_frac()),
             "flow_frac": float(self._flow_frac()),
@@ -2609,6 +2308,9 @@ class pour_beer(KitchenS_base_task):
             "foam_decay": float(getattr(self, "foam_decay", self.FOAM_DECAY)),
             "cup_xy": np.asarray(self.cup_xy, dtype=float).tolist(),
             "tap_xy": np.asarray(self.tap_xy, dtype=float).tolist(),
+            "touch_xy": np.asarray(
+                getattr(self, "touch_xy", [0.0, 0.0]), dtype=float
+            ).tolist(),
             "scene_id": int(getattr(self, "scene_id", 0)),
         }
         return obs

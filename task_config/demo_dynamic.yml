@@ -1103,8 +1103,8 @@ task_args:
     timer_x: -0.36              # top-left of table (x−, y+)
     timer_y: 0.28
   pour_beer:
-    # KitchenS: pull the hinged beer-tap lever by hand; flow follows opening.
-    # Foam % of stream rises with continuous open time (resets on close). Pause to settle; overflow fails.
+    # KitchenS: hold the fancy tap push-button to pour; release to stop.
+    # Foam % of stream rises with continuous hold time (resets on release). Pause to settle; overflow fails.
     # Mug glass materials match measure_ingredient jar (transmission / hollow viewer shell).
     # Layout: tap L/R + Y in [baseline−10cm, baseline]; mug under nozzle; bar props AABB-clear.
     scene_id: 0
@@ -1118,16 +1118,16 @@ task_args:
     station_x_range_right: [0.06, 0.16]
     station_x_range: [0.06, 0.16]
     pour_rate: 0.000715
-    randomize_rates: true       # ±jitter on pour_rate + foam_gain (other foam params stay fixed)
-    pour_rate_jitter: 0.20      # ±20%
+    randomize_rates: true       # ±jitter on pour_rate + foam_gain (fill speed varies by run)
+    pour_rate_jitter: 0.30      # ±30% fill-speed randomization
     foam_gain_jitter: 0.20      # ±20%
-    # Stream foam % ramps start→peak over foam_ramp_steps of continuous open; resets on close.
-    foam_gain_start: 0.18
-    foam_gain: 0.85
-    foam_ramp_steps: 70
+    # Stream foam % ramps start→peak over foam_ramp_steps of continuous hold; resets on release.
+    foam_gain_start: 0.12
+    foam_gain: 0.55
+    foam_ramp_steps: 90
     foam_decay: 0.0045
-    tap_settle_sec: 1.0  # tap must stay closed this long before success
-    open_gap_timeout_sec: 5.0  # closed >this since last opening → end & score
+    tap_settle_sec: 1.0  # button must stay released this long before success
+    open_gap_timeout_sec: 5.0  # released >this since last pour → end & score
     expert_foam_pause: 0.16
     expert_foam_resume: 0.09
     target_liquid: 0.85

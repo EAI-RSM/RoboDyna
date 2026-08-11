@@ -1,22 +1,22 @@
 {
-  "full_description": "In the KitchenS bar scene, pull the beer tap lever by hand to pour into the beer mug under the spout. Flow follows lever angle; foaminess of the stream rises the longer the tap stays open and resets when closed then reopened. Pause to settle foam, then finish, close fully, and wait for the tap to stop before done. Overflow fails.",
-  "schema": "{A} is the beer tap, {B} is the beer mug, {C} is the tap lever, {a} is the arm used",
+  "full_description": "In the KitchenS bar scene, press and hold the beer tap button to pour into the beer mug under the spout. Flow runs while the button is held and stops when released. Foaminess of the stream rises the longer the button stays held and resets when released. Pause to settle foam, then finish, release fully, and wait before done. Overflow fails.",
+  "schema": "{A} is the beer tap, {B} is the beer mug, {C} is the tap button, {a} is the arm used",
   "preference": "num of words should not exceed 20. Degree of detail avg is 6",
   "seen": [
-    "Pull {C} open by hand to pour beer from {A} into {B}",
-    "Use {a} to gradually open {C}, fill {B}, then close the lever",
+    "Press and hold {C} to pour beer from {A} into {B}",
+    "Use {a} to hold {C}, fill {B}, then release the button",
     "Pour from {A} into {B} without foam overflow",
-    "Open the tap lever, pause for foam, then finish filling {B}",
-    "Pull {C} to pour into {B}; close before it spills",
+    "Hold the tap button, pause for foam, then finish filling {B}",
+    "Press {C} to pour into {B}; release before it spills",
     "Fill {B} from the beer tap, managing the foam head",
-    "With {a}, drive {C} until {B} is nearly full",
-    "Pour beer into {B} from {A} and shut the lever in time"
+    "With {a}, hold {C} until {B} is nearly full",
+    "Pour beer into {B} from {A} and release the button in time"
   ],
   "unseen": [
-    "Operate the beer tap lever gradually to fill the mug without spilling",
-    "Pull and release the lever so foam does not crest the rim",
-    "Use {a} to control the lever angle until the mug is full",
+    "Operate the beer tap button to fill the mug without spilling",
+    "Press and release the button so foam does not crest the rim",
+    "Use {a} to hold the button until the mug is full",
     "Do not let foam or beer overflow while pouring from the tap",
-    "Fill the mug from the draft tap with careful lever control"
+    "Fill the mug from the draft tap with careful button control"
   ]
 }
