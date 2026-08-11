@@ -406,7 +406,10 @@ def format_episode_condition(env, task: str | None = None) -> str:
             parts.append(f"ball side={side}")
         if bool(getattr(env, "target_wagon_mode", False)):
             widx = getattr(env, "target_wagon_idx", None)
-            parts.append(f"target wagon={widx if widx is not None else '?'}")
+            # Opt 1 only counts this wagon; the gray ones are distractors.
+            parts.append(
+                f"target wagon={widx if widx is not None else '?'} (the RED one; gray = distractor)"
+            )
 
     elif task == "save_goal":
         mirrored = bool(getattr(env, "mirrored", False))

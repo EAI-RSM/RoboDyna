@@ -157,6 +157,67 @@ def _advance_interpolated_robot_nudge(env, motion) -> bool:
     return False
 
 
+def _ball_held(env) -> bool:
+    """True while fingers still contact the ball (shared G-close grasp)."""
+    if getattr(env, "ball", None) is None:
+        return False
+    try:
+        return len(env.get_gripper_actor_contact_position(env.ball.get_name())) > 0
+    except Exception:
+        return False
+
+
+class BallReleaseMonitor:
+    """Drive hold/release off the gripper so a manual G grasp is recognised.
+
+    The viewer used to latch release only through the Space helper, so a player
+    who picked the ball up with the shared teleop controls (G) and dropped it
+    into a wagon never set ``_ball_released`` -- the env never ran its latch
+    check and ``is_done`` never fired, so no SUCCESS/FAILURE was ever printed.
+    """
+
+    def __init__(self, env):
+        self.env = env
+        self.holding = False
+        self._hold_contact_seen = False
+        self._no_contact_steps = 0
+        self._slip_no_contact_steps = 8
+
+    def update(self):
+        if getattr(self.env, "_interactive_released", False):
+            return
+        if _ball_held(self.env):
+            if not self.holding:
+                self.holding = True
+                self.env._interactive_holding = True
+                print("Ball grasped — carry it over a wagon, then G to open / release.")
+            self._hold_contact_seen = True
+            self._no_contact_steps = 0
+            return
+        if not self.holding:
+            return
+        self._no_contact_steps += 1
+        limit = (
+            self._slip_no_contact_steps
+            if self._hold_contact_seen
+            else self._slip_no_contact_steps * 4
+        )
+        if self._no_contact_steps < limit:
+            return
+        self.holding = False
+        self.env._interactive_holding = False
+        self.env._interactive_released = True
+        if self.env._ball_rigid is not None:
+            try:
+                self.env._ball_rigid.set_disable_gravity(False)
+            except Exception:
+                pass
+        release_dynamic(self.env._ball_rigid)
+        self.env._ball_released = True
+        self.env._bed_contact_steps = 0
+        print("Ball released — watch for wagon latch.")
+
+
 def _do_release(env, use_robot: bool):
     if getattr(env, "_interactive_released", False):
         return
@@ -199,18 +260,22 @@ def main():
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: drop the ball into an open wagon as it passes under the near rail.",
-            "Space  — first press picks up the ball; second press releases it",
+            "Opt 1 (target wagon): ONLY the RED wagon counts — gray ones are distractors.",
+            "G — close on the ball to pick it up, open again over a wagon to drop it",
             "Arrows — nudge the held ball in XY (robot supports smooth interpolation)",
+            "Space — optional shortcut: auto pick / auto release (keyboard mode)",
             "V — cycle view: head_camera ↔ gripper(s)",
             "Esc — close the viewer window to quit",
-            "The ball starts untouched; press Space to pick it up.",
             "--robot-motion planner|interpolate",
         ],
     )
     env._interactive_holding = False
     env._interactive_released = False
     env._ball_released = False
-    print_instructions("Ball ready. Press Space to pick it up.")
+    release_monitor = BallReleaseMonitor(env)
+    print_instructions(
+        "Ball ready. Grab it with G (or press Space to auto-pick), then drop it into a wagon."
+    )
 
     keys_prev: dict = {}
     post_release = 0
@@ -218,6 +283,8 @@ def main():
 
     def on_step(window, step):
         nonlocal post_release, interpolate_motion
+        # Recognise a manual G grasp / open even when Space is never pressed.
+        release_monitor.update()
         if edge_pressed(window, "space", keys_prev) and not env._interactive_released:
             if not env._interactive_holding:
                 if use_robot:
@@ -270,9 +337,30 @@ def main():
         if env._interactive_released:
             post_release += 1
 
+    def _outcome_detail():
+        """Explain the result in wagon terms.
+
+        Opt 1 (``target_wagon_mode``) only counts the red target wagon, so a ball
+        sitting in a gray distractor is a legitimate failure -- say so, instead of
+        a bare ``ball_in_train=False`` that reads like a bug when the ball is
+        visibly inside a wagon.
+        """
+        landed = getattr(env, "_latched_car_idx", None)
+        target = getattr(env, "target_wagon_idx", None)
+        if not getattr(env, "target_wagon_mode", False) or target is None:
+            return "ball in a wagon" if env.ball_in_train else "ball not in any wagon"
+        if landed is None:
+            return f"ball not in any wagon (target was wagon {int(target)}, the red one)"
+        if int(landed) == int(target):
+            return f"ball in target wagon {int(target)}"
+        return (
+            f"ball landed in wagon {int(landed)} (gray distractor); "
+            f"target was wagon {int(target)}, the red one"
+        )
+
     def is_done(step):
         if env._interactive_released and post_release > 400:
-            return True, f"ball_in_train={env.ball_in_train}"
+            return True, _outcome_detail()
         return False
 
     run_viewer_loop(env, on_step, is_done=is_done, max_steps=20000)
