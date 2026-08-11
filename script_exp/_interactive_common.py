@@ -603,6 +603,7 @@ def toggle_selected_grippers(env, *, fallback=("left", "right"), threshold: floa
 
     Uses the current 1/2/3 selection when present; otherwise ``fallback``.
     Per selected arm: width ``> threshold`` → close (0), else open (1).
+    ``trap_bug`` closes only to the outer-wall hold width (not crushed shut).
     Applies via ``robot.set_gripper`` (non-blocking) so teleop stays responsive.
     """
     robot = getattr(env, "robot", None)
@@ -615,18 +616,32 @@ def toggle_selected_grippers(env, *, fallback=("left", "right"), threshold: floa
             print("Select an arm first: 1 (left), 2 (right), or 3 (both).")
             return False
         selected = tuple(fallback)
+    trap_hold = None
+    if type(env).__name__ == "trap_bug":
+        trap_hold = float(getattr(env, "trap_hold_gripper", 0.78))
     actions = []
     for side in selected:
         if side not in ("left", "right"):
             continue
         width = gripper_width(env, side)
-        target = 0.0 if width > float(threshold) else 1.0
+        if trap_hold is not None:
+            # Pinch outer walls (~0.78). Fully closed (0) tunnels the hollow box.
+            # Open when already pinching / welded; otherwise close to hold width.
+            if bool(getattr(env, "_trap_welded", False)) or width <= trap_hold + 0.05:
+                target = 1.0
+                label = "open"
+            else:
+                target = trap_hold
+                label = "pinch"
+        else:
+            target = 0.0 if width > float(threshold) else 1.0
+            label = "open" if target > 0.5 else "closed"
         try:
             robot.set_gripper(target, side, gripper_eps=0.0)
         except Exception as exc:
             print(f"Gripper toggle failed ({side}): {exc}")
             continue
-        actions.append(f"{side}={'open' if target > 0.5 else 'closed'}")
+        actions.append(f"{side}={label}")
     if not actions:
         return False
     print("Gripper: " + ", ".join(actions))
@@ -1160,17 +1175,20 @@ class UniversalRobotControls:
 
     def __init__(self, env):
         self.env = env
-        # No arm is active until the user presses 1 / 2 / 3 for the first time
-        # (both grippers stay gray). Task pre-seeds of ``_interactive_selected_arms``
-        # are ignored for highlight / teleop until that explicit selection.
-        self.selected = ()
+        # Default: no arm until 1 / 2 / 3. Honor task pre-seeds (e.g. trap_bug
+        # trap-side arm) so Space / teleop work without a redundant press.
+        pre = tuple(
+            s for s in (getattr(env, "_interactive_selected_arms", ()) or ())
+            if s in ("left", "right")
+        )
+        self.selected = pre
         self._previous = {key: False for key in ("1", "2", "3", "o")}
         self._last_update = None
         self._command = {}
         self._highlight_materials = {}
         self._origin_joints = {}
         self._origin_pose = {}
-        env._interactive_selected_arms = ()
+        env._interactive_selected_arms = pre
         env._interactive_universal_controls = True
         env._interactive_robot_controls = self
         # Ensure the shared failure feedback exists for Space/action paths.

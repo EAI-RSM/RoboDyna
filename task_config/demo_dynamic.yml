@@ -967,8 +967,12 @@ task_args:
     emerge_steps: 40            # sim steps of emerge before L/R run
     walk_time: 15.0             # seconds out before hiding (fail)
     trap_half: [0.045, 0.045, 0.028]  # m; outer half-extents of glass trap
-    trap_wall: 0.004            # m; wall / lid thickness
-    trap_mass: 2.5              # kg; heavy vs ~0.5 g bug; still graspable
+    trap_wall: 0.004            # m; visual wall / lid thickness
+    trap_wall_collision: 0.012  # m; thicker PhysX walls so fingers pinch outer faces
+    trap_mass: 0.5              # kg; light enough to carry; bug is ~4 g and cannot shove it
+    trap_hold_gripper: 0.78     # outer-wall pinch width (do not crush through hollow)
+    trap_latch_gval_max: 0.90   # latch while closing around outer walls
+    trap_release_gval_min: 0.94 # release only when nearly fully open
     release_clearance: 0.05     # m; drop height above the seated trap
   two_type_sorting_catch:
     num_objects: 4              # total objects emitted
