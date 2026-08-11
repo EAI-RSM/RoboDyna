@@ -9,8 +9,9 @@ G opens/closes the selected gripper(s); V cycles head_camera ↔ gripper views
 snapshots — top-down is not available).
 Space grasps/releases the task's primary prop (except boil_milk / trap_bug /
 cook_food / cook_food_timer / make_soup / catch_mouse_object_drop /
-pour_beer, where Space is gripper open/close only via ViewerViewToggle;
-stop_ball Space closes/opens the gripper to grasp the rolling ball).
+pour_beer / clean_table, where Space is gripper open/close only via
+ViewerViewToggle; stop_ball Space closes/opens the gripper to grasp the
+rolling ball).
 """
 from __future__ import annotations
 
@@ -525,8 +526,9 @@ class HouseholdController:
         if self.task == "stop_ball":
             self._toggle_stop_ball_grasp_grip()
             return
-        # boil_milk / trap_bug / cook_food* / make_soup / catch_mouse*: Space is
-        # gripper open/close only (ViewerViewToggle). Physical teleop for props.
+        # boil_milk / trap_bug / cook_food* / make_soup / catch_mouse* /
+        # clean_table: Space is gripper open/close only (ViewerViewToggle).
+        # Physical teleop for props (pinch the sponge handle to lift it).
         if self.task in (
             "boil_milk",
             "trap_bug",
@@ -534,6 +536,7 @@ class HouseholdController:
             "cook_food_timer",
             "make_soup",
             "catch_mouse_object_drop",
+            "clean_table",
         ):
             return
         # measure_ingredient: Space always grasps/releases the jar — never the oil key.
@@ -819,7 +822,8 @@ class HouseholdController:
             self._fill_space_was_down = space_down
         elif self.space.poll(space_down):
             self._grasp_or_release()
-        # Space = gripper open/close (ViewerViewToggle) for make_soup / cook_food*.
+        # Space = gripper open/close (ViewerViewToggle) for make_soup / cook_food*
+        # / clean_table / etc. when `_grasp_or_release` early-returns.
         # measure_ingredient: oil key = lower closed gripper onto red key;
         # Space = grasp/release jar for the scale step.
         if not self.robot and self.holding and self.actor is not None:
