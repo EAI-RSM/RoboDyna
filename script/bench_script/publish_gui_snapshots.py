@@ -30,6 +30,8 @@ import sys
 
 sys.path.insert(0, "./")
 sys.path.insert(0, "./script/bench_script")
+sys.path.insert(0, "./script_exp")
+sys.path.insert(0, "./script_hh_exp")
 
 import numpy as np
 from PIL import Image
