@@ -211,43 +211,10 @@ class cook_food(KitchenS_base_task):
         return True
 
     def _configure_head_camera(self) -> None:
-        """Use a close head framing that keeps the cooking workspace readable."""
-        cams = getattr(self, "cameras", None)
-        if cams is None:
-            return
-        names = list(getattr(cams, "static_camera_name", []) or [])
-        clist = list(getattr(cams, "static_camera_list", []) or [])
-        if "head_camera" not in names:
-            return
-        camera = clist[names.index("head_camera")]
-        rx, ry = getattr(self, "range_xy", (0.22, 0.05))
-        bx = float(getattr(self, "board_xy", (rx - 0.25, ry))[0])
-        dx = float(getattr(self, "decor_plate_xy", (rx + 0.25, ry))[0])
-        # Frame board + stove + deco (no sink / microwave / serving plate).
-        center_x = 0.5 * (bx + dx)
-        # Match the close-up KitchenS head framing used by the other cooking
-        # tasks.  The previous y=-1.20/z=1.95, 58° setup made the workspace
-        # unnecessarily small in the main task and interactive viewer.
-        cam_pos = np.array([center_x * 0.35 + float(rx) * 0.65, -0.98, 1.74], dtype=float)
-        look_at = np.array([float(rx), float(ry) * 0.10, 0.82], dtype=float)
-        forward = look_at - cam_pos
-        forward /= np.linalg.norm(forward)
-        left = np.cross(np.array([0.0, 0.0, 1.0], dtype=float), forward)
-        if float(np.linalg.norm(left)) < 1e-6:
-            left = np.array([-1.0, 0.0, 0.0], dtype=float)
-        left /= np.linalg.norm(left)
-        up = np.cross(forward, left)
-        m = np.eye(4)
-        m[:3, :3] = np.stack([forward, left, up], axis=1)
-        m[:3, 3] = cam_pos
-        camera.entity.set_pose(sapien.Pose(m))
-        try:
-            camera.set_fovy(float(np.deg2rad(52)))
-        except Exception:
-            try:
-                camera.fovy = float(np.deg2rad(52))
-            except Exception:
-                pass
+        """Shared household head framing (see ``envs.utils.household_view``)."""
+        from .utils.household_view import configure_household_head_camera
+
+        configure_household_head_camera(self)
 
     # ---------------------------------------------------------------- actors
     def load_actors(self) -> None:

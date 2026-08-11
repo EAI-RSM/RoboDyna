@@ -59,7 +59,7 @@ HOUSEHOLD_MAX_SECONDS = 60.0
 
 
 def configure_standard_head_camera(task) -> None:
-    """Force ``head_camera`` to the shared suite pose (base + household)."""
+    """Force ``head_camera`` to the shared suite pose + D435 fovy (base + household)."""
     cams = getattr(task, "cameras", None)
     if cams is None:
         return
@@ -75,6 +75,14 @@ def configure_standard_head_camera(task) -> None:
     m[:3, :3] = np.stack([forward, left, up], axis=1)
     m[:3, 3] = HEAD_CAMERA_POS
     camera.entity.set_pose(sapien.Pose(m))
+    # Reset FOV in case a task previously widened/narrowed the sensor.
+    try:
+        camera.set_fovy(HEAD_CAMERA_FOVY)
+    except Exception:
+        try:
+            camera.fovy = HEAD_CAMERA_FOVY
+        except Exception:
+            pass
 
 
 def configure_household_head_camera(task) -> None:
