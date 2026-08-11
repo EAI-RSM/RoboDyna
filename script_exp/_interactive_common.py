@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"
 
 # ANSI colors for interactive CLI (TTY only; respect NO_COLOR / FORCE_COLOR).
-_ANSI_BLUE = "\033[34m"
+_ANSI_CYAN = "\033[36m"
 _ANSI_GREEN = "\033[32m"
 _ANSI_RED = "\033[31m"
 _ANSI_RESET = "\033[0m"
@@ -46,9 +46,9 @@ def colorize(text: str, ansi_code: str) -> str:
 
 
 def print_instructions(*args, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
-    """Print controls / how-to text in blue."""
+    """Print controls / how-to text in cyan."""
     msg = sep.join(str(a) for a in args)
-    print(colorize(msg, _ANSI_BLUE), end=end, flush=flush)
+    print(colorize(msg, _ANSI_CYAN), end=end, flush=flush)
 
 
 def print_success(*args, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
@@ -1822,10 +1822,57 @@ def _is_gripper_toggle_help_line(line: str) -> bool:
     return "gripper" in low and ("open" in low or "close" in low or "grasp" in low)
 
 
+def _is_shared_robot_teleop_help_line(line: str) -> bool:
+    """True for task-banner rows that only restate universal robot teleop keys."""
+    s = line.strip()
+    if not s:
+        return False
+    s_u = s.upper()
+    # Combined short rows used by several interactive scripts.
+    if s_u.startswith("ARROWS / E / Q") or s_u.startswith("ARROWS/E/Q"):
+        return True
+    prefixes = (
+        "ARROW KEYS",
+        "ARROWS ",
+        "ARROWS\t",
+        "ARROWS:",
+        "E / Q",
+        "E/Q ",
+        "E/Q\t",
+        "E/Q:",
+        "Z / X",
+        "Z/X ",
+        "Z/X\t",
+        "Z/X:",
+        "R / T",
+        "R/T ",
+        "R/T\t",
+        "R/T:",
+        "1 / 2 / 3",
+        "1/2/3",
+        "O ",
+        "O\t",
+        "O:",
+        "O —",
+        "O -",
+    )
+    return any(s_u.startswith(p) for p in prefixes)
+
+
 def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str) -> None:
     """Print only the help block for the selected ``--control`` mode."""
     body = (robot if mode == "robot" else keyboard).strip("\n")
     if mode == "robot":
+        # Drop task lines that duplicate the shared teleop block below.
+        task_lines = [
+            ln for ln in body.splitlines()
+            if not _is_shared_robot_teleop_help_line(ln)
+        ]
+        while task_lines and not task_lines[0].strip():
+            task_lines.pop(0)
+        while task_lines and not task_lines[-1].strip():
+            task_lines.pop()
+        body = "\n".join(task_lines)
         # Shared teleop keys; skip Space here when the task banner already lists it.
         shared = (
             "  Arrow keys        move selected arm(s) in world XY\n"
@@ -1835,19 +1882,23 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
             "  1 / 2 / 3         select left / right / both arms\n"
             "  O                 return selected arm(s) to original position\n"
         )
-        if not _line_documents_key(body.splitlines(), "Space"):
+        if not _line_documents_key(task_lines, "Space"):
             shared += f"  {_GRIPPER_TOGGLE_HELP}\n"
-        body = shared + body
+        body = shared + (("\n" + body) if body.strip() else "")
     lines = _normalize_view_help_lines(body.splitlines())
-    # Rewrite stale F/G gripper-toggle help to Space; inject Space when missing.
+    # Collapse duplicate F/G/Space gripper-toggle rows; keep task-specific Space
+    # wording, only rewrite stale F/G bindings to Space.
     rewritten = []
     saw_space_grip = False
     for ln in lines:
         if _is_gripper_toggle_help_line(ln):
             if saw_space_grip:
                 continue
-            indent = ln[: len(ln) - len(ln.lstrip(" "))]
-            rewritten.append(f"{indent}{_GRIPPER_TOGGLE_HELP}")
+            if ln.strip().upper().startswith("SPACE"):
+                rewritten.append(ln)
+            else:
+                indent = ln[: len(ln) - len(ln.lstrip(" "))]
+                rewritten.append(f"{indent}{_GRIPPER_TOGGLE_HELP}")
             saw_space_grip = True
         else:
             rewritten.append(ln)
