@@ -6,9 +6,10 @@ checks.  This module only adds the same viewer/arm teleoperation used by
 Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
 G opens/closes the selected gripper(s); V cycles head_camera ↔ gripper views
 (shared ``ViewerViewToggle`` handler; top-down is not available).
-Space grasps/releases the task's primary prop (except trap_bug / stop_ball /
-pour_beer, where Space is gripper open/close only via ViewerViewToggle).
-C invokes a task-specific control where needed (cook_food / make_soup).
+Space grasps/releases the task's primary prop (except boil_milk / trap_bug /
+stop_ball / pour_beer, where Space is gripper open/close only via
+ViewerViewToggle). C invokes a task-specific control where needed
+(cook_food / make_soup).
 """
 from __future__ import annotations
 
@@ -194,12 +195,11 @@ class HouseholdController:
         e, t = self.env, self.task
         try:
             if t == "boil_milk":
-                want = not bool(e.stove_on)
-                # Idle knob→fire sync reads joint angle; keep qpos aligned.
-                e._set_knob_joint_angle(
-                    e.KNOB_ON_ANGLE if want else e.KNOB_OFF_ANGLE, hard=True
+                # No keyboard snap — fire follows a physical gripper twist only.
+                print(
+                    "[boil_milk] turn the stove with the gripper on the knob "
+                    "(close on the knob and twist with teleop)"
                 )
-                e._set_stove(want)
             elif t == "fill_coffee_jar":
                 self._fill_coffee_press(1)
             elif t in ("cook_food", "cook_food_timer"):
@@ -613,14 +613,14 @@ class HouseholdController:
         # pour_beer: no Space shortcut — open the lever with arm teleop / contact.
         if self.task == "pour_beer":
             return
-        if self.task in ("boil_milk", "fill_coffee_jar"):
+        if self.task == "fill_coffee_jar":
             self._task_action()
             return
         if self.task == "stop_ball":
             return
-        # trap_bug: Space is gripper open/close only (ViewerViewToggle). Env
-        # auto-welds / releases the trap from proximity + gripper width.
-        if self.task == "trap_bug":
+        # boil_milk / trap_bug: Space is gripper open/close only
+        # (ViewerViewToggle). Knob / trap latch are physical teleop, not Space.
+        if self.task in ("boil_milk", "trap_bug"):
             return
         # measure_ingredient: Space always grasps/releases the jar — never the oil key.
         if self.task == "measure_ingredient":

@@ -40,6 +40,8 @@ class KitchenS_base_task(Base_Task):
     }
     # Top-facing rotary knob on the right-front corner of the cooktop
     # (slightly forward of the slab so it sits on the counter apron).
+    # When ``stove_side == "right"``, ``_load_cooking_range`` mirrors X so the
+    # knob sits on the left-front apron facing the open workspace.
     KNOB_LOCAL_XY = (0.165, -0.185)
     KNOB_RADIUS = 0.022
     KNOB_HEIGHT = 0.028  # full height of the knob body
@@ -622,6 +624,11 @@ class KitchenS_base_task(Base_Task):
         # White tick: 0° → +Y (off), −90° → −X (on). While gripped the joint
         # is undriven — only jaw contact friction may torque it.
         knob_dx, knob_dy = self.KNOB_LOCAL_XY
+        # Right-counter cooktop: put the knob on the stove's left apron so it
+        # faces the open workspace (not the outer table edge).
+        if str(getattr(self, "stove_side", "")).lower().strip() == "right":
+            knob_dx = -float(knob_dx)
+        self._knob_local_xy = (float(knob_dx), float(knob_dy))
         knob_x = float(x + knob_dx * scale_mult)
         knob_y = float(y + knob_dy * scale_mult)
         knob_r = float(self.KNOB_RADIUS) * scale_mult
@@ -1486,6 +1493,10 @@ class KitchenS_base_task(Base_Task):
         start_angle = float(start_angle)
         target_angle = float(target_angle)
         full_path = tuple(self.KNOB_APPROACH_PATH)
+        # Knob on the stove's left apron (right-counter layout): mirror the
+        # lateral staging so the wrist approaches from the open workspace.
+        if float(getattr(self, "_knob_local_xy", self.KNOB_LOCAL_XY)[0]) < 0.0:
+            full_path = tuple((-float(ox), float(oy), float(oz)) for ox, oy, oz in full_path)
         # Shutoff used to drop only the last (lowest) waypoint; from an apron
         # park that single hop often fails. Keep at least two staging poses.
         if direct:
