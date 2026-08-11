@@ -29,10 +29,11 @@ class drop_ball_hole(Base_Task):
 
     Default / Opt2 (no stick_to_surface): after the gripper releases, the ball has
     ``drop_timeout_s`` (default 2 s) to fall into the box or the episode fails.
+    Ball falling off the table (onto the floor) is an immediate failure.
     """
 
     # ----- tunable params (CLASS DEFAULTS; overridable via task_args.drop_ball_hole) -----
-    SPIN_SPEED_DEFAULT = 0.9          # cap angular speed baseline (rad / sim-step-unit)
+    SPIN_SPEED_DEFAULT = 0.72         # cap angular speed baseline (−20% vs 0.9)
     SPIN_SPEED_JITTER_DEFAULT = 0.20  # sample speed in [1±jitter] * spin_speed
     CAP_HOLE_RADIUS_DEFAULT = 0.03    # radius of the circular opening at the cap center
     CAP_HOLE_DIAMETER_DEFAULT = 2.0 * CAP_HOLE_RADIUS_DEFAULT
@@ -91,6 +92,7 @@ class drop_ball_hole(Base_Task):
         self.ball_released = False
         self.ball_stuck_on_platform = False
         self._drop_timed_out = False
+        self._ball_fell_off_table = False
         self._steps_since_release = 0
         self.selected_arm = None
         self.bucket_floor_z = 0.0
@@ -1024,6 +1026,11 @@ class drop_ball_hole(Base_Task):
             self._update_kinematic_tasks()
             self.scene.step()
             self.ball_in_box = self._ball_in_box()
+            if (
+                getattr(self, "_ball_fell_off_table", False)
+                or getattr(self, "ball_stuck_on_platform", False)
+            ):
+                break
             if self.save_freq and (i % self.save_freq == 0):
                 self._take_picture()
 
@@ -1049,6 +1056,46 @@ class drop_ball_hole(Base_Task):
         below_platform = p[2] <= (self.cap_z - self.cap_thickness - 0.01)
         return bool(in_x and in_y and above_floor and below_platform)
 
+    def _ball_off_table(self):
+        """True when the free ball has fallen off the tabletop onto the floor.
+
+        In-box success and stuck-on-platform are excluded. Table footprint matches
+        ``create_table`` (length=1.2, width=0.7).
+        """
+        if getattr(self, "ball", None) is None:
+            return False
+        if getattr(self, "ball_stuck_on_platform", False):
+            return False
+        if self._ball_in_box():
+            return False
+        p = np.array(self.ball.get_pose().p, dtype=np.float64)
+        table_z = float(getattr(self, "table_top_z", 0.74 + float(self.table_z_bias)))
+        # Clearly below the tabletop → fell to the floor / under the table.
+        if float(p[2]) < table_z - 0.05:
+            return True
+        bias = getattr(self, "table_xy_bias", [0.0, 0.0])
+        half_x, half_y = 0.60, 0.35
+        margin = 0.03
+        off_xy = (
+            abs(float(p[0]) - float(bias[0])) > half_x + margin
+            or abs(float(p[1]) - float(bias[1])) > half_y + margin
+        )
+        # Past the table rim and not held high (e.g. rolled/bounced off the edge).
+        near_surface = float(p[2]) < table_z + float(getattr(self, "ball_radius", 0.025)) + 0.06
+        return bool(off_xy and near_surface)
+
+    def _try_latch_ball_off_table(self):
+        """Latch off-table failure and mark the episode terminal for eval."""
+        if getattr(self, "_ball_fell_off_table", False):
+            return True
+        if not self._ball_off_table():
+            return False
+        self._ball_fell_off_table = True
+        self.ball_in_box = False
+        self._last_fail_reason = "ball dropped off the table"
+        self.eval_fail = True
+        return True
+
     def _uses_drop_timeout(self):
         """Default / Opt2: require entry within ``drop_timeout_s`` after release.
 
@@ -1071,6 +1118,8 @@ class drop_ball_hole(Base_Task):
         if not self._uses_drop_timeout():
             return
         if not self.ball_released or self.ball_in_box or self.ball_stuck_on_platform:
+            return
+        if getattr(self, "_ball_fell_off_table", False):
             return
         if self._drop_timed_out:
             return
@@ -1097,11 +1146,15 @@ class drop_ball_hole(Base_Task):
             self.ball_in_box = False
             self._tick_drop_timeout()
             return
+        if self._try_latch_ball_off_table():
+            self._tick_drop_timeout()
+            return
         self._try_stick_ball_on_platform()
         if getattr(self, "ball_stuck_on_platform", False):
             self.ball_in_box = False
         else:
             self.ball_in_box = self._ball_in_box()
+        self._try_latch_ball_off_table()
         self._tick_drop_timeout()
 
     def _cap_angle_at_step(self, step):
@@ -1169,6 +1222,7 @@ class drop_ball_hole(Base_Task):
                     self.ball_in_box
                     or self._drop_timed_out
                     or getattr(self, "ball_stuck_on_platform", False)
+                    or getattr(self, "_ball_fell_off_table", False)
                 ):
                     break
             if self.ball_in_box:
@@ -1176,7 +1230,11 @@ class drop_ball_hole(Base_Task):
         else:
             self._dwell(self.post_release_steps)
         self._cap_tracking = False
-        if getattr(self, "ball_stuck_on_platform", False) or self._drop_timed_out:
+        if (
+            getattr(self, "ball_stuck_on_platform", False)
+            or self._drop_timed_out
+            or getattr(self, "_ball_fell_off_table", False)
+        ):
             self.ball_in_box = False
         else:
             self.ball_in_box = self._ball_in_box()
@@ -1192,11 +1250,15 @@ class drop_ball_hole(Base_Task):
 
     def check_success(self):
         """Success: ball fell through the target hole and rests inside the box."""
+        self._try_latch_ball_off_table()
         stuck = bool(getattr(self, "ball_stuck_on_platform", False))
         timed_out = bool(getattr(self, "_drop_timed_out", False))
-        in_box = (not stuck) and self._ball_in_box()
+        off_table = bool(getattr(self, "_ball_fell_off_table", False))
+        in_box = (not stuck) and (not off_table) and self._ball_in_box()
         self.ball_in_box = bool(in_box)
-        if timed_out and not in_box:
+        if off_table:
+            self._last_fail_reason = "ball dropped off the table"
+        elif timed_out and not in_box:
             self._last_fail_reason = (
                 f"ball not in box within {float(self.drop_timeout_s):.1f}s after release"
             )
@@ -1206,6 +1268,7 @@ class drop_ball_hole(Base_Task):
         self.info["selected_arm"] = str(getattr(self, "selected_arm", "left"))
         self.info["ball_in_box"] = bool(self.ball_in_box)
         self.info["ball_stuck_on_platform"] = stuck
+        self.info["ball_off_table"] = bool(off_table)
         self.info["drop_timed_out"] = bool(timed_out and not in_box)
         self.info["drop_timeout_s"] = float(
             getattr(self, "drop_timeout_s", self.DROP_TIMEOUT_S_DEFAULT)
@@ -1236,6 +1299,7 @@ class drop_ball_hole(Base_Task):
             "drop_target_xy": self._drop_target_xy.tolist() if hasattr(self, "_drop_target_xy") else [0.0, 0.0],
             "ball_in_box": bool(getattr(self, "ball_in_box", False)),
             "ball_stuck_on_platform": bool(getattr(self, "ball_stuck_on_platform", False)),
+            "ball_off_table": bool(getattr(self, "_ball_fell_off_table", False)),
             "drop_timed_out": bool(getattr(self, "_drop_timed_out", False)),
             "drop_timeout_s": float(getattr(self, "drop_timeout_s", self.DROP_TIMEOUT_S_DEFAULT)),
             "stick_to_surface": bool(getattr(self, "stick_to_surface", self.STICK_TO_SURFACE_DEFAULT)),
