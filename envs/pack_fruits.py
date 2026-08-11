@@ -28,7 +28,8 @@ class pack_fruits(Base_Task):
 
     Success requires every colored apple to rest in its color-matched basket
     (red → left basket, green → right). Colored apples may appear on either
-    belt in every scenario; the belt-side arm reaches them.
+    belt in every scenario; the color-matched arm reaches them (left for red,
+    right for green) so the carry stays on the basket side.
 
     Belt speed is sampled each episode as nominal × U(1 ± belt_speed_jitter)
     (default ±20%), independently per belt.
@@ -59,9 +60,10 @@ class pack_fruits(Base_Task):
     PICK_Y = 0.24                     # begin moving the arm into place (fruit keeps rolling)
     PICK_Y_END = -0.16                # give up past this (still moving; never park)
     PICK_STATION_Y = 0.02             # hover / grab y; fruit rolls through here
-    # attach only once the gripper has approached within ~2 cm
+    # pinch only once the gripper has approached within ~2 cm
     ATTACH_XY = 0.02
     ATTACH_Z_MAX = 0.055              # TCP may sit slightly above the fruit
+    GRASP_SETTLE_STEPS = 25           # contacts form before gravity (pick_ripe_apple)
     HIDE_Z = -10.0
 
     FRUIT_MODEL = "035_apple"
@@ -369,11 +371,17 @@ class pack_fruits(Base_Task):
         )
 
         # Colored apples may appear on either belt (all scenarios). The arm that
-        # reaches a fruit is the belt-side arm; the drop target stays color-matched.
+        # reaches a fruit is the color-matched arm (red→left, green→right) so the
+        # subsequent slide stays over the matching basket; belt side is only for
+        # stream geometry.
         self.item_sides = [
             str(np.random.choice(["left", "right"])) for _ in self.item_types
         ]
-        self.item_arms = list(self.item_sides)
+        self.item_arms = [
+            self.TYPE_SIDE.get(t, s) for t, s in zip(self.item_types, self.item_sides)
+        ]
+        self._pack_fail_counts = [0] * self.n_items
+        self._pack_fail_limit = 3
 
         # stage all fruits off-table; they appear gradually on the belts
         self.items = []
@@ -886,108 +894,30 @@ class pack_fruits(Base_Task):
              else self.robot.get_right_tcp_pose())
         return np.array(p[:3], dtype=float)
 
-    def _weld_fruit_to_ee(self, idx, arm):
-        """Rigidly attach fruit to the EE so lifts/carries cannot slip or rotate.
-
-        The offset is captured once, as a full 6-DOF pose (position +
-        orientation) expressed in the planning-EE's own local frame:
-        ``local_offset = ee_pose.inv() * fruit_pose``. Every subsequent step,
-        ``_update_welded_fruits`` recomputes ``ee_pose_now * local_offset`` —
-        a proper rigid-body transform composition, not a world-frame
-        translation — so the fruit stays glued to the gripper (zero slip,
-        zero relative rotation) even while the wrist reorients during the
-        lift/slide.
-        """
+    def _mark_fruit_held(self, idx, arm):
+        """Bookkeeping for a friction-held fruit (no EE weld / pose glue)."""
         arm_name = "left" if str(arm) == "left" else "right"
         self._weld_arm[idx] = arm_name
-        ee_pose = self._ee_pose_full(arm_name)
-        fruit_pose = self.items[idx].get_pose()
-        self._weld_offset[idx] = ee_pose.inv() * fruit_pose
-        rigid = self._item_comps[idx]
-        if rigid is not None:
-            rigid.set_disable_gravity(True)
-            rigid.set_kinematic(True)
-            try:
-                rigid.set_linear_velocity(np.zeros(3))
-                rigid.set_angular_velocity(np.zeros(3))
-            except Exception:
-                pass
-        # leave the belt stream; fruit now tracks the gripper
-        # (still "active" until dropped in the basket — blocks next spawn)
+        self._weld_offset[idx] = None
         self._item_y[idx] = None
         self._welded[idx] = True
-        # Avoid belt/table contacts fighting teleop / raise while welded.
-        self._set_fruit_collision_enabled(idx, False)
-        # reset the JERK baseline so a stale pre-release position (from a
-        # previous weld cycle on this same fruit index, e.g. after a
-        # miss->resend->re-pick loop) isn't diffed against the fresh
-        # post-attach position and misreported as a physical jolt
-        if not hasattr(self, "_dbg_last_fruit_p"):
-            self._dbg_last_fruit_p = {}
-        self._dbg_last_fruit_p[idx] = np.array(self.items[idx].get_pose().p, dtype=float)
+        self._set_fruit_collision_enabled(idx, True)
 
     def _update_welded_fruits(self):
-        """Re-glue every welded fruit to its gripper's current pose.
-
-        Called every physics step (see ``_update_kinematic_tasks``), including
-        during arm motion, waits, and dwells — not just once at attach time —
-        so the fruit rigidly tracks the full gripper pose (no drift/wobble)
-        for the entire carry until ``_release_fruit``.
-
-        The weld reads ``ee_pose`` from ``_ee_pose_full``, which is the EE
-        link's *actual simulated* global pose (``left_ee.global_pose`` /
-        ``right_ee.global_pose``), not the planned trajectory waypoint. If a
-        contact force (e.g. wrist vs. basket rim) perturbs the real link
-        pose even slightly, the welded fruit inherits that perturbation
-        one-for-one, every step. PACKING_DEBUG=1 flags any single-step fruit
-        position jump above ``_JERK_THRESH`` so a physical "contact knocked
-        it loose"-looking event can be told apart from a normal smooth move.
-        """
-        if not getattr(self, "_welded", None):
-            return
-        dbg = bool(os.environ.get("PACKING_DEBUG"))
-        for i in range(self.n_items):
-            if not self._welded[i]:
-                continue
-            ee_pose = self._ee_pose_full(self._weld_arm[i])
-            pose = ee_pose * self._weld_offset[i]
-            if dbg:
-                prev = getattr(self, "_dbg_last_fruit_p", {}).get(i)
-                newp = np.array(pose.p, dtype=float)
-                if prev is not None:
-                    jump = float(np.linalg.norm(newp - prev))
-                    if jump > 0.008:  # > 8mm in one physics step is not a smooth glide
-                        print(f"[pack_fruits]  JERK fruit_{i} step={self._step_ctr} "
-                              f"jump={jump:.4f} prev={prev.round(4)} new={newp.round(4)}",
-                              flush=True)
-                if not hasattr(self, "_dbg_last_fruit_p"):
-                    self._dbg_last_fruit_p = {}
-                self._dbg_last_fruit_p[i] = newp
-            self.items[i].actor.set_pose(pose)
-            rigid = self._item_comps[i]
-            if rigid is not None:
-                try:
-                    rigid.set_kinematic_target(pose)
-                except Exception:
-                    pass
+        """No-op: fruit is held by jaw friction, not glued to the EE."""
+        return
 
     def _release_fruit(self, idx):
-        """Un-weld so the fruit can drop into the basket under gravity."""
+        """Clear held bookkeeping; fruit drops under gravity when jaws open."""
         if bool(os.environ.get("PACKING_DEBUG")):
             p = np.array(self.items[idx].get_pose().p, dtype=float)
             print(f"[pack_fruits]  RELEASE fruit_{idx} step={self._step_ctr} p={p.round(4)}", flush=True)
         self._welded[idx] = False
         self._weld_arm[idx] = None
+        self._weld_offset[idx] = None
         self._set_fruit_collision_enabled(idx, True)
-        rigid = self._item_comps[idx]
-        if rigid is not None:
-            try:
-                rigid.set_kinematic(False)
-                rigid.set_disable_gravity(False)
-                rigid.set_linear_velocity(np.zeros(3))
-                rigid.set_angular_velocity(np.zeros(3))
-            except Exception:
-                pass
+        self._enable_fruit_gravity(idx)
+        self._calm_fruit(idx, damping=(2.5, 12.0))
 
     def _fruit_over_belt(self, idx, margin=0.03):
         """Return belt side if fruit XY sits on a conveyor slab, else None."""
@@ -1002,7 +932,7 @@ class pack_fruits(Base_Task):
         return best_side
 
     def _set_fruit_collision_enabled(self, idx, enabled: bool):
-        """Toggle PhysX contacts on a colored apple (off while expert-welded)."""
+        """Toggle PhysX contacts on a colored apple."""
         rigid = self._item_comps[idx] if idx < len(self._item_comps) else None
         if rigid is None:
             return
@@ -1193,7 +1123,7 @@ class pack_fruits(Base_Task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_belt_ready", False):
             return
-        # welded fruit tracks the EE every physics step (including during arm moves)
+        # held fruit rides jaw friction (no EE weld / pose glue)
         self._update_welded_fruits()
         if bool(os.environ.get("PACKING_DEBUG")):
             self._accumulate_basket_contacts()
@@ -1361,14 +1291,40 @@ class pack_fruits(Base_Task):
             self._belt_dwell(max(1, self.advance_every))
         return False
 
-    def _tcp_near_fruit(self, idx, arm):
-        """True if the gripper has approached close enough to attach (~2 cm)."""
+    def _plan_final_grasp(self, idx, arm, lead_y=0.02):
+        """Grasp pose at the fruit, with a small downstream lead for belt motion.
+
+        ``lead_y`` shifts the planning pose toward the robot (−y) so the TCP
+        arrives where the still-moving apple will be — fruit is never paused.
+        """
+        if self._item_y[idx] is None:
+            return None
+        side = self.item_sides[idx]
+        x = self._item_x[idx]
+        if x is None:
+            x = self.belt_cx[side]
+        y = float(self._item_y[idx]) - float(lead_y)
+        roll = float(self._item_roll[idx])
+        self._set_fruit_pose(idx, float(x), y, self._fruit_ride_z, roll=roll)
+        try:
+            _, grasp_pose = self.choose_grasp_pose(
+                self.items[idx], arm_tag=arm, pre_dis=0.05, target_dis=0.0,
+            )
+        except Exception:
+            grasp_pose = None
+        finally:
+            self._restore_fruit_stream_pose(idx)
+        return grasp_pose
+
+    def _tcp_near_fruit(self, idx, arm, xy_tol=None):
+        """True if the gripper has approached close enough to pinch."""
         arm_name = "left" if str(arm) == "left" else "right"
         tcp = self._tcp_pos(arm_name)
         fp = np.array(self.items[idx].get_pose().p, dtype=float)
         xy = float(np.linalg.norm(fp[:2] - tcp[:2]))
         dz = float(tcp[2] - fp[2])
-        return xy <= self.ATTACH_XY and 0.0 <= dz <= self.ATTACH_Z_MAX
+        tol = float(self.ATTACH_XY if xy_tol is None else xy_tol)
+        return xy <= tol and 0.0 <= dz <= self.ATTACH_Z_MAX
 
     def _fruit_gripper_dist(self, idx, arm):
         arm_name = "left" if str(arm) == "left" else "right"
@@ -1378,86 +1334,238 @@ class pack_fruits(Base_Task):
         dz = float(tcp[2] - fp[2])
         return xy, dz
 
-    def _plan_final_grasp(self, idx, arm):
-        """Grasp pose right at the fruit's current position (no teleport)."""
-        try:
-            _, grasp_pose = self.choose_grasp_pose(
-                self.items[idx], arm_tag=arm, pre_dis=0.05, target_dis=0.0,
-            )
-        except Exception:
-            return None
-        return grasp_pose
+    def _settle_grasp_contacts(self, steps=None):
+        n = int(self.GRASP_SETTLE_STEPS if steps is None else steps)
+        for j in range(n):
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (self._pic_ctr % max(1, self.save_freq) == 0):
+                self._take_picture()
+            self._pic_ctr += 1
 
-    def _attach_fruit_to_gripper(self, idx, arm):
-        """Place fruit between the fingers and weld (no gripper close — fast)."""
-        import os
-        dbg = bool(os.environ.get("PACKING_DEBUG"))
+    def _close_gripper_tracking_fruit(self, idx, arm, target_pos=0.0, n_steps=50):
+        """Close the gripper while TCP tracks the still-moving belt apple.
+
+        The apple stays on the kinematic stream the whole time (no pause).
+        Uses a short close trajectory so the fruit does not slide far through
+        the jaws while they shut (gripper timing only — no physics retune).
+        """
         arm_name = "left" if str(arm) == "left" else "right"
-        tcp = self._tcp_pos(arm_name)
-        pos = tcp.copy()
-        pos[2] -= 0.015
-        self._item_y[idx] = None
-        self.items[idx].actor.set_pose(sapien.Pose(pos.tolist(), self.FRUIT_Q))
-        rigid = self._item_comps[idx]
-        if rigid is not None:
-            try:
-                rigid.set_kinematic(True)
-                rigid.set_disable_gravity(True)
-                rigid.set_linear_velocity(np.zeros(3))
-                rigid.set_angular_velocity(np.zeros(3))
-                rigid.set_kinematic_target(
-                    sapien.Pose(pos.tolist(), self.FRUIT_Q)
-                )
-            except Exception:
-                pass
-        self._weld_fruit_to_ee(idx, arm)
-        if dbg:
-            print(f"[pack_fruits]  attach {self.item_types[idx]}_{idx} at "
-                  f"{arm_name} tcp={np.round(tcp, 3)}", flush=True)
+        now = float(
+            self.robot.get_left_gripper_val() if arm_name == "left"
+            else self.robot.get_right_gripper_val()
+        )
+        n = max(8, int(n_steps))
+        target = float(target_pos)
+        vals = np.linspace(now, target, n, dtype=float)
+        per_step = (target - now) / float(n)
+        grip = {"num_step": n, "per_step": per_step, "result": vals}
 
-    def _close_on_attached(self, *arm_idx_pairs):
-        """Close gripper(s) on already-attached fruit and re-seat the weld."""
-        acts = []
-        for arm, idx in arm_idx_pairs:
-            if idx is None:
-                continue
-            acts.append(self.close_gripper(arm, pos=0.0))
-        if not acts:
-            return
-        self.plan_success = True
-        if len(acts) == 1:
-            self.move(acts[0])
-        else:
-            self.move(*acts)
-        self.plan_success = True
-        for arm, idx in arm_idx_pairs:
-            if idx is None:
-                continue
+        ee = np.array(
+            self.robot.get_left_ee_pose() if arm_name == "left"
+            else self.robot.get_right_ee_pose(),
+            dtype=float,
+        )
+        fp0 = np.array(self.items[idx].get_pose().p, dtype=float)
+        off_xy = ee[:2] - fp0[:2]
+        ee_z = float(ee[2])
+        ee_q = ee[3:7].copy()
+
+        joints = (self.robot.left_arm_joints if arm_name == "left"
+                  else self.robot.right_arm_joints)
+        for i in range(n):
+            if self._item_y[idx] is not None and self._item_y[idx] >= self.pick_y_end:
+                fp = np.array(self.items[idx].get_pose().p, dtype=float)
+                target_ee = np.concatenate([
+                    np.array([fp[0] + off_xy[0], fp[1] + off_xy[1], ee_z], dtype=float),
+                    ee_q,
+                ])
+                q_goal = self._ik_arm_joints_for_ee(arm, target_ee)
+                if q_goal is not None:
+                    q_now = np.array(
+                        [float(j.get_drive_target()[0]) for j in joints], dtype=float
+                    )
+                    self.robot.set_arm_joints(
+                        q_goal, (q_goal - q_now).astype(float), arm_name
+                    )
+            self.robot.set_gripper(grip["result"][i], arm_name, grip["per_step"])
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (self._pic_ctr % max(1, self.save_freq) == 0):
+                self._take_picture()
+            self._pic_ctr += 1
+
+    def _close_grippers_tracking_pair(self, idx_l, arm_l, idx_r, arm_r, target_pos=0.0, n_steps=50):
+        """Close both grippers while each TCP tracks its still-moving apple."""
+        def _grip(arm_name):
+            now = float(
+                self.robot.get_left_gripper_val() if arm_name == "left"
+                else self.robot.get_right_gripper_val()
+            )
+            n = max(8, int(n_steps))
+            target = float(target_pos)
+            return {
+                "num_step": n,
+                "per_step": (target - now) / float(n),
+                "result": np.linspace(now, target, n, dtype=float),
+            }
+
+        grip_l = _grip("left")
+        grip_r = _grip("right")
+
+        def _track_state(idx, arm_name):
+            ee = np.array(
+                self.robot.get_left_ee_pose() if arm_name == "left"
+                else self.robot.get_right_ee_pose(),
+                dtype=float,
+            )
+            fp = np.array(self.items[idx].get_pose().p, dtype=float)
+            return {
+                "off_xy": ee[:2] - fp[:2],
+                "ee_z": float(ee[2]),
+                "ee_q": ee[3:7].copy(),
+                "joints": (self.robot.left_arm_joints if arm_name == "left"
+                           else self.robot.right_arm_joints),
+            }
+
+        st_l = _track_state(idx_l, "left")
+        st_r = _track_state(idx_r, "right")
+        n = max(int(grip_l["num_step"]), int(grip_r["num_step"]))
+
+        def _step_track(idx, arm_name, st):
+            if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
+                return
+            fp = np.array(self.items[idx].get_pose().p, dtype=float)
+            target_ee = np.concatenate([
+                np.array([fp[0] + st["off_xy"][0], fp[1] + st["off_xy"][1], st["ee_z"]],
+                         dtype=float),
+                st["ee_q"],
+            ])
+            q_goal = self._ik_arm_joints_for_ee(arm_name, target_ee)
+            if q_goal is None:
+                return
+            q_now = np.array(
+                [float(j.get_drive_target()[0]) for j in st["joints"]], dtype=float
+            )
+            self.robot.set_arm_joints(q_goal, (q_goal - q_now).astype(float), arm_name)
+
+        for i in range(n):
+            _step_track(idx_l, "left", st_l)
+            _step_track(idx_r, "right", st_r)
+            if i < grip_l["num_step"]:
+                self.robot.set_gripper(grip_l["result"][i], "left", grip_l["per_step"])
+            if i < grip_r["num_step"]:
+                self.robot.set_gripper(grip_r["result"][i], "right", grip_r["per_step"])
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (self._pic_ctr % max(1, self.save_freq) == 0):
+                self._take_picture()
+            self._pic_ctr += 1
+
+    def _pinch_fruit(self, idx, arm):
+        """Pinch a still-moving belt apple; hold by jaw friction (no weld / no pause).
+
+        The apple keeps riding the stream while the jaws close and the TCP
+        tracks it. Only after a confirmed pinch does it leave the belt as a
+        dynamic body — same idea as interactive_pack_fruits.
+        """
+        dbg = bool(os.environ.get("PACKING_DEBUG"))
+        if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
+            return False
+
+        self._close_gripper_tracking_fruit(idx, arm, target_pos=0.0, n_steps=50)
+
+        xy, dz = self._fruit_gripper_dist(idx, arm)
+        near = (self._item_y[idx] is not None
+                and xy <= 0.04 and -0.02 <= dz <= self.ATTACH_Z_MAX + 0.02)
+        contact = self._fruit_held_by_gripper(idx)
+        if not (contact or near):
+            if dbg:
+                print(f"[pack_fruits]  pinch miss (still on belt) "
+                      f"xy={xy:.3f} dz={dz:.3f}", flush=True)
+            return False
+
+        # Leave the stream at the current pose; settle contacts, then gravity.
+        self._free_fruit_for_physical_grasp(idx)
+        self._settle_grasp_contacts(15)
+        self._enable_fruit_gravity(idx)
+        self._settle_grasp_contacts(15)
+        held = self._fruit_held_by_gripper(idx) or self._fruit_near_gripper(idx, arm)
+        if held:
+            self._mark_fruit_held(idx, arm)
+        if dbg:
             arm_name = "left" if str(arm) == "left" else "right"
             tcp = self._tcp_pos(arm_name)
-            pos = tcp.copy()
-            pos[2] -= 0.015
-            self.items[idx].actor.set_pose(sapien.Pose(pos.tolist(), self.FRUIT_Q))
-            self._weld_fruit_to_ee(idx, arm)
+            fp = np.array(self.items[idx].get_pose().p, dtype=float)
+            print(f"[pack_fruits]  pinch {self.item_types[idx]}_{idx} at "
+                  f"{arm_name} tcp={np.round(tcp, 3)} fruit={np.round(fp, 3)} "
+                  f"held={held} contact={self._fruit_held_by_gripper(idx)}",
+                  flush=True)
+        return bool(held)
 
-    def _snap_fruit_into_gripper(self, idx, arm):
-        """Attach fruit then close the gripper (single-arm path)."""
-        self._attach_fruit_to_gripper(idx, arm)
-        self._close_on_attached((arm, idx))
+    def _fruit_near_gripper(self, idx, arm, xy_tol=0.05, z_lo=-0.03, z_hi=0.08):
+        """True if the fruit is still between / under the jaws (contact optional)."""
+        xy, dz = self._fruit_gripper_dist(idx, arm)
+        return xy <= float(xy_tol) and float(z_lo) <= dz <= float(z_hi)
+    def _pinch_fruit_pair(self, *arm_idx_pairs):
+        """Pinch still-moving belt apples together; hold by friction (no pause).
+
+        Returns a list of bools aligned with ``arm_idx_pairs``.
+        """
+        pairs = [(arm, idx) for arm, idx in arm_idx_pairs if idx is not None]
+        if not pairs:
+            return []
+        if len(pairs) == 1:
+            arm, idx = pairs[0]
+            return [self._pinch_fruit(idx, arm)]
+
+        (arm_l, idx_l), (arm_r, idx_r) = pairs[0], pairs[1]
+        self._close_grippers_tracking_pair(
+            idx_l, arm_l, idx_r, arm_r, target_pos=0.0, n_steps=50
+        )
+
+        to_free = []
+        for arm, idx in pairs:
+            xy, dz = self._fruit_gripper_dist(idx, arm)
+            near = (self._item_y[idx] is not None
+                    and xy <= 0.04 and -0.02 <= dz <= self.ATTACH_Z_MAX + 0.02)
+            contact = self._fruit_held_by_gripper(idx)
+            if contact or near:
+                to_free.append((arm, idx))
+        for _arm, idx in to_free:
+            self._free_fruit_for_physical_grasp(idx)
+        if to_free:
+            self._settle_grasp_contacts(15)
+            for _arm, idx in to_free:
+                self._enable_fruit_gravity(idx)
+            self._settle_grasp_contacts(15)
+
+        freed = {idx for _arm, idx in to_free}
+        out = []
+        for arm, idx in pairs:
+            if idx not in freed:
+                out.append(False)
+                continue
+            held = self._fruit_held_by_gripper(idx) or self._fruit_near_gripper(idx, arm)
+            if held:
+                self._mark_fruit_held(idx, arm)
+            out.append(bool(held))
+        return out
 
     def _reach_and_attach(self, idx, arm):
-        """Reach straight for the fruit; attach once the gripper ends up close.
+        """Reach for the fruit; pinch once the gripper ends up close.
 
         A plain move-to-grasp-pose motion (like reaching for any static
-        object) — at most one extra correction reach if the fruit rolled a
-        little further while the arm was moving.
+        object) — at most a few correction reaches if the fruit rolled a
+        little further while the arm was moving. No teleport / EE weld.
         """
-        import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
-        for attempt in range(3):
+        for attempt in range(5):
             if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
                 return False
-            grasp_pose = self._plan_final_grasp(idx, arm)
+            # Increase lead on later attempts so a slow reach still intercepts.
+            lead = 0.015 + 0.01 * float(attempt)
+            grasp_pose = self._plan_final_grasp(idx, arm, lead_y=lead)
             if grasp_pose is None:
                 if dbg:
                     print("[pack_fruits]  no final grasp pose", flush=True)
@@ -1465,22 +1573,27 @@ class pack_fruits(Base_Task):
             self.plan_success = True
             self.move(self.move_to_pose(arm, grasp_pose))
             self.plan_success = True
-            if self._item_y[idx] is not None and self._tcp_near_fruit(idx, arm):
-                self._snap_fruit_into_gripper(idx, arm)
-                return True
+            # Slightly looser gate after a long cross-belt reach.
+            if self._item_y[idx] is not None and self._tcp_near_fruit(idx, arm, xy_tol=0.035):
+                if self._pinch_fruit(idx, arm):
+                    return True
+                if dbg:
+                    print("[pack_fruits]  pinch missed contact — retry reach",
+                          flush=True)
+                # reopen and try again while fruit is still near
+                self.plan_success = True
+                self.move(self.open_gripper(arm, pos=0.45))
+                self.plan_success = True
+                if self._item_y[idx] is None:
+                    # freed but not held — reseat for another attempt
+                    self._reseat_on_belt(idx)
         if dbg:
-            print("[pack_fruits]  reach finished but not close enough to attach",
+            print("[pack_fruits]  reach finished but not close enough to pinch",
                   flush=True)
         return False
 
     def _reach_and_attach_pair(self, idx_l, idx_r, arm_l, arm_r):
-        """Reach for both fruits together; attach whichever ends up close.
-
-        Both arms attach (without closing) as soon as they are near enough,
-        then both grippers close together so one fruit never has to wait on
-        the other's gripper-close motion.
-        """
-        import os
+        """Reach for both fruits; pinch whichever ends up close, then close together."""
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         got_l = got_r = False
         for attempt in range(3):
@@ -1503,10 +1616,8 @@ class pack_fruits(Base_Task):
             self.move(*acts)
             self.plan_success = True
             if need_l and self._item_y[idx_l] is not None and self._tcp_near_fruit(idx_l, arm_l):
-                self._attach_fruit_to_gripper(idx_l, arm_l)
                 got_l = True
             if need_r and self._item_y[idx_r] is not None and self._tcp_near_fruit(idx_r, arm_r):
-                self._attach_fruit_to_gripper(idx_r, arm_r)
                 got_r = True
 
         pairs = []
@@ -1514,11 +1625,29 @@ class pack_fruits(Base_Task):
             pairs.append((arm_l, idx_l))
         if got_r:
             pairs.append((arm_r, idx_r))
-        if pairs:
-            self._close_on_attached(*pairs)
+        if not pairs:
+            if dbg:
+                print("[pack_fruits]  pair reach done gotL=False gotR=False", flush=True)
+            return False, False
+        held_flags = self._pinch_fruit_pair(*pairs)
+        ok_l = ok_r = False
+        for (arm, idx), held in zip(pairs, held_flags):
+            if idx == idx_l:
+                ok_l = bool(held)
+            if idx == idx_r:
+                ok_r = bool(held)
+            if not held:
+                # missed pinch — put back on the belt for a later solo attempt
+                self._welded[idx] = False
+                self._weld_arm[idx] = None
+                if self._item_y[idx] is None:
+                    self._reseat_on_belt(idx)
+                self.plan_success = True
+                self.move(self.open_gripper(arm))
+                self.plan_success = True
         if dbg:
-            print(f"[pack_fruits]  pair reach done gotL={got_l} gotR={got_r}", flush=True)
-        return got_l, got_r
+            print(f"[pack_fruits]  pair reach done gotL={ok_l} gotR={ok_r}", flush=True)
+        return ok_l, ok_r
 
     def _settle_after_drop(self, idx, target_xy, resend_on_miss=True):
         """Mark packed if the fruit fell into the basket; otherwise resend.
@@ -1564,14 +1693,13 @@ class pack_fruits(Base_Task):
         )
 
     def _intercept_and_grasp(self, idx, arm, side):
-        """Hover above the belt, wait for the fruit, then reach and attach.
+        """Hover above the belt, wait for the fruit, then reach and pinch.
 
         The fruit never pauses on the belt. The arm hovers over the pick
-        station, waits for the fruit to arrive, then does a single reaching
-        move to it; once the gripper ends up within ~2 cm, the fruit is
-        placed between the fingers and welded.
+        station, waits for the fruit to arrive, then reaches and closes while
+        tracking the still-moving apple; only a confirmed pinch frees it for
+        a friction hold (no teleport / EE weld).
         """
-        import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
 
         self.plan_success = True
@@ -1594,6 +1722,11 @@ class pack_fruits(Base_Task):
             if dbg:
                 print("[pack_fruits]  failed to reach station hover", flush=True)
             return False
+
+        # Pre-shape while waiting so the tracked pinch close is short.
+        self.plan_success = True
+        self.move(self.close_gripper(arm, pos=0.45))
+        self.plan_success = True
 
         if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
             if dbg:
@@ -1691,11 +1824,25 @@ class pack_fruits(Base_Task):
         self._contact_min_sep_pending = None
         self._contact_step_range_pending = None
 
-    def _weld_target_ee_pose(self, idx, xyz):
-        """EE pose that places the welded fruit at world ``xyz`` (same orientation)."""
+    def _held_target_ee_pose(self, idx, arm, xyz):
+        """EE pose that places the held fruit at world ``xyz`` (planning only).
+
+        Uses a snapshot fruit↔EE offset — the fruit is not glued; it must
+        ride with jaw friction during the move.
+        """
+        arm_name = "left" if str(arm) == "left" else "right"
+        ee_pose = self._ee_pose_full(arm_name)
         fruit_pose = self.items[idx].get_pose()
-        target_fruit = sapien.Pose(np.asarray(xyz, dtype=float).tolist(), list(fruit_pose.q))
-        return target_fruit * self._weld_offset[idx].inv()
+        offset = ee_pose.inv() * fruit_pose
+        target_fruit = sapien.Pose(
+            np.asarray(xyz, dtype=float).tolist(), list(fruit_pose.q)
+        )
+        return target_fruit * offset.inv()
+
+    def _weld_target_ee_pose(self, idx, xyz):
+        """Compat alias — prefer ``_held_target_ee_pose`` with an arm tag."""
+        arm = self._weld_arm[idx] if self._weld_arm[idx] is not None else "left"
+        return self._held_target_ee_pose(idx, arm, xyz)
 
     def _ik_arm_joints_for_ee(self, arm, ee_pose7):
         """IK joint solution for a planning-EE pose ``[x,y,z,qw,qx,qy,qz]``.
@@ -1767,8 +1914,11 @@ class pack_fruits(Base_Task):
             self._pic_ctr += 1
 
     def _raise_along_z(self, idx, arm, lift_z=None):
-        """Raise the gripper (and welded fruit) straight up by ``lift_z`` meters."""
-        import os
+        """Raise the gripper (and friction-held fruit) straight up by ``lift_z`` meters.
+
+        Uses several small continuous displacements so jaw contacts are not
+        yanked apart (no physics retune).
+        """
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         if lift_z is None:
             lift_z = self.pick_lift
@@ -1779,17 +1929,14 @@ class pack_fruits(Base_Task):
             dtype=float,
         )
         fp0 = np.array(self.items[idx].get_pose().p, dtype=float)
-        raised = ee0.copy()
-        raised[2] += float(lift_z)
-        q_goal = self._ik_arm_joints_for_ee(arm, raised)
-        if q_goal is None:
-            if dbg:
-                print("[pack_fruits]  raise IK failed — falling back to displacement", flush=True)
+        n_chunks = 4
+        chunk = float(lift_z) / float(n_chunks)
+        for _ in range(n_chunks):
             self.plan_success = True
-            self.move(self.move_by_displacement(arm, z=float(lift_z), move_axis="world"))
+            self.move(self.move_by_displacement(arm, z=chunk, move_axis="world"))
             self.plan_success = True
-        else:
-            self._drive_arm_joints(arm, q_goal, n_steps=50)
+            if not self._fruit_near_gripper(idx, arm):
+                break
         if dbg:
             ee1 = np.array(
                 self.robot.get_left_ee_pose() if arm_name == "left"
@@ -1799,7 +1946,9 @@ class pack_fruits(Base_Task):
             fp1 = np.array(self.items[idx].get_pose().p, dtype=float)
             print(f"[pack_fruits]  raise +Z asked={lift_z:.3f} "
                   f"ee_dz={ee1[2]-ee0[2]:.3f} fruit_dz={fp1[2]-fp0[2]:.3f} "
-                  f"fruit_z={fp1[2]:.3f}", flush=True)
+                  f"fruit_z={fp1[2]:.3f} contact={self._fruit_held_by_gripper(idx)} "
+                  f"near={self._fruit_near_gripper(idx, arm)}",
+                  flush=True)
 
     def _fruit_xy_gap(self, idx, target_xy):
         """Horizontal distance from the held fruit to a drop target."""
@@ -1815,23 +1964,34 @@ class pack_fruits(Base_Task):
         return max(fruit_z, float(rim) + self.fruit_r + 0.02)
 
     def _slide_xy_to_target(self, idx, arm, target_xy, tries=3, tol=0.03):
-        """Slide the held fruit to ``target_xy`` at a rim-clearing height."""
-        import os
+        """Slide the held fruit to ``target_xy`` at a rim-clearing height.
+
+        Displacements are measured from the fruit pose (pick_ripe_apple style)
+        so a soft friction hold still converges without an EE weld.
+        """
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         hover_z = self._slide_hover_z(idx)
         for _try in range(tries):
+            if not self._fruit_near_gripper(idx, arm):
+                if dbg:
+                    print(f"[pack_fruits]  slide abort — lost fruit_{idx}",
+                          flush=True)
+                return False
+            fp = np.array(self.items[idx].get_pose().p, dtype=float)
             gap_xy = self._fruit_xy_gap(idx, target_xy)
             if dbg:
-                fp = np.array(self.items[idx].get_pose().p, dtype=float)
                 print(f"[pack_fruits]  slide try={_try} fp={fp.round(4)} "
                       f"gap_xy={gap_xy:.4f} hover_z={hover_z:.3f}", flush=True)
             if gap_xy < tol:
                 return True
-            target = np.array(
-                [float(target_xy[0]), float(target_xy[1]), hover_z], dtype=float
-            )
             self.plan_success = True
-            self.move(self.move_to_pose(arm, self._weld_target_ee_pose(idx, target)))
+            self.move(self.move_by_displacement(
+                arm,
+                x=float(target_xy[0]) - fp[0],
+                y=float(target_xy[1]) - fp[1],
+                z=float(hover_z) - fp[2],
+                move_axis="world",
+            ))
             self.plan_success = True
         return self._fruit_xy_gap(idx, target_xy) < tol
 
@@ -1899,6 +2059,13 @@ class pack_fruits(Base_Task):
         Returns whether the fruit was actually released over the basket.
         """
         self._slide_over_basket(idx, arm, target_xy, lift_z=self.pick_lift)
+        if not self._fruit_near_gripper(idx, arm):
+            # Lost the apple mid-carry — put it back rather than drop on the table.
+            self._abort_drop_to_belt(idx, arm)
+            self.plan_success = True
+            self.move(self.back_to_origin(arm))
+            self.plan_success = True
+            return False
         over_basket = self._ensure_over_basket(idx, arm, target_xy)
         self._over_basket[idx] = bool(over_basket)
         if not over_basket:
@@ -1929,24 +2096,18 @@ class pack_fruits(Base_Task):
         import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
 
-        # 1) raise both grippers +Z in place (IK-driven, not trajopt)
+        # 1) raise both grippers +Z (continuous displacement — keep jaw contacts)
         self._raise_along_z(idx_l, arm_l, lift_z=self.pick_lift)
         self._raise_along_z(idx_r, arm_r, lift_z=self.pick_lift)
-        hover_z_l = float(self.items[idx_l].get_pose().p[2])
-        hover_z_r = float(self.items[idx_r].get_pose().p[2])
 
-        # 2) slide horizontally over each basket at the raised height
+        # 2) slide horizontally over each basket (fruit-relative displacement)
         for _try in range(3):
             fp_l = np.array(self.items[idx_l].get_pose().p, dtype=float)
             fp_r = np.array(self.items[idx_r].get_pose().p, dtype=float)
-            tgt_l = np.array(
-                [float(target_l[0]), float(target_l[1]), hover_z_l], dtype=float
-            )
-            tgt_r = np.array(
-                [float(target_r[0]), float(target_r[1]), hover_z_r], dtype=float
-            )
-            gl = float(np.hypot(tgt_l[0] - fp_l[0], tgt_l[1] - fp_l[1]))
-            gr = float(np.hypot(tgt_r[0] - fp_r[0], tgt_r[1] - fp_r[1]))
+            hover_z_l = self._slide_hover_z(idx_l)
+            hover_z_r = self._slide_hover_z(idx_r)
+            gl = float(np.hypot(float(target_l[0]) - fp_l[0], float(target_l[1]) - fp_l[1]))
+            gr = float(np.hypot(float(target_r[0]) - fp_r[0], float(target_r[1]) - fp_r[1]))
             if dbg:
                 print(
                     f"[pack_fruits]  pair slide try={_try} gap_l={gl:.4f} gap_r={gr:.4f}",
@@ -1956,8 +2117,20 @@ class pack_fruits(Base_Task):
                 break
             self.plan_success = True
             self.move(
-                self.move_to_pose(arm_l, self._weld_target_ee_pose(idx_l, tgt_l)),
-                self.move_to_pose(arm_r, self._weld_target_ee_pose(idx_r, tgt_r)),
+                self.move_by_displacement(
+                    arm_l,
+                    x=float(target_l[0]) - fp_l[0],
+                    y=float(target_l[1]) - fp_l[1],
+                    z=float(hover_z_l) - fp_l[2],
+                    move_axis="world",
+                ),
+                self.move_by_displacement(
+                    arm_r,
+                    x=float(target_r[0]) - fp_r[0],
+                    y=float(target_r[1]) - fp_r[1],
+                    z=float(hover_z_r) - fp_r[2],
+                    move_axis="world",
+                ),
             )
             self.plan_success = True
 
@@ -2005,14 +2178,14 @@ class pack_fruits(Base_Task):
         return bool(over_l), bool(over_r)
 
     def _pack_item(self, idx):
-        """Intercept one still-moving fruit → weld → carry → release."""
-        import os
+        """Intercept one still-moving fruit → pinch → carry → release."""
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         fruit = self.items[idx]
         ftype = self.item_types[idx]
         belt_side = self.item_sides[idx]
-        # Reach with the belt-side arm (apples may appear on either belt).
-        arm_side = belt_side
+        # Color-matched arm (red→left, green→right) so the slide lands over the
+        # matching basket. Belt-side arm cannot reach the opposite basket (~0.44 m).
+        arm_side = self.TYPE_SIDE.get(ftype, belt_side)
         arm = ArmTag(arm_side)
         target_xy = self._basket_target_xy(idx)
 
@@ -2037,16 +2210,37 @@ class pack_fruits(Base_Task):
                 except Exception:
                     pass
                 self.plan_success = True
+                self._note_pack_failure(idx)
                 return
 
             if dbg:
-                print(f"[pack_fruits]  welded; ee={np.round(self._ee_pos(arm_side), 3)} "
-                      f"fruit={np.round(fruit.get_pose().p, 3)}", flush=True)
+                print(f"[pack_fruits]  pinched; ee={np.round(self._ee_pos(arm_side), 3)} "
+                      f"fruit={np.round(fruit.get_pose().p, 3)} "
+                      f"contact={self._fruit_held_by_gripper(idx)}", flush=True)
 
-            self._carry_and_drop(idx, arm, target_xy)
+            dropped = self._carry_and_drop(idx, arm, target_xy)
+            if not dropped:
+                self._note_pack_failure(idx)
         finally:
             self._grasping_idxs.discard(idx)
             self._end_spawn_hold()
+
+    def _note_pack_failure(self, idx):
+        """Cap retries so a stuck cross-reach cannot spin forever."""
+        if idx < 0 or idx >= len(self._pack_fail_counts):
+            return
+        if self._packed[idx] or self._missed[idx]:
+            return
+        self._pack_fail_counts[idx] += 1
+        if self._pack_fail_counts[idx] < int(self._pack_fail_limit):
+            return
+        self._missed[idx] = True
+        if self._item_y[idx] is not None:
+            # park off-stream so _ready_by_side stops selecting it
+            self._item_y[idx] = None
+        if bool(os.environ.get("PACKING_DEBUG")):
+            print(f"[pack_fruits]  giving up on fruit_{idx} after "
+                  f"{self._pack_fail_counts[idx]} failed packs", flush=True)
 
     def _pack_pair(self, idx_l, idx_r):
         """Pick left+right fruits simultaneously, then carry to baskets together."""
