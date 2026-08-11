@@ -252,16 +252,13 @@ class HouseholdTaskLauncher(tk.Tk):
             pass
         self.style.configure(
             "Task.TCombobox",
-            padding=(28, 18),
-            arrowsize=42,
+            padding=(14, 10),
+            arrowsize=26,
             fieldbackground="#f7fafc",
             foreground="#182633",
             selectbackground="#f7fafc",
             selectforeground="#182633",
         )
-        # Popup was 156 pt / 276 px; reduce both by 30 percent.
-        self.option_add("*TCombobox*Listbox.font", ("Sans", 109, "bold"))
-        self.option_add("*TCombobox*Listbox.rowHeight", 193)
 
         self.header = tk.Frame(
             self,
@@ -278,7 +275,7 @@ class HouseholdTaskLauncher(tk.Tk):
             text="Household Interactive Tasks",
             bg=HEADER_BG,
             fg=TEXT_PRIMARY,
-            font=("Sans", 36, "bold"),
+            font=("Sans", 34, "bold"),
         )
         self.title_label.pack(anchor="w")
         self.subtitle_label = tk.Label(
@@ -292,6 +289,20 @@ class HouseholdTaskLauncher(tk.Tk):
 
         self.controls = tk.Frame(self.header, bg=HEADER_BG)
         self.controls.pack(side="right", padx=22, pady=16)
+
+        # Pack Exit first on the right so it stays visible when the header is tight.
+        self.exit_button = RoundedButton(
+            self.controls,
+            text="Exit",
+            command=self.exit_app,
+            bg="#e34a33",
+            activebackground="#eb6854",
+            font=("Sans", 17, "bold"),
+            width=150,
+            height=76,
+            radius=28,
+        )
+        self.exit_button.pack(side="right", pady=(18, 0))
 
         brief_group = tk.Frame(self.controls, bg=HEADER_BG)
         brief_group.pack(side="left", padx=(0, 16))
@@ -343,7 +354,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.seed_entry.pack(ipady=8, pady=(4, 0))
 
         control_group = tk.Frame(self.controls, bg=HEADER_BG)
-        control_group.pack(side="left", padx=(0, 12))
+        control_group.pack(side="left", padx=(0, 14))
         self.control_caption = tk.Label(
             control_group,
             text="Control",
@@ -356,24 +367,12 @@ class HouseholdTaskLauncher(tk.Tk):
             control_group,
             values=("keyboard", "robot"),
             state="readonly",
-            width=11,
+            width=10,
             font=("Sans", 22, "bold"),
             style="Task.TCombobox",
         )
         self.control.set("robot")
-        self.control.pack(ipady=4, pady=(4, 0))
-        self.exit_button = RoundedButton(
-            self.controls,
-            text="Exit",
-            command=self.exit_app,
-            bg="#e34a33",
-            activebackground="#eb6854",
-            font=("Sans", 18, "bold"),
-            width=190,
-            height=88,
-            radius=30,
-        )
-        self.exit_button.pack(side="left")
+        self.control.pack(pady=(4, 0))
 
         self.status = tk.Label(
             self,
@@ -383,7 +382,7 @@ class HouseholdTaskLauncher(tk.Tk):
             anchor="w",
             justify="left",
             wraplength=1460,
-            font=("Sans", 21),
+            font=("Sans", 19),
         )
         self.status.pack(fill="x", padx=34, pady=(2, 12))
 
@@ -435,7 +434,8 @@ class HouseholdTaskLauncher(tk.Tk):
         if getattr(self, "title_label", None) is None:
             return
         scale = self._compute_ui_scale()
-        narrow = self.winfo_width() < 1200 or scale < 0.78
+        # Longer title than the base suite GUI — stack earlier so Exit stays on-screen.
+        narrow = self.winfo_width() < 1320 or scale < 0.82
         if abs(scale - self._ui_scale) < 0.02:
             self.status.configure(
                 wraplength=max(360, self.winfo_width() - self._px(68, scale))
@@ -448,7 +448,7 @@ class HouseholdTaskLauncher(tk.Tk):
         s = scale
 
         self.header.pack_configure(padx=self._px(24, s), pady=(self._px(18, s), self._px(12, s)))
-        self.title_label.configure(font=self._scaled_font(36, "bold", s))
+        self.title_label.configure(font=self._scaled_font(34, "bold", s))
         self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
         self.brief_caption.configure(font=self._scaled_font(13, "bold", s))
         self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
@@ -457,26 +457,25 @@ class HouseholdTaskLauncher(tk.Tk):
         self.seed_entry.configure(font=self._scaled_font(22, "bold", s))
         self.seed_entry.pack_configure(ipady=self._px(8, s), pady=(self._px(4, s), 0))
         self.control.configure(font=self._scaled_font(22, "bold", s))
-        self.control.pack_configure(ipady=self._px(4, s), pady=(self._px(4, s), 0))
+        self.control.pack_configure(pady=(self._px(4, s), 0))
         self.style.configure(
             "Task.TCombobox",
-            padding=(self._px(28, s), self._px(18, s)),
-            arrowsize=max(12, self._px(42, s)),
+            padding=(self._px(14, s), self._px(10, s)),
+            arrowsize=max(12, self._px(26, s)),
             fieldbackground="#f7fafc",
             foreground="#182633",
             selectbackground="#f7fafc",
             selectforeground="#182633",
         )
-        self.option_add("*TCombobox*Listbox.font", self._scaled_font(109, "bold", s))
-        self.option_add("*TCombobox*Listbox.rowHeight", self._px(193, s))
         self.exit_button.configure(
-            font=self._scaled_font(18, "bold", s),
-            width=self._px(190, s),
-            height=self._px(88, s),
-            radius=self._px(30, s),
+            font=self._scaled_font(17, "bold", s),
+            width=self._px(150, s),
+            height=self._px(76, s),
+            radius=self._px(28, s),
         )
+        self.exit_button.pack_configure(pady=(self._px(18, s), 0))
         self.status.configure(
-            font=self._scaled_font(21, scale=s),
+            font=self._scaled_font(19, scale=s),
             wraplength=max(360, self.winfo_width() - self._px(68, s)),
         )
         self.status.pack_configure(padx=self._px(34, s), pady=(self._px(2, s), self._px(12, s)))
@@ -495,13 +494,14 @@ class HouseholdTaskLauncher(tk.Tk):
         for label in self.card_badge_labels:
             label.configure(font=self._scaled_font(12, "bold", s))
 
-        btn_font = self._scaled_font(20, "bold", s)
+        # Match base suite Play button scale (was oversized and crowded the cards).
+        btn_font = self._scaled_font(16, "bold", s)
         for button in self.task_buttons:
             button.configure(
                 font=btn_font,
-                width=self._px(270, s),
-                height=self._px(106, s),
-                radius=self._px(38, s),
+                width=self._px(220, s),
+                height=self._px(70, s),
+                radius=self._px(26, s),
             )
 
         self._header_narrow = narrow
@@ -509,7 +509,7 @@ class HouseholdTaskLauncher(tk.Tk):
 
     def _relayout_header(self, scale: float):
         """Keep header controls on-screen by stacking when the window is narrow."""
-        narrow = self.winfo_width() < 1200 or scale < 0.78
+        narrow = self.winfo_width() < 1320 or scale < 0.82
         self.heading.pack_forget()
         self.controls.pack_forget()
         if narrow:
@@ -644,10 +644,10 @@ class HouseholdTaskLauncher(tk.Tk):
             command=lambda i=index: self.play_or_stop(i),
             bg=PLAY_BLUE,
             activebackground=PLAY_BLUE_ACTIVE,
-            font=("Sans", 20, "bold"),
-            width=270,
-            height=106,
-            radius=38,
+            font=("Sans", 16, "bold"),
+            width=220,
+            height=70,
+            radius=26,
             on_enter=lambda t=task, l=label: self._show_task_hint(t, l),
             on_leave=self._clear_task_hint,
         )
