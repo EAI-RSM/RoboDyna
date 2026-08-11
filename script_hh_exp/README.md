@@ -58,7 +58,6 @@ the same controls as the interactive examples in `script_exp`:
 --control keyboard:        Space and arrows move the task prop directly
 V                          cycle head_camera ↔ gripper / wrist view(s)
 G                          open / close selected gripper(s)
-C                          task-specific action (make_soup burner / board place)
 Escape                     quit
 ```
 
@@ -75,8 +74,8 @@ The optional `--config`, `--seed`, `--robot-motion`, and repeated
 Use `--smoke-test` to initialize a task, render three frames, and exit without
 waiting for viewer input.
 
-For `interactive_make_soup.py` in keyboard mode, press `C` to position the
-board over the pot, then hold `R` or `T` to tilt it left or right.
+For `interactive_make_soup.py`, close the gripper on the board handle, carry it
+over the pot, then hold Z/X to tip and pour.
 Physics, task-specific kinematic updates, and `check_success()` remain in the
 original environment classes; the runner only supplies viewer controls and
 the small set of task actions shown in each script's banner.

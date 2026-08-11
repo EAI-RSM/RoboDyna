@@ -7,9 +7,8 @@ Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
 G opens/closes the selected gripper(s); V cycles head_camera ↔ gripper views
 (shared ``ViewerViewToggle`` handler; top-down is not available).
 Space grasps/releases the task's primary prop (except boil_milk / trap_bug /
-cook_food / cook_food_timer / stop_ball / pour_beer, where Space is gripper
-open/close only via ViewerViewToggle). C invokes a task-specific control
-where needed (make_soup).
+cook_food / cook_food_timer / make_soup / stop_ball / pour_beer, where Space
+is gripper open/close only via ViewerViewToggle).
 """
 from __future__ import annotations
 
@@ -22,7 +21,6 @@ from pathlib import Path
 import numpy as np
 import sapien
 import sapien.physx
-from transforms3d.quaternions import axangle2quat, qmult
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -131,11 +129,9 @@ class HouseholdController:
         self.actor = getattr(env, actor_attr, None) if actor_attr else None
         self.holding = False
         self.space = _Edge()
-        self.c = _Edge()
         self._fill_space_started_at = None
         self._fill_space_was_down = False
         self._fill_press_state = None
-        self.board_over_pot = False
         self.trap_released = False
         self.scenario_started = False
         if task == "trap_bug" and robot:
@@ -214,17 +210,6 @@ class HouseholdController:
                     "[measure_ingredient] push jar under nozzle, then press the "
                     "green key (ON/OFF); success is checked after OFF"
                 )
-            elif t == "make_soup":
-                if not bool(e.stove_on):
-                    e._set_knob_joint_angle(e.KNOB_ON_ANGLE, hard=True)
-                    e._set_stove(True)
-                    print("[make_soup] burner on; hold/move the board, then press C to place it over the pot")
-                elif self.holding:
-                    target = [float(e.pot_xy[0]), float(e.pot_xy[1]), float(e.pot_rim_z + 0.12)]
-                    e._set_entity_pose(e.board, sapien.Pose(target, [1, 0, 0, 0]))
-                    self.board_over_pot = True
-                    e._pour_armed = True
-                    print("[make_soup] board is over the pot; hold Z/X to tip and pour")
         except Exception as exc:
             print(f"[{t}] action unavailable: {exc}")
 
@@ -419,13 +404,6 @@ class HouseholdController:
                     "[measure_ingredient] push jar under nozzle, then lower onto "
                     "the green key; success is checked after the key turns OFF"
                 )
-            elif t == "make_soup":
-                if not bool(e.stove_on):
-                    self._turn_make_soup_knob()
-                elif self.holding:
-                    # Manual pour: arm teleop Z/X tips the gripper; do not auto-dump.
-                    e._pour_armed = True
-                    print("[make_soup] pour armed — hold Z (left) / X (right) to tip the gripper")
         except Exception as exc:
             if arm is not None:
                 action_failed(e, (str(arm),), detail=f"action unavailable: {exc}")
@@ -451,37 +429,6 @@ class HouseholdController:
             e._set_knob_joint_angle(angle, hard=True)
         if callable(getattr(e, "_set_stove", None)):
             e._set_stove(bool(want_on))
-
-    def _turn_make_soup_knob(self):
-        """Contact-driven cooktop twist with the selected arm only."""
-        e = self.env
-        arm = _arm_tag(e)
-        if arm is None:
-            return
-        previous_arm = getattr(e, "arm", None)
-        action_error = None
-        try:
-            e.arm = arm
-            e.plan_success = True
-            e._turn_knob_on()
-        except Exception as exc:
-            action_error = exc
-        finally:
-            e.arm = previous_arm
-            e._ignore_knob = False
-
-        if bool(getattr(e, "stove_on", False)):
-            print(
-                f"[make_soup] burner on ({arm} arm) — grasp the board, "
-                "carry it over the pot, then hold Z/X to tip"
-            )
-            return
-        detail = (
-            f"could not turn the knob: {action_error}"
-            if action_error is not None
-            else "knob did not reach the heat threshold; stove still off"
-        )
-        action_failed(e, (str(arm),), detail=detail)
 
     def _return_arm_after_failure(self, arm):
         """Best-effort recovery for a failed scripted reach."""
@@ -557,9 +504,15 @@ class HouseholdController:
             return
         if self.task == "stop_ball":
             return
-        # boil_milk / trap_bug / cook_food*: Space is gripper open/close only
-        # (ViewerViewToggle). Knob / trap latch / food grasp are physical teleop.
-        if self.task in ("boil_milk", "trap_bug", "cook_food", "cook_food_timer"):
+        # boil_milk / trap_bug / cook_food* / make_soup: Space is gripper
+        # open/close only (ViewerViewToggle). Physical teleop for props / knobs.
+        if self.task in (
+            "boil_milk",
+            "trap_bug",
+            "cook_food",
+            "cook_food_timer",
+            "make_soup",
+        ):
             return
         # measure_ingredient: Space always grasps/releases the jar — never the oil key.
         if self.task == "measure_ingredient":
@@ -805,10 +758,7 @@ class HouseholdController:
             self._fill_space_was_down = space_down
         elif self.space.poll(space_down):
             self._grasp_or_release()
-        # C = make_soup burner + board-over-pot (cook_food*: teleop knob only).
-        # Space = global gripper open/close (ViewerViewToggle) for cook_food*.
-        if self.task == "make_soup" and self.c.poll(window.key_down("c")):
-            self._task_action()
+        # Space = gripper open/close (ViewerViewToggle) for make_soup / cook_food*.
         # measure_ingredient: oil key = lower closed gripper onto red key;
         # Space = grasp/release jar for the scale step.
         if not self.robot and self.holding and self.actor is not None:
@@ -819,22 +769,6 @@ class HouseholdController:
                   step * (bool(window.key_down("up")) - bool(window.key_down("down"))), dz]
             if np.any(np.asarray([window.key_down(k) for k in ("left", "right", "up", "down", "q", "e")])):
                 _set_pose(self.actor, p, kinematic=True)
-            if self.task == "make_soup" and self.board_over_pot and not getattr(self.env, "_veg_released", False):
-                # Z tip left / X tip right (R/T kept as aliases).
-                tilt = 0.018 * (
-                    (bool(window.key_down("x")) or bool(window.key_down("t")))
-                    - (bool(window.key_down("z")) or bool(window.key_down("r")))
-                )
-                if abs(tilt) > 0.0:
-                    pose = self.actor.get_pose()
-                    q = qmult(axangle2quat([0.0, 1.0, 0.0], tilt), list(pose.q))
-                    _set_pose(self.actor, pose.p, quat=q, kinematic=True)
-                    # Once the board is substantially tipped, let PhysX carry
-                    # the vegetables into the pot instead of teleporting them.
-                    if float(self.env._board_up_dot()) < float(self.env.tilt_hold_dot):
-                        self.env._pour_armed = True
-                        self.env._release_veggies_physics()
-                        print("[make_soup] vegetables released from tilted board")
 
     def start_scenario(self):
         """Start time-sensitive scene motion after the first rendered frame."""
