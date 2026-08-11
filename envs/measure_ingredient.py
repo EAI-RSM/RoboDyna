@@ -43,8 +43,9 @@ class measure_ingredient(KitchenS_base_task):
     JAR_BOTTOM_T = 0.005
     JAR_MASS = 0.22
     # Jar spawns this far toward the robot (−Y) from the fill/nozzle target.
-    # Small gap → only a short shove (~2–3 cm) to seat under the spout.
-    JAR_START_GAP = 0.025
+    # Long enough for a visible contact shove; short enough that the approach
+    # still fits behind the jar on the KitchenS near edge (no end teleport).
+    JAR_START_GAP = 0.08
     # Nozzle must land within this radius of the jar center to fill (else spill).
     JAR_CATCH_R = 0.028
 
@@ -74,18 +75,18 @@ class measure_ingredient(KitchenS_base_task):
     KEY_PRESS_DEPTH = 0.024                     # expert depress from hover
 
     # catch_cup-style contact push (closed gripper shoves the jar under nozzle).
-    PUSH_CONTACT_GAP = 0.018
+    PUSH_CONTACT_GAP = 0.014
     PUSH_FINGER_DROP = 0.043
-    PUSH_EDGE_MARGIN = 0.035
-    PUSH_BEHIND_STANDOFF = 0.10
-    PUSH_FINGER_HEIGHT_FRAC = 0.35
-    PUSH_LIN_DAMP = 0.6
+    PUSH_EDGE_MARGIN = 0.025
+    PUSH_BEHIND_STANDOFF = 0.07
+    PUSH_FINGER_HEIGHT_FRAC = 0.40
+    PUSH_LIN_DAMP = 0.85
     PUSH_MU_STATIC = 0.95
     PUSH_MU_DYNAMIC = 0.85
-    PUSH_STEP_DEFAULT = 0.055
+    PUSH_STEP_DEFAULT = 0.040
     PUSH_PLACE_TOL = 0.025
     # Near table edge (KitchenS counter ~0.6 m deep, robot at −Y).
-    TABLE_NEAR_Y = -0.28
+    TABLE_NEAR_Y = -0.34
 
     # Ring marks at 25% / 50% / 75%; 100% = jar rim (no extra ring).
     FILL_LEVELS = (0.25, 0.50, 0.75, 1.0)
@@ -153,10 +154,11 @@ class measure_ingredient(KitchenS_base_task):
     RING_MESH_RADIUS = 0.0388
     RING_XY_SCALE = 1.02
     RING_Z_SCALE = 3.2
-    GLASS = [0.88, 0.95, 0.98, 0.14]
+    # Cooler / less-white glass (same as fill_coffee_jar).
+    GLASS = [0.72, 0.84, 0.92, 0.16]
     # Interactive viewer look (matches trap_bug plain trap): no transmission/IOR.
     # Note: the jar itself always uses transmission glass (see ``_jar_glass_material``).
-    PLAIN_GLASS = [0.18, 0.32, 0.48, 0.55]
+    PLAIN_GLASS = [0.14, 0.26, 0.40, 0.55]
     VERTICAL_CYL_Q = [0.70710678, 0.0, 0.70710678, 0.0]
 
     def setup_demo(self, **kwags):
@@ -1390,25 +1392,24 @@ class measure_ingredient(KitchenS_base_task):
         self._advance_button_press_visual()
 
     def _jar_glass_material(self, viewer_shell: bool = False):
-        """Glass for the jar.
+        """Glass for the jar (same look as ``fill_coffee_jar``).
 
         Demo cameras use transmission glass. The interactive SAPIEN viewer does
-        not composite opaque oil behind transmission materials (you see the
-        table through the wall but not the liquid), so the viewer shell uses
-        plain alpha glass — same trick as ``trap_bug`` plain trap.
+        not composite opaque oil behind transmission materials (or a solid
+        cylinder wall), so the viewer shell uses plain alpha glass — same trick
+        as ``fill_coffee_jar`` / ``trap_bug``.
         """
         if viewer_shell:
-            # Interactive hollow shell: alpha 0.18 (10% more transparent than 0.20).
             glass = sapien.render.RenderMaterial(
-                base_color=[0.88, 0.94, 0.98, 0.18]
+                base_color=[0.70, 0.82, 0.90, 0.22]
             )
             try:
                 glass.set_transmission(0.0)
                 glass.set_transmission_roughness(1.0)
-                glass.set_roughness(0.10)
+                glass.set_roughness(0.12)
                 glass.set_metallic(0.0)
             except Exception:
-                glass.roughness = 0.10
+                glass.roughness = 0.12
                 glass.metallic = 0.0
             try:
                 glass.set_ior(1.0)
@@ -1416,11 +1417,14 @@ class measure_ingredient(KitchenS_base_task):
                 pass
             return glass
 
-        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
+        if bool(getattr(self, "_plain_glass", False)):
+            return self._plain_glass_material()
+
+        glass = sapien.render.RenderMaterial(base_color=[0.76, 0.88, 0.94, 0.12])
         try:
             glass.set_transmission(1.0)
             glass.set_transmission_roughness(0.0)
-            glass.set_roughness(0.04)
+            glass.set_roughness(0.05)
             glass.set_metallic(0.0)
         except Exception:
             pass
@@ -1469,7 +1473,12 @@ class measure_ingredient(KitchenS_base_task):
         wall_z = bottom_t + wall_half
         glass = self._jar_glass_material(viewer_shell=bool(hollow))
 
-        pose = self.jar.get_pose()
+        try:
+            pose = self.jar.get_pose()
+        except Exception:
+            pose = sapien.Pose(
+                [float(self.jar_xy[0]), float(self.jar_xy[1]), self.table_top + 0.001]
+            )
         vis = sapien.Entity()
         vis.set_name("glass_jar_visual")
         vis.set_pose(pose)
@@ -2636,14 +2645,12 @@ class measure_ingredient(KitchenS_base_task):
         return np.array(pose[:3], dtype=float)
 
     def _move_tcp(self, arm_tag, xy, z, quat) -> bool:
-        """Absolute TCP move (see catch_cup — avoid EE-frame displacement)."""
+        """Absolute TCP move via EE pose (top-down: EE sits ``EE_TO_TCP`` above TCP)."""
         self.plan_success = True
-        self.move(
-            self.move_to_pose(
-                arm_tag,
-                [float(xy[0]), float(xy[1]), float(z)] + list(quat),
-            )
+        pose = self._ee_pose_from_tcp(
+            [float(xy[0]), float(xy[1]), float(z)], list(quat)
         )
+        self.move(self.move_to_pose(arm_tag, pose))
         return bool(self.plan_success)
 
     def _jar_live_xy(self):
@@ -2734,12 +2741,13 @@ class measure_ingredient(KitchenS_base_task):
             except Exception:
                 pass
             rigid.set_disable_gravity(False)
-            # Free XY translation; lock roll/pitch; yaw free.
-            rigid.set_locked_motion_axes([False, False, False, True, True, False])
+            # Planar slide: free XY + yaw; lock Z / roll / pitch so the jar
+            # cannot hop or tip when the gripper glances the cylinder.
+            rigid.set_locked_motion_axes([False, False, True, True, True, False])
             rigid.set_linear_damping(float(self.PUSH_LIN_DAMP))
             rigid.set_angular_damping(2.0)
             try:
-                rigid.set_max_linear_velocity(0.6)
+                rigid.set_max_linear_velocity(0.45)
             except Exception:
                 pass
             if not getattr(self, "_push_active", False):
@@ -2758,42 +2766,55 @@ class measure_ingredient(KitchenS_base_task):
         )
         self._jar_locked = False
 
-    def _slide_jar_to(self, xy) -> None:
-        if getattr(self, "_push_active", False) or self.jar is None:
-            return
-        pose = sapien.Pose(
-            [float(xy[0]), float(xy[1]), float(self.table_top) + 0.001],
-            list(self.jar.get_pose().q),
-        )
-        self._freeze_jar(pose)
-
     def _push_jar_under_nozzle(self, arm_tag: ArmTag) -> bool:
-        """Shove the jar under the nozzle with a closed gripper (catch_cup style)."""
+        """Shove the jar under the nozzle with a closed gripper (contact only).
+
+        Mirrors ``catch_valley_ball``: freeze for approach, unlock PhysX for the
+        shove, then park wherever contact left the jar — never ``set_pose``-slide
+        to the fill target.
+        """
         land_xy = np.asarray(self.fill_xy, dtype=float).copy()
         self._measure_jar_extents()
         pp0 = self._jar_live_xy()
         delta = land_xy - pp0
         dist = float(np.linalg.norm(delta))
         if dist < 0.02:
-            self._freeze_jar(
-                sapien.Pose(
-                    [float(land_xy[0]), float(land_xy[1]), float(self.table_top) + 0.001],
-                    list(self.jar.get_pose().q),
-                )
-            )
-            return True
+            # Already seated — freeze in place (no snap to land_xy).
+            self._freeze_jar()
+            placed = bool(self._jar_under_nozzle())
+            self.plan_success = placed
+            return placed
 
+        # Prefer +Y push (jar spawn is toward the robot); soft X so glancing
+        # sideways shoves do not fling the cylinder off the counter.
         direction = delta / max(dist, 1e-6)
+        if abs(float(direction[0])) < 0.45:
+            direction = np.array([0.25 * float(direction[0]), float(direction[1])])
+            direction = direction / max(float(np.linalg.norm(direction)), 1e-6)
         half_along = float(
             abs(direction[0]) * self.jar_half_xy[0]
             + abs(direction[1]) * self.jar_half_xy[1]
         )
         quat = self._push_quat(arm_tag)
         gap = float(self.PUSH_CONTACT_GAP)
-        behind = pp0 - direction * (half_along + self.PUSH_BEHIND_STANDOFF)
-        contact = pp0 - direction * (half_along + gap)
         y_min = float(self.TABLE_NEAR_Y) + float(self.PUSH_EDGE_MARGIN)
+        min_clear = half_along + gap + 0.015
+        standoff = float(self.PUSH_BEHIND_STANDOFF)
+        behind = pp0 - direction * (half_along + standoff)
+        contact = pp0 - direction * (half_along + gap)
+        # Keep the TCP behind the rear face; if the near-edge clamp would put
+        # the hand inside the jar, shorten the standoff then side-offset.
+        if float(behind[1]) < y_min and abs(float(direction[1])) > 1e-4:
+            t_max = (float(pp0[1]) - y_min) / float(direction[1])
+            t = float(np.clip(t_max, min_clear, half_along + standoff))
+            behind = pp0 - direction * t
         behind[1] = max(float(behind[1]), y_min)
+        if float(np.dot(pp0 - behind, direction)) < min_clear - 1e-3:
+            side = np.array([-float(direction[1]), float(direction[0])], dtype=float)
+            # Bias the side offset toward the arm's natural workspace.
+            side_sign = -1.0 if str(arm_tag) == "left" else 1.0
+            behind = pp0 - direction * min_clear + side_sign * 0.055 * side
+            behind[1] = max(float(behind[1]), y_min)
         contact[1] = max(float(contact[1]), y_min)
 
         self.move(self.close_gripper(arm_tag=arm_tag))
@@ -2829,36 +2850,38 @@ class measure_ingredient(KitchenS_base_task):
         self._move_tcp(arm_tag, into, z_hold, quat)
         print(
             f"[measure_ingredient] push approach jar={np.round(pp, 3)} "
-            f"land={np.round(land_xy, 3)} z_hold={z_hold:.3f}"
+            f"land={np.round(land_xy, 3)} behind={np.round(behind, 3)} "
+            f"z_hold={z_hold:.3f}"
         )
 
-        step = float(np.clip(getattr(self, "push_step", self.PUSH_STEP_DEFAULT), 0.02, 0.10))
-        ee_goal = land_xy - direction * (half_along + gap)
-        ee_start = self._tcp_pos(arm_tag)[:2].copy()
+        step = float(np.clip(getattr(self, "push_step", self.PUSH_STEP_DEFAULT), 0.02, 0.08))
         place_tol = float(self.PUSH_PLACE_TOL)
-        n_chunks = int(np.ceil(float(np.linalg.norm(ee_goal - ee_start)) / step)) + 18
+        n_chunks = int(np.ceil(dist / step)) + 40
         prev_pp = self._jar_live_xy().copy()
         n_stuck = 0
         for _ in range(max(1, n_chunks)):
             pp = self._jar_live_xy()
             err = land_xy - pp
-            along_remain = float(np.dot(err, direction))
-            lateral = err - along_remain * direction
-            if float(np.linalg.norm(err)) <= place_tol:
+            # Soft X corrections — glancing lateral shoves fling the cylinder.
+            if abs(float(err[0])) < 0.04:
+                err[0] *= 0.2
+            err_n = float(np.linalg.norm(err))
+            if self._jar_under_nozzle() or err_n <= place_tol:
                 break
+            direction = err / max(err_n, 1e-6)
+            half_along = float(
+                abs(direction[0]) * self.jar_half_xy[0]
+                + abs(direction[1]) * self.jar_half_xy[1]
+            )
             rear_now = pp - direction * (half_along + gap)
-            if along_remain <= 0.015 and float(np.linalg.norm(lateral)) > 0.02:
-                lat_n = float(np.linalg.norm(lateral))
-                aim = rear_now + lateral * (min(step, lat_n) / max(lat_n, 1e-6))
-            else:
-                aim = rear_now + direction * step
-                if float(np.dot(aim - ee_goal, direction)) < 0.0:
-                    aim = ee_goal.copy()
-                aim = aim + 0.15 * lateral
+            advance = min(step, max(err_n - 0.5 * place_tol, 0.01))
+            if err_n < 0.06:
+                advance = min(advance, 0.5 * step)
+            aim = rear_now + direction * advance
             aim[1] = max(float(aim[1]), y_min)
 
             moved = float(np.linalg.norm(pp - prev_pp))
-            if moved < 0.006:
+            if moved < 0.004:
                 n_stuck += 1
                 if n_stuck >= 2:
                     z_hold = max(float(self.table_top) + drop + 0.008, z_hold - 0.008)
@@ -2871,31 +2894,44 @@ class measure_ingredient(KitchenS_base_task):
             self._move_tcp(arm_tag, aim, z_hold, quat)
             self._dwell(2)
             self.plan_success = True
+            # Soft brake near the target so contact inertia cannot coast past it.
+            if err_n < 0.08:
+                rigid = self._get_rigid(self.jar)
+                if rigid is not None:
+                    try:
+                        v = np.asarray(rigid.get_linear_velocity(), dtype=float)
+                        scale = 0.20 if err_n < 0.05 else 0.40
+                        rigid.set_linear_velocity(scale * v)
+                        rigid.set_linear_damping(1.4)
+                    except Exception:
+                        pass
             prev_pp = self._jar_live_xy().copy()
 
+        # Leave the jar where contact physics put it — no teleport / snap.
         self._push_active = False
-        self._dwell(18)
+        rigid = self._get_rigid(self.jar)
+        if rigid is not None:
+            try:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+            except Exception:
+                pass
+        self._dwell(12)
         pp = self._jar_live_xy()
-        err = float(np.linalg.norm(pp - land_xy))
-        if 0.02 < err <= 0.12:
-            self._slide_jar_to(land_xy)
-            self._dwell(4)
-            pp = self._jar_live_xy()
         self._freeze_jar(
             sapien.Pose(
                 [float(pp[0]), float(pp[1]), float(self.table_top) + 0.001],
                 list(self.jar.get_pose().q),
             )
         )
-        placed = bool(float(np.linalg.norm(pp - land_xy)) <= place_tol + 0.01)
-        # Also accept if the nozzle would already catch into the jar.
-        if self._jar_under_nozzle():
-            placed = True
+        # Success only when the spout would actually land in the mouth.
+        placed = bool(self._jar_under_nozzle())
         tcp = self._tcp_pos(arm_tag)
         self._move_tcp(arm_tag, tcp[:2], float(tcp[2] + 0.12), quat)
         print(
             f"[measure_ingredient] push done placed={placed} "
             f"jar {np.round(pp0, 3)}->{np.round(pp, 3)} land={np.round(land_xy, 3)} "
+            f"err={float(np.linalg.norm(pp - land_xy)):.3f} "
             f"under_nozzle={self._jar_under_nozzle()}"
         )
         self.plan_success = bool(placed)
@@ -2918,16 +2954,23 @@ class measure_ingredient(KitchenS_base_task):
         return self._touch_tip_pose(tip_z_above)
 
     def _press_switch(self, arm_tag: ArmTag, want_open: bool):
-        """Press the key (hover → depress → release) to the desired latch.
+        """Press the key via real TCP force — no scripted latch without contact.
 
-        ON: oil starts at depress; key stays down after release.
-        OFF: oil keeps flowing through the whole press; stream stops only after
-        release when the key returns to its up position.
+        ON: depress until ``_detect_tab_touch`` engages (force > threshold), then
+        release; key stays visually DOWN while ``tab_open``.
+        OFF: depress for a second press edge (``_pending_tab_off``), then release
+        so the detector turns oil OFF when the key returns up.
         """
         was = self.tab_open
-        # Ignore ambient touch; expert sets the state explicitly below.
-        self._ignore_tab = True
+        if want_open and was:
+            return True
+        if (not want_open) and (not was):
+            return True
+
+        # Contact path only — never ``_set_tab_open`` from the expert.
+        self._ignore_tab = False
         self._pending_tab_off = False
+        self._touch_latched = False
         self._pressing_arm_side = str(arm_tag)
 
         self.move(self.close_gripper(arm_tag))
@@ -2935,59 +2978,91 @@ class measure_ingredient(KitchenS_base_task):
             return False
 
         high_dis = float(self.KEY_HOVER_DIS) + 0.08
+        # Absolute poses (not relative displace) so a drifted post-pour wrist
+        # still lands on the key XY.
         self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(high_dis)))
         if not self.plan_success:
             self.plan_success = True
-            self.move(
-                self.move_to_pose(arm_tag, self._touch_tip_pose(self.KEY_HOVER_DIS))
-            )
-        else:
-            self.move(
-                self.move_by_displacement(
-                    arm_tag, z=-(high_dis - float(self.KEY_HOVER_DIS))
-                )
-            )
+        self.move(
+            self.move_to_pose(arm_tag, self._touch_tip_pose(self.KEY_HOVER_DIS))
+        )
         if not self.plan_success:
             print(f"[measure_ingredient] key hover failed want_open={want_open}")
             return False
 
-        # Depress.
-        self.move(self.move_by_displacement(arm_tag, z=-float(self.KEY_PRESS_DEPTH)))
-        if not self.plan_success:
-            self.plan_success = True
-        self._idle_steps(3)
-        if want_open:
-            # Latch ON immediately so oil flows while the key is held down.
-            self._set_tab_open(True)
-            self._idle_steps(4)
-            self.move(
-                self.move_by_displacement(
-                    arm_tag, z=float(self.KEY_PRESS_DEPTH) + 0.04
+        # Depress into the force-engage band: TCP below top_z + slack.
+        # tip_z_above = -0.008 → ~8 mm into the key cap.
+        engage_tips = (-0.004, -0.010, -0.016)
+
+        def _force() -> float:
+            sig = self._switch_press_signal()
+            return float(sig["force"]) if sig is not None else 0.0
+
+        def _depress_until(pred, label: str) -> bool:
+            for tip in engage_tips:
+                self.move(self.move_to_pose(arm_tag, self._touch_tip_pose(tip)))
+                if not self.plan_success:
+                    self.plan_success = True
+                self._idle_steps(35, until=pred)
+                if pred():
+                    return True
+                print(
+                    f"[measure_ingredient] key {label} retry tip={tip} "
+                    f"force={_force():.2f}N"
                 )
-            )
-        else:
-            # Keep pouring while depressed; stop only once the key is back up.
-            self._idle_steps(4)
+            return bool(pred())
+
+        if want_open:
+            if not _depress_until(lambda: bool(self.tab_open), "ON"):
+                print(
+                    f"[measure_ingredient] key ON failed — no contact engage "
+                    f"(force={_force():.2f}N need>{self.SWITCH_ENGAGE_FORCE})"
+                )
+                self.plan_success = False
+                return False
+            # Release; latch stays ON via tab_open (visual stays down).
             self.move(
-                self.move_by_displacement(
-                    arm_tag, z=float(self.KEY_PRESS_DEPTH) + 0.04
+                self.move_to_pose(
+                    arm_tag, self._touch_tip_pose(float(self.KEY_HOVER_DIS) + 0.04)
                 )
             )
             if not self.plan_success:
                 self.plan_success = True
-            self._idle_steps(3)
-            self._set_tab_open(False)
-        self._touch_latched = False
-        self._pending_tab_off = False
-        # Keep ignore during scripted expert; interactive clears via load / F end.
+            self._idle_steps(8)
+        else:
+            if not _depress_until(
+                lambda: bool(self._pending_tab_off), "OFF"
+            ):
+                print(
+                    f"[measure_ingredient] key OFF press missed contact "
+                    f"(force={_force():.2f}N, tab_open={self.tab_open})"
+                )
+                self.plan_success = False
+                return False
+            self.move(
+                self.move_to_pose(
+                    arm_tag, self._touch_tip_pose(float(self.KEY_HOVER_DIS) + 0.04)
+                )
+            )
+            if not self.plan_success:
+                self.plan_success = True
+            self._idle_steps(40, until=lambda: not bool(self.tab_open))
+            if self.tab_open:
+                print(
+                    "[measure_ingredient] key OFF failed — still ON after release"
+                )
+                self.plan_success = False
+                return False
+
         interactive = bool(getattr(self, "_interactive_robot_mode", False)) or bool(
             getattr(self, "_interactive_universal_controls", False)
         )
+        # Expert: ignore ambient touches between scripted presses.
         self._ignore_tab = not interactive
         print(
             f"[measure_ingredient] press key {was}→{self.tab_open} "
-            f"(want={want_open}, latched={'DOWN' if self.tab_open else 'UP'}) "
-            f"liq={self.liquid_level:.2f}"
+            f"(want={want_open}, latched={'DOWN' if self.tab_open else 'UP'}, "
+            f"contact) liq={self.liquid_level:.2f}"
         )
         return bool(self.plan_success)
 
