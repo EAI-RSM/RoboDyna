@@ -1,8 +1,8 @@
 """Push a marked jar under an oil nozzle and fill it to a target ring.
 
-KitchenS prep-counter scene (no sink / tap / stove): silver oil dispenser, marked
-glass jar a few centimeters in front of the nozzle, electronic scale (scene prop),
-and baking props. The robot pushes the jar under the nozzle
+KitchenS prep-counter scene (no sink / tap / stove): silver oil dispenser, glass
+jar marked with red rings at 25% / 50% / 75%, electronic scale (scene prop), and
+baking props. The robot pushes the jar under the nozzle
 (``catch_cup`` pillow-style contact shove),
 presses the green key to latch oil ON (key turns red), then presses OFF at the
 target fill. Oil that misses the jar mouth (jar not under the nozzle, or pushed
@@ -87,7 +87,7 @@ class measure_ingredient(KitchenS_base_task):
     # Near table edge (KitchenS counter ~0.6 m deep, robot at −Y).
     TABLE_NEAR_Y = -0.28
 
-    # Ring marks at 25/50/75%; 100% = jar rim (no ring).
+    # Ring marks at 25% / 50% / 75%; 100% = jar rim (no extra ring).
     FILL_LEVELS = (0.25, 0.50, 0.75, 1.0)
     FILL_TOL = 0.05             # ±5% absolute fill tolerance
     # Slow enough that opening the switch does not already overshoot the mark;
@@ -148,7 +148,11 @@ class measure_ingredient(KitchenS_base_task):
     UPRIGHT_CYL_Q = [0.70710678, 0.0, -0.70710678, 0.0]
     SILVER = [0.78, 0.80, 0.84, 1.0]
     SILVER_DARK = [0.55, 0.57, 0.60, 1.0]
-    RING_RED = [0.78, 0.05, 0.05]
+    # Saturated opaque red fill mark (matches fill_coffee_jar).
+    RING_RED = [1.0, 0.04, 0.02]
+    RING_MESH_RADIUS = 0.0388
+    RING_XY_SCALE = 1.02
+    RING_Z_SCALE = 3.2
     GLASS = [0.88, 0.95, 0.98, 0.14]
     # Interactive viewer look (matches trap_bug plain trap): no transmission/IOR.
     # Note: the jar itself always uses transmission glass (see ``_jar_glass_material``).
@@ -802,6 +806,31 @@ class measure_ingredient(KitchenS_base_task):
         except Exception:
             mat.roughness = 0.45
             mat.metallic = 0.0
+        return mat
+
+    def _ring_material(self):
+        """Opaque saturated red for the target fill mark."""
+        rgba = list(self.RING_RED[:3]) + [1.0]
+        mat = sapien.render.RenderMaterial(base_color=rgba)
+        try:
+            mat.set_roughness(0.30)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.30
+            mat.metallic = 0.0
+        try:
+            emit = [
+                float(self.RING_RED[0]) * 0.35,
+                float(self.RING_RED[1]) * 0.35,
+                float(self.RING_RED[2]) * 0.35,
+                1.0,
+            ]
+            mat.set_emission(emit)
+        except Exception:
+            try:
+                mat.emission = emit
+            except Exception:
+                pass
         return mat
 
     def _parse_oil_style(self, cfg) -> str:
@@ -1570,17 +1599,27 @@ class measure_ingredient(KitchenS_base_task):
                     pass
 
     def _build_fill_rings(self):
-        """Three subtle red rings that follow the jar pose."""
+        """Three thick red rings at 25% / 50% / 75% that follow the jar pose."""
         self._ring_entities = []
-        ring_material = self._opaque_material(self.RING_RED, 0.70)
+        ring_material = self._ring_material()
         ring_mesh = str(Path("assets/objects/253_glass_jar/rings/thin_ring.glb").resolve())
         x, y = self.jar_xy
+        outer_r = float(self.JAR_INNER_R) + 0.0035
+        xy = float(self.RING_XY_SCALE) * (outer_r / float(self.RING_MESH_RADIUS))
+        z_sc = float(self.RING_Z_SCALE)
+        scale = [xy, xy, z_sc]
         for frac in (0.25, 0.50, 0.75):
             z_local = self.JAR_BOTTOM_T + frac * self.jar_fillable_h
             builder = self.scene.create_actor_builder()
             builder.set_physx_body_type("kinematic")
-            builder.add_visual_from_file(filename=ring_mesh, material=ring_material)
-            builder.set_initial_pose(sapien.Pose([x, y, self.table_top + 0.001 + z_local]))
+            builder.add_visual_from_file(
+                filename=ring_mesh,
+                scale=scale,
+                material=ring_material,
+            )
+            builder.set_initial_pose(
+                sapien.Pose([x, y, self.table_top + 0.001 + z_local])
+            )
             ent = builder.build(name=f"fill_ring_{int(frac * 100)}")
             self._ring_entities.append((float(frac), ent))
 

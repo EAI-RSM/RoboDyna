@@ -1318,7 +1318,8 @@ class UniversalRobotControls:
             + float(self.FINGER_TABLE_CLEARANCE)
         )
         floor_fn = getattr(self.env, "interactive_ee_z_floor", None)
-        # Task floors only raise the band floor (never lower the ceiling here).
+        # Raise-only here; press-key tasks replace the band in ``_drive`` the
+        # same way ``_reactive_buttons.min_ee_z_over_key`` does.
         if callable(floor_fn):
             override = floor_fn(side, pose)
             if override is not None:
@@ -1366,18 +1367,27 @@ class UniversalRobotControls:
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
         # Absolute world-frame Q/E band (not relative to current EE height).
         z_min, z_max = self._global_ee_z_band(side, pose)
-        # Over a cook / reactive key: replace the table+finger floor with the
-        # trigger-depth EE floor so Q can finish the press after fingers contact
-        # the keycap, without continuing down to full key travel.
+        # Over a cook / reactive / dispenser key: *replace* the table+finger
+        # floor with the key press-depth EE floor so Q can finish the press
+        # after fingers contact the keycap, then stop (no dive past full force).
+        key_floor = None
         bank = getattr(self.env, "_reactive_buttons", None)
         if bank is not None:
-            key_floor = None
             if hasattr(bank, "min_ee_z_over_key"):
                 key_floor = bank.min_ee_z_over_key(pose[:2])
             elif hasattr(bank, "min_ee_z_over_pressed"):
                 key_floor = bank.min_ee_z_over_pressed(pose[:2])
-            if key_floor is not None:
-                z_min = float(key_floor)
+        if key_floor is None:
+            floor_fn = getattr(self.env, "interactive_ee_z_floor", None)
+            if callable(floor_fn):
+                try:
+                    override = floor_fn(side, pose)
+                    if override is not None:
+                        key_floor = float(override)
+                except Exception:
+                    key_floor = None
+        if key_floor is not None:
+            z_min = float(key_floor)
         # Billiard / tool-on-surface: if the held cue is already on the felt,
         # reject further -Z on that arm so it stops with the stick.
         if float(step[2]) < -1e-9:
@@ -1461,8 +1471,20 @@ class UniversalRobotControls:
         ], dtype=np.float64)
         roll = float(roll_dir) * self.ROLL_SPEED * dt
         yaw = float(yaw_dir) * self.YAW_SPEED * dt
+        scale_fn = getattr(self.env, "interactive_teleop_z_speed_scale", None)
         for side in self.selected:
-            self._drive(side, step, dt, roll=roll, yaw=yaw)
+            local_step = step
+            if callable(scale_fn) and abs(float(step[2])) > 1e-12:
+                try:
+                    state = self._command.get(side)
+                    pose = state["pose"] if state is not None else self._ee_pose(side)
+                    scale = scale_fn(side, pose, float(step[2]))
+                    if scale is not None:
+                        local_step = step.copy()
+                        local_step[2] *= float(np.clip(scale, 0.0, 1.0))
+                except Exception:
+                    local_step = step
+            self._drive(side, local_step, dt, roll=roll, yaw=yaw)
 
 
 # Keep stepping/rendering this long after a terminal SUCCESS/FAILURE so the

@@ -978,6 +978,19 @@ def _fill_level_detail(env, task: str) -> str:
         if bool(getattr(env, "overflowed", False)):
             return f"OVERFLOW fill={lvl:.0f}%"
         return f"fill={lvl:.0f}% target={tgt - tol:.0f}–{tgt + tol:.0f}%"
+    if task == "fill_coffee_jar":
+        try:
+            fill = 100.0 * float(env._current_fill())
+        except Exception:
+            fill = 0.0
+        tgt = 100.0 * float(getattr(env, "target_fill", 0.0))
+        tol = 100.0 * float(getattr(env, "fill_tol", 0.05))
+        idle = float(getattr(env, "_press_idle_s", 0.0))
+        need = float(getattr(env, "idle_score_sec", 3.0))
+        return (
+            f"fill={fill:.0f}% target={tgt - tol:.0f}–{tgt + tol:.0f}% "
+            f"idle={idle:.1f}/{need:.0f}s"
+        )
     return ""
 
 
@@ -1024,9 +1037,15 @@ def _terminal_failure(env, task):
                 return "switch turned off without meeting success criteria"
     elif task == "fill_coffee_jar":
         try:
-            _lo, hi = env._fill_band()
-            if float(env._current_fill()) > float(hi) + 1e-3:
-                return "coffee jar overfilled"
+            if not bool(env._fill_ready_to_score()):
+                return None
+            fill = float(env._current_fill())
+            lo, hi = env._fill_band()
+            if fill > float(hi) + 1e-3:
+                return "coffee jar overfilled after idle"
+            if fill + 1e-3 < float(lo):
+                return "coffee jar underfilled after idle"
+            return "fill outside target after idle"
         except Exception:
             pass
     elif task in ("cook_food", "cook_food_timer"):

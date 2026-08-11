@@ -4,13 +4,16 @@ Inherits ``KitchenS_base_task`` (cooking range on a solid kitchen counter; no
 microwave / sink / tap). The dispenser is a raised clear glass hopper packed
 with real bean meshes. Pressing the button on top opens a nozzle above the jar
 and releases beans into a glass jar marked with red ring lines at 25% / 50% /
-75% (rim = full).
+75% (rim = full). Target fill is randomized (15%–80% in 5% steps by default).
 
 Counter decor: random ``113_coffee-box``, ``038_milk-box``, and ``039_mug``.
 A random ``009_kettle`` sits on one of the stove burners.
 
-Dispense amount is gated by **press force** on the button (four thresholds), not
-hold duration.
+Dispense amount is gated by **press force** on the button (four thresholds).
+Each press–release cycle dispenses once for the achieved force level (up to the
+final / hardest level if pushed further); holding continuously does not keep
+filling — release and press again for another shot. Success / failure is scored
+only after the button has been idle for ``IDLE_SCORE_SEC`` (default 3 s).
 """
 
 from __future__ import annotations
@@ -37,8 +40,9 @@ class fill_coffee_jar(KitchenS_base_task):
     """Press the dispenser button to fill a marked glass jar to a target level.
 
     Task options (``task_args.fill_coffee_jar``):
-      - ``target_fill``: 0.25 | 0.50 | 0.75 | ``random``
+      - ``target_fill``: fraction in {0.15, 0.20, …, 0.80} | ``random`` (default)
       - ``fill_tol``: success band half-width (default 0.05 = ±5%)
+      - ``idle_score_sec``: seconds without a press before scoring (default 3)
       - ``randomize_layout``: seed-randomized non-overlapping station pose
       - ``force_thresholds``: 4 increasing force cutoffs (N)
       - ``beans_per_force_level``: beans dispensed at each force level
@@ -46,7 +50,11 @@ class fill_coffee_jar(KitchenS_base_task):
       - ``scene_id``: 0 | 1 | 2 (KitchenS fixture layout)
 
     Peak button press force maps to four dispense levels; fill rises with beans.
-    Success when fill ∈ [target_fill − fill_tol, target_fill + fill_tol].
+    One press–release = one dispense (continuous hold does not re-fire). Within a
+    press the level follows how hard the button is pushed, up to the final level.
+    After ``idle_score_sec`` without a press following any completed press
+    (timer resets on every press), success if fill ∈ [target − tol, target + tol],
+    else failure.
     """
 
     BEAN_MODEL = "252_coffee_bean"
@@ -66,8 +74,10 @@ class fill_coffee_jar(KitchenS_base_task):
     # Expert press depths from hover for force levels 1..4.
     PRESS_DEPTHS = (0.020, 0.030, 0.044, 0.057)
     PRESS_SAMPLE_S = 0.40  # hold time to sample peak force
-    FILL_LEVELS = (0.25, 0.50, 0.75)
+    # Target fill: 15%–80% in 5% steps (default episode samples randomly).
+    FILL_LEVELS = tuple(round(0.15 + 0.05 * i, 2) for i in range(14))  # 0.15..0.80
     FILL_TOL = 0.05  # success band: target_fill ± fill_tol
+    IDLE_SCORE_SEC = 3.0  # score only after this long without a button press
     # Station footprints for non-overlap layout (half-extents, meters).
     DISP_HALF_XY = (0.065, 0.065)
     JAR_HALF_XY = (0.045, 0.045)
@@ -87,6 +97,8 @@ class fill_coffee_jar(KitchenS_base_task):
     BTN_BASE_COLOR = (0.12, 0.12, 0.14)
     BTN_COLOR = (0.08, 0.36, 0.95)
     BTN_TOUCH_XY_TOL = 0.05   # m; fingertip XY tolerance around button center
+    # Teleop Q over the key: fraction of default Z_SPEED (finer force control).
+    DISPENSE_Z_DOWN_SCALE = 0.22
     BEAN_FILL_FRAC = 0.65                  # visual fill inside the glass box
     EE_TO_TCP = 0.12
     KEY_HOVER_DIS = 0.06
@@ -98,11 +110,16 @@ class fill_coffee_jar(KitchenS_base_task):
     JAR_HEIGHT = 0.125
     JAR_BOTTOM_T = 0.005
 
-    GLASS = [0.88, 0.95, 0.98, 0.14]
+    GLASS = [0.72, 0.84, 0.92, 0.16]
     # Interactive viewer look (matches trap_bug plain trap): no transmission/IOR.
-    PLAIN_GLASS = [0.18, 0.32, 0.48, 0.55]
+    PLAIN_GLASS = [0.14, 0.26, 0.40, 0.55]
     BEAN_BROWN = [0.30, 0.14, 0.05]
-    RING_RED = [0.95, 0.05, 0.05]
+    # Fill marks: saturated opaque red (not washed-out translucent).
+    RING_RED = [1.0, 0.04, 0.02]
+    # thin_ring.glb native radius ≈ jar outer; Z scale thickens the band.
+    RING_MESH_RADIUS = 0.0388
+    RING_XY_SCALE = 1.02
+    RING_Z_SCALE = 3.2
 
     # Counter / stove decor (static props; not task goals).
     COFFEE_BOX_MODEL = "113_coffee-box"
@@ -178,13 +195,16 @@ class fill_coffee_jar(KitchenS_base_task):
         self._touch_latched = False
         self._dispensing = False
         self._press_active = False
+        self._awaiting_release = False
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
         self._press_peak_force = 0.0
         self._press_force_level = 0
+        self._press_dispense_level = 0
         self._button_visual_depth = 0.0
         self._button_target_depth = 0.0
+        self._press_idle_s = 0.0
         self.table_top = 0.74
         self._plain_glass = bool(self._cfg.get("plain_glass", False))
 
@@ -346,15 +366,15 @@ class fill_coffee_jar(KitchenS_base_task):
         """
         if viewer_shell:
             glass = sapien.render.RenderMaterial(
-                base_color=[0.88, 0.94, 0.98, 0.20]
+                base_color=[0.70, 0.82, 0.90, 0.22]
             )
             try:
                 glass.set_transmission(0.0)
                 glass.set_transmission_roughness(1.0)
-                glass.set_roughness(0.10)
+                glass.set_roughness(0.12)
                 glass.set_metallic(0.0)
             except Exception:
-                glass.roughness = 0.10
+                glass.roughness = 0.12
                 glass.metallic = 0.0
             try:
                 glass.set_ior(1.0)
@@ -365,11 +385,11 @@ class fill_coffee_jar(KitchenS_base_task):
         if bool(getattr(self, "_plain_glass", False)):
             return self._plain_glass_material()
 
-        glass = sapien.render.RenderMaterial(base_color=[0.93, 0.97, 1.0, 0.10])
+        glass = sapien.render.RenderMaterial(base_color=[0.76, 0.88, 0.94, 0.12])
         try:
             glass.set_transmission(1.0)
             glass.set_transmission_roughness(0.0)
-            glass.set_roughness(0.04)
+            glass.set_roughness(0.05)
             glass.set_metallic(0.0)
         except Exception:
             pass
@@ -450,14 +470,20 @@ class fill_coffee_jar(KitchenS_base_task):
         builder.set_initial_pose(pose)
         return builder.build(name=name)
 
-    def _add_static_mesh_visual(self, filename, pose, material, name):
+    def _add_static_mesh_visual(self, filename, pose, material, name, scale=None):
         """Add a smooth mesh visual while forcing the intended render material."""
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
-        builder.add_visual_from_file(
-            filename=str(Path(filename).resolve()),
-            material=material,
-        )
+        kwargs = {
+            "filename": str(Path(filename).resolve()),
+            "material": material,
+        }
+        if scale is not None:
+            sc = list(scale)
+            if len(sc) == 1:
+                sc = [float(sc[0])] * 3
+            kwargs["scale"] = [float(v) for v in sc[:3]]
+        builder.add_visual_from_file(**kwargs)
         builder.set_initial_pose(pose)
         return builder.build(name=name)
 
@@ -753,15 +779,18 @@ class fill_coffee_jar(KitchenS_base_task):
         return True
 
     def _resolve_target_fill(self, cfg, rng: np.random.RandomState) -> float:
-        tf = cfg.get("target_fill", 0.25)
-        if tf is None:
-            return 0.25
-        if isinstance(tf, str) and tf.lower() == "random":
+        tf = cfg.get("target_fill", "random")
+        if tf is None or (isinstance(tf, str) and tf.lower() == "random"):
             return float(rng.choice(self.FILL_LEVELS))
-        val = float(tf)
-        if val not in self.FILL_LEVELS:
-            raise ValueError(f"target_fill must be one of {self.FILL_LEVELS} or 'random'")
-        return val
+        val = round(float(tf), 2)
+        # Accept exact fill levels, or values that land on the 5% grid in range.
+        if val in self.FILL_LEVELS:
+            return float(val)
+        if 0.15 - 1e-9 <= val <= 0.80 + 1e-9 and abs(val * 20.0 - round(val * 20.0)) < 1e-6:
+            return float(round(val, 2))
+        raise ValueError(
+            f"target_fill must be one of {list(self.FILL_LEVELS)} or 'random'"
+        )
 
     def _sample_station_layout(self, cfg, rng: np.random.RandomState):
         """Place dispenser+jar on the free half opposite the stove.
@@ -878,17 +907,21 @@ class fill_coffee_jar(KitchenS_base_task):
         self.beans_per_press_min = int(self.beans_per_force_level[0])
         self.beans_per_press_max = int(self.beans_per_force_level[-1])
         self.fill_tol = float(cfg.get("fill_tol", self.FILL_TOL))
+        self.idle_score_sec = float(cfg.get("idle_score_sec", self.IDLE_SCORE_SEC))
         self.beans = []
         self.beans_in_jar = 0
         self.press_count = 0
         self._touch_latched = False
         self._dispensing = False
         self._press_active = False
+        self._awaiting_release = False
+        self._press_idle_s = 0.0
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
         self._press_peak_force = 0.0
         self._press_force_level = 0
+        self._press_dispense_level = 0
 
         side_x, disp_y, jar_y = self._sample_station_layout(cfg, rng_layout)
         self.dispenser_xy = np.array([side_x, disp_y], dtype=float)
@@ -968,7 +1001,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self._add_static_box(
             pose=sapien.Pose([x, y, lid_z]),
             half_size=[bx * 1.01, by * 1.01, lid_hz],
-            material=self._glass_material([0.90, 0.96, 0.99, 0.22]),
+            material=self._glass_material([0.74, 0.86, 0.93, 0.24]),
             name="dispenser_lid",
             collision=True,
         )
@@ -1040,8 +1073,17 @@ class fill_coffee_jar(KitchenS_base_task):
             [jar_x, jar_y, nozzle_outlet_z], dtype=float
         )
 
-        self.touch_xy = np.array([x, y], dtype=float)
+        self.touch_xy = np.asarray([x, y], dtype=float)
         self.touch_top_z = float(btn_z + bhz)
+        # Same floor math as ``ReactivePushButtons.min_ee_z_over_key``: EE Z at
+        # the tip height that reaches force level 4 (``force_full``).
+        max_force = float(self.FORCE_THRESHOLDS[-1])
+        stiffness = max(float(self.FORCE_STIFFNESS), 1e-6)
+        slack = float(self.FORCE_ENGAGE_SLACK)
+        tip_l4 = float(self.touch_top_z) + slack - (max_force / stiffness)
+        self._dispenser_ee_z_floor = float(
+            tip_l4 - 0.003 + float(self.EE_TO_TCP)
+        )
 
     def _set_button_press_depth(self, depth: float) -> None:
         max_depth = float(getattr(self, "BTN_HALF", (0.0, 0.0, 0.0))[2])
@@ -1096,6 +1138,7 @@ class fill_coffee_jar(KitchenS_base_task):
                     else self.robot.get_right_ee_pose
                 )
                 ee = np.asarray(getter(), dtype=float)
+                # Same virtual tip as ReactivePushButtons / cook_meat keys.
                 tcp = np.asarray(ee, dtype=float)
                 tcp[2] -= float(self.EE_TO_TCP)
             except Exception:
@@ -1124,6 +1167,68 @@ class fill_coffee_jar(KitchenS_base_task):
             self._pressing_arm_side = best["side"]
         return best
 
+    def _over_dispenser_button(self, side, pose) -> bool:
+        """True when EE or TCP XY is over the dispenser push button."""
+        touch_xy = getattr(self, "touch_xy", None)
+        if touch_xy is None:
+            return False
+        target = np.asarray(touch_xy, dtype=float)
+        tol = max(
+            float(self.BTN_TOUCH_XY_TOL) * 1.35,
+            float(self.BTN_HALF[0]) + 0.025,
+            float(self.BTN_HALF[1]) + 0.025,
+        )
+        samples = []
+        p = np.asarray(pose, dtype=float).reshape(-1) if pose is not None else None
+        if p is not None and p.size >= 2:
+            samples.append(p[:2].astype(float))
+        robot = getattr(self, "robot", None)
+        if robot is not None:
+            for name in (
+                f"get_{side}_tcp_pose",
+                f"get_{side}_ee_pose",
+            ):
+                fn = getattr(robot, name, None)
+                if not callable(fn):
+                    continue
+                try:
+                    samples.append(np.asarray(fn()[:2], dtype=float))
+                except Exception:
+                    continue
+        for xy in samples:
+            if float(np.linalg.norm(xy - target)) <= tol:
+                return True
+        return False
+
+    def interactive_ee_z_floor(self, side, pose):
+        """EE floor over the key at force level 4 (reactive-button style).
+
+        ``UniversalRobotControls`` *replaces* the table+finger band with this
+        value while over the key — same as ``ReactivePushButtons.min_ee_z_over_key``.
+        That lets Q reach level 4, then blocks further descent.
+        """
+        if not self._over_dispenser_button(side, pose):
+            return None
+        cached = getattr(self, "_dispenser_ee_z_floor", None)
+        if cached is not None:
+            return float(cached)
+        touch_top = getattr(self, "touch_top_z", None)
+        if touch_top is None:
+            return None
+        max_force = float(self.force_thresholds[-1])
+        stiffness = max(float(self.force_stiffness), 1e-6)
+        slack = float(self.force_engage_slack)
+        tip_l4 = float(touch_top) + slack - (max_force / stiffness)
+        return float(tip_l4 - 0.003 + float(self.EE_TO_TCP))
+
+    def interactive_teleop_z_speed_scale(self, side, pose, z_delta: float):
+        """Slow Q (lowering) over the dispenser for finer press-force control."""
+        if float(z_delta) >= 0.0:
+            return None
+        if not self._over_dispenser_button(side, pose):
+            return None
+        return float(self.DISPENSE_Z_DOWN_SCALE)
+
     def _update_button_pressed_visual_from_robot(self) -> None:
         signal = self._button_press_signal()
         if signal is None:
@@ -1132,7 +1237,9 @@ class fill_coffee_jar(KitchenS_base_task):
             max_depth = float(getattr(self, "BTN_HALF", (0.0, 0.0, 0.0))[2])
             target = float(
                 np.clip(
-                    float(signal["force"]) / max(float(self.force_thresholds[-1]), 1e-6) * max_depth,
+                    float(signal["force"])
+                    / max(float(self.force_thresholds[-1]), 1e-6)
+                    * max_depth,
                     0.0,
                     max_depth,
                 )
@@ -1253,11 +1360,41 @@ class fill_coffee_jar(KitchenS_base_task):
         self.jar_fillable_h = self.JAR_HEIGHT - self.JAR_BOTTOM_T
         self._build_jar_visual(hollow=False)
 
+    def _ring_material(self):
+        """Opaque saturated red for fill marks (readable through the jar)."""
+        rgba = list(self.RING_RED[:3]) + [1.0]
+        mat = sapien.render.RenderMaterial(base_color=rgba)
+        try:
+            mat.set_roughness(0.30)
+            mat.set_metallic(0.0)
+        except Exception:
+            mat.roughness = 0.30
+            mat.metallic = 0.0
+        # Mild emission so the bands stay sharp under glass/transmission.
+        try:
+            emit = [
+                float(self.RING_RED[0]) * 0.35,
+                float(self.RING_RED[1]) * 0.35,
+                float(self.RING_RED[2]) * 0.35,
+                1.0,
+            ]
+            mat.set_emission(emit)
+        except Exception:
+            try:
+                mat.emission = emit
+            except Exception:
+                pass
+        return mat
+
     def _build_fill_rings(self):
-        """Add three subtle, thin red rings around the glass jar body."""
+        """Three thick red rings at 25% / 50% / 75% of the jar fill height."""
         x, y = self.jar_xy
-        ring_material = self._opaque_material([0.78, 0.05, 0.05], 0.70)
+        ring_material = self._ring_material()
         ring_mesh = Path(f"assets/objects/{self.JAR_MODEL}/rings/thin_ring.glb")
+        outer_r = float(self.JAR_INNER_R) + 0.0035
+        xy = float(self.RING_XY_SCALE) * (outer_r / float(self.RING_MESH_RADIUS))
+        z_sc = float(self.RING_Z_SCALE)
+        scale = [xy, xy, z_sc]
         for frac in (0.25, 0.50, 0.75):
             z = self.jar_bottom_z + frac * self.jar_fillable_h
             self._add_static_mesh_visual(
@@ -1265,6 +1402,7 @@ class fill_coffee_jar(KitchenS_base_task):
                 pose=sapien.Pose([x, y, z]),
                 material=ring_material,
                 name=f"fill_ring_{int(frac * 100)}",
+                scale=scale,
             )
 
     # ------------------------------------------------------------------ dispense / fill
@@ -1541,12 +1679,17 @@ class fill_coffee_jar(KitchenS_base_task):
                 level = i + 1
         return int(level)
 
-    def _beans_for_force(self, force_n: float) -> int:
-        """Map force (N) → bean count via the four thresholds."""
-        level = self._force_level(force_n)
+    def _beans_for_level(self, level: int) -> int:
+        """Bean count for dispense level in {1,2,3,4} (0 → none)."""
+        level = int(level)
         if level <= 0:
             return 0
+        level = min(level, len(self.beans_per_force_level))
         return int(self.beans_per_force_level[level - 1])
+
+    def _beans_for_force(self, force_n: float) -> int:
+        """Map force (N) → bean count via the four thresholds."""
+        return self._beans_for_level(self._force_level(force_n))
 
     def _spawn_one_dispensed_bean(self):
         """Drop a single bean from the nozzle into the jar."""
@@ -1566,19 +1709,39 @@ class fill_coffee_jar(KitchenS_base_task):
         )
         self._spawn_bean(pose)
 
-    def _start_press(self):
+    def _start_press(self, *, require_release: bool = True):
         if self._press_active or self.beans_in_jar >= self.beans_full:
+            return
+        # After a dispense, the button must be released before another shot.
+        if require_release and bool(getattr(self, "_awaiting_release", False)):
             return
         self._press_active = True
         self._dispensing = True
+        self._awaiting_release = False
+        # Each new press restarts the post-release idle scoring window.
+        self._press_idle_s = 0.0
         self._press_steps = 0
         self._press_spawned = 0
         self._press_hold_s = 0.0
         self._press_peak_force = 0.0
         self._press_force_level = 0
+        self._press_dispense_level = 0
+
+    def _update_dispense_level(self, force_n: float) -> int:
+        """Track the in-press dispense level from current force (up to level 4).
+
+        Soft press → that level's beans; push harder in the same press and the
+        target rises to the achieved force level (max final level). Continuous
+        hold still only dispenses once — release is required to re-arm.
+        """
+        raw = int(self._force_level(force_n))
+        if raw > int(getattr(self, "_press_dispense_level", 0) or 0):
+            self._press_dispense_level = raw
+        self._press_force_level = int(getattr(self, "_press_dispense_level", 0) or 0)
+        return int(self._press_force_level)
 
     def _tick_press(self):
-        """While the button is held, stream beans according to peak press force."""
+        """While the button is held, stream beans for the current dispense level."""
         if not self._press_active:
             return
         if self.beans_in_jar + self._press_spawned >= self.beans_full:
@@ -1588,8 +1751,8 @@ class fill_coffee_jar(KitchenS_base_task):
         force_n = self._lid_press_force()
         if force_n > self._press_peak_force:
             self._press_peak_force = force_n
-        self._press_force_level = self._force_level(self._press_peak_force)
-        target = self._beans_for_force(self._press_peak_force)
+        level = self._update_dispense_level(self._press_peak_force)
+        target = self._beans_for_level(level)
         target = min(target, self.beans_full - self.beans_in_jar)
         while self._press_spawned < target:
             self._spawn_one_dispensed_bean()
@@ -1603,16 +1766,20 @@ class fill_coffee_jar(KitchenS_base_task):
                 self.scene.step()
 
     def _end_press(self):
-        """Finalize a press: top up to the force-level mapping, settle, freeze."""
+        """Finalize a press: top up to the dispense level, settle, freeze.
+
+        Arms ``_awaiting_release`` so a continuous hold cannot start another
+        dispense until the gripper leaves the button.
+        """
         if not self._press_active:
             return
         # One last pressure sample in case the peak arrived on the release frame.
         force_n = self._lid_press_force()
         if force_n > self._press_peak_force:
             self._press_peak_force = force_n
-        self._press_force_level = self._force_level(self._press_peak_force)
+        level = self._update_dispense_level(self._press_peak_force)
         # Ignore ghost touches during approach (below first threshold → no beans).
-        if self._press_force_level <= 0 and int(self._press_spawned) <= 0:
+        if level <= 0 and int(self._press_spawned) <= 0:
             self._press_active = False
             self._dispensing = False
             self._press_steps = 0
@@ -1620,8 +1787,9 @@ class fill_coffee_jar(KitchenS_base_task):
             self._press_hold_s = 0.0
             self._press_peak_force = 0.0
             self._press_force_level = 0
+            self._press_dispense_level = 0
             return
-        want = self._beans_for_force(self._press_peak_force)
+        want = self._beans_for_level(level)
         want = min(want, self.beans_full - self.beans_in_jar)
         while self._press_spawned < want:
             self._spawn_one_dispensed_bean()
@@ -1635,9 +1803,12 @@ class fill_coffee_jar(KitchenS_base_task):
         self.press_count += 1
         spawned = int(self._press_spawned)
         peak = float(self._press_peak_force)
-        level = int(self._press_force_level)
         # Close the press session before settle so touch-detect cannot re-enter.
         self._press_active = False
+        # Must lift off before another press can arm (blocks continuous fill).
+        self._awaiting_release = True
+        # Idle window starts only after lift-off; keep it zero through settle.
+        self._press_idle_s = 0.0
         self._dwell(self.SETTLE_STEPS)
         self._freeze_beans(self.beans)
         self._dwell(6)
@@ -1655,6 +1826,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_hold_s = 0.0
         self._press_peak_force = 0.0
         self._press_force_level = 0
+        self._press_dispense_level = 0
 
     def _dwell(self, steps: int):
         for i in range(max(0, int(steps))):
@@ -1700,12 +1872,18 @@ class fill_coffee_jar(KitchenS_base_task):
 
         # Sample peak force while pressed (expert path; does not rely on the
         # per-step touch detector, which can miss during move()).
-        self._start_press()
+        self._awaiting_release = False
+        self._start_press(require_release=False)
         hold_steps = max(1, int(round(self.press_sample_s / self._sim_dt())))
         for _ in range(hold_steps):
             measured = self._lid_press_force()
             if measured > self._press_peak_force:
                 self._press_peak_force = measured
+            # Expert requests an explicit level — allow that level in one shot.
+            self._press_dispense_level = max(
+                int(getattr(self, "_press_dispense_level", 0) or 0), int(level)
+            )
+            self._press_force_level = int(self._press_dispense_level)
             self._tick_press()
             if not self._press_active:
                 break
@@ -1714,6 +1892,7 @@ class fill_coffee_jar(KitchenS_base_task):
             if self.save_freq and (self._press_steps % max(1, int(self.save_freq)) == 0):
                 self._take_picture()
         self._end_press()
+        self._awaiting_release = False
 
         self.move(self.move_by_displacement(arm_tag, z=depth))
         self._dwell(8)
@@ -1723,21 +1902,67 @@ class fill_coffee_jar(KitchenS_base_task):
         if self.dispenser_touch_surface is None or not hasattr(self, "robot"):
             return
         signal = self._button_press_signal()
-        touching = bool(signal is not None and self._lid_press_force() > 0.5)
+        force_n = float(self._lid_press_force()) if signal is not None else 0.0
+        touching = bool(signal is not None and force_n > 0.5)
+        # After a completed dispense, ignore further contact until a real release.
+        # Idle scoring starts only once the gripper has lifted off.
+        if bool(getattr(self, "_awaiting_release", False)):
+            if not touching:
+                self._awaiting_release = False
+                self._touch_latched = False
+                self._update_press_idle(touching=False)
+            else:
+                self._touch_latched = True
+                self._press_idle_s = 0.0
+            return
         if touching and not self._touch_latched:
             self._start_press()
         if touching and self._press_active:
             self._tick_press()
-            # Auto-finish once the hardest level has been held briefly.
+            # Finish once the hardest allowed level has been held briefly.
             if (
-                self._press_force_level >= 4
+                int(getattr(self, "_press_dispense_level", 0) or 0) >= 4
                 and self._press_hold_s >= self.press_sample_s
             ):
                 self._end_press()
-                touching = False
         if (not touching) and self._touch_latched and self._press_active:
             self._end_press()
         self._touch_latched = touching
+        self._update_press_idle(touching=bool(touching))
+
+    def _update_press_idle(self, *, touching: bool) -> None:
+        """Post-press idle timer for success/failure scoring.
+
+        - Before the first real press: do not count (never score).
+        - On every press / while held / while settling / until lift-off: reset to 0.
+        - After release: accumulate; at ``idle_score_sec`` evaluate fill vs target.
+        """
+        busy = bool(
+            touching
+            or getattr(self, "_press_active", False)
+            or getattr(self, "_dispensing", False)
+            or getattr(self, "_awaiting_release", False)
+        )
+        if busy:
+            self._press_idle_s = 0.0
+            return
+        if int(getattr(self, "press_count", 0) or 0) <= 0:
+            self._press_idle_s = 0.0
+            return
+        self._press_idle_s = float(getattr(self, "_press_idle_s", 0.0)) + float(
+            self._sim_dt()
+        )
+
+    def _fill_ready_to_score(self) -> bool:
+        """True after a real press, then ``idle_score_sec`` with the button released."""
+        if int(getattr(self, "press_count", 0) or 0) <= 0:
+            return False
+        if bool(getattr(self, "_press_active", False)):
+            return False
+        if bool(getattr(self, "_awaiting_release", False)):
+            return False
+        need = float(getattr(self, "idle_score_sec", self.IDLE_SCORE_SEC))
+        return float(getattr(self, "_press_idle_s", 0.0)) + 1e-9 >= need
 
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
@@ -1747,6 +1972,8 @@ class fill_coffee_jar(KitchenS_base_task):
         # While actively holding we still need touch edge detection for release
         # / max-duration stop; `_tick_press` is driven from `_detect_lid_touch`.
         if getattr(self, "_dispensing", False) and not self._press_active:
+            # Settle after a shot — idle window stays at 0 until lift-off.
+            self._update_press_idle(touching=False)
             return
         self._detect_lid_touch()
 
@@ -1809,9 +2036,12 @@ class fill_coffee_jar(KitchenS_base_task):
                 f"(band {lo:.0%}–{hi:.0%}) plan={self.plan_success}"
             )
 
-        # Target band reached → withdraw.
+        # Target band reached → withdraw, then idle long enough to score.
         if self.plan_success:
             self.move(self.move_by_displacement(arm, z=0.08))
+        idle_need = float(getattr(self, "idle_score_sec", self.IDLE_SCORE_SEC))
+        idle_steps = max(1, int(round(idle_need / max(self._sim_dt(), 1e-6))))
+        self._dwell(idle_steps)
 
         if self.check_success():
             self.plan_success = True
@@ -1829,13 +2059,10 @@ class fill_coffee_jar(KitchenS_base_task):
         return self.info
 
     def check_success(self):
-        """Success when fill is inside target_fill ± fill_tol (default ±5%)."""
+        """Success after idle: fill inside target_fill ± fill_tol (default ±5%)."""
         if not getattr(self, "layout_ok", True):
             return False
-        # Never declare success mid-press. The final fill must be evaluated
-        # after the button is released so an overshooting last press does not
-        # terminate the episode early.
-        if bool(getattr(self, "_press_active", False)):
+        if not self._fill_ready_to_score():
             return False
         self.beans_in_jar = self._count_beans_in_jar()
         fill = self._current_fill()
@@ -1848,6 +2075,9 @@ class fill_coffee_jar(KitchenS_base_task):
         obs["coffee_jar"] = {
             "target_fill": float(self.target_fill),
             "fill_tol": float(self.fill_tol),
+            "idle_score_sec": float(getattr(self, "idle_score_sec", self.IDLE_SCORE_SEC)),
+            "press_idle_s": float(getattr(self, "_press_idle_s", 0.0)),
+            "ready_to_score": bool(self._fill_ready_to_score()),
             "fill_lo": float(lo),
             "fill_hi": float(hi),
             "fill": float(self._current_fill()),
