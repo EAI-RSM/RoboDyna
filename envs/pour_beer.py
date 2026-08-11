@@ -3,7 +3,9 @@
 Chrome draft tower with a fancy spring push-button on the tap head. Hold the
 button down to pour; release to stop. Fill rate is randomized per episode.
 Foaminess of the stream ramps the longer the button stays held and resets when
-released. Overflow fails with a yellow stain.
+released. Overflow fails with a yellow stain. When pouring is done, click the
+``050_bell`` beside the tap to signal finish — success/failure is scored on
+that press.
 
 The drinking vessel is a simple procedural glass beer mug (body + D-handle).
 Demo cameras use transmission glass; the interactive viewer uses a hollow
@@ -13,6 +15,7 @@ Episode randomization (task_args.pour_beer):
   - ``randomize_layout``: cup/tap station + bar props with AABB non-overlap
   - ``randomize_rates`` / ``pour_rate_range`` / ``foam_gain_range``: fill & peak foam %
   - ``foam_gain_start`` / ``foam_ramp_steps``: stream foam % ramp over hold time
+  - finish bell left/right of the tap (``bell_side`` / ``bell_dx``)
 """
 from __future__ import annotations
 
@@ -31,7 +34,7 @@ from .utils.create_actor import create_actor
 
 
 class pour_beer(KitchenS_base_task):
-    """Hold the tap push-button to fill the mug without foam overflow."""
+    """Hold the tap push-button to fill the mug, then click the finish bell."""
 
     GLASS_MODEL = "beer_mug"
     GLASS_UPRIGHT_Q = [0.70710678, 0.70710678, 0.0, 0.0]
@@ -109,17 +112,26 @@ class pour_beer(KitchenS_base_task):
     EXPERT_FOAM_RESUME = 0.09
     # Expert pour cap (beer+foam) — above TARGET so liquid can clear the gate.
     SAFE_TOTAL = 0.96
-    # Tap must stay fully idle this long before success can pass.
+    # Tap must stay fully idle this long before fill quality can pass.
     # 1s gap avoids mid-pour / spring-return flicker latching success while the
     # lever still looks open or foam is still collapsing into beer.
     TAP_SETTLE_SEC = 1.0
-    # If the tap stays closed this long after an opening (no reopen), end the
-    # episode and score via check_success (success if criteria met, else fail).
+    # Legacy open-gap auto-score disabled — finish is signaled by clicking the bell.
     OPEN_GAP_TIMEOUT_SEC = 5.0
     TAP_IDLE_ANGLE = 0.02  # rad — upright enough to count as closed
     TAP_IDLE_VEL = 0.05  # rad/step — below return step once nearly shut
     # Liquid must not rise more than this while idle (blocks foam→beer "filling").
     LIQUID_STABLE_EPS = 1e-5
+
+    # Finish bell (050_bell): left/right of the tap with clearance for approach.
+    BELL_MODEL = "050_bell"
+    BELL_IDS = (0, 1)
+    BELL_UPRIGHT_Q = [0.5, 0.5, 0.5, 0.5]
+    BELL_DX = 0.20                 # m; |Δx| from tap center (sufficient clearance)
+    BELL_HALF_XY = (0.07, 0.07)    # footprint reserved around the bell
+    BELL_PRESS_XY_EPS = 0.03
+    BELL_PRESS_Z_EPS = 0.035
+    BELL_CLICK_DROP = 0.045        # expert press depth after hover
 
     # Non-overlap layout (axis-aligned footprint half-sizes, meters).
     LAYOUT_MARGIN = 0.030
@@ -206,6 +218,11 @@ class pour_beer(KitchenS_base_task):
         self.cup = None
         self.mug_visual = None
         self._mug_visual_hollow = False
+        self.bell = None
+        self.bell_id = 0
+        self.bell_xy = np.zeros(2, dtype=float)
+        self.bell_side = 1.0
+        self._bell_pressed = False
         self.table_top = 0.74
         self.coaster_top_z = 0.75
         # Kept for optional prop/stream overrides; mug glass ignores this flag
@@ -846,6 +863,11 @@ class pour_beer(KitchenS_base_task):
         self.spill_amount = 0.0
         self._bar_props = []
         self._prop_footprints = []
+        self.bell = None
+        self.bell_id = 0
+        self.bell_xy = np.zeros(2, dtype=float)
+        self.bell_side = 1.0
+        self._bell_pressed = False
         # mug_visual may alias the cup Actor — only remove a separate visual entity.
         mv = getattr(self, "mug_visual", None)
         cup = getattr(self, "cup", None)
@@ -867,6 +889,7 @@ class pour_beer(KitchenS_base_task):
         self._spawn_glass()
         self._build_tap()
         self._spawn_tap_button()
+        self._spawn_finish_bell(rng)
         self._rebuild_fluids(force=True)
         self._sync_stream(force=True)
 
@@ -874,7 +897,9 @@ class pour_beer(KitchenS_base_task):
         print(
             f"[pour_beer] tap scene={self.scene_id} arm={self.arm} seed={self._layout_seed} "
             f"cup={self.cup_xy} tap={self.tap_xy} spout={self.nozzle_outlet_xyz} "
-            f"btn={self.touch_xy} target={self.target_liquid:.2f} "
+            f"btn={self.touch_xy} bell={self.bell_xy} bell_side="
+            f"{'right' if self.bell_side > 0 else 'left'} "
+            f"target={self.target_liquid:.2f} "
             f"pour_rate={self.pour_rate:.5f} foam_gain={self.foam_gain_start:.2f}→"
             f"{self.foam_gain:.2f}/{self.foam_ramp_steps}steps "
             f"foam_decay={self.foam_decay:.4f} bar_props={len(self._bar_props)}"
@@ -1439,6 +1464,208 @@ class pour_beer(KitchenS_base_task):
         self.lever_angle = 0.0
         self._lever_pressed = False
 
+    def _spawn_finish_bell(self, rng):
+        """Place ``050_bell`` left or right of the tap with clearance."""
+        cfg = self._cfg
+        tap = np.asarray(self.tap_xy, dtype=float)
+        mug = np.asarray(self.cup_xy, dtype=float)
+        dx = float(cfg.get("bell_dx", self.BELL_DX))
+        dx = float(np.clip(dx, 0.14, 0.35))
+        half = np.asarray(cfg.get("bell_half_xy", self.BELL_HALF_XY), dtype=float)
+
+        side_pref = str(cfg.get("bell_side", "random")).lower().strip()
+        if side_pref in ("left", "l", "-1"):
+            sides = [-1.0]
+        elif side_pref in ("right", "r", "+1", "1"):
+            sides = [1.0]
+        else:
+            # Random order; try both if the first collides with mug/props/edge.
+            first = float(rng.choice([-1.0, 1.0]))
+            sides = [first, -first]
+
+        blockers = [
+            (self._station_center_xy(), np.asarray(self.STATION_HALF_XY, dtype=float)),
+            (mug, np.array([0.07, 0.07], dtype=float)),
+            (tap, np.array([self.BASE_R + 0.03, self.BASE_R + 0.04], dtype=float)),
+        ]
+        for fp in list(getattr(self, "_prop_footprints", None) or []):
+            try:
+                blockers.append(
+                    (np.asarray(fp[0], dtype=float), np.asarray(fp[1], dtype=float))
+                )
+            except Exception:
+                pass
+
+        chosen = None
+        chosen_side = sides[0]
+        for side in sides:
+            for dy in (0.0, -0.03, 0.03, -0.06):
+                cand = np.array([tap[0] + side * dx, tap[1] + dy], dtype=float)
+                cand = self._clamp_footprint_to_table(cand, half)
+                if self._footprint_clear(cand, half, blockers) and self._footprint_on_table(
+                    cand, half
+                ):
+                    # Prefer candidates that keep |Δx| from tap near the target.
+                    if abs(float(cand[0] - tap[0])) < 0.12:
+                        continue
+                    chosen = cand
+                    chosen_side = float(side)
+                    break
+            if chosen is not None:
+                break
+        if chosen is None:
+            # Fallback: outboard of the tap (away from x=0) at fixed dx.
+            out = 1.0 if float(tap[0]) >= 0.0 else -1.0
+            chosen = self._clamp_footprint_to_table(
+                np.array([tap[0] + out * dx, tap[1]], dtype=float), half
+            )
+            chosen_side = out
+
+        self.bell_side = float(chosen_side)
+        self.bell_xy = np.asarray(chosen, dtype=float)
+        ids = list(getattr(self, "BELL_IDS", (0, 1)))
+        self.bell_id = int(rng.choice(ids))
+        z = float(self.table_top)
+        try:
+            z = float(self._prop_pose_z(self.BELL_MODEL, self.bell_id, 1.0, self.table_top))
+        except Exception:
+            pass
+        pose = sapien.Pose(
+            [float(self.bell_xy[0]), float(self.bell_xy[1]), z],
+            list(self.BELL_UPRIGHT_Q),
+        )
+        # Remove previous bell if load_actors is re-entered.
+        old = getattr(self, "bell", None)
+        if old is not None:
+            try:
+                ent = old.actor if hasattr(old, "actor") else old
+                self.scene.remove_entity(ent)
+            except Exception:
+                pass
+            self.bell = None
+
+        self.bell = create_actor(
+            self,
+            pose=pose,
+            modelname=self.BELL_MODEL,
+            model_id=self.bell_id,
+            convex=True,
+            is_static=True,
+        )
+        try:
+            self.bell.set_name(f"{self.BELL_MODEL}_{self.bell_id}")
+        except Exception:
+            pass
+        try:
+            self.add_prohibit_area(self.bell, padding=0.06)
+        except Exception:
+            pass
+        self._prop_footprints.append((np.asarray(self.bell_xy, dtype=float), half))
+        self._bell_pressed = False
+        print(
+            f"[pour_beer] finish bell={self.BELL_MODEL}/base{self.bell_id} "
+            f"xy=({self.bell_xy[0]:+.3f},{self.bell_xy[1]:+.3f}) "
+            f"side={'right' if self.bell_side > 0 else 'left'} of tap",
+            flush=True,
+        )
+
+    def _bell_contact_top(self) -> np.ndarray:
+        """World XYZ of the bell button top (contact point 0)."""
+        if self.bell is None:
+            return np.array(
+                [float(self.bell_xy[0]), float(self.bell_xy[1]), float(self.table_top) + 0.04],
+                dtype=float,
+            )
+        try:
+            cp = self.bell.get_contact_point(0, ret="list")
+            if cp is not None and len(cp) >= 3:
+                return np.asarray(cp[:3], dtype=float)
+        except Exception:
+            pass
+        p = np.asarray(self.bell.get_pose().p, dtype=float)
+        return p + np.array([0.0, 0.0, 0.04], dtype=float)
+
+    def _gripper_pressing_bell(self) -> bool:
+        """True when a closed gripper is pressing the bell top (click_bell style)."""
+        if self.bell is None or bool(getattr(self, "_bell_pressed", False)):
+            return False
+        # Prefer the working arm; also accept the other if it is the one on the bell.
+        sides = []
+        arm = str(getattr(self, "arm_side", "") or "")
+        if arm in ("left", "right"):
+            sides.append(arm)
+        sides += [s for s in ("left", "right") if s not in sides]
+
+        top = self._bell_contact_top()
+        xy_eps = float(getattr(self, "BELL_PRESS_XY_EPS", 0.03))
+        z_eps = float(getattr(self, "BELL_PRESS_Z_EPS", 0.035))
+
+        # PhysX contact points on the bell near the button top.
+        try:
+            pts = self.get_gripper_actor_contact_position(self.bell.get_name())
+        except Exception:
+            pts = []
+        if not pts:
+            try:
+                pts = self.get_gripper_actor_contact_position(self.BELL_MODEL)
+            except Exception:
+                pts = []
+        for position in pts or []:
+            p = np.asarray(position[:3], dtype=float)
+            if (
+                abs(float(p[0] - top[0])) < xy_eps
+                and abs(float(p[1] - top[1])) < xy_eps
+                and abs(float(p[2] - top[2])) < z_eps
+            ):
+                return True
+
+        # Fallback: closed gripper TCP near the bell top (interactive presses).
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return False
+        for side in sides:
+            closed_fn = (
+                self.is_left_gripper_close if side == "left" else self.is_right_gripper_close
+            )
+            try:
+                if not bool(closed_fn()):
+                    continue
+            except Exception:
+                continue
+            tcp_fn = getattr(robot, f"get_{side}_tcp_pose", None)
+            if not callable(tcp_fn):
+                tcp_fn = getattr(robot, f"get_{side}_ee_pose", None)
+            if not callable(tcp_fn):
+                continue
+            try:
+                tcp = np.asarray(tcp_fn()[:3], dtype=float)
+            except Exception:
+                continue
+            if (
+                abs(float(tcp[0] - top[0])) < xy_eps + 0.01
+                and abs(float(tcp[1] - top[1])) < xy_eps + 0.01
+                and abs(float(tcp[2] - top[2])) < z_eps + 0.02
+            ):
+                return True
+        return False
+
+    def _update_bell_press(self) -> None:
+        """Latch finish when the gripper clicks the bell; score on that event."""
+        if bool(getattr(self, "_bell_pressed", False)):
+            return
+        if not self._gripper_pressing_bell():
+            return
+        self._bell_pressed = True
+        print("[pour_beer] finish bell pressed — scoring pour", flush=True)
+        try:
+            if self._pour_quality_ok():
+                self.eval_success = True
+            else:
+                # Explicit miss so interactive / collectors can end on the press.
+                self.eval_fail = True
+        except Exception:
+            pass
+
     def _set_button_press_depth(self, depth: float) -> None:
         max_depth = float(getattr(self, "BTN_MAX_TRAVEL", self.BTN_HALF[2]))
         self._button_target_depth = float(np.clip(depth, 0.0, max_depth))
@@ -1961,37 +2188,12 @@ class pour_beer(KitchenS_base_task):
         else:
             self._liquid_stable_steps = 0
         self._liquid_level_prev = liq
-        self._update_open_gap_timeout()
+        self._update_bell_press()
+        # Open-gap auto-score removed: finish is signaled by clicking the bell.
 
     def _update_open_gap_timeout(self):
-        """End episode if tap stays closed >OPEN_GAP_TIMEOUT_SEC after an opening."""
-        if bool(getattr(self, "_pour_gap_timed_out", False)):
-            return
-        if self._tap_is_flowing():
-            self._closed_since_open_steps = 0
-            return
-        if not bool(getattr(self, "opened_once", False)):
-            return
-        self._closed_since_open_steps = int(
-            getattr(self, "_closed_since_open_steps", 0)
-        ) + 1
-        if self._closed_since_open_steps < int(self._open_gap_timeout_steps()):
-            return
-        self._pour_gap_timed_out = True
-        gap_s = float(
-            getattr(self, "open_gap_timeout_sec", self.OPEN_GAP_TIMEOUT_SEC)
-        )
-        print(
-            f"[pour_beer] tap closed >{gap_s:.0f}s since last opening — "
-            "scoring episode",
-            flush=True,
-        )
-        # Latch eval success immediately when criteria already hold.
-        try:
-            if self.check_success():
-                self.eval_success = True
-        except Exception:
-            pass
+        """Deprecated: finish scoring is gated on the bell press."""
+        return
 
     def _idle_steps(self, n_steps: int, until=None):
         save_freq = self.save_freq if self.save_freq is not None else 15
@@ -2183,15 +2385,39 @@ class pour_beer(KitchenS_base_task):
         settle_n = int(self._tap_settle_steps()) + 60
         self._idle_steps(
             settle_n,
-            until=lambda: self.overflowed or self.check_success(),
+            until=lambda: self.overflowed or self._pour_quality_ok(),
         )
         self.closed_after_pour = (
             (not bool(self._button_pouring))
             and not bool(self.tab_open)
             and float(self.liquid_level) > 0.05
         )
+        # Signal finish by clicking the bell — success/failure latches on press.
+        if not self.overflowed:
+            self._click_finish_bell(arm)
 
-    def check_success(self):
+    def _click_finish_bell(self, arm: ArmTag) -> bool:
+        """Hover over the finish bell and press down (same pattern as click_bell)."""
+        if self.bell is None:
+            return False
+        self.plan_success = True
+        self.move(self.close_gripper(arm))
+        self.move(self.grasp_actor(
+            self.bell,
+            arm_tag=arm,
+            pre_grasp_dis=0.10,
+            grasp_dis=0.10,
+            contact_point_id=0,
+        ))
+        drop = float(getattr(self, "BELL_CLICK_DROP", 0.045))
+        self.move(self.move_by_displacement(arm, z=-drop))
+        # Give contact / TCP latch a few steps to register.
+        self._idle_steps(20, until=lambda: bool(getattr(self, "_bell_pressed", False)))
+        self.move(self.move_by_displacement(arm, z=drop))
+        return bool(getattr(self, "_bell_pressed", False))
+
+    def _pour_quality_ok(self) -> bool:
+        """Fill criteria only (no bell). Used while pouring and for miss reasons."""
         if self.overflowed:
             return False
         if not bool(getattr(self, "opened_once", False)):
@@ -2205,11 +2431,9 @@ class pour_beer(KitchenS_base_task):
             return False
         if not bool(getattr(self, "closed_after_pour", False)):
             return False
-        liquid_ok = float(self.liquid_level) > float(self.target_liquid)
-        if not liquid_ok:
+        if float(self.liquid_level) <= float(self.target_liquid):
             return False
-        not_overfull = self._total_fill() < float(self.overflow_level) - 0.02
-        if not not_overfull:
+        if self._total_fill() >= float(self.overflow_level) - 0.02:
             return False
         if not self._tap_fully_stopped():
             return False
@@ -2217,12 +2441,19 @@ class pour_beer(KitchenS_base_task):
             return False
         return True
 
+    def check_success(self):
+        """Success only after the finish bell is pressed with a good pour."""
+        if not bool(getattr(self, "_bell_pressed", False)):
+            return False
+        return bool(self._pour_quality_ok())
+
     def get_language_instruction(self):
         return [
             {
                 "{A}": "beer tap",
                 "{B}": "beer mug",
                 "{C}": "tap button",
+                "{D}": f"{self.BELL_MODEL}/base{int(getattr(self, 'bell_id', 0))}",
                 "{a}": str(self.arm),
             }
         ]
@@ -2259,6 +2490,10 @@ class pour_beer(KitchenS_base_task):
             "cup_xy": np.asarray(self.cup_xy, dtype=float).tolist(),
             "tap_xy": np.asarray(self.tap_xy, dtype=float).tolist(),
             "touch_xy": np.asarray(getattr(self, "touch_xy", [0, 0]), dtype=float).tolist(),
+            "bell_xy": np.asarray(getattr(self, "bell_xy", [0, 0]), dtype=float).tolist(),
+            "bell_id": int(getattr(self, "bell_id", 0)),
+            "bell_side": float(getattr(self, "bell_side", 0.0)),
+            "bell_pressed": bool(getattr(self, "_bell_pressed", False)),
         }
 
     def get_obs(self):
@@ -2278,6 +2513,8 @@ class pour_beer(KitchenS_base_task):
             "spill_amount": float(getattr(self, "spill_amount", 0.0)),
             "opened_once": bool(self.opened_once),
             "closed_after_pour": bool(self.closed_after_pour),
+            "bell_pressed": bool(getattr(self, "_bell_pressed", False)),
+            "bell_xy": np.asarray(getattr(self, "bell_xy", [0, 0]), dtype=float).tolist(),
             "tap_fully_stopped": bool(self._tap_fully_stopped()),
             "tap_idle_steps": int(getattr(self, "_tap_idle_steps", 0)),
             "tap_settle_steps": int(self._tap_settle_steps()),

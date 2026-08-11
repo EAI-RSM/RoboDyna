@@ -12,8 +12,8 @@ KEYBOARD = """
 ROBOT = """
   Lower onto the fancy tap button and hold to pour; lift to stop.
   Foam % of the stream rises the longer you hold. Overflow fails.
+  When finished pouring, click the finish bell beside the tap to score.
   EE Z is capped over the key so Q cannot dive through it.
-  Prefer arm 2 (right) for the tap.
 """
 
 
@@ -26,7 +26,7 @@ def _post_setup(env):
     print_instructions(
         f"[pour_beer] interactive flow_rate_scale={env.flow_rate_scale:.3g} "
         f"pour_rate={float(getattr(env, 'pour_rate', 0)):.5f} "
-        f"(hold button to pour; EE Z capped on key)"
+        f"(hold button to pour; click finish bell to score; EE Z capped on key)"
     )
 
 

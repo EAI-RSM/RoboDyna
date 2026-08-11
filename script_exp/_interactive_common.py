@@ -371,6 +371,7 @@ def format_episode_condition(env, task: str | None = None) -> str:
     elif task == "pour_beer":
         tgt = 100.0 * float(getattr(env, "target_liquid", 0.90))
         parts.append(f"need beer>{tgt:.0f}%")
+        parts.append("then click finish bell")
 
     elif task in ("cook_food", "cook_food_timer"):
         food = str(getattr(env, "food_type", "") or "")

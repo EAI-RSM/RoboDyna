@@ -940,11 +940,20 @@ def _terminal_failure(env, task):
     elif task in ("boil_milk", "pour_beer", "measure_ingredient"):
         if bool(getattr(env, "overflowed", False)):
             return "liquid overflowed"
-        # pour_beer: >5s closed since last opening → end and score (success
-        # is checked first in the viewer loop; this path is the fail branch).
-        if task == "pour_beer" and bool(getattr(env, "_pour_gap_timed_out", False)):
-            gap_s = float(getattr(env, "open_gap_timeout_sec", 5.0))
-            return f"tap closed >{gap_s:.0f}s without reopening"
+        # pour_beer: score only when the finish bell is pressed.
+        if task == "pour_beer" and bool(getattr(env, "_bell_pressed", False)):
+            try:
+                if bool(env._pour_quality_ok()):
+                    return None
+            except Exception:
+                pass
+            liq = 100.0 * float(getattr(env, "liquid_level", 0.0))
+            tgt = 100.0 * float(getattr(env, "target_liquid", 0.85))
+            if not bool(getattr(env, "opened_once", False)):
+                return "finish bell pressed before pouring"
+            if liq + 1e-3 <= tgt:
+                return f"finish bell pressed with underfill beer={liq:.0f}% need>{tgt:.0f}%"
+            return "finish bell pressed without meeting pour criteria"
         if task == "boil_milk":
             turned_on = bool(getattr(env, "turned_on_once", False))
             stove_off = not bool(getattr(env, "stove_on", False))
