@@ -36,7 +36,7 @@ sys.path.insert(0, "./script_hh_exp")
 import numpy as np
 from PIL import Image
 
-from envs.utils.household_view import HOUSEHOLD_TASKS, configure_household_head_camera
+from envs.utils.household_view import configure_standard_head_camera
 from script.bench_script.record_demo import build_args
 from script.collect_data import class_decorator
 from script_exp.interactive_task_gui import (
@@ -139,8 +139,8 @@ def capture_snapshot(
 
     def _setup_demo(**kwargs):
         _orig_setup(**kwargs)
-        if task_name in HOUSEHOLD_TASKS:
-            configure_household_head_camera(task)
+        # Same elevated head pose for base suite + household GUI cards.
+        configure_standard_head_camera(task)
 
     task.setup_demo = _setup_demo
     task.setup_demo(now_ep_num=0, seed=int(seed), **args)

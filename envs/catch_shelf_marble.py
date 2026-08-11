@@ -53,13 +53,13 @@ class catch_shelf_marble(Base_Task):
       (the per-level spacing) is derived as `stack_height / (n_shelves - 1)` so taller stacks
       (more shelves) don't grow the scene's overall height. Set `level_gap` explicitly to pin a
       fixed per-level spacing instead (skips the derivation).
-    - `max_stack_span` (default 0.55m): soft cap on cascade centre-to-centre width. The
+    - `max_stack_span` (default 0.65m): soft cap on cascade centre-to-centre width. The
       hard bound is the button window: shelves and belt must stay inside
       ``[key_x_left - layout_pad_from_key, key_x_right + layout_pad_from_key]`` (default
-      ±15 cm past the green/blue keys) and are recentered on table ``x=0``. The layout may
+      ±20 cm past the green/blue keys) and are recentered on table ``x=0``. The layout may
       be shorter than that window; it is never longer.
-    - `layout_pad_from_key` (default 0.15m): how far past each bowl key the shelf/belt
-      arrangement may extend along x.
+    - `layout_pad_from_key` (default 0.20m): how far past each bowl key the shelf/belt
+      arrangement may extend along x (+5 cm/side vs the prior 0.15m pad).
     - `tilt_min_deg`/`tilt_max_deg`: the randomized range (degrees) each shelf's tilt magnitude is
       drawn from independently every episode (direction is separately, independently randomized per
       shelf and tied to that shelf's own zig-zag offset; see `load_actors`). Defaults 15-45.
@@ -87,9 +87,9 @@ class catch_shelf_marble(Base_Task):
     TILT_MAX_DEG_DEFAULT = 45.0
     BOTTOM_CLEARANCE_DEFAULT = 0.22       # belt surface up to the bottom shelf's underside
     STACK_SHIFT_RANGE_DEFAULT = 0.0       # no random x-shift; cascade is centered on table x=0
-    MAX_STACK_SPAN_DEFAULT = 0.55         # soft cap on (max - min) shelf-centre x; further limited by
+    MAX_STACK_SPAN_DEFAULT = 0.65         # soft cap on (max - min) shelf-centre x; further limited by
                                            # the green/blue key window (+ layout_pad_from_key)
-    LAYOUT_PAD_FROM_KEY_DEFAULT = 0.15    # m; belt/shelves may extend this far past each bowl key (8+7 cm)
+    LAYOUT_PAD_FROM_KEY_DEFAULT = 0.20    # m; belt/shelves may extend this far past each bowl key (+5 cm/side)
 
     OSCILLATING_SHELF_ENABLED_DEFAULT = False
     OSCILLATING_SHELF_PERIOD_DEFAULT = 3.0    # s, full -x -> +x -> -x cycle (runs even while marble parked)

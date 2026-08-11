@@ -37,6 +37,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
+    declutter_interactive_viewer,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
@@ -260,6 +261,7 @@ def _add_second_view(env, primary_viewer):
 
     secondary = Viewer(env.renderer)
     secondary.set_scene(env.scene)
+    declutter_interactive_viewer(secondary)
     # The standard simulator perspective, complementary to the overhead view.
     secondary.set_camera_xyz(0.477, 0.253, 1.625)
     secondary.set_camera_rpy(0.0, -0.8, 2.45)

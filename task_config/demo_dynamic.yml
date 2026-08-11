@@ -272,7 +272,8 @@ task_args:
     key_x_left: -0.26           # m; left (green) bowl-key x
     key_x_right: 0.26           # m; right (blue) bowl-key x
     key_y: -0.13                # m; both keys’ y
-    layout_pad_from_key: 0.15   # m; shelves+belt stay in [key_left−pad, key_right+pad], centered at x=0
+    layout_pad_from_key: 0.20   # m; shelves+belt in [key_left−pad, key_right+pad] (+5 cm/side vs 0.15)
+    max_stack_span: 0.65        # m; soft cap on shelf-centre span (fits the wider pad window)
   catch_valley_ball_v1:
     # Options (independent toggles):
     #   Default — red ball goes straight to the exit edge

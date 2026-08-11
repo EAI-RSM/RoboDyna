@@ -1,4 +1,10 @@
-"""Shared head-camera framing and episode cutoff for household tasks / demos."""
+"""Shared head-camera framing and episode cutoff for suite tasks / demos.
+
+Used by household *and* base interactive viewers, GUI ``scene_snapshot`` stills,
+and household RGB demos. Keep these numbers aligned with
+``assets/embodiments/ur5-wsg/config.yml`` ``head_camera`` and D435 fovy in
+``task_config/_camera_config.yml``.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -9,10 +15,21 @@ class EpisodeTimeLimit(Exception):
     """Raised when a household episode hits the step cutoff while saving."""
 
 
-# Fixed elevated head view (same for every household task).
-HOUSEHOLD_HEAD_POS = np.array([0.0, -0.50, 2.0], dtype=np.float64)
-HOUSEHOLD_HEAD_FORWARD = np.array([0.0, 0.45, -1.0], dtype=np.float64)
-HOUSEHOLD_HEAD_LEFT = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
+# Fixed elevated head view (GUI snapshots + interactive free-fly default).
+HEAD_CAMERA_POS = np.array([0.0, -0.50, 2.0], dtype=np.float64)
+HEAD_CAMERA_FORWARD = np.array([0.0, 0.45, -1.0], dtype=np.float64)
+HEAD_CAMERA_LEFT = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
+# D435 vertical FOV (degrees → radians).
+HEAD_CAMERA_FOVY_DEG = 37.0
+HEAD_CAMERA_FOVY = float(np.deg2rad(HEAD_CAMERA_FOVY_DEG))
+# Sapien FPS free-fly controller values that recreate HEAD_CAMERA_* axes.
+HEAD_VIEWER_XYZ = (0.0, -0.50, 2.0)
+HEAD_VIEWER_RPY = (0.0, -1.14794242382892, float(-np.pi / 2.0))
+
+# Back-compat aliases (older household call sites).
+HOUSEHOLD_HEAD_POS = HEAD_CAMERA_POS
+HOUSEHOLD_HEAD_FORWARD = HEAD_CAMERA_FORWARD
+HOUSEHOLD_HEAD_LEFT = HEAD_CAMERA_LEFT
 
 HOUSEHOLD_TASKS = frozenset(
     {
@@ -41,8 +58,8 @@ HOUSEHOLD_MAX_STEPS = EPISODE_MAX_STEPS
 HOUSEHOLD_MAX_SECONDS = 60.0
 
 
-def configure_household_head_camera(task) -> None:
-    """Force ``head_camera`` to the shared household pose."""
+def configure_standard_head_camera(task) -> None:
+    """Force ``head_camera`` to the shared suite pose (base + household)."""
     cams = getattr(task, "cameras", None)
     if cams is None:
         return
@@ -51,10 +68,15 @@ def configure_household_head_camera(task) -> None:
     if "head_camera" not in names:
         return
     camera = clist[names.index("head_camera")]
-    forward = HOUSEHOLD_HEAD_FORWARD / np.linalg.norm(HOUSEHOLD_HEAD_FORWARD)
-    left = HOUSEHOLD_HEAD_LEFT / np.linalg.norm(HOUSEHOLD_HEAD_LEFT)
+    forward = HEAD_CAMERA_FORWARD / np.linalg.norm(HEAD_CAMERA_FORWARD)
+    left = HEAD_CAMERA_LEFT / np.linalg.norm(HEAD_CAMERA_LEFT)
     up = np.cross(forward, left)
     m = np.eye(4)
     m[:3, :3] = np.stack([forward, left, up], axis=1)
-    m[:3, 3] = HOUSEHOLD_HEAD_POS
+    m[:3, 3] = HEAD_CAMERA_POS
     camera.entity.set_pose(sapien.Pose(m))
+
+
+def configure_household_head_camera(task) -> None:
+    """Alias for :func:`configure_standard_head_camera` (legacy name)."""
+    configure_standard_head_camera(task)

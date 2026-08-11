@@ -294,17 +294,34 @@ class Base_Task(gym.Env):
         if self.render_freq:
             self.viewer = Viewer(self.renderer)
             self.viewer.set_scene(self.scene)
-            # Defaults match ur5-wsg demo_camera (v1 demo framing).
+            # Shared head framing for base + household interactive (GUI snapshots).
+            from .utils.household_view import (
+                HEAD_CAMERA_FOVY,
+                HEAD_VIEWER_RPY,
+                HEAD_VIEWER_XYZ,
+            )
+
+            xyz = HEAD_VIEWER_XYZ
+            rpy = HEAD_VIEWER_RPY
             self.viewer.set_camera_xyz(
-                x=kwargs.get("camera_xyz_x", 0.477),
-                y=kwargs.get("camera_xyz_y", 0.253),
-                z=kwargs.get("camera_xyz_z", 1.625),
+                x=kwargs.get("camera_xyz_x", xyz[0]),
+                y=kwargs.get("camera_xyz_y", xyz[1]),
+                z=kwargs.get("camera_xyz_z", xyz[2]),
             )
             self.viewer.set_camera_rpy(
-                r=kwargs.get("camera_rpy_r", 0),
-                p=kwargs.get("camera_rpy_p", -0.8),
-                y=kwargs.get("camera_rpy_y", 2.45),
+                r=kwargs.get("camera_rpy_r", rpy[0]),
+                p=kwargs.get("camera_rpy_p", rpy[1]),
+                y=kwargs.get("camera_rpy_y", rpy[2]),
             )
+            try:
+                window = getattr(self.viewer, "window", None)
+                if window is not None and hasattr(window, "set_camera_parameters"):
+                    fovy = float(kwargs.get("camera_fovy", HEAD_CAMERA_FOVY))
+                    near = float(getattr(window, "near", 0.1))
+                    far = float(getattr(window, "far", 1000.0))
+                    window.set_camera_parameters(near, far, fovy)
+            except Exception:
+                pass
 
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):
         self.table_xy_bias = table_xy_bias
@@ -785,12 +802,17 @@ class Base_Task(gym.Env):
             **kwags,
         )
         self.cameras.load_camera(self.scene)
-        # Household tasks share one elevated head framing.
+        # Shared elevated head framing for household always, and for any
+        # interactive session (base suite GUI / script_exp viewers).
         try:
-            from .utils.household_view import HOUSEHOLD_TASKS, configure_household_head_camera
+            from .utils.household_view import (
+                HOUSEHOLD_TASKS,
+                configure_standard_head_camera,
+            )
 
-            if getattr(self, "task_name", None) in HOUSEHOLD_TASKS:
-                configure_household_head_camera(self)
+            task_name = getattr(self, "task_name", None)
+            if task_name in HOUSEHOLD_TASKS or getattr(self, "_interactive_session", False):
+                configure_standard_head_camera(self)
         except Exception:
             pass
         self._update_kinematic_tasks()

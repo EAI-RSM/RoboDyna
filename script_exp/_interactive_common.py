@@ -635,8 +635,9 @@ def toggle_selected_grippers(env, *, fallback=("left", "right"), threshold: floa
 class ViewerViewToggle:
     """V cycles head_camera ↔ gripper/wrist views (no top-down).
 
-    Space (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
-    Camera switching is V-only.
+    Head view matches GUI ``scene_snapshot`` / training ``head_camera`` RGB
+    (pose + fovy). Space (edge) opens/closes the selected gripper(s) via
+    ``toggle_selected_grippers``. Camera switching is V-only.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
     (``_handle_focused_camera`` commented out), so we copy the active camera
@@ -647,8 +648,12 @@ class ViewerViewToggle:
     DEFAULT_TOPDOWN_XYZ = (_TOPDOWN_VIEW_X_OFFSET, 0.0, 1.68)
     DEFAULT_TOPDOWN_RPY = (0.0, -np.pi / 2.0, -np.pi / 2.0)
     DEFAULT_TOPDOWN_FOVY = float(np.deg2rad(65.0))
-    # Fallback only: when available, the selected head camera's own fovy is used.
-    DEFAULT_HEAD_FOVY = float(np.pi / 2.0)
+    # Fallback only: shared D435 head fovy when render camera fovy is missing.
+    try:
+        from envs.utils.household_view import HEAD_CAMERA_FOVY as _HEAD_FOVY
+    except Exception:  # pragma: no cover - import during partial bootstraps
+        _HEAD_FOVY = float(np.deg2rad(37.0))
+    DEFAULT_HEAD_FOVY = float(_HEAD_FOVY)
     # D435-ish wrist fallback when collect_wrist_camera is off.
     DEFAULT_GRIPPER_FOVY = float(np.deg2rad(42.0))
     _GRIPPER_MODES = ("right_gripper", "left_gripper")
@@ -742,9 +747,53 @@ class ViewerViewToggle:
         except Exception:
             pass
         self.viewer.set_camera_pose(pose)
+        # Mirror ControlWindow._sync_fps_camera_controller so mouse/WASD (when
+        # re-enabled) start from the same orientation we just applied. Prefer
+        # setXYZ/setRPY over the no-op FPSCameraController.pose setter.
         cw = self._control_window()
-        if cw is not None and hasattr(cw, "_sync_fps_camera_controller"):
-            cw._sync_fps_camera_controller()
+        if cw is None:
+            return
+        fps = getattr(cw, "fps_camera_controller", None)
+        if fps is None:
+            return
+        try:
+            from transforms3d.euler import quat2euler
+
+            fps.setXYZ(*np.asarray(pose.p, dtype=np.float64))
+            r, p, y = quat2euler(np.asarray(pose.q, dtype=np.float64))
+            fps.setRPY(r, -p, -y)
+        except Exception:
+            if hasattr(cw, "_sync_fps_camera_controller"):
+                try:
+                    cw._sync_fps_camera_controller()
+                except Exception:
+                    pass
+
+    def _head_render_pose(self):
+        """Pose of the sapien head render camera (matches GUI snapshot RGB)."""
+        head = self._head
+        if head is None:
+            return None
+        try:
+            return head.global_pose
+        except Exception:
+            pass
+        try:
+            return head.entity.get_pose()
+        except Exception:
+            return None
+
+    def _apply_head_view(self, announce: bool = False):
+        """Lock free-fly viewer to head_camera pose + fovy (GUI snapshot view)."""
+        pose = self._head_render_pose()
+        if pose is None:
+            if announce:
+                print("View: head_camera unavailable.")
+            return
+        self._set_fovy(self._head_fovy())
+        self._set_viewer_pose(pose)
+        if announce:
+            print("View: head_camera")
 
     def _view_cycle_modes(self) -> list[str]:
         """V targets: head_camera then each active gripper/wrist view."""
@@ -843,10 +892,7 @@ class ViewerViewToggle:
             self.mode = modes[0]
             if self.mode != "head":
                 return self.apply(announce=announce)
-        self._set_fovy(self._head_fovy())
-        self._set_viewer_pose(self._head.global_pose)
-        if announce:
-            print("View: head_camera")
+        self._apply_head_view(announce=announce)
 
     def _edge_key(self, window, key: str, prev_attr: str) -> bool:
         down = bool(window.key_down(key))
@@ -897,14 +943,54 @@ class ViewerViewToggle:
             self._cycle_view()
             return
         # Keep head / gripper views locked to the moving cameras.
+        # Head also re-applies fovy so the free-fly frustum stays matched to
+        # head_camera RGB (GUI snapshots / training view).
         if self.mode == "head" and self._head is not None:
-            self._set_viewer_pose(self._head.global_pose)
+            self._apply_head_view(announce=False)
         else:
             side = self._gripper_side()
             if side is not None:
                 pose = self._wrist_pose(side)
                 if pose is not None:
+                    self._set_fovy(self._gripper_fovy(side))
                     self._set_viewer_pose(self._gripper_viewer_pose(pose))
+
+
+def declutter_interactive_viewer(viewer) -> None:
+    """Show only the 3D scene: hide ImGui panels and camera frustum lines.
+
+    Keeps ControlWindow camera/input logic; suppresses its (and every other
+    plugin's) black side windows. Safe to call more than once.
+    """
+    if viewer is None:
+        return
+    for plugin in getattr(viewer, "plugins", []) or []:
+        # Drop ImGui windows while leaving before/after_render hooks intact.
+        try:
+            plugin.get_ui_windows = lambda: []
+        except Exception:
+            pass
+        try:
+            if hasattr(plugin, "show_camera_linesets"):
+                plugin.show_camera_linesets = False
+        except Exception:
+            pass
+        try:
+            if hasattr(plugin, "show_joint_axes"):
+                plugin.show_joint_axes = False
+        except Exception:
+            pass
+        try:
+            if hasattr(plugin, "show_origin_frame"):
+                plugin.show_origin_frame = False
+        except Exception:
+            pass
+        # Contact overlay only (other plugins may reuse ``enabled``).
+        try:
+            if type(plugin).__name__ == "ContactWindow" and hasattr(plugin, "enabled"):
+                plugin.enabled = False
+        except Exception:
+            pass
 
 
 def make_viewer_view_toggle(
@@ -917,13 +1003,23 @@ def make_viewer_view_toggle(
 ) -> ViewerViewToggle:
     """Build V (head ↔ gripper) view switching for an interactive env.
 
-    Always starts on ``head_camera`` when available. Legacy ``topdown_*`` /
-    ``capture_current_as_topdown`` kwargs are accepted but ignored.
+    Always starts on the shared suite ``head_camera`` framing (same pose/FOV as
+    GUI ``scene_snapshot`` cards) for both base and household tasks. Legacy
+    ``topdown_*`` / ``capture_current_as_topdown`` kwargs are accepted but ignored.
     """
     if viewer is None:
         viewer = getattr(env, "viewer", None)
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+    declutter_interactive_viewer(viewer)
+    # Mark + force shared head pose so base interactives match household / GUI.
+    try:
+        env._interactive_session = True
+        from envs.utils.household_view import configure_standard_head_camera
+
+        configure_standard_head_camera(env)
+    except Exception:
+        pass
     robot_controls = None
     robot_mode = bool(getattr(env, "_interactive_robot_mode", False))
     control_from_argv = None
@@ -1357,14 +1453,25 @@ class UniversalRobotControls:
         pose = state["pose"].copy()
         prev_z = float(pose[2])
         pose[:3] += step
+        freeze_wrist = False
+        freeze_fn = getattr(self.env, "interactive_freeze_wrist_orientation", None)
+        if callable(freeze_fn):
+            try:
+                freeze_wrist = bool(freeze_fn(side))
+            except Exception:
+                freeze_wrist = False
         # World-Y tip (Z/X): rotate the commanded gripper orientation in place.
-        if abs(float(roll)) > 1e-9:
+        if (not freeze_wrist) and abs(float(roll)) > 1e-9:
             dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
         # World-Z yaw (R/T): table-plane spin, premultiply for fixed-axis turn.
-        if abs(float(yaw)) > 1e-9:
+        if (not freeze_wrist) and abs(float(yaw)) > 1e-9:
             dq = axangle2quat([0.0, 0.0, 1.0], float(yaw))
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
+        if freeze_wrist:
+            # Keep the orientation from when the grasp engaged so the wrist
+            # stays rigid while the free tap hinge absorbs the pull.
+            pose[3:7] = np.asarray(state["pose"][3:7], dtype=np.float64)
         # Absolute world-frame Q/E band (not relative to current EE height).
         z_min, z_max = self._global_ee_z_band(side, pose)
         # Over a cook / reactive / dispenser key: *replace* the table+finger
