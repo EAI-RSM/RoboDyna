@@ -15,7 +15,8 @@ Everything after the basket is placed is simulated, not animated: shelf objects
 are free dynamic bodies the mouse can shove, the fall and the landing come out
 of the solver, and success is read off the resting pose. Nothing is teleported
 into place. The mouse starts scurrying at episode start while the arm places
-the basket; the final shove waits until the catcher is down.
+the basket and does not pause for the catcher — placement is a race against
+the knock.
 """
 
 from ._office_base_task import Office_base_task
@@ -195,7 +196,7 @@ class catch_mouse_object_drop(Office_base_task):
         self._mouse_s = 0.0
         self._mouse_z = 0.0
         self._mouse_heading = 0.0
-        self._allow_shove = False
+        self._allow_shove = True
         self._mouse_shove_attempts = 0
         self._shove_observe = 0
         self._mouse_obstacles = []
@@ -821,7 +822,7 @@ class catch_mouse_object_drop(Office_base_task):
             seg.append(seg[-1] + float(np.linalg.norm(b - a)))
         self._mouse_cum = seg
         self._mouse_path_len = float(seg[-1])
-        # Hold just before the final shove so the basket can finish placing.
+        # Path length at the start of the final shove leg (debug / retries).
         self._mouse_shove_s = float(seg[-2]) if len(seg) >= 2 else 0.0
         self._mouse_s = 0.0
         self._mouse_z = float(z)
@@ -1176,7 +1177,7 @@ class catch_mouse_object_drop(Office_base_task):
         self._basket_placed = False
         self._holding_basket = False
         self._target_live = False
-        self._allow_shove = False
+        self._allow_shove = True
         self._mouse_shove_attempts = 0
         self._shove_observe = 0
         self._loaded = True
@@ -1429,15 +1430,9 @@ class catch_mouse_object_drop(Office_base_task):
             return
         dt = float(self.scene.get_timestep())
         nxt = self._mouse_s + float(self.mouse_speed) * dt
-        # Wait at the stand-off until the basket is allowed to receive the shove
-        # (robot is still placing, or placement just finished).
-        shove_s = float(getattr(self, "_mouse_shove_s", self._mouse_path_len))
-        if not getattr(self, "_allow_shove", True) and nxt >= shove_s:
-            nxt = shove_s
+        # Continuous run: do not pause at the stand-off for basket placement.
         self._mouse_s = nxt
-        if self._mouse_s >= self._mouse_path_len and getattr(
-            self, "_allow_shove", True
-        ):
+        if self._mouse_s >= self._mouse_path_len:
             self._mouse_s = self._mouse_path_len
             if self._mouse_state != "done":
                 self._mouse_shove_attempts = int(
@@ -1498,8 +1493,6 @@ class catch_mouse_object_drop(Office_base_task):
             np.array([tx, behind_y], dtype=np.float64),
         ]
         self._set_mouse_path(route, push_y1, float(self._mouse_z))
-        # Basket is already down — do not re-gate at the standoff.
-        self._mouse_shove_s = 0.0
         self._allow_shove = True
         self._mouse_state = "running"
         self._shove_observe = 0
@@ -1521,8 +1514,6 @@ class catch_mouse_object_drop(Office_base_task):
     def _maybe_retry_mouse_shove(self) -> None:
         """After a finished shove, retry if the object is still on the shelf."""
         if self._mouse_state != "done":
-            return
-        if not getattr(self, "_allow_shove", True):
             return
         if self._caught or self._fell_on_table:
             return
@@ -1656,14 +1647,7 @@ class catch_mouse_object_drop(Office_base_task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
             return
-        # Interactive: once the catcher sits under the landing, finish the shove.
-        # (Expert play_once sets this flag after the pick-and-place.)
-        if (
-            not getattr(self, "_allow_shove", True)
-            and self.basket is not None
-            and self._basket_under_landing()
-        ):
-            self._allow_shove = True
+        if self.basket is not None and self._basket_under_landing():
             self._basket_placed = True
         self._advance_mouse()
         self._tame_shelf_velocities()
@@ -1851,13 +1835,11 @@ class catch_mouse_object_drop(Office_base_task):
             self.save_freq = 5
 
         # Mouse scurries from the first frame while the arm places the basket.
-        # The final shove is gated on _allow_shove so the object is not knocked
-        # off before the catcher is down.
-        self._allow_shove = False
+        # No stand-off wait: the knock is a race against placement timing.
+        self._allow_shove = True
         self._activate_target()
         self._release_mouse()
         self._pick_place_basket_to_landing(arm_tag)
-        self._allow_shove = True
 
         dt = max(float(self.scene.get_timestep()), 1e-4)
         remain = max(0.0, self._mouse_path_len - float(self._mouse_s))
