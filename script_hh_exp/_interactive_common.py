@@ -5,10 +5,12 @@ checks.  This module only adds the same viewer/arm teleoperation used by
 ``script_exp``: arrows move the selected end-effector in XY, Q/E move it in Z,
 Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
 G opens/closes the selected gripper(s); V cycles head_camera ↔ gripper views
-(shared ``ViewerViewToggle`` handler; top-down is not available).
+(shared ``ViewerViewToggle``; default head framing matches base suite GUI
+snapshots — top-down is not available).
 Space grasps/releases the task's primary prop (except boil_milk / trap_bug /
-cook_food / cook_food_timer / make_soup / stop_ball / pour_beer, where Space
-is gripper open/close only via ViewerViewToggle).
+cook_food / cook_food_timer / make_soup / catch_mouse_object_drop /
+pour_beer, where Space is gripper open/close only via ViewerViewToggle;
+stop_ball Space closes/opens the gripper to grasp the rolling ball).
 """
 from __future__ import annotations
 
@@ -141,9 +143,10 @@ class HouseholdController:
                 env._interactive_selected_arms = (side,)
         if task in (
             "fill_coffee_jar", "pour_beer", "measure_ingredient", "catch_cup",
-            "stop_ball",
         ) and robot:
             self._close_grippers_at_start()
+        elif task == "stop_ball" and robot:
+            self._open_stop_ball_grippers_at_start()
         elif task == "clean_table" and robot:
             # clean_table only — do not open grippers for any other task.
             # Space approaches the handle cube open, then closes on it.
@@ -165,6 +168,23 @@ class HouseholdController:
             self.env.together_close_gripper(save_freq=None)
         except Exception as exc:
             print(f"[{self.task}] could not pre-close grippers: {exc}")
+        self.env.plan_success = True
+
+    def _open_stop_ball_grippers_at_start(self):
+        """stop_ball: start open so the hand can close around the rolling ball."""
+        try:
+            self.env.plan_success = True
+            opener = getattr(self.env, "together_open_gripper", None)
+            if callable(opener):
+                opener(save_freq=None, left_pos=1.0, right_pos=1.0)
+            else:
+                from envs.utils.action import ArmTag
+
+                for side in ("left", "right"):
+                    self.env.plan_success = True
+                    self.env.move(self.env.open_gripper(ArmTag(side), pos=1.0))
+        except Exception as exc:
+            print(f"[stop_ball] could not pre-open grippers: {exc}")
         self.env.plan_success = True
 
     def _open_clean_table_grippers_at_start(self):
@@ -503,15 +523,17 @@ class HouseholdController:
             self._task_action()
             return
         if self.task == "stop_ball":
+            self._toggle_stop_ball_grasp_grip()
             return
-        # boil_milk / trap_bug / cook_food* / make_soup: Space is gripper
-        # open/close only (ViewerViewToggle). Physical teleop for props / knobs.
+        # boil_milk / trap_bug / cook_food* / make_soup / catch_mouse*: Space is
+        # gripper open/close only (ViewerViewToggle). Physical teleop for props.
         if self.task in (
             "boil_milk",
             "trap_bug",
             "cook_food",
             "cook_food_timer",
             "make_soup",
+            "catch_mouse_object_drop",
         ):
             return
         # measure_ingredient: Space always grasps/releases the jar — never the oil key.
@@ -698,6 +720,45 @@ class HouseholdController:
                     return
                 self.holding = False
                 print("[catch_cup] gripper opened")
+        except Exception as exc:
+            action_failed(e, (str(arm),), detail=f"gripper toggle unavailable: {exc}")
+
+    def _toggle_stop_ball_grasp_grip(self):
+        """Space closes/opens the gripper to grasp the rolling ball."""
+        e = self.env
+        arm = _arm_tag(e)
+        if arm is None:
+            return
+        try:
+            e.plan_success = True
+            if not self.holding:
+                moved = e.move(e.close_gripper(arm, pos=0.0))
+                ok = moved is not False and bool(getattr(e, "plan_success", True))
+                self.holding = bool(ok)
+                if ok:
+                    # Env auto-welds when closed jaws sit around the ball.
+                    try:
+                        e._maybe_interactive_grasp()
+                    except Exception:
+                        pass
+                    print("[stop_ball] gripper closed — grasp the ball when it is between the fingers")
+                else:
+                    action_failed(e, (str(arm),), detail="close gripper failed")
+            else:
+                moved = e.move(e.open_gripper(arm, pos=1.0))
+                ok = moved is not False and bool(getattr(e, "plan_success", True))
+                if not ok:
+                    action_failed(e, (str(arm),), detail="open gripper failed")
+                    return
+                try:
+                    e._release_ball_weld()
+                    if getattr(e, "_ball_state", "") == "grasped":
+                        e._ball_state = "live"
+                        e._grasped = False
+                except Exception:
+                    pass
+                self.holding = False
+                print("[stop_ball] gripper opened")
         except Exception as exc:
             action_failed(e, (str(arm),), detail=f"gripper toggle unavailable: {exc}")
 
@@ -961,7 +1022,7 @@ def _terminal_failure(env, task):
             return "object fell on the table"
     elif task == "stop_ball":
         if bool(getattr(env, "_fell_off", False)) or getattr(env, "_ball_state", "") == "fallen":
-            return "ball fell off the table"
+            return "ball fell off the table without being grasped"
     elif task == "clean_table":
         if bool(getattr(env, "laptop_reached", False)):
             return "spill reached the laptop"

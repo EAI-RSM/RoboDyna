@@ -6,10 +6,10 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Ball starts rolling as soon as the viewer is ready. Block it with the gripper before it falls off the table.
+  Ball starts rolling as soon as the viewer is ready. Open the gripper, intercept the ball, and close to grasp it before it falls off the table.
 """
 ROBOT = """
-  Ball starts rolling as soon as the viewer is ready. Block it with the gripper before it falls off the table.
+  Ball starts rolling as soon as the viewer is ready. Open the gripper, intercept the ball, and close (G) to grasp it before it falls off the table.
 """
 
 if __name__ == "__main__":
