@@ -1,0 +1,39 @@
+---
+description: Hard ban on physics hacking — planner solutions use arms only under default physics
+alwaysApply: true
+---
+
+# No physics hacking for planner solutions
+
+When authoring or fixing `play_once` / expert / planner trajectories, **solve with real contact physics under the default setup**. Do not cheat the sim so a demo “succeeds.”
+
+Source: `basic_prompt.md`.
+
+## Core rule
+
+**If the planner cannot solve the task with the default setup and physics, do not change physics, object motion, masses, friction, damping, gravity, collision shapes, spawn kinematics, or how props move.** The fix must be **purely with the arms** (approach, timing, grasp pose, dual-arm coordination, retreat paths, open/close timing). If arms alone cannot do it under defaults, stop and report — do not “make it work” by editing the world.
+
+## Forbidden (planner / grasp / carry / place)
+
+- Silent **weld / attach / parent** of a grasped object to the EE or gripper
+- **Teleport** / `set_pose` carries that skip contact (object glued by code, not friction)
+- Closing fingers **through** the object volume; fingers must close **around** it
+- Disabling gravity / forcing kinematic on a held object just to make the grasp hold
+- Making objects **appear / disappear**, or spawning into collision / overlap
+- Fake success by snapping objects into goal poses without a physical place / drop
+- Tweaking **mass, friction, restitution, damping, density, scale-for-stability**, object velocities, or scripted object motion to paper over a bad trajectory
+- Changing how belts / gates / timers / falling objects behave solely so the expert succeeds
+
+## Allowed (environment mechanics only)
+
+Kinematic belts, gates, timers, scripted scene props, and similar **task fixture** drivers are OK when they model the intended apparatus — not when they substitute for a robot grasp or carry, and not when retuned mid-debugging just to rescue a failing `play_once`.
+
+## Required behavior
+
+- Round objects **roll**; non-round objects may **slip** on tilt when that is the contact model
+- Hold = jaw friction / contacts after a proper close; release = open gripper + gravity / dynamics
+- If a grasp or timing is unreliable, fix **arm motion only**: approach, pregrasp pose, open/close timing, dual-arm coordination — **not** physics, friction, welds, or object drivers
+
+## When editing tasks
+
+If you find `_weld_*`, attach-to-EE, teleport-carry, or expert-only physics tweaks, treat them as bugs to remove unless the user explicitly asks to keep a fixture-level kinematic drive.
