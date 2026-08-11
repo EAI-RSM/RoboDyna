@@ -58,7 +58,7 @@ the same controls as the interactive examples in `script_exp`:
 --control keyboard:        Space and arrows move the task prop directly
 V                          cycle head_camera ↔ gripper / wrist view(s)
 G                          open / close selected gripper(s)
-C                          task-specific action (cook_food*: gripper knob twist; make_soup burner)
+C                          task-specific action (make_soup burner / board place)
 Escape                     quit
 ```
 

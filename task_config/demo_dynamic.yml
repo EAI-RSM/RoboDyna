@@ -1056,7 +1056,7 @@ task_args:
     range_center_xy: [0.0, 0.14]
     board_y: -0.02
     plate_y: -0.12
-    cook_steps: 1538            # ~30% faster than prior 2000
+    cook_steps: 3076            # 2× prior 1538 (50% slower / mean cook time ×2)
     cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
     # Top-down knob shutoff is a longer reach than the old front knobs.
     shutoff_lead: 0.22
@@ -1083,7 +1083,7 @@ task_args:
     range_center_xy: [0.0, 0.14]
     board_y: -0.02
     plate_y: -0.12
-    cook_steps: 1538
+    cook_steps: 3076
     cook_speed_jitter: 0.20
     shutoff_lead: 0.22
     cook_intensity: 0.70

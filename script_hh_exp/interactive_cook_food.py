@@ -6,17 +6,12 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Space             hold/release food
-  Arrow keys        move held food in XY
-  E / Q             move held food in Z
-
-  Stove starts on. Shut it off by closing on the cooktop knob and twisting.
+  Prefer --control robot: Space only opens/closes the gripper.
+  Grasp food and shut the stove off by closing on the cooktop knob and twisting.
 """
 ROBOT = """
-  Space             grasp/release food
-  C                 gripper grasp-and-twist cooktop knob (shut off)
-
-  Stove starts on. Or close on the knob and twist with teleop.
+  Space opens/closes the gripper only — no automatic food grasp.
+  Grasp food with teleop, then close on the cooktop knob and twist to shut off.
 """
 
 if __name__ == "__main__":

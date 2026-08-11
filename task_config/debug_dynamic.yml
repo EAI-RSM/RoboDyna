@@ -90,7 +90,7 @@ task_args:
     randomize_layout: false
     stove_pose: current
     burner: left_front
-    cook_steps: 769
+    cook_steps: 1538
     cook_speed_jitter: 0.20
     shutoff_lead: 0.22
     cook_intensity: 0.70

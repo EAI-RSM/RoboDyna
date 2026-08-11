@@ -31,9 +31,9 @@ from .utils.create_actor import create_actor, create_visual_box, UnStableError
 class cook_food(KitchenS_base_task):
     """Drop food into a pre-lit pan, then shut the stove off at target doneness."""
 
-    COOK_STEPS_DEFAULT: ClassVar[int] = 1538  # ~30% faster than prior 2000
+    COOK_STEPS_DEFAULT: ClassVar[int] = 3076  # 2× prior 1538 (50% slower / mean cook time ×2)
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
-    COOK_STEPS_ONION_DEFAULT: ClassVar[int] = 846  # ~30% faster than prior 1100
+    COOK_STEPS_ONION_DEFAULT: ClassVar[int] = 1692  # 2× prior 846
     KNOB_CONTACT_RADIUS_DEFAULT: ClassVar[float] = 0.06
     EE_TO_TCP: ClassVar[float] = 0.12
     # Lateral then overhead approach (shared KitchenS path — straight-down
@@ -813,6 +813,9 @@ class cook_food(KitchenS_base_task):
                 self.turned_on_once = True
             elif self.turned_on_once and self.max_doneness > 0.05:
                 self.turned_off_after_cook = True
+                # Freeze the cook score at shutoff (interactive + expert).
+                if self._grasp_doneness is None:
+                    self._grasp_doneness = float(self.doneness)
 
         # Explicit state changes and contact-validated wrist coupling keep the
         # articulated tick aligned with task state.
@@ -932,8 +935,8 @@ class cook_food(KitchenS_base_task):
             target = max(float(level), float(self.doneness))
             start = float(self.doneness)
             if getattr(self, "food_type", "") == "onion_half":
-                # ~4–5 s of browning at save_freq=15 / fps≈16.7.
-                n = int(np.clip(float(self.cook_steps), 800, 1400))
+                # ~8–10 s of browning at save_freq=15 / fps≈16.7 (2× prior cook time).
+                n = int(np.clip(float(self.cook_steps), 1600, 2800))
             else:
                 n = 20
             save_freq = self.save_freq if self.save_freq is not None else 15
@@ -959,7 +962,7 @@ class cook_food(KitchenS_base_task):
         if max_steps is None:
             max_steps = int(round(float(level) * self.cook_steps / inten)) + 40
         if getattr(self, "food_type", "") == "onion_half":
-            max_steps = min(int(max_steps), 1200)
+            max_steps = min(int(max_steps), 2400)
         self._idle_steps(
             max_steps,
             until=lambda: self.doneness >= float(level) or self.doneness >= 0.99,
@@ -1712,14 +1715,22 @@ class cook_food(KitchenS_base_task):
         return float(lo) <= float(doneness) <= float(hi)
 
     def check_success(self) -> bool:
-        """Success: food cooked into the target band after the stove is shut off."""
-        if self._grasp_doneness is None:
-            return False
-        if not self._doneness_in_target_range(float(self._grasp_doneness)):
-            return False
-        if self.fire_intensity > 0.02 or self.knob_angle < -0.05:
+        """Success: food in the target band, scored only after the stove is off."""
+        # Do not score while the burner is still lit / knob is still open.
+        if (
+            bool(getattr(self, "stove_on", False))
+            or self.fire_intensity > 0.02
+            or self.knob_angle < -0.05
+        ):
             return False
         if not self.turned_on_once or not self.turned_off_after_cook:
+            return False
+        score = (
+            float(self._grasp_doneness)
+            if self._grasp_doneness is not None
+            else float(self.doneness)
+        )
+        if not self._doneness_in_target_range(score):
             return False
         if self._food_held():
             return False

@@ -7,9 +7,9 @@ Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
 G opens/closes the selected gripper(s); V cycles head_camera ↔ gripper views
 (shared ``ViewerViewToggle`` handler; top-down is not available).
 Space grasps/releases the task's primary prop (except boil_milk / trap_bug /
-stop_ball / pour_beer, where Space is gripper open/close only via
-ViewerViewToggle). C invokes a task-specific control where needed
-(cook_food / make_soup).
+cook_food / cook_food_timer / stop_ball / pour_beer, where Space is gripper
+open/close only via ViewerViewToggle). C invokes a task-specific control
+where needed (make_soup).
 """
 from __future__ import annotations
 
@@ -206,8 +206,7 @@ class HouseholdController:
                 # No keyboard snap — fire follows a physical gripper twist only.
                 print(
                     f"[{t}] turn the stove with the gripper on the knob "
-                    "(robot mode: C runs a contact grasp-and-twist; "
-                    "or close on the knob and twist with teleop)"
+                    "(close on the knob and twist with teleop)"
                 )
             elif t == "measure_ingredient":
                 # No C/keyboard proxy — oil key is pressed by lowering the gripper.
@@ -414,8 +413,6 @@ class HouseholdController:
                 e._press_dispenser(arm, force_level=4)
                 if not bool(getattr(e, "plan_success", True)):
                     action_failed(e, (str(arm),), detail="dispenser press failed")
-            elif t in ("cook_food", "cook_food_timer"):
-                self._turn_cook_food_knob()
             elif t == "measure_ingredient":
                 # No C assist — oil key is pressed by lowering the closed gripper.
                 print(
@@ -545,64 +542,6 @@ class HouseholdController:
         self._return_arm_after_failure(arm)
         action_failed(e, (str(arm),), detail=detail)
 
-    def _turn_cook_food_knob(self):
-        """Contact grasp-and-twist the cooktop knob with the selected arm.
-
-        Interactive: only the selected arm moves — no parking the other arm,
-        no long staging path, no retreat. Stove starts on; C shuts it off.
-        """
-        e = self.env
-        arm = _arm_tag(e)
-        if arm is None:
-            return
-
-        previous_arm = getattr(e, "arm", None)
-        stove_was_on = bool(getattr(e, "stove_on", False))
-        wanted_on = not stove_was_on
-        on_angle = (
-            -float(getattr(e, "cook_intensity", 1.0))
-            * float(getattr(e, "KNOB_MAX_ANGLE", np.pi / 2))
-        )
-        target = float(on_angle if wanted_on else 0.0)
-        start = float(getattr(e, "knob_angle", 0.0))
-        action_error = None
-        try:
-            e.arm = arm
-            e.plan_success = True
-            # Bypass ``_set_knob_to`` (it parks the unused food arm).
-            reached = e._turn_stove_knob(
-                target,
-                approach=False,
-                start_angle=start,
-                settle_steps=4,
-                after_idle=0,
-                retry_closer=True,
-                direct=True,
-                retreat=False,
-            )
-            if callable(getattr(e, "_set_knob_angle", None)):
-                e._set_knob_angle(reached)
-        except Exception as exc:
-            action_error = exc
-        finally:
-            e.arm = previous_arm
-            e._ignore_knob = False
-
-        reached_target = bool(getattr(e, "stove_on", False)) == wanted_on
-        if reached_target:
-            print(f"[{self.task}] knob turned with {arm} arm — stove "
-                  f"{'on' if wanted_on else 'off'}")
-            return
-
-        detail = (
-            f"could not turn the knob: {action_error}"
-            if action_error is not None
-            else "knob did not reach the heat threshold"
-        )
-        print(f"[{self.task}] {arm} arm failed; returning it to origin")
-        self._return_arm_after_failure(arm)
-        action_failed(e, (str(arm),), detail=detail)
-
     def _task_action(self):
         if self.robot:
             self._robot_action()
@@ -618,9 +557,9 @@ class HouseholdController:
             return
         if self.task == "stop_ball":
             return
-        # boil_milk / trap_bug: Space is gripper open/close only
-        # (ViewerViewToggle). Knob / trap latch are physical teleop, not Space.
-        if self.task in ("boil_milk", "trap_bug"):
+        # boil_milk / trap_bug / cook_food*: Space is gripper open/close only
+        # (ViewerViewToggle). Knob / trap latch / food grasp are physical teleop.
+        if self.task in ("boil_milk", "trap_bug", "cook_food", "cook_food_timer"):
             return
         # measure_ingredient: Space always grasps/releases the jar — never the oil key.
         if self.task == "measure_ingredient":
@@ -866,11 +805,9 @@ class HouseholdController:
             self._fill_space_was_down = space_down
         elif self.space.poll(space_down):
             self._grasp_or_release()
-        # C = cook_food burner toggle / make_soup burner + board-over-pot.
-        # F = global gripper open/close (ViewerViewToggle); not a task action.
-        if self.task in ("cook_food", "cook_food_timer", "make_soup") and self.c.poll(
-            window.key_down("c")
-        ):
+        # C = make_soup burner + board-over-pot (cook_food*: teleop knob only).
+        # Space = global gripper open/close (ViewerViewToggle) for cook_food*.
+        if self.task == "make_soup" and self.c.poll(window.key_down("c")):
             self._task_action()
         # measure_ingredient: oil key = lower closed gripper onto red key;
         # Space = grasp/release jar for the scale step.
@@ -1050,11 +987,24 @@ def _terminal_failure(env, task):
             pass
     elif task in ("cook_food", "cook_food_timer"):
         try:
-            if float(env.doneness) > float(env.target_doneness_range[1]) + 1e-3:
+            lo, hi = env.target_doneness_range
+            # Overcook is irreversible — fail as soon as doneness passes the band.
+            if float(env.doneness) > float(hi) + 1e-3:
                 return "food overcooked"
+            # Under/out-of-band after shutoff only (success is checked first).
+            stove_off = (
+                not bool(getattr(env, "stove_on", False))
+                and float(getattr(env, "fire_intensity", 1.0)) <= 0.02
+                and float(getattr(env, "knob_angle", -1.0)) >= -0.05
+            )
+            if not stove_off or not bool(getattr(env, "turned_off_after_cook", False)):
+                return None
             grasped = getattr(env, "_grasp_doneness", None)
-            if grasped is not None and not env._doneness_in_target_range(float(grasped)):
-                return "food removed outside target doneness"
+            score = float(env.doneness) if grasped is None else float(grasped)
+            if score + 1e-3 < float(lo):
+                return "food undercooked"
+            if not env._doneness_in_target_range(score):
+                return "food outside target doneness"
         except Exception:
             pass
     elif task == "make_soup":
