@@ -22,10 +22,10 @@ class stop_ball(Office_base_task):
     fails.
     """
 
-    BALL_IDS = [0, 1]
-    # Asset has no authored scale; 0.02 → ~4 cm diameter; default 1.6× (=2×−20%).
+    BALL_IDS = [0]  # orange table-tennis (id 1 is hard to see in head cam)
+    # Asset has no authored scale; 0.02 → ~4 cm diameter; default 2.0× for a graspable pinch.
     BALL_BASE_SCALE = 0.02
-    BALL_SCALE_MULT_DEFAULT = 1.6
+    BALL_SCALE_MULT_DEFAULT = 2.0
     # 100% larger than the previous 0.50 scale.
     TROPHY_SCALE_MULT = 1.00
     # Prior screen was 1.5×; 30% smaller → 1.05× (~41 cm wide).
@@ -43,8 +43,8 @@ class stop_ball(Office_base_task):
     SEAL_IDS = [0, 1, 2, 3, 4, 6]
     MILKTEA_IDS = [0, 1, 2, 4, 5, 6]
 
-    ROLL_SPEED_DEFAULT = 0.15
-    ROLL_SPEED_JITTER_FRAC = 0.30  # sample table-roll speed in mean ± this fraction
+    ROLL_SPEED_DEFAULT = 0.09
+    ROLL_SPEED_JITTER_FRAC = 0.20  # sample table-roll speed in mean ± this fraction
     FALL_SPEED_XY_DEFAULT = 0.07
     SHELF_ROLL_DURATION_DEFAULT = 1.00
     GRAVITY = 9.81
@@ -65,25 +65,25 @@ class stop_ball(Office_base_task):
     # The ball collides as a convex hull, so it slides instead of rolling.
     # Near-zero Coulomb friction emulates rolling resistance; damping is what
     # bleeds off post-miss motion.
-    LIVE_LINEAR_DAMPING_DEFAULT = 0.12
-    LIVE_ANGULAR_DAMPING_DEFAULT = 0.3
-    LIVE_FRICTION_DEFAULT = 0.006
-    LIVE_RESTITUTION_DEFAULT = 0.12
+    # Enough friction that hitting the pads can naturally slow the ball;
+    # still low enough to slide along the table after handoff.
+    LIVE_LINEAR_DAMPING_DEFAULT = 0.08
+    LIVE_ANGULAR_DAMPING_DEFAULT = 0.25
+    LIVE_FRICTION_DEFAULT = 0.35
+    LIVE_RESTITUTION_DEFAULT = 0.08
     BALL_MASS = 0.05
     MIN_COUPLE_GAP = 0.055  # m; closer than this the ball is inside the gripper
     # Close when TCP is this close to the ball centre; hold by PhysX contact only.
     ATTACH_DIST_DEFAULT = 0.045
     GRASP_TOL_DEFAULT = 0.035
     # Low table friction while rolling; raise for the pinch so jaws can hold.
-    GRASP_FRICTION = 1.8
-    GRASP_SETTLE_STEPS = 25
+    # Pad friction while pinching (still contact-based; no velocity kill).
+    GRASP_FRICTION = 1.6
+    GRASP_SETTLE_STEPS = 30
     # Success requires the ball clear of the tabletop after the pinch.
     LIFT_CLEARANCE = 0.025
     POST_GRASP_LIFT_DEFAULT = 0.10
-    MAX_LIVE_STEPS_DEFAULT = 700
-    # Real finger opening while a ~5 cm ball is pinched (commanded close is always ~0).
-    PINCH_OPEN_MIN = 0.08
-    PINCH_OPEN_MAX = 0.70
+    MAX_LIVE_STEPS_DEFAULT = 400
 
     BALL_X_ABS_MIN = 0.14
     BALL_X_ABS_MAX = 0.30
@@ -1149,19 +1149,36 @@ class stop_ball(Office_base_task):
             return True
         return val >= 0.55
 
-    def _real_gripper_opening(self, arm_tag):
-        """Actual finger opening in [0,1] (not the commanded target)."""
-        side = "left" if str(arm_tag) == "left" else "right"
-        try:
-            vals = self.robot.get_normal_real_gripper_val()
-            return float(vals[0] if side == "left" else vals[1])
-        except Exception:
-            return 0.0
+    def _gripper_pos_for_ball(self):
+        """Normalized gripper command that seats pads on the ball (not empty-shut)."""
+        scale = list(getattr(self.robot, "left_gripper_scale", [0.01, -0.06]))
+        s0, s1 = float(scale[0]), float(scale[1])
+        half_gap = float(self.ball_radius) + 0.001
+        target_joint = -half_gap
+        if abs(s1 - s0) < 1e-9:
+            return 0.45
+        return float(np.clip((target_joint - s0) / (s1 - s0), 0.08, 0.90))
 
-    def _gripper_pinching(self, arm_tag):
-        """Jaws are partly open around an object (not empty-shut, not fully open)."""
-        opening = self._real_gripper_opening(arm_tag)
-        return float(self.PINCH_OPEN_MIN) <= opening <= float(self.PINCH_OPEN_MAX)
+    def _finger_gap(self, arm_tag):
+        """World-frame distance between the arm's two finger pads."""
+        entity = (
+            self.robot.left_entity if str(arm_tag) == "left"
+            else self.robot.right_entity
+        )
+        if entity is None:
+            return 0.0
+        pts = [
+            np.array(link.entity_pose.p, dtype=np.float64)
+            for link in entity.get_links()
+            if "finger" in link.get_name().lower()
+        ]
+        if len(pts) < 2:
+            return 0.0
+        best = 0.0
+        for i in range(len(pts)):
+            for j in range(i + 1, len(pts)):
+                best = max(best, float(np.linalg.norm(pts[i] - pts[j])))
+        return best
 
     def _ball_near_tcp(self, arm_tag, dist=None):
         lim = float(self.grasp_tol if dist is None else dist)
@@ -1198,9 +1215,10 @@ class stop_ball(Office_base_task):
         return z >= float(self.table_top) + float(self.ball_radius) + float(self.LIFT_CLEARANCE)
 
     def _ball_held_by_gripper(self, arm_tag=None, require_lift=False):
-        """Real pinch in the jaws: contact, partly-open fingers, tight TCP proximity.
+        """Real jaw pinch: gripper contact + tight TCP proximity (+ lift for success).
 
-        ``require_lift`` also demands the ball be clear of the table (success metric).
+        Finger gap is not used as a hold signal: the expert commands a ball-width
+        opening, so gap≈diameter even when the jaws are empty.
         """
         if self.ball is None or self._ball_state == "fallen":
             return False
@@ -1209,14 +1227,14 @@ class stop_ball(Office_base_task):
             if arm_tag is not None
             else ("left", "right")
         )
-        # Tight: ball must sit in the jaw pocket, not beside the wrist/forearm.
-        lim = max(float(self.grasp_tol), float(self.ball_radius) + 0.015)
+        lim = max(float(self.grasp_tol) * 0.85, float(self.ball_radius) + 0.008)
         if not self._ball_gripper_contact():
             return False
         if require_lift and not self._ball_lifted():
             return False
         for side in sides:
-            if not self._gripper_pinching(side):
+            # Reject fully-open jaws; commanded ball-width close is fine.
+            if self._gripper_open_enough(side):
                 continue
             if self._ball_near_tcp(side, dist=lim):
                 return True
@@ -1375,8 +1393,8 @@ class stop_ball(Office_base_task):
             tcp[0] = float(np.clip(tcp[0], 0.05, self.BLOCK_X_MAX))
         else:
             tcp[0] = float(np.clip(tcp[0], -self.BLOCK_X_MAX, -0.05))
-        # Top-down grasp: TCP around ball-centre height.
-        tcp[2] = self.table_top + max(self.ball_radius + 0.01, self.block_z_above)
+        # Top-down pinch at ball-centre height so pads meet the equator.
+        tcp[2] = self.table_top + float(self.ball_radius) + 0.008
         return tcp
 
     def _grasp_quat(self, arm_tag):
@@ -1419,78 +1437,155 @@ class stop_ball(Office_base_task):
         self.move(self.move_by_displacement(arm_tag, x=dx))
 
     def _nudge_toward_ball(self, arm_tag, step=0.03):
-        """Small world-frame slide of the TCP toward the live ball centre."""
+        """Slide TCP onto the ball centre in XY; keep Z at pinch height."""
         delta = self._ball_to_tcp(arm_tag)  # ball - tcp
         xy = delta[:2].copy()
         n = float(np.linalg.norm(xy))
-        if n < 1e-4:
+        target_z = float(self.table_top) + float(self.ball_radius) + 0.008
+        tcp_z = float(self._tcp_pos(arm_tag)[2])
+        dz = float(np.clip(target_z - tcp_z, -0.02, 0.02))
+        if n < 1e-4 and abs(dz) < 1e-3:
             return
-        xy = xy * (min(float(step), n) / n)
-        dz = float(np.clip(delta[2], -0.02, 0.02))
+        if n >= 1e-4:
+            xy = xy * (min(float(step), n) / n)
+        else:
+            xy[:] = 0.0
         self.plan_success = True
         self.move(self.move_by_displacement(
             arm_tag, x=float(xy[0]), y=float(xy[1]), z=dz, move_axis="world",
         ))
 
-    def _grasp_live_ball(self, arm_tag):
-        """Chase the live ball, close when near, hold by contact, then lift.
+    def _try_pinch_and_lift(self, arm_tag):
+        """Close on the moving ball under the TCP and lift if the pinch holds.
 
-        A miss keeps the ball on its exit heading until it leaves the table.
-        No EE weld / pose teleport — fingers must pinch the dynamic ball.
+        Ball velocity / gravity / damping are left to PhysX — no scripted stop.
+        The hand tracks with the ball while the jaws close.
         """
-        close_lim = max(float(self.attach_dist), float(self.ball_radius) + 0.025)
-        for _ in range(max(int(self.max_live_steps), 900)):
-            if self._grasped or self._fell_off or self._ball_state == "fallen":
-                break
-            if self._ball_state != "live":
-                break
-            gap = float(np.linalg.norm(self._ball_to_tcp(arm_tag)[:3]))
-            if gap <= close_lim:
-                self._recouple_ball_to_robot()
-                self._set_grasp_friction()
-                # Kill residual roll so the jaws can seat around a nearly still ball.
-                if self._ball_rigid is not None:
-                    try:
-                        self._ball_rigid.set_linear_velocity(np.zeros(3))
-                        self._ball_rigid.set_angular_velocity(np.zeros(3))
-                    except Exception:
-                        pass
-                # Drop a little so fingertips surround the sphere before closing.
+        self._recouple_ball_to_robot()
+        self._set_grasp_friction()
+
+        # Short chase-close: keep TCP over the moving ball while clamping.
+        close_pos = float(np.clip(self._gripper_pos_for_ball() * 0.75, 0.05, 0.85))
+        for step_i in range(4):
+            delta = self._ball_to_tcp(arm_tag)
+            xy = delta[:2]
+            n = float(np.linalg.norm(xy))
+            target_z = float(self.table_top) + float(self.ball_radius) + 0.008
+            dz = float(np.clip(target_z - float(self._tcp_pos(arm_tag)[2]), -0.02, 0.02))
+            # Lead slightly along the roll so jaws meet the ball mid-path.
+            lead = np.zeros(2, dtype=np.float64)
+            if self._ball_rigid is not None:
+                try:
+                    v = np.array(self._ball_rigid.get_linear_velocity(), dtype=np.float64)[:2]
+                    vn = float(np.linalg.norm(v))
+                    if vn > 1e-3:
+                        lead = v * (0.04 / vn)
+                except Exception:
+                    pass
+            if n > 0.006 or float(np.linalg.norm(lead)) > 1e-4:
+                step = xy * (min(0.035, n) / max(n, 1e-6)) + lead * 0.35
                 self.plan_success = True
                 self.move(self.move_by_displacement(
-                    arm_tag, z=-0.015, move_axis="world",
+                    arm_tag,
+                    x=float(np.clip(step[0], -0.04, 0.04)),
+                    y=float(np.clip(step[1], -0.04, 0.04)),
+                    z=dz,
+                    move_axis="world",
                 ))
+            if step_i == 0:
                 self.plan_success = True
-                self.move(self.close_gripper(arm_tag=arm_tag, pos=0.0))
-                # Let PhysX form jaw contacts before judging the pinch.
-                self._dwell(int(self.GRASP_SETTLE_STEPS))
-                if self._ball_held_by_gripper(arm_tag):
-                    self._mark_held(arm_tag)
+                self.move(self.close_gripper(arm_tag=arm_tag, pos=close_pos))
+            self._dwell(6)
+
+        self._dwell(max(8, int(self.GRASP_SETTLE_STEPS) - 10))
+        # Require sustained contact for several steps (not a one-frame graze).
+        hold_hits = 0
+        for _ in range(12):
+            self._dwell(2)
+            if self._ball_held_by_gripper(arm_tag, require_lift=False):
+                hold_hits += 1
+        held0 = hold_hits >= 6
+        if not held0:
+            self.plan_success = True
+            self.move(self.close_gripper(arm_tag=arm_tag, pos=0.05))
+            hold_hits = 0
+            for _ in range(10):
+                delta = self._ball_to_tcp(arm_tag)
+                if float(np.linalg.norm(delta[:2])) > 0.01:
                     self.plan_success = True
                     self.move(self.move_by_displacement(
-                        arm_tag, z=float(self.post_grasp_lift), move_axis="world",
+                        arm_tag,
+                        x=float(np.clip(delta[0], -0.025, 0.025)),
+                        y=float(np.clip(delta[1], -0.025, 0.025)),
+                        move_axis="world",
                     ))
-                    self._dwell(10)
-                    # Confirm the lift did not drop the ball.
-                    if self._ball_held_by_gripper(arm_tag):
-                        self._mark_held(arm_tag)
-                    else:
-                        self._clear_hold()
+                self._dwell(4)
+                if self._ball_held_by_gripper(arm_tag, require_lift=False):
+                    hold_hits += 1
+            held0 = hold_hits >= 5
+        if not held0:
+            self._tune_ball_friction()
+            print(
+                f"[stop_ball] pinch miss gap={float(np.linalg.norm(self._ball_to_tcp(arm_tag))):.3f} "
+                f"contact={self._ball_gripper_contact()} open={self._gripper_open_enough(arm_tag)}",
+                flush=True,
+            )
+            return False
+        self._mark_held(arm_tag)
+        self.plan_success = True
+        self.move(self.move_by_displacement(
+            arm_tag, z=float(self.post_grasp_lift), move_axis="world",
+        ))
+        self._dwell(25)
+        if self._ball_held_by_gripper(arm_tag, require_lift=True):
+            self._mark_held(arm_tag)
+            return True
+        print(
+            f"[stop_ball] lift drop z={float(self._ball_centre()[2]):.3f} "
+            f"need={float(self.table_top + self.ball_radius + self.LIFT_CLEARANCE):.3f} "
+            f"contact={self._ball_gripper_contact()}",
+            flush=True,
+        )
+        self._clear_hold()
+        self._tune_ball_friction()
+        return False
+
+    def _grasp_live_ball(self, arm_tag):
+        """Wait/chase with open jaws on the path, pinch when centred, lift.
+
+        No EE weld / pose teleport. A miss keeps the ball rolling off the table.
+        """
+        xy_lim = max(float(self.ball_radius) * 1.05, 0.022)
+        nudge_cool = 0
+        for _ in range(max(int(self.max_live_steps), 900)):
+            if self._fell_off or self._ball_state == "fallen":
+                break
+            if self._ball_state != "live" and self._ball_state != "grasped":
+                break
+            if self._ball_held_by_gripper(arm_tag, require_lift=True):
+                self._mark_held(arm_tag)
+                return
+            delta = self._ball_to_tcp(arm_tag)
+            xy_gap = float(np.linalg.norm(delta[:2]))
+            if xy_gap <= xy_lim and abs(float(delta[2])) <= 0.035:
+                if self._try_pinch_and_lift(arm_tag):
+                    self._dwell(40)
                     return
-                # Close missed — restore slide friction and keep chasing / miss path.
-                self._tune_ball_friction()
-            # Close enough in XY to descend / chase.
-            if gap <= close_lim * 2.5:
-                self._nudge_toward_ball(arm_tag, step=0.025)
-            elif not self._near_any_arm() and self._ball_speed() < 0.6 * float(self.roll_speed):
-                self._boost_ball_along_path()
+                self.plan_success = True
+                self.move(self.open_gripper(arm_tag=arm_tag, pos=1.0))
+                nudge_cool = 5
+            # Track onto the jaw centreline, but do not replan every sim step.
+            if xy_gap <= max(0.14, xy_lim * 5.0) and nudge_cool <= 0:
+                self._nudge_toward_ball(arm_tag, step=0.028)
+                nudge_cool = 10
+            else:
+                nudge_cool = max(0, nudge_cool - 1)
             self._dwell(1)
 
-        if self._grasped or self._fell_off:
+        if self._ball_held_by_gripper(arm_tag, require_lift=True) or self._fell_off:
             return
-        # Miss: keep driving until the ball leaves the table.
-        for _ in range(1200):
-            if self._grasped or self._fell_off or self._ball_state != "live":
+        for _ in range(800):
+            if self._fell_off or self._ball_state != "live":
                 break
             if self._ball_speed() < 0.8 * float(self.roll_speed):
                 self._boost_ball_along_path()
@@ -1510,18 +1605,35 @@ class stop_ball(Office_base_task):
         if self._wait_until_handoff():
             self._grasp_live_ball(arm_tag)
             self._dwell(15)
-            self.plan_success = bool(self._ball_held_by_gripper(arm_tag))
         elif self._ball_state == "rolling":
             while self._traj_step < len(self._traj):
                 self._dwell(1)
                 if self._fell_off or self._ball_state == "fallen":
                     break
-            self.plan_success = False
         elif self._ball_state == "live":
             self._grasp_live_ball(arm_tag)
-            self.plan_success = bool(self._ball_held_by_gripper(arm_tag))
+            self._dwell(15)
+
+        self.plan_success = bool(
+            self._ball_held_by_gripper(arm_tag, require_lift=True)
+        )
+        if self.plan_success:
+            bc = self._ball_centre()
+            tcp = self._tcp_pos(arm_tag)
+            print(
+                f"[stop_ball] SUCCESS arm={arm_tag} "
+                f"ball_z={bc[2]:.3f} tcp_z={tcp[2]:.3f} "
+                f"gap={float(np.linalg.norm(bc - tcp)):.3f} "
+                f"finger_gap={self._finger_gap(arm_tag):.3f} "
+                f"diam={2 * float(self.ball_radius):.3f}",
+                flush=True,
+            )
         else:
-            self.plan_success = False
+            print(
+                f"[stop_ball] FAIL arm={arm_tag} state={self._ball_state} "
+                f"fell={self._fell_off} grasped={self._grasped}",
+                flush=True,
+            )
 
         self.info["info"] = {
             "{A}": f"027_table-tennis/base{self.ball_id}",
@@ -1533,17 +1645,18 @@ class stop_ball(Office_base_task):
         return self.info
 
     def check_success(self):
-        """Success = closed gripper still holding the ball by contact/friction."""
+        """Success = ball pinched in the jaws and lifted clear of the table."""
         if self._fell_off or self._ball_state == "fallen":
             return False
         if self.ball is None:
             return False
-        held = self._ball_held_by_gripper(self._hold_arm)
-        if not held:
-            held = self._ball_held_by_gripper()
-        if held:
+        if self._ball_held_by_gripper(self._hold_arm, require_lift=True):
             if not self._grasped:
                 self._mark_held(self._hold_arm or self.arm_side)
+            return True
+        if self._ball_held_by_gripper(require_lift=True):
+            if not self._grasped:
+                self._mark_held(self.arm_side)
             return True
         return False
 
@@ -1555,6 +1668,7 @@ class stop_ball(Office_base_task):
             "grasped": bool(self._grasped),
             "holding": bool(self._holding),
             "hold_arm": None if self._hold_arm is None else str(self._hold_arm),
+            "lifted": bool(self._ball_lifted()) if self.ball is not None else False,
             "traj_step": int(self._traj_step),
             "intercept_idx": int(self._intercept_idx),
             "arm_side": str(self.arm_side),
