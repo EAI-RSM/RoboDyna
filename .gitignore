@@ -12,11 +12,6 @@ envs/curobo
 *.zip
 viewer_show.*
 eval_video/
-# task_config
-task_config/*
-!task_config/_*
-!task_config/create_task_config.sh
-!task_config/demo_*.yml
 **/.DS_Store
 logs/*
 .idea/

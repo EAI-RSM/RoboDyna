@@ -81,7 +81,7 @@ task_args:
     button_press_depth: 0.03
     door_open_angle_deg: 95.0
     door_open_speed_deg: 220.0
-    ball_speed: 0.18
+    ball_speed: 0.144
     ball_bounce_height: 0.012
   catch_cuboid:
     num_appearances: 3

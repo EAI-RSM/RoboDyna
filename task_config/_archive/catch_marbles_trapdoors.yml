@@ -56,7 +56,7 @@ task_args:
                                 # left-side trapdoor → left arm; right-side → right arm
     shuffle_colors: true
     key_base_half: [0.032, 0.032, 0.005]
-    ball_speed: 0.18            # nominal; episode speeds sample ±20%
+    ball_speed: 0.144           # -20% vs 0.18; episode still samples ±20%
     ball_speed_scale_min: 0.8
     ball_speed_scale_max: 1.2
     ball_bounce_height: 0.012

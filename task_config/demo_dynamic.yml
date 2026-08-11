@@ -375,7 +375,7 @@ task_args:
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
-    start_freeze_s: 3.0         # s; ball waits at its drop pose before falling (arms stay free)
+    start_freeze_s: 0.0         # s; no start hold — ball drops immediately
     catcher_model: custom_catch_box
     bowl_id: 0
     bowl_scale_mult: 1.0
@@ -1237,7 +1237,8 @@ task_args:
     disp_y: 0.08
     disp_y_jitter: 0.06
     jar_y: -0.06
-    jar_start_gap: 0.025
+    # Contact shove distance (no end teleport). Keep ≥ ~6 cm so the push is visible.
+    jar_start_gap: 0.08
     scale_x: -0.32
     scale_y: -0.14
     scale_dist: 0.25
@@ -1314,7 +1315,7 @@ task_args:
     n_veg_max: 4
     tilt_hold_dot: 0.82
     tilt_spill_dot: 0.50
-    pour_tip_rad: 0.70
+    pour_tip_rad: 0.70           # ~40° tip — match make_soup
     knob_contact_radius: 0.06
     grasp_tcp_tol: 0.045
     plate_x: -0.18
