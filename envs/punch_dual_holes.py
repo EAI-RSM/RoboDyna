@@ -82,7 +82,8 @@ class punch_dual_holes(Base_Task):
     # belt center y (toward the robot's working area) and surface z above table
     BELT_Y = -0.05
     SURF_DZ = 0.016                     # page sits this high above belt-slab center top
-    PUNCH_ANIM_STEPS = 24
+    PUNCH_ANIM_STEPS = 48            # down+up stroke length (physics steps); keep visible on demos
+    PUNCH_DROP_M = 0.06              # how far the gantry head descends on a press
     TILE_PAUSE_S_DEFAULT = 2.0          # discrete: nominal hold under stamp (seconds)
     TILE_PAUSE_JITTER_DEFAULT = 0.40    # discrete: ± fraction on tile_pause_s per episode
     # Wall-clock hold once the belts arm: tiles sit still for this long before the
@@ -355,6 +356,7 @@ class punch_dual_holes(Base_Task):
         self._punch_rest_z = {}   # side -> punch head rest z
         self._punch_y = {}        # side -> punch/belt y
         self._punch_press = {}    # side -> remaining descend frames (visual)
+        self._pending_mark = {}   # side -> page idx waiting for bottom-of-stroke reveal
         self.belt_inner_reach = {}
         self.belt_outward_reach = {}
         self.belt_bounds_x = {}
@@ -538,6 +540,10 @@ class punch_dual_holes(Base_Task):
             home_poses=[self._button_home[s] for s in sides],
             max_depth=float(self.BUTTON_HALF[2]),
             ids=sides,
+            # Snappier keycap + deeper trigger so the stamp edge lands when the
+            # gripper has actually pressed, not on a light approach.
+            visual_step=0.002,
+            trigger_depth_frac=0.55,
         )
         self._reactive_buttons.set_tops_z([self._button_top_z[s] for s in sides])
 
@@ -545,17 +551,18 @@ class punch_dual_holes(Base_Task):
         bank = getattr(self, "_reactive_buttons", None)
         if bank is None:
             return
-        # Always animate keycaps; only auto-fire punches in interactive teleop
-        # (expert demos call ``_fire_punch`` explicitly after the ready window).
+        # Keycap spring + punch fire share one path for expert demos and teleop:
+        # button press edge always drives the gantry stamp stroke, then scoring.
         triggered = bank.update()
-        interactive = bool(
-            getattr(self, "_interactive_universal_controls", False)
-            or getattr(self, "_interactive_robot_mode", False)
-        )
-        if not interactive:
-            return
         for side in triggered:
-            self._fire_punch(side)
+            self._on_button_pressed(side)
+
+    def _on_button_pressed(self, side):
+        """Button press edge: stamp head goes down, then register the punch result."""
+        if not getattr(self, "_punch_press", None):
+            return
+        self._trigger_punch_head(side)
+        self._fire_punch(side)
 
     # --------------------------------------------------- belt kinematics
     @staticmethod
@@ -654,16 +661,34 @@ class punch_dual_holes(Base_Task):
             self._under_head[side] = best_k if best_d < 0.05 else None
 
     def _update_punch_heads(self):
+        """Advance gantry punch-head strokes. Runs every physics step while animating."""
+        press = getattr(self, "_punch_press", None)
+        if not press:
+            return
+        pending = getattr(self, "_pending_mark", None)
+        if pending is None:
+            self._pending_mark = {}
+            pending = self._pending_mark
         for side in ("left", "right"):
-            if self._punch_press[side] <= 0:
+            if side not in press or press[side] <= 0:
                 continue
-            self._punch_press[side] -= 1
-            frac = 1.0 - self._punch_press[side] / max(1, self.PUNCH_ANIM_STEPS)
+            press[side] -= 1
+            frac = 1.0 - press[side] / max(1, self.PUNCH_ANIM_STEPS)
+            # Triangle: 0 → 1 → 0 over the stroke; bottom of travel at frac=0.5.
             tri = 1.0 - abs(2 * frac - 1.0)
-            drop = tri * 0.045
+            drop = tri * float(self.PUNCH_DROP_M)
             h = self.punch_head[side]
             hp = h.get_pose()
-            h.actor.set_pose(sapien.Pose([hp.p[0], hp.p[1], self._punch_rest_z[side] - drop], hp.q))
+            h.actor.set_pose(
+                sapien.Pose(
+                    [hp.p[0], hp.p[1], self._punch_rest_z[side] - drop],
+                    hp.q,
+                )
+            )
+            # Reveal the card mark once the head reaches the bottom of the stroke.
+            if frac >= 0.45 and side in pending:
+                k = pending.pop(side)
+                self._apply_punch_mark(side, k)
 
     def _align_page_under_punch(self, side, k):
         """Snap page `k` so its center is exactly under the punch at the current held step."""
@@ -679,6 +704,8 @@ class punch_dual_holes(Base_Task):
         # base hook (drives any DOMINO dynamic objects); runs EVERY physics step
         super()._update_kinematic_tasks()
         self._update_reactive_buttons()
+        # Stamp strokes must advance even when belts are idle (discrete press windows).
+        self._update_punch_heads()
         if not getattr(self, "_belt_active", False):
             return
         # Start-of-episode hold: tiles stay put for belt_start_freeze_s so the stamps
@@ -688,7 +715,6 @@ class punch_dual_holes(Base_Task):
         if int(getattr(self, "_belt_freeze_i", 0)) < freeze_total:
             self._belt_freeze_i = int(getattr(self, "_belt_freeze_i", 0)) + 1
             self._refresh_pages_at_current_step()
-            self._update_punch_heads()
             return
         # In continuous mode the belt advances on every physics step once active, independent
         # of stamping logic. In stepwise mode it only advances when explicit belt motion is
@@ -699,11 +725,9 @@ class punch_dual_holes(Base_Task):
         if not belt_advancing:
             # still refresh page poses so they render at their held position, but don't advance
             self._refresh_pages_at_current_step()
-            self._update_punch_heads()
             return
         self._belt_step += 1
         self._refresh_pages_at_current_step()
-        self._update_punch_heads()
 
     def _trigger_punch_head(self, side):
         self._punch_press[side] = self.PUNCH_ANIM_STEPS
@@ -728,18 +752,23 @@ class punch_dual_holes(Base_Task):
 
     def _fire_punch(self, side, k=Ellipsis):
         """Register a punch on `side` at the current belt step: punch whichever page is
-        under the head, recording its x-offset from the punch center, and trigger the
-        head's visual descent."""
-        self._trigger_punch_head(side)
+        under the head, recording its x-offset from the punch center.
+
+        The gantry head descend is started by ``_on_button_pressed`` / ``_trigger_punch_head``
+        so a press always shows the stroke even when this scores a miss or no-ops.
+        """
         if k is Ellipsis:
             k = self._under_head[side]
+        if k is not None and self.page_punched[side][k]:
+            return
+        # Fallback path (no prior button edge): still run the stroke.
+        if self._punch_press.get(side, 0) <= 0:
+            self._trigger_punch_head(side)
         if k is None:
             self._mark_invalid_empty_press(side)
             return
         if not self._page_satisfies_stamp_criterion(side, k):
             self._mark_missed_page(side, k)
-            return
-        if self.page_punched[side][k]:
             return
         x = self._page_x_at(side, k, self._belt_step)
         off = abs(x - self.page_target_x[side][k])
@@ -747,7 +776,8 @@ class punch_dual_holes(Base_Task):
         self.page_offset[side][k] = float(off)
         if os.environ.get("DHP_DEBUG"):
             print(f"[dhp] FIRE {side} page{k} off={off:.4f} step={self._belt_step}", flush=True)
-        self._apply_punch_mark(side, k)
+        # Defer the card mark until the head reaches the bottom of its stroke.
+        self._pending_mark[side] = k
 
     def _apply_punch_mark(self, side, k):
         """Reveal the prebuilt textured stamp overlay on top of page (side, k)."""
@@ -934,17 +964,34 @@ class punch_dual_holes(Base_Task):
         pressed_sides, action1, action2 = self._build_press_plan(ready_by_side, descend=descend)
         if not pressed_sides:
             return []
-        # Continuous: stamp at commit time (tile is known ready). The button press then
-        # animates while the belt keeps moving — waiting until after the descend would
-        # often let the tile leave the stamp window and get marked missed.
-        if advance_belts and self.belt_continous_motion:
-            for side in pressed_sides:
-                self._fire_punch(side, ready_by_side[side])
-            self._move_with_belt_motion(action1, action2, advance_belts=True)
-            return pressed_sides
+        # 1) Land the grippers on the keys first — do not force keycaps yet, or the
+        #    stamp stroke would start while the arms are still descending.
         self._move_with_belt_motion(action1, action2, advance_belts=advance_belts)
+        # 2) Now depress the keys; ReactivePushButtons press edge drives the gantry
+        #    stamp down (same path as teleop).
+        bank = getattr(self, "_reactive_buttons", None)
+        if bank is not None:
+            for side in pressed_sides:
+                # Clear any latch from a light tip graze during the descend so the
+                # forced press below still emits a fresh edge after contact.
+                try:
+                    idx = bank.resolve_index(side)
+                    bank._latched[idx] = False
+                except Exception:
+                    pass
+                bank.set_forced(side, True)
+            steps = max(
+                8,
+                int(bank.trigger_depth / max(bank.visual_step, 1e-6)) + 2,
+            )
+            self._belt_idle(steps, advance_belts=advance_belts)
+            for side in pressed_sides:
+                bank.set_forced(side, False)
+        # 3) Safety net if the press edge never fired.
         for side in pressed_sides:
-            self._fire_punch(side, ready_by_side[side])
+            k = ready_by_side[side]
+            if not self.page_punched[side][k]:
+                self._on_button_pressed(side)
         return pressed_sides
 
     def _continuous_press_descend(self):
