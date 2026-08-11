@@ -156,10 +156,10 @@ SCENARIO_OVERRIDES = {
         "opt1+2": {"continuous_ball_motion": True, "oscillating_bowl_enabled": True},
     },
     "pack_fruits": {
-        "default": {"spawn_mode": "parallel", "pair_stagger_enabled": False, "single_wave_any_belt": False, "distractor_enabled": False},
-        "opt1": {"spawn_mode": "random", "pair_stagger_enabled": True, "single_wave_any_belt": True, "distractor_enabled": False},
-        "opt2": {"spawn_mode": "parallel", "pair_stagger_enabled": False, "single_wave_any_belt": False, "distractor_enabled": True},
-        "opt1+2": {"spawn_mode": "random", "pair_stagger_enabled": True, "single_wave_any_belt": True, "distractor_enabled": True},
+        "default": {"two_colors_enabled": False, "distractor_enabled": False},
+        "opt1": {"two_colors_enabled": True, "distractor_enabled": False},
+        "opt2": {"two_colors_enabled": False, "distractor_enabled": True},
+        "opt1+2": {"two_colors_enabled": True, "distractor_enabled": True},
     },
     "pick_ripe_apple": {
         "default": {"two_apples_enabled": False, "basket_move_enabled": False},
@@ -283,7 +283,12 @@ def build_scenario_config(task: str, scenario: str) -> dict:
     with config_path.open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     task_args = config.setdefault("task_args", {}).setdefault(task, {})
-    task_args.update(SCENARIO_OVERRIDES[task][scenario])
+    overrides = dict(SCENARIO_OVERRIDES.get(task, {}).get(scenario, {}) or {})
+    task_args.update(overrides)
+    # Top-level marker so the task env can recover the scenario even if a
+    # nested key is missing / stale.
+    config["interactive_scenario"] = scenario
+    config["interactive_task"] = task
     return config
 
 
@@ -858,6 +863,17 @@ class InteractiveTaskLauncher(tk.Tk):
 
         try:
             config_name = self._write_temporary_config(task, scenario)
+            child_env = os.environ.copy()
+            child_env.setdefault(
+                "PYTHONWARNINGS",
+                "ignore::UserWarning,ignore::FutureWarning,ignore::DeprecationWarning",
+            )
+            # Authoritative scenario for tasks that read ROBODYNA_SCENARIO
+            # (pack_fruits applies Opt1/Opt2 flags from this even if a stale
+            # temp yml is missing the new keys).
+            child_env["ROBODYNA_SCENARIO"] = scenario
+            self._prepare_result_file()
+            child_env[TASK_RESULT_ENV] = str(self.result_file)
             command = [
                 sys.executable,
                 str(script),
@@ -868,13 +884,10 @@ class InteractiveTaskLauncher(tk.Tk):
                 "--control",
                 control_mode,
             ]
-            child_env = os.environ.copy()
-            child_env.setdefault(
-                "PYTHONWARNINGS",
-                "ignore::UserWarning,ignore::FutureWarning,ignore::DeprecationWarning",
-            )
-            self._prepare_result_file()
-            child_env[TASK_RESULT_ENV] = str(self.result_file)
+            # Prefer an explicit CLI scenario when the interactive script
+            # understands it (pack_fruits); unknown flags are avoided below.
+            if task == "pack_fruits":
+                command.extend(["--scenario", scenario])
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )

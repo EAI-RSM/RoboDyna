@@ -141,30 +141,10 @@ SCENARIO_OVERRIDES = {
         "opt1+2": {"continuous_ball_motion": True, "oscillating_bowl_enabled": True},
     },
     "pack_fruits": {
-        "default": {
-            "spawn_mode": "parallel",
-            "pair_stagger_enabled": False,
-            "single_wave_any_belt": False,
-            "distractor_enabled": False,
-        },
-        "opt1": {
-            "spawn_mode": "random",
-            "pair_stagger_enabled": True,
-            "single_wave_any_belt": True,
-            "distractor_enabled": False,
-        },
-        "opt2": {
-            "spawn_mode": "parallel",
-            "pair_stagger_enabled": False,
-            "single_wave_any_belt": False,
-            "distractor_enabled": True,
-        },
-        "opt1+2": {
-            "spawn_mode": "random",
-            "pair_stagger_enabled": True,
-            "single_wave_any_belt": True,
-            "distractor_enabled": True,
-        },
+        "default": {"two_colors_enabled": False, "distractor_enabled": False},
+        "opt1": {"two_colors_enabled": True, "distractor_enabled": False},
+        "opt2": {"two_colors_enabled": False, "distractor_enabled": True},
+        "opt1+2": {"two_colors_enabled": True, "distractor_enabled": True},
     },
     "pick_ripe_apple": {
         "default": {"two_apples_enabled": False, "basket_move_enabled": False},

@@ -1,34 +1,34 @@
 {
-  "full_description": "pick apples and oranges as they appear on the moving belts and pack them into the matching breadbaskets",
-  "schema": "{A} notifies the apples and oranges on the belts, {B} notifies the breadbaskets, {a} notifies the arms that pack them",
+  "full_description": "pick red and green apples as they appear on the moving belts and pack them into the matching breadbaskets",
+  "schema": "{A} notifies the apples on the belts, {B} notifies the breadbasket(s), {a} notifies the arm(s) that pack them",
   "preference": "num of words should not exceed 14",
   "seen": [
     "Pack each of {A} into the matching {B} with {a}",
-    "Use {a} to place every fruit of {A} into the correct {B}",
+    "Use {a} to place every apple of {A} into the correct {B}",
     "Sort {A} from the belts into the matching {B}",
     "Have {a} pack all {A} into the right {B}",
     "Pick {A} off the belts and pack them into {B}",
     "With {a}, pack the streaming {A} into the correct {B}",
-    "Move every fruit from {A} into the matching {B}",
-    "Use {a} to sort apples and oranges of {A} into {B}",
-    "Pack belt {A} into the matching breadbaskets {B}",
+    "Move every apple from {A} into the matching {B}",
+    "Use {a} to sort red and green apples of {A} into {B}",
+    "Pack belt {A} into the matching breadbasket {B}",
     "Have {a} place each of {A} into the correct {B}",
-    "Sort all {A} by type into the {B}",
+    "Sort all {A} by color into the {B}",
     "Pick the {A} and pack them into matching {B}",
-    "Direct {a} to pack every fruit of {A} into {B}",
-    "Place apples left and oranges right from {A} into {B}",
+    "Direct {a} to pack every apple of {A} into {B}",
+    "Place red left and green right from {A} into {B}",
     "Use {a} to pack each of {A} into its {B}",
-    "Pack every fruit of {A} into the correct {B}",
+    "Pack every apple of {A} into the correct {B}",
     "Sort {A} from the moving belts into {B}",
     "Have {a} put each of {A} into the right {B}",
     "Move {A} into color-matched {B} using {a}",
     "Pack all {A} into the correct {B} with {a}"
   ],
   "unseen": [
-    "With {a}, pack every fruit of {A} into the matching {B}",
+    "With {a}, pack every apple of {A} into the matching {B}",
     "Sort the streaming {A} into the correct {B}",
     "Use {a} to place all {A} into matching {B}",
     "Pack each of {A} into its matching {B}",
-    "Have {a} sort every fruit of {A} into the right {B}"
+    "Have {a} sort every apple of {A} into the right {B}"
   ]
 }

@@ -1,8 +1,14 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive sandbox for ``pack_fruits``.
 
-Dual belts: pack apples into the left basket and oranges into the right.
-Opt2 black distractors are never packed.
+Pack red apples into the left basket and green apples into the right
+(when both colors are present). Opt2 black distractors are never packed.
+Colored apples may appear on either belt in every scenario.
+
+Physical grasp (same pattern as pick_ripe_apple — no teleport / no EE weld):
+  Teleop over a belt apple → Space closes the gripper. The apple keeps riding
+  the belt until a real pinch is confirmed, then frees in place for a friction
+  hold → lift with E → Space opens → falls under gravity.
 
 Run from any directory:
 
@@ -13,261 +19,306 @@ Run from any directory:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _interactive_common import (  # noqa: E402
-    action_failed,
     add_robot_motion_arg,
     bootstrap_repo,
     configure_task,
-    edge_pressed,
+    gripper_width,
     print_banner,
-    require_selected_arms,
-    run_viewer_loop,
     print_episode_condition,
+    run_viewer_loop,
 )
 
 bootstrap_repo()
 
 
-ARM_BASKET = {"left": "apple", "right": "orange"}
+# Pinch window (looser than the expert attach thresholds).
+PINCH_XY = 0.055
+PINCH_Z_MAX = 0.08
+GRASP_SETTLE_STEPS = 28
+DROP_SETTLE_STEPS = 90
+CLOSE_WIDTH = 0.45
+OPEN_WIDTH = 0.55
 
 
-def _on_belt_by_side(env):
-    """Oldest live fruit per belt (anywhere on the stream, not just at the station)."""
-    on_belt = {}
+def _tcp_fruit_gap(env, idx, arm_name: str):
+    tcp = env._tcp_pos(arm_name)
+    fp = np.array(env.items[idx].get_pose().p, dtype=float)
+    xy = float(np.linalg.norm(fp[:2] - tcp[:2]))
+    dz = float(tcp[2] - fp[2])
+    return xy, dz
+
+
+def _nearest_graspable(env, arm_name: str):
+    """Closest belt apple under the gripper (never black distractors / held)."""
+    best = None
+    best_score = 1e9
     for idx in range(env.n_items):
         if (
-            env._spawned_mask[idx]
-            and not env._packed[idx]
-            and not env._missed[idx]
-            and not env._welded[idx]
-            and env._item_y[idx] is not None
-            and env._item_y[idx] >= env.pick_y_end
+            not env._spawned_mask[idx]
+            or env._packed[idx]
+            or env._missed[idx]
+            or env._welded[idx]
+            or idx in env._grasping_idxs
+            or env._item_y[idx] is None
         ):
-            on_belt.setdefault(env.item_sides[idx], idx)
-    return on_belt
+            continue
+        xy, dz = _tcp_fruit_gap(env, idx, arm_name)
+        if xy > PINCH_XY or dz < -0.02 or dz > PINCH_Z_MAX:
+            continue
+        score = xy + 0.5 * max(0.0, dz)
+        if score < best_score:
+            best_score = score
+            best = idx
+    return best
 
 
-def _picks_for_selection(env, selection):
-    """``(fruit index, arm)`` pairs for the current 1/2/3 selection.
+def _near_fruit(env, idx, arm_name: str) -> bool:
+    xy, dz = _tcp_fruit_gap(env, idx, arm_name)
+    return xy <= PINCH_XY and -0.02 <= dz <= PINCH_Z_MAX
 
-    Starts as soon as fruit is on the belt so the arm can hover and wait while
-    the stream keeps rolling — no freeze at the grasp. The selected arm owns
-    the pick; its basket owns the drop (wrong arm → wrong basket → fail).
+
+class FruitPinchMonitor:
+    """Detach a belt apple only when a real pinch is confirmed.
+
+    Closing early near an apple does **not** pull it off the belt — it keeps
+    riding at its current lateral pose. Only confirmed contact/proximity frees
+    it for a friction hold (stacking/drop unchanged).
     """
-    on_belt = _on_belt_by_side(env)
-    if not on_belt:
-        return None
-    if selection == "both":
-        return [(on_belt[side], side) for side in ("left", "right") if side in on_belt]
-    if selection in on_belt:
-        return [(on_belt[selection], selection)]
-    return None
 
+    def __init__(self, env):
+        self.env = env
+        self._prev_width = {"left": 1.0, "right": 1.0}
+        self._held = {}  # arm_name -> fruit idx
+        # arm -> (idx, step_when_fingers_should_be_closed)
+        self._pending = {}
+        self._settle = None  # (idx, arm, steps_left) after release
+        self._announced = set()
 
-def _keyboard_pack(env, picks):
-    """Teleport each fruit into the selected arm's basket in one shot."""
-    wrong = []
-    for idx, arm_side in picks:
-        basket = ARM_BASKET[str(arm_side)]
-        ftype = env.item_types[idx]
-        target = env._basket_target_xy(idx, basket=basket)
-        env._set_fruit_pose(
-            idx, float(target[0]), float(target[1]),
-            float(env.basket_base_z[basket] + 0.05),
+    def _try_pinch(self, arm_name: str, step: int) -> None:
+        if arm_name in self._held or arm_name in self._pending:
+            return
+        idx = _nearest_graspable(self.env, arm_name)
+        if idx is None:
+            return
+        # Stay on the kinematic belt stream while the jaws close.
+        self._pending[arm_name] = (idx, step + GRASP_SETTLE_STEPS)
+
+    def _confirm_or_abort_pinch(self, arm_name: str, idx: int) -> None:
+        held = self.env._fruit_held_by_gripper(idx)
+        near = _near_fruit(self.env, idx, arm_name)
+        closed = gripper_width(self.env, arm_name) <= CLOSE_WIDTH
+        on_belt = self.env._item_y[idx] is not None
+
+        if closed and (held or near):
+            # Real pinch — only now leave the belt, at the apple's current pose.
+            self.env._free_fruit_for_physical_grasp(idx)
+            self.env._grasping_idxs.add(idx)
+            self.env._enable_fruit_gravity(idx)
+            self._held[arm_name] = idx
+            if idx not in self._announced:
+                self._announced.add(idx)
+                ftype = self.env.item_types[idx]
+                print(
+                    f"Pinched {ftype}_{idx} with {arm_name}. "
+                    f"Lift with E over the "
+                    f"{'red' if ftype == 'apple' else 'green'} basket, "
+                    f"Space to release."
+                )
+            return
+
+        # Missed / early close: apple never left the belt — keep riding.
+        if on_belt:
+            return
+        self.env._reseat_on_belt(idx)
+
+    def _begin_release(self, arm_name: str) -> None:
+        idx = self._held.pop(arm_name, None)
+        if idx is None:
+            return
+        self._pending.pop(arm_name, None)
+        self.env._calm_fruit(idx, damping=(2.5, 12.0))
+        self.env._enable_fruit_gravity(idx)
+        self._settle = (idx, arm_name, DROP_SETTLE_STEPS)
+        print(f"Released fruit_{idx} — dropping under gravity…")
+
+    def _tick_settle(self) -> None:
+        if self._settle is None:
+            return
+        idx, arm_name, left = self._settle
+        if left > DROP_SETTLE_STEPS - 12:
+            self.env._calm_fruit(idx, damping=(3.0, 14.0))
+        left -= 1
+        if left > 0:
+            self._settle = (idx, arm_name, left)
+            return
+        self._settle = None
+        self.env._grasping_idxs.discard(idx)
+
+        if self.env._fruit_held_by_gripper(idx) or _near_fruit(self.env, idx, arm_name):
+            if gripper_width(self.env, arm_name) <= CLOSE_WIDTH:
+                self._held[arm_name] = idx
+                self.env._grasping_idxs.add(idx)
+                print(f"fruit_{idx} still in the jaws — open Space fully to drop.")
+                return
+
+        if self.env._fruit_in_basket(idx):
+            self.env._mark_packed(idx, freeze=False)
+            print(f"Packed {self.env.item_types[idx]}_{idx} into the matching basket.")
+            return
+
+        p = np.array(self.env.items[idx].get_pose().p, dtype=float)
+        in_any = any(
+            self.env._xy_inside_basket(p[:2], btype) for btype in self.env.baskets
         )
-        env._mark_packed(idx)
-        if basket != ftype:
-            wrong.append(idx)
-    return wrong
+        if in_any:
+            self.env._mark_packed(idx, freeze=False)
+            print(f"{self.env.item_types[idx]}_{idx} landed in the wrong basket.")
+            return
 
+        if self.env._fruit_over_belt(idx) is not None:
+            self.env._reseat_on_belt(idx)
+            print(f"{self.env.item_types[idx]}_{idx} back on the belt — keep packing.")
+            return
 
-def _robot_pack(env, picks):
-    """One-shot intercept → grasp → drop into the selected arm's basket.
+        self.env._mark_table_rest(idx)
+        print(f"{self.env.item_types[idx]}_{idx} left on the table.")
 
-    The belt stays running the whole time: hover/wait uses ``_belt_dwell``, and
-    arm moves call ``_update_kinematic_tasks`` every physics step. Dropping into
-    the arm's own basket (not the fruit's color) makes a wrong-arm choice a
-    permanent mis-pack.
-    """
-    from envs.utils.action import ArmTag
+    def update(self, step: int) -> None:
+        env = self.env
+        self._tick_settle()
 
-    if env._grasping_idxs:
-        return None
-    indices = [idx for idx, _arm in picks]
-    env._belt_running = True
-    env._begin_spawn_hold()
-    env._grasping_idxs.update(indices)
-    held = None
+        for arm, (idx, at) in list(self._pending.items()):
+            if step < at:
+                continue
+            del self._pending[arm]
+            if arm in self._held:
+                continue
+            self._confirm_or_abort_pinch(arm, idx)
 
-    def failed():
-        for idx in indices:
-            env._grasping_idxs.discard(idx)
-        env._end_spawn_hold()
-        return None
+        for arm in ("left", "right"):
+            w = gripper_width(env, arm)
+            prev = self._prev_width[arm]
+            closing = prev > CLOSE_WIDTH and w <= CLOSE_WIDTH
+            opening = prev <= CLOSE_WIDTH and w > OPEN_WIDTH
+            self._prev_width[arm] = w
 
-    try:
-        if len(picks) == 1:
-            idx, arm_side = picks[0]
-            arm = ArmTag(arm_side)
-            if not env._intercept_and_grasp(idx, arm, env.item_sides[idx]):
-                return failed()
-            held = [(idx, arm)]
-        else:
-            idx_l = next(idx for idx, arm_side in picks if arm_side == "left")
-            idx_r = next(idx for idx, arm_side in picks if arm_side == "right")
-            arm_l, arm_r = ArmTag("left"), ArmTag("right")
-            env.plan_success = True
-            env.move(env.open_gripper(arm_l), env.open_gripper(arm_r))
-            pre_l = env._plan_station_pre(idx_l, arm_l)
-            pre_r = env._plan_station_pre(idx_r, arm_r)
-            if pre_l is None or pre_r is None:
-                return failed()
-            env.plan_success = True
-            if env.move(env.move_to_pose(arm_l, pre_l),
-                        env.move_to_pose(arm_r, pre_r)) is False:
-                return failed()
-            if not env._wait_pair_at_station(idx_l, idx_r):
-                return failed()
-            got_l, got_r = env._reach_and_attach_pair(idx_l, idx_r, arm_l, arm_r)
-            if not (got_l and got_r):
-                return failed()
-            held = [(idx_l, arm_l), (idx_r, arm_r)]
+            if self._settle is not None:
+                continue
 
-        wrong, aborted = [], []
-        if len(held) == 1:
-            idx, arm = held[0]
-            basket = ARM_BASKET[str(arm)]
-            target = env._basket_target_xy(idx, basket=basket)
-            if not env._carry_and_drop(idx, arm, target, resend_on_miss=False):
-                aborted.append(idx)
-            elif not env._fruit_in_basket(idx):
-                wrong.append(idx)
-        else:
-            # Dual grasp already happened together — drop both at once too
-            # (sequential _carry_and_drop would park one fruit first).
-            (idx_l, arm_l), (idx_r, arm_r) = held
-            target_l = env._basket_target_xy(idx_l, basket=ARM_BASKET[str(arm_l)])
-            target_r = env._basket_target_xy(idx_r, basket=ARM_BASKET[str(arm_r)])
-            ok_l, ok_r = env._carry_and_drop_pair(
-                idx_l, arm_l, target_l, idx_r, arm_r, target_r,
-                resend_on_miss=False,
-            )
-            for idx, ok in ((idx_l, ok_l), (idx_r, ok_r)):
-                if not ok:
-                    aborted.append(idx)
-                elif not env._fruit_in_basket(idx):
-                    wrong.append(idx)
-        if aborted:
-            names = ", ".join(f"{env.item_types[i]}_{i}" for i in aborted)
-            print(f"Could not reach the basket with {names} — back on the belt.")
-            return None
-        return wrong
-    finally:
-        for idx in indices:
-            env._grasping_idxs.discard(idx)
-        env._end_spawn_hold()
-        env._belt_running = True
+            if closing:
+                self._try_pinch(arm, step)
+            elif opening and arm in self._held:
+                self._begin_release(arm)
+            elif opening:
+                self._pending.pop(arm, None)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive pack_fruits viewer")
     parser.add_argument("--config", default="demo_dynamic")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--scenario",
+        choices=("default", "opt1", "opt2", "opt1+2"),
+        default=None,
+        help="Apply GUI scenario flags (opt1 = red+green with both baskets)",
+    )
     add_robot_motion_arg(parser)
     args = parser.parse_args()
 
     from envs.pack_fruits import pack_fruits
 
+    scenario_overrides = {
+        "default": {"two_colors_enabled": False, "distractor_enabled": False},
+        "opt1": {"two_colors_enabled": True, "distractor_enabled": False},
+        "opt2": {"two_colors_enabled": False, "distractor_enabled": True},
+        "opt1+2": {"two_colors_enabled": True, "distractor_enabled": True},
+    }
+    scenario = args.scenario or os.environ.get("ROBODYNA_SCENARIO") or None
+    overrides = scenario_overrides.get(scenario) if scenario else None
+
     use_robot = args.control == "robot"
+    config = configure_task(
+        "pack_fruits", args.config, args.seed, use_robot=use_robot,
+        task_arg_overrides=overrides,
+    )
+    # Prefer CLI/env scenario; fall back to top-level key from GUI temp yml.
+    scenario = scenario or config.get("interactive_scenario")
+    if scenario in scenario_overrides:
+        config.setdefault("task_args", {}).setdefault("pack_fruits", {}).update(
+            scenario_overrides[scenario]
+        )
+        config["interactive_scenario"] = scenario
+        config["scenario"] = scenario
+    print(
+        f"[interactive_pack_fruits] scenario={scenario!r} "
+        f"two_colors={config.get('task_args', {}).get('pack_fruits', {}).get('two_colors_enabled')}",
+        flush=True,
+    )
     env = pack_fruits()
-    env.setup_demo(**configure_task("pack_fruits", args.config, args.seed, use_robot=use_robot))
+    env.setup_demo(**config)
     print_episode_condition(env)
     env._belt_running = True
+
+    if env.two_colors_enabled:
+        # Opt1 / Opt1+2: red→left basket, green→right — both arms needed.
+        env._interactive_selected_arms = ("left", "right")
+    else:
+        env._interactive_selected_arms = (
+            ("left",) if env.active_colors[0] == "apple" else ("right",)
+        )
+
+    for side in ("left", "right"):
+        try:
+            env.robot.set_gripper(1.0, side, gripper_eps=0.0)
+        except Exception:
+            pass
+
+    if env.two_colors_enabled:
+        goal = (
+            f"Opt1-style: {env.n_apple} red → left basket, "
+            f"{env.n_green} green → right basket (one apple at a time)."
+        )
+    else:
+        color = "red" if env.active_colors[0] == "apple" else "green"
+        side = "left" if color == "red" else "right"
+        goal = f"Default/Opt2: {env.n_items} {color} apples → {side} basket."
 
     print_banner(
         "pack_fruits — interactive controls",
         [
             f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
-            f"config: {args.config}  |  seed: {args.seed}",
-            "Goal: apple → left basket, orange → right basket. Never pack black (Opt2).",
-            "Space — arm approaches while the belt keeps moving, then grasps and "
-            "drops into that arm's basket in one shot",
+            f"config: {args.config}  |  seed: {args.seed}"
+            + (f"  |  scenario: {args.scenario}" if args.scenario else ""),
+            goal,
+            "Never pack black distractors (Opt2).",
+            "1 / 2 / 3 — select left / right / both arms",
+            "Arrows / E / Q — teleop the selected arm(s)",
+            "Space — close to pinch; apple keeps moving until a real grasp",
             "V — cycle view: head_camera ↔ gripper(s)",
             "Esc — close the viewer window to quit",
-            "Pick apples with 1 and oranges with 2 — the wrong arm mis-packs "
-            "into its own basket and fails the episode.",
+            "--scenario default|opt1|opt2|opt1+2",
             "--robot-motion planner|interpolate",
         ],
     )
-    keys_prev: dict = {}
+
     settle_after_done = None
-    selected = None
-    pending_pack = False
-    busy = False
+    pinch = FruitPinchMonitor(env) if use_robot else None
 
     def on_step(window, step):
-        nonlocal settle_after_done, selected, pending_pack, busy
-        # Keep the stream rolling every viewer tick (also restored after packs).
+        nonlocal settle_after_done
         env._belt_running = True
 
-        # Gripper highlighting belongs to the shared 1/2/3 controls; a second
-        # recolor here would cache the already-tinted color and leave the
-        # previously selected arm lit.
-        if use_robot:
-            arms = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
-        else:
-            arms = tuple(getattr(env, "_interactive_selected_arms", ()) or ("left",))
-        new_selected = "both" if len(arms) == 2 else (arms[0] if arms else None)
-        if new_selected != selected:
-            selected = new_selected
-
-        if busy:
-            return
-
-        if edge_pressed(window, "space", keys_prev):
-            if use_robot:
-                arms = require_selected_arms(env, exactly_one=False)
-                if not arms:
-                    return
-            pending_pack = True
-            print(f"Armed: {selected} arm will pack the next fruit on the belt.")
-
-        # Start as soon as fruit is on the belt so the arm can hover/wait while
-        # the stream keeps advancing — no stop-and-go freeze at the grasp.
-        if pending_pack and not env._grasping_idxs:
-            picks = _picks_for_selection(env, selected)
-            if picks is not None:
-                busy = True
-                pending_pack = False
-                for idx, arm in picks:
-                    ftype = env.item_types[idx]
-                    basket = ARM_BASKET[str(arm)]
-                    warn = "" if basket == ftype else f"  WRONG ARM → {basket} basket!"
-                    print(f"Packing {ftype}_{idx} with the {arm} arm.{warn}")
-                try:
-                    if use_robot:
-                        wrong = _robot_pack(env, picks)
-                    else:
-                        wrong = _keyboard_pack(env, picks)
-                finally:
-                    busy = False
-                    env._belt_running = True
-                if wrong is None and use_robot:
-                    pack_arms = tuple(str(arm) for _idx, arm in picks)
-                    action_failed(env, pack_arms, detail="pack failed")
-                    pending_pack = True
-                elif wrong is None:
-                    print("Pack failed; press Space to try again.")
-                    pending_pack = True
-                elif wrong:
-                    names = ", ".join(f"{env.item_types[i]}_{i}" for i in wrong)
-                    print(f"Mis-packed {names} — episode will fail.")
-                else:
-                    print("Packed into the matching basket(s).")
+        if pinch is not None:
+            pinch.update(step)
 
         if settle_after_done is None:
             all_done = (
@@ -289,6 +340,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
     from _interactive_common import task_result_exit_code
     raise SystemExit(task_result_exit_code())

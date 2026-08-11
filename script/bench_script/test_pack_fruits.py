@@ -2,13 +2,13 @@
 """Full controller test + tagged demos for pack_fruits.
 
 Conditions (5 episodes each):
-  default : spawn_mode=parallel, distractor_enabled=false
-  opt1    : spawn_mode=random (+ pair stagger / any-belt), distractor_enabled=false
-  opt2    : spawn_mode=parallel, distractor_enabled=true (black distractors)
-  opt1+2  : spawn_mode=random (+ pair stagger / any-belt), distractor_enabled=true
+  default : two_colors_enabled=false, distractor_enabled=false
+  opt1    : two_colors_enabled=true,  distractor_enabled=false
+  opt2    : two_colors_enabled=false, distractor_enabled=true (≥1 black)
+  opt1+2  : two_colors_enabled=true,  distractor_enabled=true
 
-Success: every real fruit rests in its color-matched basket
-  (red/apple → left, yellow/orange → right). Black distractors are ignored.
+Success: every colored apple rests in its color-matched basket
+  (red/apple → left, green → right). Black distractors are ignored.
 
 Demos land in:
   final_task_demos/pack_fruits/<tag>_sidebyside.mp4
@@ -37,40 +37,32 @@ N_PER_CONDITION = 5
 
 # Shared knobs for every condition (match demo_dynamic pack_fruits section).
 _BASE = {
-    "n_per_color": 3,
+    "n_items_min": 3,
+    "n_items_max": 5,
     "belt_speed_jitter": 0.20,
-    "distractor_color": "0.05,0.05,0.05",  # black; parsed specially below
-    "distractor_prob": 1.0,  # always spawn when Opt 2 is on (so demos show it)
+    "distractor_extra_prob": 0.3,
     "distractor_min_gap_mult": 2.0,
 }
 
 CONDITIONS = {
     "default": {
         **_BASE,
-        "spawn_mode": "parallel",
-        "pair_stagger_enabled": False,
-        "single_wave_any_belt": False,
+        "two_colors_enabled": False,
         "distractor_enabled": False,
     },
     "opt1": {
         **_BASE,
-        "spawn_mode": "random",
-        "pair_stagger_enabled": True,
-        "single_wave_any_belt": True,
+        "two_colors_enabled": True,
         "distractor_enabled": False,
     },
     "opt2": {
         **_BASE,
-        "spawn_mode": "parallel",
-        "pair_stagger_enabled": False,
-        "single_wave_any_belt": False,
+        "two_colors_enabled": False,
         "distractor_enabled": True,
     },
     "opt1+2": {
         **_BASE,
-        "spawn_mode": "random",
-        "pair_stagger_enabled": True,
-        "single_wave_any_belt": True,
+        "two_colors_enabled": True,
         "distractor_enabled": True,
     },
 }
@@ -86,10 +78,6 @@ DEMO_FILE_TAGS = {
 def _overrides(condition: str) -> list[str]:
     out = []
     for k, v in CONDITIONS[condition].items():
-        if k == "distractor_color":
-            # YAML list via three separate keys is awkward; set color in code path
-            # by leaving it to the env default (black) — skip string form here.
-            continue
         if isinstance(v, bool):
             out.append(f"{k}={'true' if v else 'false'}")
         else:
@@ -107,9 +95,7 @@ def _snapshot(env) -> dict:
         in_ok.append(bool(env._fruit_in_basket(i)))
         positions.append([float(x) for x in env.items[i].get_pose().p])
 
-    # Independent correct-basket check: apple in the left basket mouth, orange
-    # in the right one. The mouth is rectangular, so a circle would also accept
-    # fruit resting on the table alongside the narrow (world X) walls.
+    # Independent correct-basket check: apple/red → left, green → right.
     half_xy = getattr(env, "basket_half_xy", {})
     centers = getattr(env, "basket_centers", {})
     base_z = getattr(env, "basket_base_z", {})
@@ -131,19 +117,21 @@ def _snapshot(env) -> dict:
 
     return {
         "spawn_mode": str(getattr(env, "spawn_mode", "")),
-        "pair_stagger_enabled": bool(getattr(env, "pair_stagger_enabled", False)),
-        "single_wave_any_belt": bool(getattr(env, "single_wave_any_belt", False)),
+        "two_colors_enabled": bool(getattr(env, "two_colors_enabled", False)),
         "distractor_enabled": bool(getattr(env, "distractor_enabled", False)),
         "distractor_color": [float(x) for x in list(getattr(env, "distractor_color", []))[:3]],
         "n_items": n,
         "n_apple": int(getattr(env, "n_apple", 0)),
-        "n_orange": int(getattr(env, "n_orange", 0)),
+        "n_green": int(getattr(env, "n_green", 0)),
+        "n_orange": int(getattr(env, "n_orange", getattr(env, "n_green", 0))),
+        "active_colors": list(getattr(env, "active_colors", [])),
         "item_types": types,
         "item_sides": sides,
         "item_in_correct_basket": in_ok,
         "independent_in_correct_basket": independent_ok,
         "positions": positions,
         "n_distractor_slots": n_dist_slots,
+        "n_distractor_plan": int(getattr(env, "n_distractor_plan", n_dist_slots)),
         "n_distractor_active": n_dist_active,
         "n_missed": int(sum(1 for m in getattr(env, "_missed", []) if m)),
         "n_packed": int(sum(1 for p in getattr(env, "_packed", []) if p)),
@@ -153,8 +141,8 @@ def _snapshot(env) -> dict:
 def _criteria_ok(snap: dict) -> bool:
     """Independent success check matching the task contract.
 
-    - every real fruit (apple/orange) in its color-matched basket
-      (apple/red → left, orange/yellow → right)
+    - every colored apple in its color-matched basket
+      (apple/red → left, green → right)
     - black distractors are ignored (not required for success)
     """
     if snap["n_items"] <= 0:
@@ -163,9 +151,8 @@ def _criteria_ok(snap: dict) -> bool:
         return False
     if not all(snap["independent_in_correct_basket"]):
         return False
-    # sanity: types are only apple/orange (distractors are not in item_types)
     for t in snap["item_types"]:
-        if t not in ("apple", "orange"):
+        if t not in ("apple", "green"):
             return False
     return True
 
@@ -173,16 +160,27 @@ def _criteria_ok(snap: dict) -> bool:
 def _condition_shape_ok(condition: str, snap: dict) -> bool:
     """Sanity-check that the sampled episode matches the condition knobs."""
     cfg = CONDITIONS[condition]
-    if snap["spawn_mode"] != cfg["spawn_mode"]:
+    if bool(snap["two_colors_enabled"]) != bool(cfg["two_colors_enabled"]):
         return False
     if bool(snap["distractor_enabled"]) != bool(cfg["distractor_enabled"]):
         return False
-    if bool(snap["pair_stagger_enabled"]) != bool(cfg["pair_stagger_enabled"]):
+    if snap["spawn_mode"] != "single":
         return False
+    if not (3 <= snap["n_items"] <= 5):
+        return False
+    if cfg["two_colors_enabled"]:
+        if set(snap["active_colors"]) != {"apple", "green"}:
+            return False
+        if snap["n_apple"] < 1 or snap["n_green"] < 1:
+            return False
+    else:
+        if len(snap["active_colors"]) != 1:
+            return False
+        if snap["active_colors"][0] not in ("apple", "green"):
+            return False
     if cfg["distractor_enabled"]:
         if snap["n_distractor_slots"] < 1:
             return False
-        # color should be near-black
         col = snap["distractor_color"]
         if len(col) < 3 or max(col) > 0.2:
             return False

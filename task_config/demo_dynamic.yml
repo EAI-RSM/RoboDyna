@@ -762,39 +762,40 @@ task_args:
     bowl_scale_mult: 0.65       # uniform bowl asset scale
     bowl_catch_radius: 0.032    # m; XY catch tolerance around bowl center
   pack_fruits:
-    # Options (independent toggles; Opt 1+2 can both be on):
-    #   Opt 1 — random single-or-pair waves  →  spawn_mode: random
-    #           (+ pair_stagger_enabled, single_wave_any_belt)
-    #   Opt 2 — black distractor fruit       →  distractor_enabled
-    n_per_color: 3              # number of each colored fruit (apples + oranges)
-    # n_apple: 3                # optional per-color override (falls back to n_per_color)
-    # n_orange: 3
-    spawn_mode: random          # Opt 1: random (single|pair per wave) | parallel | single
-    spawn_delay_s: 2.0          # unused (compat); spawn is gated on drop / belt-exit
+    # Options (independent; Opt 1+2 combines both):
+    #   Opt 1 — two_colors_enabled: red + green apples, both baskets
+    #   Opt 2 — distractor_enabled: ≥1 black distractor (never packed)
+    # Default / either opt: one colored apple at a time; apples on either belt.
+    two_colors_enabled: false   # Opt 1: red + green with both baskets
+    distractor_enabled: false   # Opt 2: black distractor fruit on the belts
+    distractor_extra_prob: 0.3  # Opt 2: chance of a second black apple
+    distractor_prob: 0.3        # legacy alias for distractor_extra_prob
+    distractor_color: [0.05, 0.05, 0.05]
+    distractor_min_gap_mult: 2.0
+    n_items_min: 3              # single-color episode: U{min..max} apples
+    n_items_max: 5
+    n_per_color_min: 2          # two-color: each color independently U{min..max}
+    n_per_color_max: 3
+    # n_items: 4                # optional fixed single-color count
+    # n_apple: 2                # optional fixed per-color counts (two-color)
+    # n_green: 3
+    # n_per_color: 3            # legacy: same fixed count for both colors
+    spawn_delay_s: 2.0          # unused (compat); spawn is gated on pack / belt-exit
     belt_gap: 0.10              # m; gap between the two belts, centered at x=0
     belt_speed: 0.0008          # m per belt tick nominal; both belts use this
     belt_speed_jitter: 0.20     # fraction; each ep/side ~ U((1-j)*nom, (1+j)*nom)
-    # belt_speed_left: 0.0008   # optional per-belt override (falls back to belt_speed)
-    # belt_speed_right: 0.0012
     advance_every: 3            # physics steps between belt ticks
     spawn_gap: 0.16             # m; min spacing between successive spawns
-    randomize_spawn_gap: true   # ±spawn_gap_jitter
-    spawn_gap_jitter: 0.20      # ±20%
-    pick_y: 0.24                # m; start arm approach; fruit keeps rolling
-    pick_y_end: -0.16           # m; past this, too late; fruit loops to far end
-    pick_station_y: 0.02        # m; hover/grab line; fruit rolls through without pausing
-    fruit_scale: 0.80           # larger fruit → easier grasp
-    basket_y: 0.0               # m; table midline (toward belts)
-    basket_x: 0.34              # m; nudged out so the bigger basket clears the belts
-    basket_scale: 1.15          # bigger opening — easier drop-in target
-    pick_lift: 0.10             # m; raise gripper +Z after grasp, then slide over basket and release
-    pair_stagger_enabled: true  # Opt 1: pair Y gap ~ U(0, fruit_diameter) each wave
-    # pair_stagger_y: null      # optional max gap (m); default = fruit diameter
-    single_wave_any_belt: true  # Opt 1: single fruit may appear on either belt
-    distractor_enabled: false   # Opt 2: black distractor fruit on the belts
-    distractor_prob: 0.4        # Opt 2: chance per real spawn-wave that a distractor also spawns
-    distractor_color: [0.05, 0.05, 0.05]  # Opt 2: black
-    distractor_min_gap_mult: 2.0  # Opt 2: min Y gap vs same-belt real fruit, × fruit diameter
+    randomize_spawn_gap: true
+    spawn_gap_jitter: 0.20
+    pick_y: 0.24
+    pick_y_end: -0.16
+    pick_station_y: 0.02
+    fruit_scale: 0.80
+    basket_y: 0.0
+    basket_x: 0.34
+    basket_scale: 1.15
+    pick_lift: 0.10
   pick_cup_behind_fan:
     fan_omega_deg: 2.0          # deg per physics step (then ×U(0.8,1.3) per ep)
     gap_frac: 0.40              # fraction of each 120° period that is a safe blade gap

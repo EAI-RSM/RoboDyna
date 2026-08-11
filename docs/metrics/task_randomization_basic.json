@@ -1211,38 +1211,32 @@
         {
           "name": "default",
           "config_keys": [
-            "spawn_mode",
-            "pair_stagger_enabled",
-            "single_wave_any_belt",
+            "two_colors_enabled",
             "distractor_enabled"
           ],
-          "what_it_does": "spawn_mode=parallel; stagger/single_wave_any_belt false; no distractor"
+          "what_it_does": "single color (red|green), one matching basket, 3–5 apples on either belt, one at a time; no distractor"
         },
         {
           "name": "opt1",
           "config_keys": [
-            "spawn_mode",
-            "pair_stagger_enabled",
-            "single_wave_any_belt"
+            "two_colors_enabled"
           ],
-          "what_it_does": "spawn_mode=random + pair_stagger_enabled + single_wave_any_belt — single|pair waves, either belt for singles"
+          "what_it_does": "two_colors_enabled=true — red+green with both baskets; still one colored apple at a time"
         },
         {
           "name": "opt2",
           "config_keys": [
             "distractor_enabled"
           ],
-          "what_it_does": "distractor_enabled=true — black distractor fruit with distractor_prob"
+          "what_it_does": "distractor_enabled=true — ≥1 black distractor (+ distractor_extra_prob for a 2nd)"
         },
         {
           "name": "opt1+2",
           "config_keys": [
-            "spawn_mode",
-            "pair_stagger_enabled",
-            "single_wave_any_belt",
+            "two_colors_enabled",
             "distractor_enabled"
           ],
-          "what_it_does": "random waves + distractor"
+          "what_it_does": "two colors + black distractor(s); one colored apple at a time (black may co-appear)"
         }
       ],
       "randomized_params": [
@@ -1253,21 +1247,15 @@
           "notes": "±20%"
         },
         {
-          "param": "item type order / sides",
-          "how": "shuffle fruit types; may assign random sides",
-          "config_key": "n_per_color / n_apple / n_orange",
-          "notes": null
+          "param": "n_items / color / belt",
+          "how": "n ~ U{n_items_min..n_items_max}; single-color ep picks red|green; dual mixes both (≥1 each when n≥2); each apple independently left|right belt",
+          "config_key": "n_items_min, n_items_max, two_colors_enabled, fruit_color",
+          "notes": "belt side independent of color in all scenarios"
         },
         {
-          "param": "wave spawn (random mode)",
-          "how": "Bernoulli pair vs single; pair stagger U(0, fruit_diameter); leading side random; single may pick either belt",
-          "config_key": "spawn_mode, pair_stagger_enabled, single_wave_any_belt",
-          "notes": "opt1"
-        },
-        {
-          "param": "distractor spawn",
-          "how": "per wave P(distractor_prob); Y gap ≥ distractor_min_gap_mult × diameter",
-          "config_key": "distractor_prob, distractor_color, distractor_min_gap_mult",
+          "param": "distractor count / side",
+          "how": "when enabled: always 1 black + Bernoulli(distractor_extra_prob) for a 2nd; scheduled onto colored waves; side random (same belt behind or other belt)",
+          "config_key": "distractor_enabled, distractor_extra_prob, distractor_min_gap_mult",
           "notes": "opt2"
         },
         {
