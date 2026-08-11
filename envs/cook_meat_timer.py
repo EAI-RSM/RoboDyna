@@ -28,6 +28,11 @@ from .utils.create_actor import create_visual_box
 class cook_meat_timer(cook_meat):
     """``cook_meat`` with a per-station pie timer visual."""
 
+    # Keep the tighter pre-widening window: cook_meat relaxed its own success band
+    # to 0.40–0.60, but the timer variant is meant to stay the harder read.
+    # (Both yaml sections pin this explicitly; this is the no-config fallback.)
+    TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.45, 0.55)
+
     TIMER_RADIUS_DEFAULT: ClassVar[float] = 0.040
     TIMER_HALF_H: ClassVar[float] = 0.0025
     TIMER_N_SECTIONS: ClassVar[int] = 24

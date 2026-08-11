@@ -47,7 +47,7 @@ class save_goal(Base_Task):
     # PhysX ignores restitution below bounce_threshold (default 2 m/s); our shot is slow.
     BOUNCE_THRESHOLD_DEFAULT = 0.01
     # Nominal ball speed; each episode samples ±20% by default (scale 0.8–1.2).
-    BALL_SPEED_DEFAULT = 0.05470  # -15% vs 0.06435; episode still samples ±20%
+    BALL_SPEED_DEFAULT = 0.04376  # ×0.8 vs 0.05470; episode still samples ±20%
     BALL_SPEED_SCALE_MIN_DEFAULT = 0.8
     BALL_SPEED_SCALE_MAX_DEFAULT = 1.2
     BALL_START_X_DEFAULT = 0.24

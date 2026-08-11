@@ -145,9 +145,9 @@ task_args:
     opaque_surface: false
     randomize_cuboid_color: true  # sample cuboid RGB from cuboid_colors pool
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    # Mean 0.0392 (= prior 0.056 × 0.7); range scaled −30% from [0.032, 0.08].
-    cuboid_move_speed_min: 0.0224
-    cuboid_move_speed_max: 0.056
+    # Mean 0.0294; range scaled ×0.75 from prior [0.0224, 0.056].
+    cuboid_move_speed_min: 0.0168
+    cuboid_move_speed_max: 0.042
     num_appearances: 5          # how many pop windows per episode
     pop_steps: 90               # sim steps cuboid stays raised per pop
     grasp_tol: 0.05             # m; catch offset scale (success uses ~2.5×)
@@ -373,6 +373,7 @@ task_args:
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
+    start_freeze_s: 3.0         # s; ball waits at its drop pose before falling (arms stay free)
     catcher_model: custom_catch_box
     bowl_id: 0
     bowl_scale_mult: 1.0
@@ -429,6 +430,7 @@ task_args:
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
+    start_freeze_s: 3.0         # s; ball waits at its drop pose before falling (arms stay free)
     # Small ping-pong bat (circular head + −Y handle) on a facing-ramp holder
     panel_radius: 0.055         # bat head radius
     panel_half_thick: 0.006
@@ -485,7 +487,7 @@ task_args:
     key_press_depth: 0.055      # CHANGE: m; EE press depth onto keycap
     place_jitter_xy: 0.01       # CHANGE: ±m XY jitter on pan/board (small diversity)
     place_yaw_lim: 0.175        # CHANGE: ±rad Z yaw on pan/board (~10 deg)
-    target_doneness_range: [0.45, 0.55]  # CHANGE: inclusive success range per steak
+    target_doneness_range: [0.40, 0.60]  # CHANGE: inclusive success range per steak
     target_doneness_range_jitter: 0.05   # sample one shift U(-0.05,+0.05) per episode
     place_dx: 0.0             # nudge from the measured bowl center (mirrored on the left pan)
     place_dy: 0.0             # nudge from the measured bowl center (+y = away from robot)
@@ -586,11 +588,12 @@ task_args:
     missing_tile_mode: false   # Opt 1: true = one random missing tile (1- vs 2-arm stops)
     belt_continous_motion: false # Opt 2: false = discrete stop-per-tile (default); true = continuous
     tile_pause_s: 2.0           # discrete: seconds the tile holds under the stamp
+    belt_start_freeze_s: 4.0    # s; belt holds still at episode start (arms stay free)
     tile_pause_jitter: 0.40     # discrete: ±40% per-episode pause around tile_pause_s
-    belt_speed: 0.0002          # m per physics step (discrete); continuous uses × scale below
+    belt_speed: 0.00014         # m per physics step (discrete, ×0.7 from 0.0002); continuous uses × scale below
     belt_continuous_speed_scale: 1.6  # Opt 2: multiply belt_speed when continuous
-    square_gap_min: 0.010       # m; variable-spacing min gap
-    square_gap_max: 0.030       # m; variable-spacing max gap
+    square_gap_min: 0.020       # m; variable-spacing min gap (×2 from 0.010 — sparser stamps)
+    square_gap_max: 0.060       # m; variable-spacing max gap (×2 from 0.030)
   save_goal:
     # Options (independent toggles):
     #   Option 1 — field players (bounce) → players_enabled
@@ -626,7 +629,7 @@ task_args:
     net_strand_t: 0.0022        # m; strand thickness
     mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
     random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
-    ball_speed: 0.05470         # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
+    ball_speed: 0.04376         # m/s; nominal (×0.8 from 0.05470); episode speed samples ±20% (scale 0.8–1.2)
     ball_speed_scale_min: 0.8   # low scale vs ball_speed
     ball_speed_scale_max: 1.2   # high scale vs ball_speed
     ball_angle_deg_min: -10.0   # deg; path angle vs goal-axis min (straight-shot mode)

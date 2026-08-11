@@ -71,7 +71,7 @@ task_args:
     max_episode_steps: 15000    # episode cutoff for default / Opt1 / Opt2 / Opt1+2
     cook_button_enabled: false  # Opt 1: hold-to-cook; false = latch ON/OFF
     dual_setup_enabled: false   # Opt 2: dual stations (≥10 cm clearance)
-    target_doneness: 0.5
+    target_doneness_range: [0.40, 0.60]   # inclusive success range; matches demo_dynamic
     board_scale_mult: 0.07    # cutting board size (steak starts here; may finish on pan)
   cook_meat_timer:
     cook_steps: 769
@@ -127,9 +127,9 @@ task_args:
     # Option 2: opaque colored top lattice (false = glass / see-through).
     opaque_surface: false
     # Per-episode rise/fall speed (m/s), sampled uniformly in [min, max].
-    # Mean 0.056 (= prior 0.07 × 0.8); range scaled −20% from [0.04, 0.10].
-    cuboid_move_speed_min: 0.032
-    cuboid_move_speed_max: 0.08
+    # Mean 0.0294; range scaled ×0.75 from prior [0.0224, 0.056]. Matches demo_dynamic.
+    cuboid_move_speed_min: 0.0168
+    cuboid_move_speed_max: 0.042
     num_appearances: 5
     pop_steps: 90
     grasp_tol: 0.05
@@ -183,9 +183,10 @@ task_args:
     missing_tile_mode: false    # Opt 1
     belt_continous_motion: false # Opt 2: discrete (default)
     tile_pause_s: 2.0           # Opt 2 discrete: hold under stamp (seconds)
-    belt_speed: 0.2
-    square_gap_min: 0.010
-    square_gap_max: 0.030
+    belt_start_freeze_s: 4.0    # s; belt holds still at episode start (arms stay free)
+    belt_speed: 0.00014         # m per physics step; matches demo_dynamic (was a stale 0.2)
+    square_gap_min: 0.020
+    square_gap_max: 0.060
   dispense_gummy:
     # Options (independent toggles) — keep in sync with demo_dynamic.yml:
     #   Default — layout_mode: alternating; discrete belt hops
@@ -279,7 +280,7 @@ task_args:
     net_strand_t: 0.0022        # m; strand thickness
     mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
     random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
-    ball_speed: 0.05470         # m/s; nominal; episode speed samples ±20% (scale 0.8–1.2)
+    ball_speed: 0.04376         # m/s; nominal (×0.8 from 0.05470); episode speed samples ±20% (scale 0.8–1.2)
     ball_speed_scale_min: 0.8
     ball_speed_scale_max: 1.2
     ball_angle_deg_min: -10.0
@@ -605,6 +606,7 @@ task_args:
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
+    start_freeze_s: 3.0         # s; ball waits at its drop pose before falling (arms stay free)
     catcher_model: custom_catch_box
     bowl_id: 0
     bowl_scale_mult: 1.0
@@ -658,6 +660,7 @@ task_args:
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
+    start_freeze_s: 3.0         # s; ball waits at its drop pose before falling (arms stay free)
     panel_radius: 0.055
     panel_half_thick: 0.006
     panel_mass: 0.12
