@@ -26,6 +26,9 @@ class stop_valley_ball(catch_valley_ball_v1):
 
     # Wider track (+30% y) and faster ball than catch_valley_ball_v1.
     RAMP_HALF_WIDTH_DEFAULT = 0.1625  # 0.125 * 1.3
+    # Hold the ball at its drop pose for 3 s at the top of the episode so the bat
+    # can be brought up to the intercept. Arms stay free to move during the hold.
+    START_FREEZE_S_DEFAULT = 3.0
     INITIAL_FORWARD_SPEED_DEFAULT = 0.11  # was 0.22 (−50%)
     LAUNCH_SPEED_DEFAULT = 0.40  # was 0.80 (−50%)
     DROP_TIME_DEFAULT = 0.40  # was 0.60
@@ -578,7 +581,8 @@ class stop_valley_ball(catch_valley_ball_v1):
         remaining_drop = max(0, self.drop_steps - self._drop_i)
         remaining_roll = max(0, self.roll_steps - self._roll_i)
         self._dwell(
-            remaining_drop
+            self._remaining_start_freeze()
+            + remaining_drop
             + remaining_roll
             + self.flight_steps
             + self.settle_steps

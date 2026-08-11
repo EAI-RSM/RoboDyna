@@ -35,6 +35,9 @@ class catch_valley_ball(catch_valley_ball_v1):
     CATCHER_MODEL_DEFAULT = "custom_catch_box"
     BOWL_ID_DEFAULT = 0
     BOWL_SCALE_MULT_DEFAULT = 1.0
+    # Hold the ball at its drop pose for 3 s at the top of the episode so the box
+    # can be pre-positioned. Arms stay free to move during the hold.
+    START_FREEZE_S_DEFAULT = 3.0
     BOX_HALF_XY = (
         REF_PLASTIC_HALF_XY * BOX_SIZE_SCALE,
         REF_PLASTIC_HALF_XY * BOX_SIZE_SCALE,
@@ -600,7 +603,8 @@ class catch_valley_ball(catch_valley_ball_v1):
         remaining_drop = max(0, self.drop_steps - int(getattr(self, "_drop_i", 0)))
         remaining_roll = max(0, self.roll_steps - int(getattr(self, "_roll_i", 0)))
         self._dwell(
-            remaining_drop
+            self._remaining_start_freeze()
+            + remaining_drop
             + remaining_roll
             + self.flight_steps
             + self.settle_steps

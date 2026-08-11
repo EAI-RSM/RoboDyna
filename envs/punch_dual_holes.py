@@ -68,16 +68,16 @@ class punch_dual_holes(Base_Task):
     BELT_INWARD_REACH_DEFAULT = 0.13
     BELT_OUTWARD_SCALE_DEFAULT = 2.0
     SQUARE_START_MARGIN_DEFAULT = 0.035
-    SQUARE_GAP_DEFAULT = 0.015
-    SQUARE_GAP_MIN_DEFAULT = 0.010
-    SQUARE_GAP_MAX_DEFAULT = 0.030
+    SQUARE_GAP_DEFAULT = 0.030
+    SQUARE_GAP_MIN_DEFAULT = 0.020
+    SQUARE_GAP_MAX_DEFAULT = 0.060
     BELT_EDGE_MARGIN_DEFAULT = 0.025
     SQUARE_PLACEMENT_MODE_DEFAULT = "variable"  # always variable for now (not an option)
     MISSING_TILE_MODE_DEFAULT = "none"
     BELT_CONTINOUS_MOTION_DEFAULT = False   # Opt 2 default: discrete stop-per-tile
     BELT_CONTINUOUS_SPEED_SCALE_DEFAULT = 1.6  # Opt 2: multiply belt_speed when continuous
-    BELT_SPEED_MIN_DEFAULT = 0.0016
-    BELT_SPEED_MAX_DEFAULT = 0.0028
+    BELT_SPEED_MIN_DEFAULT = 0.00112
+    BELT_SPEED_MAX_DEFAULT = 0.00196
 
     # belt center y (toward the robot's working area) and surface z above table
     BELT_Y = -0.05
@@ -85,6 +85,10 @@ class punch_dual_holes(Base_Task):
     PUNCH_ANIM_STEPS = 24
     TILE_PAUSE_S_DEFAULT = 2.0          # discrete: nominal hold under stamp (seconds)
     TILE_PAUSE_JITTER_DEFAULT = 0.40    # discrete: ± fraction on tile_pause_s per episode
+    # Wall-clock hold once the belts arm: tiles sit still for this long before the
+    # first advance, so a human (or the expert) can line the stamps up. The arms are
+    # NOT held — only the belt waits. Applies to both discrete and continuous modes.
+    BELT_START_FREEZE_S_DEFAULT = 4.0
     PAGE_EXIT_MARGIN = 0.002
     HIDE_Z = -10.0
     PUNCH_REST_Z_EXTRA = 0.03
@@ -362,6 +366,11 @@ class punch_dual_holes(Base_Task):
         self.belt_continous_motion = self._normalize_belt_continous_motion()
         self.tile_pause_steps = self._get_tile_pause_steps()
         self.tile_pause_s = float(self.tile_pause_steps) * float(self.scene.get_timestep())
+        belt_freeze_s = max(0.0, float(self._cfg.get(
+            "belt_start_freeze_s", self.BELT_START_FREEZE_S_DEFAULT)))
+        self.belt_start_freeze_steps = max(0, int(round(
+            belt_freeze_s / max(float(self.scene.get_timestep()), 1e-8))))
+        self._belt_freeze_i = 0
         self.invalid_empty_press = False
         self.invalid_empty_press_count = 0
         self.invalid_empty_press_sides = []
@@ -509,6 +518,7 @@ class punch_dual_holes(Base_Task):
         # belt simulation clock (shared step counter; each belt reads its own phase/speed)
         self._belt_step = 0
         self._belt_active = False
+        self._belt_freeze_i = 0      # start-of-episode hold, counted once _belt_active
         self._belt_running = False   # only True inside the explicit dwell loops
         # Persistent frame counter so short idles (e.g. idle(1)) don't dump a picture
         # every physics step — that makes continuous motion look frozen at playback fps.
@@ -670,6 +680,15 @@ class punch_dual_holes(Base_Task):
         super()._update_kinematic_tasks()
         self._update_reactive_buttons()
         if not getattr(self, "_belt_active", False):
+            return
+        # Start-of-episode hold: tiles stay put for belt_start_freeze_s so the stamps
+        # can be lined up first. Arms move freely throughout; only _belt_step is held,
+        # so every downstream arrival/alignment calculation just shifts with it.
+        freeze_total = int(getattr(self, "belt_start_freeze_steps", 0))
+        if int(getattr(self, "_belt_freeze_i", 0)) < freeze_total:
+            self._belt_freeze_i = int(getattr(self, "_belt_freeze_i", 0)) + 1
+            self._refresh_pages_at_current_step()
+            self._update_punch_heads()
             return
         # In continuous mode the belt advances on every physics step once active, independent
         # of stamping logic. In stepwise mode it only advances when explicit belt motion is
@@ -1110,7 +1129,12 @@ class punch_dual_holes(Base_Task):
         self._belt_running = True
         try:
             guard = 0
-            while self._belt_step < step_target and guard < (step_target + max_extra):
+            # The start-of-episode hold burns wall-clock steps without moving _belt_step,
+            # so the guard has to cover it or the first call bails out before the target.
+            remaining_freeze = max(0, int(getattr(self, "belt_start_freeze_steps", 0))
+                                   - int(getattr(self, "_belt_freeze_i", 0)))
+            guard_limit = step_target + max_extra + remaining_freeze
+            while self._belt_step < step_target and guard < guard_limit:
                 self._update_kinematic_tasks()
                 self.scene.step()
                 self._belt_pic_ctr = int(getattr(self, "_belt_pic_ctr", 0)) + 1

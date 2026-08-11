@@ -106,8 +106,11 @@ class hit_target(Base_Task):
         self._hit_center = False
         self._hit_blocker = False
         self._hit_color = None  # "yellow" / "blue" / "white" / "red" when tip meets the board
+        self._hit_ring_index = None  # 0 = outermost ring … n-1 = bullseye
         self._hit_planar_offset = None
         self._hit_radial_offset = None
+        # Partial credit for the ring stabbed: bullseye 1.0 down to 1/n on the
+        # outer ring, 0.0 for a miss or a blocker strike. Success stays binary.
         self.hit_score = 0.0
         self._target_rigid = None
         self._dart_rigid = None
@@ -688,6 +691,9 @@ class hit_target(Base_Task):
             bx, by, bz = self._static_blocker_x(), self.static_blocker_y, self.blocker_z
             if self._geom_hits_blocker(self.static_blocker, bx, by, bz):
                 self._hit_blocker = True
+                # A blocker strike is a hard failure; the ring metric must agree
+                # even if the shaft clipped it after the tip planted.
+                self.hit_score = 0.0
                 return True
 
         if getattr(self, "dynamic_blocker", None) is not None:
@@ -695,6 +701,7 @@ class hit_target(Base_Task):
             by, bz = self.dynamic_blocker_y, self.blocker_z
             if self._geom_hits_blocker(self.dynamic_blocker, bx, by, bz):
                 self._hit_blocker = True
+                self.hit_score = 0.0
                 return True
         return False
 
@@ -846,18 +853,19 @@ class hit_target(Base_Task):
         if not self._stuck:
             self._check_blocker_hit()
 
-    def _ring_color_at_radius(self, radial_offset: float) -> str | None:
-        """Map planar tip distance from the bullseye to a painted ring color.
+    def _ring_index_at_radius(self, radial_offset: float) -> int | None:
+        """Index of the painted ring under the tip, 0 = outermost … n-1 = bullseye.
 
-        Rings are nested discs drawn outer→inner (``RING_COLORS``). Returns
-        ``None`` when the tip is outside the board radius.
+        Rings are nested discs drawn outer→inner (``RING_COLORS``) at radii
+        ``board_radius * (n - k) / n``. Returns ``None`` when the tip is outside
+        the board radius.
         """
         r = float(radial_offset)
         board_r = float(self.board_radius)
         if r > board_r + 1e-6:
             return None
         n = max(1, int(self.n_rings))
-        color = self.RING_COLOR_NAMES[0]
+        index = 0
         for k in range(n):
             frac = (n - k) / n
             radius = board_r * frac
@@ -867,16 +875,43 @@ class hit_target(Base_Task):
                     float(self.center_radius) if self.center_radius > 0 else radius,
                 )
             if r <= radius + 1e-9:
-                color = self.RING_COLOR_NAMES[min(k, len(self.RING_COLOR_NAMES) - 1)]
+                index = k
             else:
                 break
-        return color
+        return index
+
+    def _ring_score(self, ring_index: int | None) -> float:
+        """Partial credit for the ring that was stabbed: bullseye 1.0, outer 1/n.
+
+        ``ring_index`` counts inward (0 = outermost), so the score runs the other
+        way: ``(k + 1) / n``. With the default 4 rings that is yellow 1.00 /
+        blue 0.75 / white 0.50 / red 0.25; off the board (or a blocker
+        strike) scores 0.
+        """
+        if ring_index is None:
+            return 0.0
+        n = max(1, int(self.n_rings))
+        k = int(np.clip(ring_index, 0, n - 1))
+        return float((k + 1) / n)
+
+    def _ring_color_at_radius(self, radial_offset: float) -> str | None:
+        """Map planar tip distance from the bullseye to a painted ring color.
+
+        Returns ``None`` when the tip is outside the board radius.
+        """
+        index = self._ring_index_at_radius(radial_offset)
+        if index is None:
+            return None
+        return self.RING_COLOR_NAMES[min(index, len(self.RING_COLOR_NAMES) - 1)]
 
     def _record_board_hit(self) -> str | None:
         """Latch the ring color under the tip when it reaches the board face.
 
-        Does not change success rules: only yellow welds (via ``_try_form_stick``).
-        Returns the latched color name, or ``None`` if the tip is not on the board.
+        Also latches ``hit_score`` — partial credit for whichever ring was
+        stabbed (see ``_ring_score``). Does not change success rules: only
+        yellow welds (via ``_try_form_stick``) and only yellow passes
+        ``check_success``. Returns the latched color name, or ``None`` if the
+        tip is not on the board.
         """
         if self._hit_blocker or getattr(self, "dart", None) is None:
             return self._hit_color
@@ -886,12 +921,17 @@ class hit_target(Base_Task):
         radial_offset = float(np.linalg.norm(planar_offset))
         if not self._tip_on_board_plane(tip[1], gap=self.TOUCH_LATCH_GAP):
             return self._hit_color
-        color = self._ring_color_at_radius(radial_offset)
-        if color is None:
+        ring_index = self._ring_index_at_radius(radial_offset)
+        if ring_index is None:
             return self._hit_color
+        color = self.RING_COLOR_NAMES[min(ring_index, len(self.RING_COLOR_NAMES) - 1)]
         self._hit_planar_offset = planar_offset.astype(float)
         self._hit_radial_offset = radial_offset
         self._hit_color = color
+        self._hit_ring_index = int(ring_index)
+        # Keep the best ring reached: a tip that grazes an outer ring on the way
+        # in must not downgrade a bullseye already scored this episode.
+        self.hit_score = max(float(self.hit_score), self._ring_score(ring_index))
         return color
 
     def hit_result_detail(self) -> str:
@@ -903,9 +943,9 @@ class hit_target(Base_Task):
             # Last chance classification from the current tip pose.
             color = self._record_board_hit()
         if color == "yellow":
-            return "hit yellow (success)"
+            return f"hit yellow (success, score {self.hit_score:.2f})"
         if color in ("blue", "white", "red"):
-            return f"hit {color} (failure)"
+            return f"hit {color} (failure, partial score {self.hit_score:.2f})"
         if self._tip_over_board():
             return "no contact: tip stopped short of the board face"
         return "missed the board"
@@ -955,7 +995,9 @@ class hit_target(Base_Task):
         self._hit_color = color
         if on_center:
             self._hit_center = True
-            self.hit_score = 1.0
+            # Already latched by _record_board_hit above; keep the ladder as the
+            # single source of truth so yellow == _ring_score(n-1) == 1.0.
+            self.hit_score = max(float(self.hit_score), self._ring_score(self.n_rings - 1))
         return True
 
     def _advance(self, steps, try_stick=False):
@@ -1608,6 +1650,10 @@ class hit_target(Base_Task):
             "center_hit": bool(self._hit_center),
             "hit_blocker": bool(self._hit_blocker),
             "hit_color": self._hit_color,
+            "hit_ring_index": (
+                int(self._hit_ring_index) if self._hit_ring_index is not None else -1
+            ),
+            "n_rings": int(self.n_rings),
             "planar_offset": planar_offset,
             "radial_offset": float(self._hit_radial_offset) if self._hit_radial_offset is not None else -1.0,
             "hit_score": float(self.hit_score),

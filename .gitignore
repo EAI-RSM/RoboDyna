@@ -116,6 +116,14 @@ assets/objects_bench/backgrounds/*
 !assets/objects_bench/backgrounds/fridge/
 !assets/objects_bench/backgrounds/fridge/**
 
+# Locally-modified ur5-wsg URDF (wrist-camera mount pose). The meshes still come
+# from the HF embodiments.zip download; only the text descriptor is tracked.
+!assets/embodiments/
+assets/embodiments/*
+!assets/embodiments/ur5-wsg/
+assets/embodiments/ur5-wsg/*
+!assets/embodiments/ur5-wsg/ur5_wsg_gripper.urdf
+
 policy/weights/*
 
 envs/curobo/*

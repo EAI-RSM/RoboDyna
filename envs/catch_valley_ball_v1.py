@@ -84,6 +84,14 @@ class catch_valley_ball_v1(Base_Task):
     IDLE_TIME_MIN_DEFAULT = 1.0
     IDLE_TIME_MAX_DEFAULT = 2.0
     SETTLE_STEPS_DEFAULT = 150
+    # Wall-clock hold at the top of the episode: the ball sits frozen at its drop
+    # pose for this long so a human (or the expert) can pre-position the catcher.
+    # The arms are NOT held — only the ball waits. Counted only once the freeze
+    # clock is armed (see `_ball_freeze_armed`), so the settle / check_stable
+    # phase before the viewer opens does not eat into it.
+    # Off here (v1 keeps its original pacing); the catch_valley_ball /
+    # stop_valley_ball subclasses opt in to 3.0 s.
+    START_FREEZE_S_DEFAULT = 0.0
 
     CATCHER_MODEL_DEFAULT = "021_cup"
     BOWL_ID_DEFAULT = 1  # 021_cup instance base1
@@ -102,6 +110,11 @@ class catch_valley_ball_v1(Base_Task):
         self._loaded = False
         self._ball_phase = None
         self._distractor_phase = None
+        # Start-hold clock: only ticks once armed (play_once / interactive main loop),
+        # so the settle + check_stable phase before the viewer opens does not eat it.
+        self._ball_freeze_armed = False
+        self._start_freeze_pending = 0
+        self._freeze_i = 0
         self._expert_demo = False
         self._bowl_ready = False
         self._bowl_welded = False
@@ -324,6 +337,7 @@ class catch_valley_ball_v1(Base_Task):
             c.get("idle_time_max", self.IDLE_TIME_MAX_DEFAULT),
         ))
         self.settle_steps = int(c.get("settle_steps", self.SETTLE_STEPS_DEFAULT))
+        self.start_freeze_s = max(0.0, float(c.get("start_freeze_s", self.START_FREEZE_S_DEFAULT)))
 
         self.catcher_model = str(c.get("catcher_model", self.CATCHER_MODEL_DEFAULT))
         self.bowl_id = int(c.get("bowl_id", self.BOWL_ID_DEFAULT))
@@ -569,6 +583,7 @@ class catch_valley_ball_v1(Base_Task):
         self.drop_steps = max(1, int(round(self.drop_time * self.SIM_HZ)))
         self.roll_steps = max(1, int(round(self.roll_time * self.SIM_HZ)))
         self.idle_steps = max(0, int(round(self.idle_time * self.SIM_HZ)))
+        self.start_freeze_steps = max(0, int(round(self.start_freeze_s * self.SIM_HZ)))
         self.flight_steps = self.physics_max_steps
         self._robot_link_names = self._collect_robot_link_names()
         self._bowl_welded = False
@@ -1055,13 +1070,30 @@ class catch_valley_ball_v1(Base_Task):
                 )
             self._distractor_phase = "frozen"
 
-    def _start_ball_motion(self, expert_demo):
+    def _start_ball_motion(self, expert_demo, freeze_steps=None):
+        """Arm the ball for its drop → roll → flight run.
+
+        ``freeze_steps`` overrides the configured start hold; pass ``0`` for the
+        landing-prediction rollout, which must not spend its ``physics_max_steps``
+        budget sitting in the pre-start hold.
+        """
         if not getattr(self, "_loaded", False):
             return
         self._expert_demo = bool(expert_demo)
         self._bowl_ready = False
         self._arm_ball_contact = False
-        self._ball_phase = "dropping"
+        if freeze_steps is None:
+            freeze_steps = int(getattr(self, "start_freeze_steps", 0))
+        self._start_freeze_pending = max(0, int(freeze_steps))
+        self._freeze_i = 0
+        # Expert rollouts have no human to wait for the viewer, so the hold starts
+        # counting immediately and simply delays the ball while play_once's arm
+        # actions proceed from t=0. Interactive runs (expert_demo=False) leave the
+        # clock disarmed until the viewer loop arms it.
+        self._ball_freeze_armed = bool(expert_demo)
+        # Hold at the drop pose first; `_advance_ball` flips this to "dropping"
+        # once the freeze clock (armed separately) has run out.
+        self._ball_phase = "prestart" if self._start_freeze_pending > 0 else "dropping"
         self._drop_i = 0
         self._roll_i = 0
         self._roll_distance = 0.0
@@ -1075,7 +1107,8 @@ class catch_valley_ball_v1(Base_Task):
             self._ball_rigid.set_angular_velocity(np.zeros(3))
             self._ball_rigid.set_kinematic_target(sapien.Pose(self.ball_drop.tolist()))
         if self.enable_distractor and self.distractor is not None:
-            self._distractor_phase = "dropping"
+            # Distractor waits out the same hold, then drops in lockstep with the ball.
+            self._distractor_phase = self._ball_phase
             self.distractor.set_pose(sapien.Pose(self.distractor_drop.tolist()))
             if self._distractor_rigid is not None:
                 self._distractor_rigid.set_disable_gravity(True)
@@ -1106,7 +1139,9 @@ class catch_valley_ball_v1(Base_Task):
         best_bounces = 0
 
         for _ in range(5):
-            self._start_ball_motion(expert_demo=False)
+            # freeze_steps=0: this rollout only predicts where the ball lands, and its
+            # physics_max_steps budget must all go to actual flight, not the start hold.
+            self._start_ball_motion(expert_demo=False, freeze_steps=0)
             touching_rail = False
             bounce_count = 0
             landing = None
@@ -1186,6 +1221,20 @@ class catch_valley_ball_v1(Base_Task):
             target_actor.set_pose(pose)
 
     def _advance_ball(self):
+        if self._ball_phase == "prestart":
+            # Start-of-episode hold: ball pinned at its drop pose so the catcher can
+            # be pre-positioned. The arms are free to move throughout. The clock only
+            # runs once armed, so the pre-viewer settle does not consume it.
+            if not getattr(self, "_ball_freeze_armed", False):
+                return
+            self._freeze_i += 1
+            if self._freeze_i < self._start_freeze_pending:
+                return
+            self._ball_phase = "dropping"
+            if self.enable_distractor and self._distractor_phase == "prestart":
+                self._distractor_phase = "dropping"
+            return
+
         if self._ball_phase == "dropping":
             self._drop_i += 1
             fraction = min(1.0, self._drop_i / float(self.drop_steps))
@@ -1328,6 +1377,16 @@ class catch_valley_ball_v1(Base_Task):
             if self.save_freq and i % self.save_freq == 0:
                 self._take_picture()
 
+    def _remaining_start_freeze(self):
+        """Steps still owed to the pre-roll hold, for expert dwell budgeting.
+
+        The hold delays the drop, so play_once's trailing dwell has to cover it —
+        otherwise the dwell can expire before the ball has even started falling.
+        """
+        if self._ball_phase != "prestart":
+            return 0
+        return max(0, int(self._start_freeze_pending) - int(self._freeze_i))
+
     # --------------------------------------------------------------- policy
     def play_once(self):
         arm_tag = ArmTag("left" if self.mirrored else "right")
@@ -1365,7 +1424,8 @@ class catch_valley_ball_v1(Base_Task):
         remaining_drop = max(0, self.drop_steps - self._drop_i)
         remaining_roll = max(0, self.roll_steps - self._roll_i)
         self._dwell(
-            remaining_drop
+            self._remaining_start_freeze()
+            + remaining_drop
             + remaining_roll
             + self.flight_steps
             + self.settle_steps

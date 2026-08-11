@@ -36,14 +36,13 @@ class catch_cuboid(Base_Task):
     CUBOID_HALF = [0.020, 0.026, 0.035]  # cuboid body half-extents (small graspable box)
     BOARD_HALF = [0.30, 0.13, 0.060]  # hole board half-extents (open bottom, closed sides)
     BOARD_PANEL_THICKNESS = 0.02      # wooden top lattice thickness
-    POP_HEIGHT = 0.055                # how far above the board top the cuboid rises when popped
     HIDE_DEPTH = 0.070                # how far below the board top the cuboid hides when retracted
     # Success requires the grasped cuboid bottom clear of the board by this margin.
     PULL_OUT_CLEARANCE = 0.04
     # Per-episode rise/fall speed (m/s) is sampled uniformly from [min, max].
-    # Mean 0.0392 (= 0.056 × 0.7); range scaled −30% from prior [0.032, 0.08].
-    CUBOID_MOVE_SPEED_MIN_DEFAULT = 0.0224
-    CUBOID_MOVE_SPEED_MAX_DEFAULT = 0.056
+    # Mean 0.0294; range scaled ×0.75 from prior [0.0224, 0.056].
+    CUBOID_MOVE_SPEED_MIN_DEFAULT = 0.0168
+    CUBOID_MOVE_SPEED_MAX_DEFAULT = 0.042
     RANDOMIZE_CUBOID_COLOR_DEFAULT = False
     CUBOID_COLOR_DEFAULT = [0.40, 0.40, 0.42]
     CUBOID_COLOR_POOL = (

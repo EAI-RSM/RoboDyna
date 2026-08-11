@@ -57,7 +57,7 @@ class cook_meat(Base_Task):
     MAX_EPISODE_STEPS_DEFAULT: ClassVar[int] = 15000  # eval / collection episode cutoff
     COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = False  # false=latch; true=hold (Opt 1)
     DUAL_SETUP_ENABLED_DEFAULT: ClassVar[bool] = False  # Opt 2
-    TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.45, 0.55)
+    TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.40, 0.60)
     TARGET_DONENESS_RANGE_JITTER_DEFAULT: ClassVar[float] = 0.0
     # Legacy fallback when target_doneness_range is absent.
     COOK_DONENESS_TOL_DEFAULT: ClassVar[float] = 0.08
@@ -881,8 +881,9 @@ class cook_meat(Base_Task):
                 raise ValueError("cook_meat.target_doneness_range must be [minimum, maximum]")
             range_min, range_max = map(float, configured_range)
         else:
-            range_min = float(config.get("target_doneness_min", 0.45))
-            range_max = float(config.get("target_doneness_max", 0.55))
+            default_min, default_max = self.TARGET_DONENESS_RANGE_DEFAULT
+            range_min = float(config.get("target_doneness_min", default_min))
+            range_max = float(config.get("target_doneness_max", default_max))
         if not 0.0 <= range_min <= range_max <= 1.0:
             raise ValueError("cook_meat target doneness range must satisfy 0 <= min <= max <= 1")
         range_jitter = float(config.get(
