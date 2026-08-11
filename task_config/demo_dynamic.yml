@@ -432,7 +432,7 @@ task_args:
     idle_time_min: 1.0
     idle_time_max: 2.0
     settle_steps: 150
-    start_freeze_s: 3.0         # s; ball waits at its drop pose before falling (arms stay free)
+    start_freeze_s: 0.0         # s; no start hold — ball drops immediately
     # Small ping-pong bat (circular head + −Y handle) on a facing-ramp holder
     panel_radius: 0.055         # bat head radius
     panel_half_thick: 0.006
