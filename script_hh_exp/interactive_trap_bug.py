@@ -11,8 +11,9 @@ KEYBOARD = """
 """
 ROBOT = """
   Bug starts running as soon as the viewer is ready.
-  Select the trap-side arm (1/2), put the fingers over the lid, Space to close —
-  trap latches and lifts with the arm. Space again to open and drop.
+  Select the trap-side arm (1/2), approach from above with the gripper open,
+  close until the fingers pinch the outer walls (about half-open — not crushed
+  shut) — trap latches and lifts. Space again to fully open and drop.
 """
 
 if __name__ == "__main__":
