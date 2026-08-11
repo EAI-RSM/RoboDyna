@@ -8,40 +8,45 @@ import os
 
 
 class pack_fruits(Base_Task):
-    """Pack apples and oranges from two moving belts into breadbaskets.
+    """Pack red/green apples from moving belts into color-matched breadbaskets.
 
     Two conveyor slabs sit with a gap centered on the table and run toward the
-    robot (-y). Spawn behaviour is controlled by ``spawn_mode``:
+    robot (-y). Scenario options (independent; Opt 1+2 combines both):
 
-    - ``random`` (Opt 1 / default): each wave independently rolls a coin and
-      spawns either a single fruit (apple xor orange; either belt when
-      ``single_wave_any_belt``) or an apple+orange pair (Y-gap ~ U(0,
-      fruit_diameter) when ``pair_stagger_enabled``).
-    - ``parallel``: always apple+orange pair waves (same Y-gap sampling).
-    - ``single``: only one fruit at a time; either color on either belt.
+    - **Default**: one color (red *or* green), one basket on the matching side,
+      **3–5** apples, **one colored apple at a time**.
+    - **Opt 1** (``two_colors_enabled``): **two baskets** and **both colors**
+      (red + green). Red apples go to the left basket, green to the right.
+      Each color independently has **2–3** apples (counts need not match).
+      Still only one colored apple at a time (no dual grasp).
+    - **Opt 2** (``distractor_enabled``): same as default, plus ≥1 black
+      distractor apple (never packed); 30% chance of a second black apple.
+      Black fruit may ride with a colored apple (same belt behind it, or the
+      other belt).
+    - **Opt 1+2**: two colors, two baskets (2–3 each color), ≥1 black
+      distractor; one colored apple at a time (black may co-appear).
 
-    Opt 2 (independent; can combine with Opt 1): ``distractor_enabled`` adds
-    black distractor fruit on the belts (never packed / counted).
-
-    Success requires every fruit to rest in its color-matched basket.
+    Success requires every colored apple to rest in its color-matched basket
+    (red → left basket, green → right). Colored apples may appear on either
+    belt in every scenario; the belt-side arm reaches them.
 
     Belt speed is sampled each episode as nominal × U(1 ± belt_speed_jitter)
     (default ±20%), independently per belt.
     """
 
-    N_PER_COLOR_DEFAULT = 3
+    N_ITEMS_MIN_DEFAULT = 3          # single-color episode count
+    N_ITEMS_MAX_DEFAULT = 5
+    N_PER_COLOR_MIN_DEFAULT = 2      # two-color: each color independently
+    N_PER_COLOR_MAX_DEFAULT = 3
     BELT_GAP_DEFAULT = 0.10
     BELT_SPEED_DEFAULT = 0.0008       # m advanced per belt tick (slow enough to pick)
     BELT_SPEED_JITTER_DEFAULT = 0.20  # fraction; speed ~ U((1-j)*nom, (1+j)*nom)
     ADVANCE_EVERY_DEFAULT = 3         # physics steps between belt ticks
     SPAWN_GAP_DEFAULT = 0.16          # y-gap between consecutive spawns on a belt
-    SPAWN_MODE_DEFAULT = "random"     # "single" | "parallel" | "random"
     SPAWN_DELAY_S_DEFAULT = 2.0       # unused (kept for config compat); spawn waits on drop/despawn
-    # pair wave: per-wave Y gap ~ U(0, max); max defaults to fruit diameter
+    # legacy pair-wave knobs (kept for config compat; colored fruit is always solo)
     PAIR_STAGGER_ENABLED_DEFAULT = False
-    PAIR_STAGGER_Y_DEFAULT = None     # None → fruit diameter (2 * fruit_r)
-    # "random" mode single-fruit wave: let it appear on either belt instead
-    # of always its color-dedicated one (arm/basket stay color-matched)
+    PAIR_STAGGER_Y_DEFAULT = None
     SINGLE_WAVE_ANY_BELT_DEFAULT = False
 
     # same belt slab dimensions as control_quality
@@ -66,7 +71,7 @@ class pack_fruits(Base_Task):
     _APPLE_CENTER_Y = 0.03814048367178239
     _APPLE_EXTENT_Y = 0.0919138697184135
     FRUIT_R = 0.026                   # approx half-extent at FRUIT_SCALE
-    FRUIT_MASS = 0.025
+    FRUIT_MASS = 0.05
     # orientation that exposes a top-down contact frame (see pick_ripe_apple);
     # rotates local +y -> world +z, so mesh center offset affects ride height
     FRUIT_Q = [0.707, 0.707, 0.0, 0.0]
@@ -82,24 +87,48 @@ class pack_fruits(Base_Task):
     PICK_LIFT = 0.10
 
     N_SLATS = 5
-    APPLE_COLOR = [0.85, 0.12, 0.10]
-    ORANGE_COLOR = [0.95, 0.55, 0.08]
+    APPLE_COLOR = [0.85, 0.12, 0.10]   # red
+    GREEN_COLOR = [0.12, 0.62, 0.18]   # green
     BELT_COLOR = [0.18, 0.18, 0.20]
     SLAT_COLOR = [0.10, 0.10, 0.12]
 
     # ---- distractor fruit (Opt 2; spawn-side only; never packed/counted) ----
     DISTRACTOR_ENABLED_DEFAULT = False
-    DISTRACTOR_PROB_DEFAULT = 0.35        # per real spawn-wave chance of also spawning a distractor
-    DISTRACTOR_COLOR_DEFAULT = [0.05, 0.05, 0.05]  # black; distinct from apple/orange
+    TWO_COLORS_ENABLED_DEFAULT = False
+    # episode-level: always ≥1 black when enabled; this is P(second black)
+    DISTRACTOR_EXTRA_PROB_DEFAULT = 0.30
+    DISTRACTOR_COLOR_DEFAULT = [0.05, 0.05, 0.05]  # black; distinct from red/green
     # min center-to-center Y gap from any active same-belt real fruit, as a
     # multiple of fruit diameter (2*FRUIT_R) — "at least twice the fruit's size"
     DISTRACTOR_MIN_GAP_MULT_DEFAULT = 2.0
 
-    # fruit type -> owning side / arm / basket
-    TYPE_SIDE = {"apple": "left", "orange": "right"}
+    # fruit type -> owning side / arm / basket (red left, green right)
+    TYPE_SIDE = {"apple": "left", "green": "right"}
+    TYPE_RGB = None  # filled in __init__ path via class attrs below
+
+    @classmethod
+    def _type_rgb(cls, ftype):
+        return cls.APPLE_COLOR if ftype == "apple" else cls.GREEN_COLOR
 
     def setup_demo(self, **kwags):
-        self._cfg = kwags.get("task_args", {}).get("pack_fruits", {})
+        self._cfg = dict(kwags.get("task_args", {}).get("pack_fruits", {}) or {})
+        # Resolve scenario from (in order): explicit kwarg, top-level config
+        # key written by the GUI temp yml, CLI/env from the launcher.
+        scenario = str(
+            kwags.get("scenario")
+            or kwags.get("interactive_scenario")
+            or os.environ.get("ROBODYNA_SCENARIO", "")
+            or ""
+        ).strip().lower()
+        scenario_overrides = {
+            "default": {"two_colors_enabled": False, "distractor_enabled": False},
+            "opt1": {"two_colors_enabled": True, "distractor_enabled": False},
+            "opt2": {"two_colors_enabled": False, "distractor_enabled": True},
+            "opt1+2": {"two_colors_enabled": True, "distractor_enabled": True},
+        }
+        if scenario in scenario_overrides:
+            self._cfg.update(scenario_overrides[scenario])
+        self._interactive_scenario = scenario or None
         # guards: _update_kinematic_tasks runs before load_actors finishes
         self._belt_ready = False
         self._belt_running = False
@@ -108,43 +137,91 @@ class pack_fruits(Base_Task):
     # --------------------------------------------------------------- actors
     def load_actors(self):
         cfg = self._cfg
-        n_per = cfg.get("n_per_color", None)
-        if n_per is not None:
-            self.n_apple = self.n_orange = int(n_per)
-        else:
-            self.n_apple = int(cfg.get("n_apple", self.N_PER_COLOR_DEFAULT))
-            self.n_orange = int(cfg.get("n_orange", self.N_PER_COLOR_DEFAULT))
-        # legacy total override (split evenly when per-color not set)
-        if "n_items" in cfg and n_per is None and "n_apple" not in cfg and "n_orange" not in cfg:
-            total = int(cfg["n_items"])
-            self.n_apple = total // 2
-            self.n_orange = total - self.n_apple
-        self.n_items = int(self.n_apple + self.n_orange)
+        # Opt 1: dual red+green with both baskets; Opt 2: black distractors
+        self.two_colors_enabled = bool(
+            cfg.get("two_colors_enabled", cfg.get("opt1", self.TWO_COLORS_ENABLED_DEFAULT))
+        )
+        _dist = cfg.get("distractor_enabled", cfg.get("opt2", self.DISTRACTOR_ENABLED_DEFAULT))
+        self.distractor_enabled = bool(_dist)
+        self.distractor_extra_prob = float(
+            cfg.get("distractor_extra_prob",
+                    cfg.get("distractor_prob", self.DISTRACTOR_EXTRA_PROB_DEFAULT))
+        )
+        self.distractor_color = list(cfg.get("distractor_color", self.DISTRACTOR_COLOR_DEFAULT))[:3]
+        self.distractor_min_gap_mult = float(cfg.get("distractor_min_gap_mult", self.DISTRACTOR_MIN_GAP_MULT_DEFAULT))
 
-        mode = str(cfg.get("spawn_mode", self.SPAWN_MODE_DEFAULT)).lower().strip()
-        if mode in ("opt1", "mixed", "randomized", "rand"):
-            mode = "random"
-        elif mode in ("simultaneous", "dual", "both"):
-            mode = "parallel"
-        elif mode in ("one", "sequential"):
-            mode = "single"
-        if mode not in ("single", "parallel", "random"):
-            mode = self.SPAWN_MODE_DEFAULT
-        self.spawn_mode = mode
+        n_min = int(cfg.get("n_items_min", self.N_ITEMS_MIN_DEFAULT))
+        n_max = int(cfg.get("n_items_max", self.N_ITEMS_MAX_DEFAULT))
+        if n_max < n_min:
+            n_min, n_max = n_max, n_min
+        per_min = int(cfg.get("n_per_color_min", self.N_PER_COLOR_MIN_DEFAULT))
+        per_max = int(cfg.get("n_per_color_max", self.N_PER_COLOR_MAX_DEFAULT))
+        if per_max < per_min:
+            per_min, per_max = per_max, per_min
+
+        # Count / color mix
+        if self.two_colors_enabled:
+            # Each color independently U{per_min..per_max} (default 2–3), unless fixed.
+            if "n_apple" in cfg or "n_green" in cfg or "n_orange" in cfg:
+                n_apple = int(cfg.get("n_apple", per_min))
+                n_green = int(cfg.get("n_green", cfg.get("n_orange", per_min)))
+            elif "n_per_color" in cfg:
+                n_per = int(cfg["n_per_color"])
+                n_apple = n_green = n_per
+            else:
+                n_apple = int(np.random.randint(per_min, per_max + 1))
+                n_green = int(np.random.randint(per_min, per_max + 1))
+            n_apple = max(1, n_apple)
+            n_green = max(1, n_green)
+            types = (["apple"] * n_apple) + (["green"] * n_green)
+            np.random.shuffle(types)
+            self.active_colors = ["apple", "green"]
+            self.n_items = int(n_apple + n_green)
+        else:
+            # Single color: U{n_min..n_max} (default 3–5).
+            if "n_items" in cfg:
+                self.n_items = max(1, int(cfg["n_items"]))
+            elif "n_apple" in cfg or "n_green" in cfg or "n_orange" in cfg:
+                n_a = int(cfg.get("n_apple", 0))
+                n_g = int(cfg.get("n_green", cfg.get("n_orange", 0)))
+                total = n_a + n_g
+                self.n_items = total if total > 0 else int(np.random.randint(n_min, n_max + 1))
+            else:
+                self.n_items = int(np.random.randint(n_min, n_max + 1))
+            self.n_items = max(1, int(self.n_items))
+            color = str(np.random.choice(["apple", "green"]))
+            force_color = cfg.get("fruit_color", cfg.get("single_color", None))
+            if force_color is not None:
+                fc = str(force_color).lower().strip()
+                if fc in ("red", "apple"):
+                    color = "apple"
+                elif fc in ("green", "orange"):
+                    color = "green"
+            types = [color] * self.n_items
+            self.active_colors = [color]
+
+        self.item_types = [str(t) for t in types]
+        self.n_apple = int(sum(1 for t in self.item_types if t == "apple"))
+        self.n_green = int(sum(1 for t in self.item_types if t == "green"))
+        self.n_orange = self.n_green  # legacy alias for observers / metrics
+
+        print(
+            f"[pack_fruits] scenario={getattr(self, '_interactive_scenario', None)!r} "
+            f"two_colors={self.two_colors_enabled} distractor={self.distractor_enabled} "
+            f"colors={self.active_colors} n_items={self.n_items} "
+            f"(red={self.n_apple}, green={self.n_green})",
+            flush=True,
+        )
+
+        # colored fruit always appears one-at-a-time (no dual grasp)
+        self.spawn_mode = "single"
         self.pick_lift = float(cfg.get("pick_lift", self.PICK_LIFT))
         self.spawn_delay_s = float(cfg.get("spawn_delay_s", self.SPAWN_DELAY_S_DEFAULT))
         self.pair_stagger_enabled = bool(cfg.get("pair_stagger_enabled", self.PAIR_STAGGER_ENABLED_DEFAULT))
-        # optional max Y gap (m); None / omitted → fruit diameter at spawn time
         _stagger_raw = cfg.get("pair_stagger_y", self.PAIR_STAGGER_Y_DEFAULT)
         self.pair_stagger_y_max = None if _stagger_raw is None else float(_stagger_raw)
-        self._pair_stagger_y = 0.0  # last sampled per-wave gap (see _spawn_wave_pair)
+        self._pair_stagger_y = 0.0
         self.single_wave_any_belt = bool(cfg.get("single_wave_any_belt", self.SINGLE_WAVE_ANY_BELT_DEFAULT))
-        # Opt 2: black distractor fruit (never packed)
-        _dist = cfg.get("distractor_enabled", cfg.get("opt2", self.DISTRACTOR_ENABLED_DEFAULT))
-        self.distractor_enabled = bool(_dist)
-        self.distractor_prob = float(cfg.get("distractor_prob", self.DISTRACTOR_PROB_DEFAULT))
-        self.distractor_color = list(cfg.get("distractor_color", self.DISTRACTOR_COLOR_DEFAULT))[:3]
-        self.distractor_min_gap_mult = float(cfg.get("distractor_min_gap_mult", self.DISTRACTOR_MIN_GAP_MULT_DEFAULT))
 
         self.belt_gap = float(cfg.get("belt_gap", self.BELT_GAP_DEFAULT))
         # shared default speed; optional per-side overrides (belt_speed_left / belt_speed_right)
@@ -218,14 +295,26 @@ class pack_fruits(Base_Task):
                 )
                 self.slats[side].append(sl)
                 self._slat_ys[side].append(sy)
+                # Slats are visual-only: kinematic set_pose would fling any
+                # dynamic apple resting on the belt. The static belt slab carries
+                # contacts; the conveyor can keep moving while grasping.
+                try:
+                    for comp in sl.actor.get_components():
+                        if not hasattr(comp, "get_collision_shapes"):
+                            continue
+                        for shape in comp.get_collision_shapes():
+                            shape.set_collision_groups([0, 0, 0, 0])
+                except Exception:
+                    pass
 
-        # ---- breadbaskets: apple left / orange right ----
+        # ---- breadbaskets: only for active colors (red→left, green→right) ----
         self.basket_id = int(np.random.choice([0, 1, 2, 3, 4]))
         self.basket_x = float(cfg.get("basket_x", self.BASKET_X))
-        self.basket_centers = {
+        all_centers = {
             "apple":  np.array([-self.basket_x, self.basket_y], dtype=np.float64),
-            "orange": np.array([+self.basket_x, self.basket_y], dtype=np.float64),
+            "green":  np.array([+self.basket_x, self.basket_y], dtype=np.float64),
         }
+        self.basket_centers = {c: all_centers[c] for c in self.active_colors}
         self.baskets = {}
         self.basket_base_z = {}
         self.basket_top_z = {}
@@ -244,7 +333,7 @@ class pack_fruits(Base_Task):
                 scale_mult=self.basket_scale,
             )
             # tint basket rim toward fruit color for readability
-            tint = self.APPLE_COLOR if ftype == "apple" else self.ORANGE_COLOR
+            tint = self._type_rgb(ftype)
             self._recolor(basket, [0.55 * tint[0] + 0.35,
                                    0.55 * tint[1] + 0.30,
                                    0.55 * tint[2] + 0.20])
@@ -257,9 +346,9 @@ class pack_fruits(Base_Task):
             # model config. Used so the carry/hover target clears the
             # actual basket wall instead of the old fixed guess, which sat
             # below the rim and caused the gripper to clip the basket.
-            cfg = getattr(basket, "config", None) or {}
-            extents = cfg.get("extents", [0.0, 0.7, 0.0])
-            scale = cfg.get("scale", [self.basket_scale] * 3)
+            bcfg = getattr(basket, "config", None) or {}
+            extents = bcfg.get("extents", [0.0, 0.7, 0.0])
+            scale = bcfg.get("scale", [self.basket_scale] * 3)
             basket_height = float(extents[1]) * float(scale[1])
             if basket_height <= 0.0:
                 basket_height = 0.07 * self.basket_scale
@@ -273,25 +362,24 @@ class pack_fruits(Base_Task):
             self.basket_half_xy[ftype] = (half_x, half_y)
             self.add_prohibit_area(basket, padding=0.04)
 
-        # ---- fruit sequence: fixed per-color counts, shuffled order ----
-        types = (["apple"] * self.n_apple) + (["orange"] * self.n_orange)
-        np.random.shuffle(types)
-        self.item_types = [str(t) for t in types]
-        if self.spawn_mode == "single":
-            # either color on either belt; the color-matched arm reaches to that belt
-            self.item_sides = [
-                str(np.random.choice(["left", "right"])) for _ in self.item_types
-            ]
-        else:
-            # apples left / oranges right
-            self.item_sides = [self.TYPE_SIDE[t] for t in self.item_types]
-        # arm that packs this fruit (color-matched); may differ from belt side in single mode
-        self.item_arms = [self.TYPE_SIDE[t] for t in self.item_types]
+        print(
+            f"[pack_fruits] spawned {len(self.baskets)} basket(s): "
+            f"{ {k: np.round(v, 3).tolist() for k, v in self.basket_centers.items()} }",
+            flush=True,
+        )
+
+        # Colored apples may appear on either belt (all scenarios). The arm that
+        # reaches a fruit is the belt-side arm; the drop target stays color-matched.
+        self.item_sides = [
+            str(np.random.choice(["left", "right"])) for _ in self.item_types
+        ]
+        self.item_arms = list(self.item_sides)
 
         # stage all fruits off-table; they appear gradually on the belts
         self.items = []
         self._item_comps = []
         self._item_y = [None] * self.n_items       # None = not yet on belt / packed
+        self._item_x = [0.0] * self.n_items        # lateral pose on the belt (not forced to center)
         self._item_roll = [0.0] * self.n_items
         self._spawned_mask = [False] * self.n_items
         self._spawned = 0
@@ -299,14 +387,11 @@ class pack_fruits(Base_Task):
         self._missed = [False] * self.n_items  # rode off belt end without pack_fruits
         # gripper has reached the drop pose above this fruit's basket
         self._over_basket = [False] * self.n_items
-        self._place_counts = {"apple": 0, "orange": 0}
+        self._place_counts = {c: 0 for c in self.active_colors}
         self._welded = [False] * self.n_items
         self._weld_offset = [None] * self.n_items
         self._weld_arm = [None] * self.n_items
-        # wave-partner tracking: set by _spawn_wave_pair so a staggered pair
-        # (one fruit given a small head start) still gets routed through
-        # _pack_pair instead of being solo-packed the instant only the lead
-        # fruit enters the ready window (see _active_pair_partner)
+        # wave-partner tracking (legacy pair path; unused for colored solo spawn)
         self._pair_partner = [None] * self.n_items
         self._grasping_idxs = set()  # fruits mid-intercept; stay on the moving stream
         # nestable hold for the pick→above-basket→drop→return cycle; blocks new spawns
@@ -314,7 +399,7 @@ class pack_fruits(Base_Task):
         self._stage_pose = sapien.Pose([0.0, 1.2, z0 + 0.4], [1, 0, 0, 0])
 
         for i, ftype in enumerate(self.item_types):
-            rgb = self.APPLE_COLOR if ftype == "apple" else self.ORANGE_COLOR
+            rgb = self._type_rgb(ftype)
             fruit = create_actor(
                 self,
                 pose=sapien.Pose(
@@ -331,6 +416,10 @@ class pack_fruits(Base_Task):
             )
             self._recolor(fruit, rgb)
             fruit.set_mass(self.FRUIT_MASS)
+            try:
+                fruit.actor.set_name(f"pack_fruit_{i}")
+            except Exception:
+                pass
             comp = None
             for c in fruit.actor.get_components():
                 if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
@@ -350,11 +439,30 @@ class pack_fruits(Base_Task):
             self.items.append(fruit)
             self._item_comps.append(comp)
 
-        # ---- distractor fruits: same mesh/scale as real fruit but recolored
-        # brown, pre-staged off-table like self.items above. Tracked in their
-        # OWN lists (never self.items/_item_*) so no pack_fruits/grasp/success
-        # code path (which only ever iterates self.items) can see them.
-        self.n_distractor_slots = int(self.n_items) if self.distractor_enabled else 0
+        # ---- distractor fruits: episode plans ≥1 (+ optional 2nd) when Opt 2
+        # is on. Scheduled to co-appear with specific colored waves (same belt
+        # behind the colored apple, or the other belt). Never packed/counted.
+        if self.distractor_enabled:
+            n_dist = 1 + (1 if bool(np.random.rand() < self.distractor_extra_prob) else 0)
+        else:
+            n_dist = 0
+        self.n_distractor_plan = int(n_dist)
+        self.n_distractor_slots = int(n_dist)
+        # schedule: which colored-wave index each distractor joins, and side
+        wave_order = list(range(self.n_items))
+        np.random.shuffle(wave_order)
+        self._distractor_schedule = []
+        for s in range(self.n_distractor_slots):
+            wave = int(wave_order[s % len(wave_order)])
+            # prefer distinct waves when two distractors
+            if s > 0 and self.n_items > 1:
+                wave = int(wave_order[s % len(wave_order)])
+            side = str(np.random.choice(["left", "right"]))
+            self._distractor_schedule.append({
+                "wave": wave,
+                "side": side,
+                "spawned": False,
+            })
         self.distractors = []
         self._distractor_comps = []
         self._distractor_y = [None] * self.n_distractor_slots
@@ -377,6 +485,10 @@ class pack_fruits(Base_Task):
             )
             self._recolor(distractor, self.distractor_color)
             distractor.set_mass(self.FRUIT_MASS)
+            try:
+                distractor.actor.set_name(f"pack_distractor_{s}")
+            except Exception:
+                pass
             d_comp = None
             for c in distractor.actor.get_components():
                 if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
@@ -434,6 +546,10 @@ class pack_fruits(Base_Task):
         side = self.item_sides[idx]
         y0 = self.BELT_Y_FAR + float(y_offset)
         self._item_y[idx] = y0
+        # Anywhere across the belt width — not forced to the centerline.
+        half = max(0.01, float(self.BELT_HALF_WID) - float(self.fruit_r) * 0.9)
+        x0 = float(self.belt_cx[side]) + float(np.random.uniform(-half, half))
+        self._item_x[idx] = x0
         self._item_roll[idx] = 0.0
         self._over_basket[idx] = False
         comp = self._item_comps[idx]
@@ -441,7 +557,7 @@ class pack_fruits(Base_Task):
             comp.set_kinematic(True)
             comp.set_disable_gravity(True)
         self._set_fruit_pose(
-            idx, self.belt_cx[side], y0, self._fruit_ride_z
+            idx, x0, y0, self._fruit_ride_z
         )
 
     def _spawn_wave_pair(self):
@@ -501,6 +617,12 @@ class pack_fruits(Base_Task):
             return None
         return j
 
+    def _clamp_fruit_belt_x(self, side, x):
+        """Keep a fruit X within its belt slab (any lateral position, not just center)."""
+        cx = float(self.belt_cx[side])
+        half = max(0.01, float(self.BELT_HALF_WID) - float(self.fruit_r) * 0.85)
+        return float(np.clip(float(x), cx - half, cx + half))
+
     def _set_fruit_pose(self, idx, x, y, z, roll=0.0):
         # keep the authored grasp orientation (FRUIT_Q); optional spin about world -y
         # is composed on top so the contact frame stays top-down-approachable
@@ -514,6 +636,8 @@ class pack_fruits(Base_Task):
         pose = sapien.Pose([float(x), float(y), float(z)], q.tolist())
         # always write the entity pose so grasp/contact queries see the true location
         self.items[idx].actor.set_pose(pose)
+        if idx < len(getattr(self, "_item_x", [])):
+            self._item_x[idx] = float(x)
         comp = self._item_comps[idx]
         if comp is not None:
             try:
@@ -586,32 +710,43 @@ class pack_fruits(Base_Task):
             except Exception:
                 pass
 
-    def _spawn_distractor(self):
-        """Put one distractor on a randomly chosen belt (independent of
-        which belt(s) the current real wave used), honoring the minimum
-        center-to-center Y gap (``distractor_min_gap_mult`` * fruit
-        diameter) from any active real fruit currently on that SAME belt.
-        Since both then ride at that belt's shared speed, a sufficient
-        initial gap is preserved for the whole ride. Fully independent of
-        ``self.items`` / ``_spawned_mask`` / ``_item_y`` — this never
-        touches (and is never touched by) spawn-gating, grasp, or success
-        bookkeeping.
-        """
-        slot = None
-        for s in range(self.n_distractor_slots):
-            if self._distractor_y[s] is None:
-                slot = s
-                break
-        if slot is None:
-            return  # every slot busy this wave; skip
+    def _spawn_distractor(self, slot=None, side=None, prefer_behind_colored=True):
+        """Put one distractor on a belt.
 
-        side = str(np.random.choice(["left", "right"]))
-        min_gap = float(self.distractor_min_gap_mult) * (2.0 * self.FRUIT_R)
+        ``side`` may be forced (Opt 2 schedule). When a colored fruit is
+        already on that belt, place the black apple behind it (farther +y)
+        with ``distractor_min_gap_mult`` × diameter clearance so they ride
+        together without overlapping. Fully independent of colored-fruit
+        spawn-gating / grasp / success bookkeeping.
+        """
+        if slot is None:
+            for s in range(self.n_distractor_slots):
+                if self._distractor_y[s] is None:
+                    slot = s
+                    break
+        if slot is None:
+            return  # every slot busy; skip
+        if self._distractor_y[slot] is not None:
+            return
+
+        if side is None:
+            side = str(np.random.choice(["left", "right"]))
+        side = str(side)
+        min_gap = float(self.distractor_min_gap_mult) * (2.0 * self.fruit_r)
         active_ys = [
             self._item_y[i] for i in range(self.n_items)
             if self.item_sides[i] == side and self._item_y[i] is not None
         ]
-        if active_ys:
+        if active_ys and prefer_behind_colored:
+            # behind = farther from robot = higher y
+            closest_to_far = max(active_ys)
+            candidate = closest_to_far + min_gap
+            if candidate <= self.BELT_Y_FAR + 1e-9:
+                y0 = candidate
+            else:
+                # not enough room behind — put in front with gap instead
+                y0 = closest_to_far - min_gap
+        elif active_ys:
             closest_to_far = max(active_ys)
             candidate = closest_to_far + min_gap
             y0 = candidate if candidate <= self.BELT_Y_FAR + 1e-9 else closest_to_far - min_gap
@@ -632,13 +767,21 @@ class pack_fruits(Base_Task):
             print(f"[pack_fruits]  distractor_{slot} spawn side={side} y0={y0:.4f} "
                   f"min_gap_req={min_gap:.4f} {gap_note}", flush=True)
 
-    def _maybe_spawn_distractor(self):
-        """Rolled once per real spawn-wave (see ``_maybe_spawn``)."""
+    def _spawn_scheduled_distractors(self, wave_idx):
+        """Spawn any black apples scheduled to co-appear with this colored wave."""
         if not getattr(self, "distractor_enabled", False):
             return
-        if not bool(np.random.rand() < self.distractor_prob):
-            return
-        self._spawn_distractor()
+        for slot, sched in enumerate(self._distractor_schedule):
+            if sched.get("spawned"):
+                continue
+            if int(sched["wave"]) != int(wave_idx):
+                continue
+            self._spawn_distractor(slot=slot, side=sched.get("side"))
+            sched["spawned"] = True
+
+    def _maybe_spawn_distractor(self):
+        """Legacy no-op hook (distractors are wave-scheduled)."""
+        return
 
     def _advance_distractors(self):
         """Mirror of the real-fruit belt-ride step below, but fully
@@ -676,63 +819,33 @@ class pack_fruits(Base_Task):
                   flush=True)
 
     def _maybe_spawn(self):
-        """Spawn the next fruit / pair only after the current wave is fully clear."""
+        """Spawn the next colored apple only after the previous one is clear.
+
+        Always one colored fruit at a time. Black distractors scheduled for
+        this wave may co-appear (same belt behind, or the other belt).
+        """
         import os
         if self._spawned >= self.n_items:
             return
-        # wait until drop/despawn of the current wave AND the pack cycle finished
-        # (gripper has been above the basket and returned — not mid-pick)
         if not self._can_spawn_next():
             return
 
-        spawned_wave = False
-
-        if self.spawn_mode == "single":
-            for i in range(self.n_items):
-                if self._spawned_mask[i] or self._packed[i] or self._missed[i]:
-                    continue
-                self._spawn(i)
-                self._spawned_mask[i] = True
-                self._spawned = int(sum(self._spawned_mask))
-                spawned_wave = True
-                break
-
-        elif self.spawn_mode == "random":
-            # each wave independently rolls single-vs-pair (falls back to
-            # single automatically if only one color remains outstanding)
-            want_pair = bool(np.random.rand() < 0.5)
+        for i in range(self.n_items):
+            if self._spawned_mask[i] or self._packed[i] or self._missed[i]:
+                continue
+            wave_idx = int(self._spawned)
+            self._spawn(i)
+            self._spawned_mask[i] = True
+            self._spawned = int(sum(self._spawned_mask))
+            self._spawn_scheduled_distractors(wave_idx)
             if bool(os.environ.get("PACKING_DEBUG")):
-                print(f"[pack_fruits]  random spawn wave: "
-                      f"{'pair' if want_pair else 'single'}", flush=True)
-            if want_pair:
-                self._spawn_wave_pair()
-                spawned_wave = True
-            else:
-                for i in range(self.n_items):
-                    if self._spawned_mask[i] or self._packed[i] or self._missed[i]:
-                        continue
-                    if self.single_wave_any_belt:
-                        old_side = self.item_sides[i]
-                        self.item_sides[i] = str(np.random.choice(["left", "right"]))
-                        if bool(os.environ.get("PACKING_DEBUG")) and self.item_sides[i] != old_side:
-                            print(f"[pack_fruits]  single wave belt override: "
-                                  f"{self.item_types[i]}_{i} {old_side} -> {self.item_sides[i]}",
-                                  flush=True)
-                    self._spawn(i)
-                    self._spawned_mask[i] = True
-                    self._spawned = int(sum(self._spawned_mask))
-                    spawned_wave = True
-                    break
-
-        else:
-            # parallel: one apple (left) + one orange (right) per wave, together
-            self._spawn_wave_pair()
-            spawned_wave = True
-
-        if spawned_wave:
-            self._maybe_spawn_distractor()
+                print(f"[pack_fruits]  spawn wave={wave_idx} "
+                      f"{self.item_types[i]}_{i} side={self.item_sides[i]}",
+                      flush=True)
+            break
 
     def _advance_stream(self):
+        self._resolve_freed_orphans()
         self._maybe_spawn()
 
         for i in range(self.n_items):
@@ -748,8 +861,9 @@ class pack_fruits(Base_Task):
                 self._despawn_off_belt(i)
                 continue
             self._item_roll[i] += speed / max(self.fruit_r, 1e-4)
+            x = self._item_x[i] if self._item_x[i] is not None else self.belt_cx[side]
             self._set_fruit_pose(
-                i, self.belt_cx[side], self._item_y[i], self._fruit_ride_z,
+                i, float(x), self._item_y[i], self._fruit_ride_z,
                 roll=self._item_roll[i],
             )
 
@@ -802,6 +916,8 @@ class pack_fruits(Base_Task):
         # (still "active" until dropped in the basket — blocks next spawn)
         self._item_y[idx] = None
         self._welded[idx] = True
+        # Avoid belt/table contacts fighting teleop / raise while welded.
+        self._set_fruit_collision_enabled(idx, False)
         # reset the JERK baseline so a stale pre-release position (from a
         # previous weld cycle on this same fruit index, e.g. after a
         # miss->resend->re-pick loop) isn't diffed against the fresh
@@ -861,6 +977,8 @@ class pack_fruits(Base_Task):
             p = np.array(self.items[idx].get_pose().p, dtype=float)
             print(f"[pack_fruits]  RELEASE fruit_{idx} step={self._step_ctr} p={p.round(4)}", flush=True)
         self._welded[idx] = False
+        self._weld_arm[idx] = None
+        self._set_fruit_collision_enabled(idx, True)
         rigid = self._item_comps[idx]
         if rigid is not None:
             try:
@@ -870,6 +988,206 @@ class pack_fruits(Base_Task):
                 rigid.set_angular_velocity(np.zeros(3))
             except Exception:
                 pass
+
+    def _fruit_over_belt(self, idx, margin=0.03):
+        """Return belt side if fruit XY sits on a conveyor slab, else None."""
+        p = np.array(self.items[idx].get_pose().p, dtype=float)
+        if p[1] < self.BELT_Y_NEAR - margin or p[1] > self.BELT_Y_FAR + margin:
+            return None
+        best_side, best_dx = None, 1e9
+        for side, cx in self.belt_cx.items():
+            dx = abs(float(p[0]) - float(cx))
+            if dx <= self.BELT_HALF_WID + margin and dx < best_dx:
+                best_side, best_dx = side, dx
+        return best_side
+
+    def _set_fruit_collision_enabled(self, idx, enabled: bool):
+        """Toggle PhysX contacts on a colored apple (off while expert-welded)."""
+        rigid = self._item_comps[idx] if idx < len(self._item_comps) else None
+        if rigid is None:
+            return
+        groups = [1, 1, 0, 0] if enabled else [0, 0, 0, 0]
+        try:
+            for shape in rigid.get_collision_shapes():
+                shape.set_collision_groups(list(groups))
+        except Exception:
+            pass
+
+    def _calm_fruit(self, idx, damping=(0.8, 4.0)):
+        """Zero velocities and set damping so a pinch/drop is not a throw."""
+        rigid = self._item_comps[idx] if idx < len(self._item_comps) else None
+        if rigid is None:
+            return
+        try:
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+            rigid.set_linear_damping(float(damping[0]))
+            rigid.set_angular_damping(float(damping[1]))
+        except Exception:
+            pass
+
+    def _free_fruit_for_physical_grasp(self, idx):
+        """Leave the belt at the current pose as a dynamic body (no teleport).
+
+        Interactive hold is friction/contact only — same idea as pick_ripe_apple.
+        Gravity stays off until the jaws finish closing. Pose is unchanged.
+        """
+        self._item_y[idx] = None
+        self._welded[idx] = False
+        self._weld_arm[idx] = None
+        self._weld_offset[idx] = None
+        self._over_basket[idx] = False
+        self._set_fruit_collision_enabled(idx, True)
+        rigid = self._item_comps[idx]
+        if rigid is None:
+            return
+        try:
+            pose = self.items[idx].get_pose()
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(True)
+            self.items[idx].actor.set_pose(pose)
+            self._calm_fruit(idx, damping=(1.2, 6.0))
+        except Exception:
+            pass
+
+    def _enable_fruit_gravity(self, idx):
+        """Turn gravity on so the closed gripper must hold the apple by contact."""
+        rigid = self._item_comps[idx]
+        if rigid is None:
+            return
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+            self._calm_fruit(idx, damping=(0.8, 4.0))
+        except Exception:
+            pass
+
+    def _fruit_held_by_gripper(self, idx) -> bool:
+        """True while a gripper still contacts this colored apple."""
+        if idx < 0 or idx >= len(self.items):
+            return False
+        try:
+            name = self.items[idx].get_name()
+            return len(self.get_gripper_actor_contact_position(name)) > 0
+        except Exception:
+            return False
+
+    def interactive_ee_z_ceiling(self, side, pose):
+        """Allow raising above the home EE while carrying a freed apple.
+
+        UniversalRobotControls otherwise caps Q/E at the captured origin height.
+        """
+        side = "left" if str(side) == "left" else "right"
+        holding = False
+        for i in range(int(getattr(self, "n_items", 0))):
+            if self._packed[i] or self._missed[i]:
+                continue
+            if self._item_y[i] is not None:
+                continue
+            if self._welded[i] and str(self._weld_arm[i]) == side:
+                holding = True
+                break
+            if i in getattr(self, "_grasping_idxs", set()):
+                try:
+                    tcp = self._tcp_pos(side)
+                    fp = np.array(self.items[i].get_pose().p, dtype=float)
+                    if float(np.linalg.norm(fp[:2] - tcp[:2])) < 0.14:
+                        holding = True
+                        break
+                except Exception:
+                    holding = True
+                    break
+        if not holding:
+            return None
+        controls = getattr(self, "_interactive_robot_controls", None)
+        home = None
+        if controls is not None:
+            home = getattr(controls, "_origin_pose", {}).get(side)
+        home_z = float(home[2]) if home is not None else float(pose[2])
+        rim = 0.0
+        if getattr(self, "basket_top_z", None):
+            rim = max(float(z) for z in self.basket_top_z.values())
+        return max(home_z + 0.08, rim + 0.18, float(pose[2]) + 0.12)
+
+    def _reseat_on_belt(self, idx, side=None, y=None, x=None):
+        """Put a free fruit back on the kinematic belt stream (same ride physics).
+
+        Keeps the fruit's current lateral X when possible — not snapped to the
+        belt centerline.
+        """
+        if side is None:
+            side = self._fruit_over_belt(idx) or self.item_sides[idx]
+        side = str(side)
+        if side not in self.belt_cx:
+            side = "left"
+        p = np.array(self.items[idx].get_pose().p, dtype=float)
+        if y is None:
+            y = float(np.clip(p[1], self.BELT_Y_NEAR + 0.02, self.BELT_Y_FAR))
+        if x is None:
+            x = float(p[0])
+        x = self._clamp_fruit_belt_x(side, x)
+        self.item_sides[idx] = side
+        self.item_arms[idx] = side
+        self._item_y[idx] = float(y)
+        self._item_x[idx] = float(x)
+        self._item_roll[idx] = 0.0
+        self._welded[idx] = False
+        self._weld_arm[idx] = None
+        self._over_basket[idx] = False
+        self._packed[idx] = False
+        self._missed[idx] = False
+        self._grasping_idxs.discard(idx)
+        self._set_fruit_collision_enabled(idx, True)
+        rigid = self._item_comps[idx]
+        if rigid is not None:
+            try:
+                rigid.set_kinematic(True)
+                rigid.set_disable_gravity(True)
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_linear_damping(5.0)
+                rigid.set_angular_damping(20.0)
+            except Exception:
+                pass
+        self._set_fruit_pose(idx, x, self._item_y[idx], self._fruit_ride_z)
+        if bool(os.environ.get("PACKING_DEBUG")):
+            print(f"[pack_fruits]  reseat fruit_{idx} on {side} belt "
+                  f"x={x:.3f} y={y:.3f}", flush=True)
+        return True
+
+    def _mark_table_rest(self, idx):
+        """Leave a dropped apple on the table (resolved miss — no belt reset)."""
+        self._missed[idx] = True
+        self._packed[idx] = False
+        self._over_basket[idx] = False
+        self._item_y[idx] = None
+        self._welded[idx] = False
+        self._weld_arm[idx] = None
+        self._grasping_idxs.discard(idx)
+        self._set_fruit_collision_enabled(idx, True)
+        rigid = self._item_comps[idx]
+        if rigid is not None:
+            try:
+                rigid.set_kinematic(False)
+                rigid.set_disable_gravity(False)
+                self._calm_fruit(idx, damping=(1.5, 8.0))
+            except Exception:
+                pass
+
+    def _resolve_freed_orphans(self):
+        """Reseat freed fruits that are not held/packed/missed (unblocks spawn)."""
+        held = set(getattr(self, "_grasping_idxs", set()) or ())
+        for i in range(int(self.n_items)):
+            if not self._spawned_mask[i] or self._packed[i] or self._missed[i]:
+                continue
+            if self._welded[i] or self._item_y[i] is not None:
+                continue
+            if i in held:
+                continue
+            # Limbo: freed, not tracked by interactive hold — put back on the belt.
+            self._reseat_on_belt(i, side=self.item_sides[i], y=float(self.BELT_Y_FAR))
+            if bool(os.environ.get("PACKING_DEBUG")):
+                print(f"[pack_fruits]  orphan fruit_{i} reseated (spawn unblock)", flush=True)
 
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
@@ -918,37 +1236,52 @@ class pack_fruits(Base_Task):
         p = np.array(self.items[idx].get_pose().p, dtype=np.float64)
         in_xy = self._xy_inside_basket(p[:2], ftype)
         above = p[2] >= (self.basket_base_z[ftype] - 0.02)
-        below = p[2] <= (self.basket_base_z[ftype] + 0.18)
+        # Tall enough for a small stack of apples (not only a single layer).
+        stack_h = 0.18 + 2.2 * float(self.fruit_r) * max(1, int(self.n_items) - 1)
+        below = p[2] <= (self.basket_base_z[ftype] + stack_h)
         return bool(in_xy and above and below)
 
     def _mark_packed(self, idx, freeze=True):
         """Resolve a fruit; ``freeze`` pins it (used for fruit inside a basket).
 
-        A fruit that ended up outside stays dynamic so it rests on the table
-        instead of hanging frozen wherever it landed.
+        Interactive packing uses ``freeze=False`` so later apples can stack on
+        earlier ones under real dynamics instead of bouncing off a kinematic pin.
         """
         ftype = self.item_types[idx]
         if not self._packed[idx]:
             self._place_counts[ftype] = self._place_counts[ftype] + 1
         self._packed[idx] = True
+        self._missed[idx] = False
         self._over_basket[idx] = True
         self._item_y[idx] = None
         self._welded[idx] = False
+        self._weld_arm[idx] = None
+        self._grasping_idxs.discard(idx)
+        self._set_fruit_collision_enabled(idx, True)
         rigid = self._item_comps[idx]
-        if rigid is not None and freeze:
-            try:
+        if rigid is None:
+            return
+        try:
+            if freeze:
                 rigid.set_kinematic(True)
                 rigid.set_disable_gravity(True)
-            except Exception:
-                pass
+                self._calm_fruit(idx, damping=(5.0, 20.0))
+            else:
+                # Keep normal fruit↔fruit / fruit↔basket contacts so apples stack.
+                rigid.set_kinematic(False)
+                rigid.set_disable_gravity(False)
+                self._calm_fruit(idx, damping=(1.2, 6.0))
+        except Exception:
+            pass
 
     def _restore_fruit_stream_pose(self, idx):
         """Put actor back on the live belt pose after a temporary planning teleport."""
         if self._item_y[idx] is None:
             return
         side = self.item_sides[idx]
+        x = self._item_x[idx] if self._item_x[idx] is not None else self.belt_cx[side]
         self._set_fruit_pose(
-            idx, self.belt_cx[side], self._item_y[idx], self._fruit_ride_z,
+            idx, float(x), self._item_y[idx], self._fruit_ride_z,
             roll=self._item_roll[idx],
         )
 
@@ -1678,7 +2011,8 @@ class pack_fruits(Base_Task):
         fruit = self.items[idx]
         ftype = self.item_types[idx]
         belt_side = self.item_sides[idx]
-        arm_side = self.item_arms[idx]
+        # Reach with the belt-side arm (apples may appear on either belt).
+        arm_side = belt_side
         arm = ArmTag(arm_side)
         target_xy = self._basket_target_xy(idx)
 
@@ -1840,37 +2174,21 @@ class pack_fruits(Base_Task):
         return ready
 
     def _dispatch_pack(self, ready):
-        """Pick the right pack call for the current ready fruit(s).
-
-        Prefers pairing a ready fruit with its still-outstanding wave
-        partner (see ``_active_pair_partner``) even if the partner hasn't
-        entered the ready window yet — this is what makes a staggered pair
-        (``pair_stagger_enabled``) still get carried together instead of
-        the head-started fruit being solo-packed the instant it alone
-        becomes ready. Falls back to the plain "both already ready"
-        pairing, then to solo pack_fruits.
-        """
+        """Pack the ready colored fruit (always solo — one colored apple at a time)."""
         left_i, right_i = ready["left"], ready["right"]
-        if self.spawn_mode in ("parallel", "random"):
-            for i in (left_i, right_i):
-                if i is None:
-                    continue
-                partner = self._active_pair_partner(i)
-                if partner is None:
-                    continue
-                idx_l, idx_r = (i, partner) if self.item_sides[i] == "left" else (partner, i)
-                self._pack_pair(idx_l, idx_r)
-                return True
-            if left_i is not None and right_i is not None:
-                self._pack_pair(left_i, right_i)
-                return True
-        if left_i is not None:
-            self._pack_item(left_i)
-            return True
-        if right_i is not None:
-            self._pack_item(right_i)
-            return True
-        return False
+        # Prefer the fruit that is farther along (smaller y) if somehow both
+        # ready — should not happen with solo spawn, but be safe.
+        candidates = [i for i in (left_i, right_i) if i is not None]
+        if not candidates:
+            return False
+        if len(candidates) == 2:
+            yl = self._item_y[left_i]
+            yr = self._item_y[right_i]
+            pick = left_i if (yl is not None and (yr is None or yl <= yr)) else right_i
+        else:
+            pick = candidates[0]
+        self._pack_item(pick)
+        return True
 
     # ------------------------------------------------------------- policy
     def play_once(self):
@@ -1921,9 +2239,17 @@ class pack_fruits(Base_Task):
                       flush=True)
 
         self.info["info"] = {
-            "{A}": f"{self.n_apple} apples + {self.n_orange} oranges",
+            "{A}": (
+                f"{self.n_items} apples "
+                f"({self.n_apple} red, {self.n_green} green)"
+                if self.two_colors_enabled
+                else f"{self.n_items} {'red' if self.active_colors[0] == 'apple' else 'green'} apples"
+            ),
             "{B}": f"076_breadbasket/base{self.basket_id}",
-            "{a}": "both arms",
+            "{a}": (
+                "both arms" if self.two_colors_enabled
+                else ("left arm" if self.active_colors[0] == "apple" else "right arm")
+            ),
         }
         return self.info
 
@@ -1937,11 +2263,16 @@ class pack_fruits(Base_Task):
         obs["pack_fruits"] = {
             "n_items": int(self.n_items),
             "n_apple": int(self.n_apple),
-            "n_orange": int(self.n_orange),
+            "n_green": int(self.n_green),
+            "n_orange": int(self.n_green),  # legacy alias
             "n_spawned": int(self._spawned),
             "n_packed": int(sum(1 for p in self._packed if p)),
             "n_missed": int(sum(1 for m in self._missed if m)),
             "n_correct": int(sum(in_ok)),
+            "n_distractor_plan": int(getattr(self, "n_distractor_plan", 0)),
+            "two_colors_enabled": bool(self.two_colors_enabled),
+            "distractor_enabled": bool(self.distractor_enabled),
+            "active_colors": list(self.active_colors),
             "spawn_mode": str(self.spawn_mode),
             "spawn_delay_s": float(self.spawn_delay_s),
             "item_types": list(self.item_types),

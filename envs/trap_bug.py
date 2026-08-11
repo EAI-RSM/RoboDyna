@@ -5,11 +5,12 @@ the table, from robotwin_bench office). A cockroach, spider, or ant emerges
 from under the bookshelf and runs left or right. The robot must place a hollow
 ~50%-transparent glass trap box over the still-moving bug (never paused for the
 place). On success the bug stops under the trap; trap collision stays on.
-The trap is always kinematic (welded while carried, never unlocked).
-Evaluation arms when the gripper opens or the trap leaves the hand; the
-landing pose is frozen as-is (no reseat). The bug only stays out for
-``walk_time`` seconds, then retreats under the shelf (task fails). The bug's
-heading always matches its travel direction.
+The trap is always kinematic (welded while carried, never unlocked; mass
+0.5 kg vs a 4 g bug so a landed trap cannot be shoved). Evaluation arms when
+the gripper opens or the trap leaves the hand; the landing pose is frozen
+as-is (no reseat). The bug only stays out for ``walk_time`` seconds, then
+retreats under the shelf (task fails). The bug's heading always matches its
+travel direction.
 """
 from __future__ import annotations
 
@@ -29,8 +30,16 @@ class trap_bug(Office_base_task):
     BUG_SPEED_MIN = 0.07
     BUG_SPEED_MAX = 0.14
     TRAP_HALF = [0.045, 0.045, 0.028]
-    TRAP_WALL = 0.004
-    TRAP_MASS = 2.5              # heavy vs ~0.5 g bug; still graspable by the arm
+    TRAP_WALL = 0.004                 # visual wall thickness
+    # Collision walls thicker than the glass visual so WSG fingers meet solid
+    # outer faces instead of tunneling into the hollow cavity.
+    TRAP_WALL_COLLISION = 0.012
+    TRAP_MASS = 0.5              # 500 g box; 4 g bug cannot shove it once landed
+    # WSG gap ≈ 2 * |joint|; joint spans ~0.055 m → ~0.11 m fully open.
+    # Outer box width is 2*hx ≈ 0.09 m → hold near gripper_val ≈ 0.78.
+    TRAP_HOLD_GRIPPER = 0.78
+    TRAP_LATCH_GVAL_MAX = 0.90   # latch while closing around the outer walls
+    TRAP_RELEASE_GVAL_MIN = 0.94 # release only when nearly fully open
     # Trap is released this far above its seated height, so the fingers clear
     # the rim instead of scraping the table.
     RELEASE_CLEARANCE = 0.05
@@ -57,21 +66,21 @@ class trap_bug(Office_base_task):
             "label": "cockroach",
             "half_h": 0.003,
             "forward_y": -1.0,
-            "mass": 0.0005,
+            "mass": 0.004,  # 4 g
         },
         "spider": {
             "model": "201_spider",
             "label": "spider",
             "half_h": 0.008,
             "forward_y": -1.0,
-            "mass": 0.0005,
+            "mass": 0.004,  # 4 g
         },
         "ant": {
             "model": "202_ant",
             "label": "ant",
             "half_h": 0.004,
             "forward_y": -1.0,
-            "mass": 0.0004,
+            "mass": 0.004,  # 4 g
         },
     }
     DEFAULT_BUG_TYPES = ("cockroach", "spider", "ant")
@@ -105,6 +114,7 @@ class trap_bug(Office_base_task):
         self._trap_weld_arm = None
         self._trap_rigid = None
         self._trap_anchor_pose = None
+        self._trap_collision_groups_backup = None
         self._bug_captured = False
         self._sim_steps = 0
         # Bias the office shelf to the requested run side (skip centered shelf so
@@ -200,27 +210,31 @@ class trap_bug(Office_base_task):
     def _create_glass_trap(self, pose: sapien.Pose) -> Actor:
         """Hollow open-bottom square box (reverse box) with glass or plain visuals."""
         hx, hy, hz = [float(v) for v in self.trap_half]
-        wt = float(self.trap_wall)
+        wt_vis = float(self.trap_wall)
+        wt_col = float(getattr(self, "trap_wall_collision", self.TRAP_WALL_COLLISION))
+        wt_col = max(wt_col, wt_vis)
         scene = self.scene
         builder = scene.create_actor_builder()
         # Always kinematic: policies cannot call unlock, and the bug must not shove it.
         builder.set_physx_body_type("kinematic")
 
-        top_hz = wt / 2.0
-        side_hz = hz - top_hz
-        side_z = -hz + side_hz
-        parts = [
-            (sapien.Pose([0, 0, hz - top_hz]), [hx, hy, top_hz]),
-            (sapien.Pose([hx - wt / 2, 0, side_z]), [wt / 2, hy, side_hz]),
-            (sapien.Pose([-hx + wt / 2, 0, side_z]), [wt / 2, hy, side_hz]),
-            (sapien.Pose([0, hy - wt / 2, side_z]), [hx - wt, wt / 2, side_hz]),
-            (sapien.Pose([0, -hy + wt / 2, side_z]), [hx - wt, wt / 2, side_hz]),
-        ]
+        def _parts(wt: float):
+            top_hz = wt / 2.0
+            side_hz = hz - top_hz
+            side_z = -hz + side_hz
+            return [
+                (sapien.Pose([0, 0, hz - top_hz]), [hx, hy, top_hz]),
+                (sapien.Pose([hx - wt / 2, 0, side_z]), [wt / 2, hy, side_hz]),
+                (sapien.Pose([-hx + wt / 2, 0, side_z]), [wt / 2, hy, side_hz]),
+                (sapien.Pose([0, hy - wt / 2, side_z]), [hx - wt, wt / 2, side_hz]),
+                (sapien.Pose([0, -hy + wt / 2, side_z]), [hx - wt, wt / 2, side_hz]),
+            ]
+
         # Grippy, dead-bounce glass so the released box lands where it was
         # dropped instead of skating off the bug.
         material = sapien.physx.PhysxMaterial(
             static_friction=1.2, dynamic_friction=1.0, restitution=0.0)
-        for local_pose, half in parts:
+        for local_pose, half in _parts(wt_col):
             builder.add_box_collision(
                 pose=local_pose,
                 half_size=half,
@@ -236,7 +250,7 @@ class trap_bug(Office_base_task):
         else:
             visual = self._make_glass_material()
         render_body = sapien.render.RenderBodyComponent()
-        for local_pose, half in parts:
+        for local_pose, half in _parts(wt_vis):
             shape = sapien.render.RenderShapeBox(half, visual)
             shape.set_local_pose(local_pose)
             render_body.attach(shape)
@@ -247,6 +261,9 @@ class trap_bug(Office_base_task):
             "extents": [hx * 2, hy * 2, hz * 2],
             "scale": [1, 1, 1],
             "target_pose": [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]]],
+            # Top-lid center, four yaw approaches from above. Grasp pinches the
+            # *outer* walls (gripper held near TRAP_HOLD_GRIPPER), not a full close
+            # into the hollow cavity.
             "contact_points_pose": [
                 [[0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, hz], [0, 0, 0, 1]],
                 [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, hz], [0, 0, 0, 1]],
@@ -262,7 +279,7 @@ class trap_bug(Office_base_task):
                     [0.0, 0.0, 0.0, 1.0],
                 ],
             ],
-            "contact_points_description": ["Top lid center, grasp from above."],
+            "contact_points_description": ["Top lid center, pinch outer walls from above."],
             "contact_points_group": [[0, 1, 2, 3]],
             "contact_points_mask": [True],
             "target_point_description": ["Bottom rim of the open trap."],
@@ -327,8 +344,16 @@ class trap_bug(Office_base_task):
         c = self._cfg
         self.trap_half = list(c.get("trap_half", self.TRAP_HALF))
         self.trap_wall = float(c.get("trap_wall", self.TRAP_WALL))
+        self.trap_wall_collision = float(c.get(
+            "trap_wall_collision", self.TRAP_WALL_COLLISION))
         # plain_trap: opaque-ish alpha box (no glass transmission) for interactive viewers.
         self._plain_trap = bool(c.get("plain_trap", False))
+        self.trap_hold_gripper = float(c.get(
+            "trap_hold_gripper", self.TRAP_HOLD_GRIPPER))
+        self.trap_latch_gval_max = float(c.get(
+            "trap_latch_gval_max", self.TRAP_LATCH_GVAL_MAX))
+        self.trap_release_gval_min = float(c.get(
+            "trap_release_gval_min", self.TRAP_RELEASE_GVAL_MIN))
         self.release_clearance = float(
             c.get("release_clearance", self.RELEASE_CLEARANCE))
         self.emerge_steps = int(c.get("emerge_steps", self.EMERGE_STEPS))
@@ -427,6 +452,7 @@ class trap_bug(Office_base_task):
         self._trap_weld_offset = None
         self._trap_weld_arm = None
         self._trap_anchor_pose = None
+        self._trap_collision_groups_backup = None
 
         self.add_prohibit_area(self.trap, padding=0.04)
         try:
@@ -532,6 +558,92 @@ class trap_bug(Office_base_task):
         p = self.get_arm_pose(ArmTag(str(arm)))
         return sapien.Pose(list(p[:3]), list(p[3:7]))
 
+    def _trap_grasp_point(self) -> np.ndarray:
+        """World position of the top-lid center (intended grasp)."""
+        pose = self.trap.get_pose()
+        p = np.asarray(pose.p, dtype=np.float64)
+        R = pose.to_transformation_matrix()[:3, :3]
+        top = R @ np.array([0.0, 0.0, float(self.trap_half[2])], dtype=np.float64)
+        return p + top
+
+    def _arm_tcp_pos(self, side: str):
+        """Gripper-center (TCP) world position; EE as fallback."""
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return None
+        for name in (f"get_{side}_tcp_pose", f"get_{side}_ee_pose"):
+            fn = getattr(robot, name, None)
+            if not callable(fn):
+                continue
+            try:
+                return np.asarray(fn()[:3], dtype=np.float64)
+            except Exception:
+                continue
+        return None
+
+    def _arm_gripper_val(self, side: str) -> float:
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return 1.0
+        fn = (
+            robot.get_left_gripper_val
+            if side == "left"
+            else robot.get_right_gripper_val
+        )
+        try:
+            return float(fn())
+        except Exception:
+            return 1.0
+
+    def _gripper_contacts_trap(self, side: str | None = None) -> bool:
+        """True when a gripper (optionally ``side``) is contacting the trap."""
+        if self.trap is None:
+            return False
+        try:
+            pts = self.get_gripper_actor_contact_position(self.trap.get_name())
+        except Exception:
+            return False
+        if not pts:
+            return False
+        if side is None:
+            return True
+        tcp = self._arm_tcp_pos(side)
+        if tcp is None:
+            return True
+        # Contact points near this arm's TCP count as that gripper.
+        for pt in pts:
+            if float(np.linalg.norm(np.asarray(pt[:3], dtype=np.float64) - tcp)) < 0.12:
+                return True
+        return False
+
+    def _arm_can_latch_trap(self, side: str) -> tuple[bool, float, float]:
+        """Whether ``side`` is closed enough around the trap's outer walls.
+
+        Returns ``(ok, dist_to_top, gripper_val)``. Uses TCP (not EE): the EE
+        frame sits ~12 cm behind the fingers, so EE→center never met the old
+        10 cm weld threshold when the jaws were actually on the lid.
+
+        The hollow box is ~9 cm wide — a correct outer-wall pinch sits near
+        ``TRAP_HOLD_GRIPPER`` (~0.78), not a full close. Requiring gval<0.55
+        forced the fingers through the empty cavity.
+        """
+        gval = self._arm_gripper_val(side)
+        tcp = self._arm_tcp_pos(side)
+        if tcp is None:
+            return False, 1e9, gval
+        top = self._trap_grasp_point()
+        delta = tcp - top
+        dist = float(np.linalg.norm(delta))
+        dxy = float(np.linalg.norm(delta[:2]))
+        dz = float(abs(delta[2]))
+        contacted = self._gripper_contacts_trap(side)
+        # Latch window: fingers over the lid (or PhysX contact) while closing
+        # around the outer walls — not fully open, not forced fully closed.
+        near = contacted or (dxy < 0.07 and dz < 0.09) or dist < 0.10
+        latch_max = float(getattr(self, "trap_latch_gval_max", self.TRAP_LATCH_GVAL_MAX))
+        ok = near and gval < latch_max
+        return ok, dist, gval
+
     def _set_trap_pose(self, pose: sapien.Pose) -> None:
         """Drive the always-kinematic trap to ``pose`` (no dynamic unlock)."""
         if self.trap is None:
@@ -551,37 +663,88 @@ class trap_bug(Office_base_task):
             pass
 
     def _closest_arm_to_trap(self):
+        """Nearest arm by TCP→top distance (legacy helper for weld fallback)."""
         if self.trap is None or getattr(self, "robot", None) is None:
             return None, 1e9, 1.0
-        tp = np.asarray(self.trap.get_pose().p, dtype=np.float64)
         best = (None, 1e9, 1.0)
-        for side, get_ee, get_g in (
-            ("left", self.robot.get_left_ee_pose, self.robot.get_left_gripper_val),
-            ("right", self.robot.get_right_ee_pose, self.robot.get_right_gripper_val),
-        ):
-            try:
-                ee = np.asarray(get_ee()[:3], dtype=np.float64)
-                g = float(get_g())
-            except Exception:
+        for side in ("left", "right"):
+            tcp = self._arm_tcp_pos(side)
+            if tcp is None:
                 continue
-            d = float(np.linalg.norm(ee - tp))
+            d = float(np.linalg.norm(tcp - self._trap_grasp_point()))
+            g = self._arm_gripper_val(side)
             if d < best[1]:
                 best = (side, d, g)
         return best
 
+    def _set_trap_physx_collisions_enabled(self, enabled: bool) -> None:
+        """Enable/disable trap PhysX shapes.
+
+        While welded the hollow box sits in the fingers and on the table; those
+        contacts shove the dynamic arm so teleop feels stuck (often can't move
+        sideways). Bug↔trap interaction stays geometric (both kinematic), so
+        PhysX shapes can stay off while carried/falling and return on land.
+        """
+        if self.trap is None:
+            return
+        rigid = self._trap_rigid or self._get_rigid(self.trap)
+        if rigid is None:
+            return
+        try:
+            shapes = list(rigid.get_collision_shapes())
+        except Exception:
+            return
+        if not shapes:
+            return
+        if not enabled:
+            if self._trap_collision_groups_backup is None:
+                backup = []
+                for shape in shapes:
+                    try:
+                        backup.append(list(shape.get_collision_groups()))
+                    except Exception:
+                        backup.append([1, 1, 0, 0])
+                self._trap_collision_groups_backup = backup
+            for shape in shapes:
+                try:
+                    shape.set_collision_groups([0, 0, 0, 0])
+                except Exception:
+                    pass
+            return
+        backup = self._trap_collision_groups_backup
+        for i, shape in enumerate(shapes):
+            groups = backup[i] if backup and i < len(backup) else [1, 1, 0, 0]
+            try:
+                shape.set_collision_groups(list(groups))
+            except Exception:
+                pass
+        self._trap_collision_groups_backup = None
+
     def weld_trap_to_gripper(self, arm=None) -> bool:
-        """Attach the kinematic trap to an EE (explicit or nearest closed gripper)."""
+        """Attach the kinematic trap to an EE (explicit or nearest latchable)."""
         if self.trap is None or self._trap_anchored or self._trap_falling:
             return False
         if arm is None:
-            side, dist, gval = self._closest_arm_to_trap()
-            if side is None or dist > 0.12 or gval > 0.55:
-                return False
-            arm = side
+            # Prefer an arm that is actually closed and near the lid.
+            for side in ("left", "right"):
+                ok, _, _ = self._arm_can_latch_trap(side)
+                if ok:
+                    arm = side
+                    break
+            if arm is None:
+                side, dist, gval = self._closest_arm_to_trap()
+                latch_max = float(getattr(
+                    self, "trap_latch_gval_max", self.TRAP_LATCH_GVAL_MAX))
+                if side is None or dist > 0.12 or gval > latch_max:
+                    return False
+                arm = side
         arm = ArmTag(str(arm))
         self._trap_weld_arm = arm
         self._trap_weld_offset = self._ee_pose(arm).inv() * self.trap.get_pose()
         self._trap_welded = True
+        # Drop PhysX contacts so the carried box cannot pin the arm against the
+        # table / fingers while teleoping.
+        self._set_trap_physx_collisions_enabled(False)
         self._sync_welded_trap()
         return True
 
@@ -622,6 +785,8 @@ class trap_bug(Office_base_task):
         self._trap_anchored = True
         self._trap_falling = False
         self._trap_released = True
+        # Restore PhysX shapes now that the box is seated (bug resolve is geometric).
+        self._set_trap_physx_collisions_enabled(True)
         # Capture verdict at land time.
         if self.bug is not None and self._bug_rigid is not None:
             rp = np.asarray(self.bug.get_pose().p, dtype=np.float64)
@@ -656,14 +821,29 @@ class trap_bug(Office_base_task):
         if self._trap_welded:
             # Sync first — EE motion between steps would otherwise look like a slip.
             self._sync_welded_trap()
-            side, dist, gval = self._closest_arm_to_trap()
-            # Arm evaluation when the gripper opens, or the trap truly leaves the hand.
-            if gval > 0.60 or dist > 0.16:
+            arm = str(self._trap_weld_arm) if self._trap_weld_arm is not None else None
+            if arm is None:
+                self.release_trap()
+                return
+            # Only the welded arm's gripper controls release (not the other hand).
+            # Outer-wall hold sits near ~0.78; only release when nearly fully open.
+            release_min = float(getattr(
+                self, "trap_release_gval_min", self.TRAP_RELEASE_GVAL_MIN))
+            if self._arm_gripper_val(arm) > release_min:
                 self.release_trap()
             return
-        side, dist, gval = self._closest_arm_to_trap()
-        if side is not None and dist < 0.10 and gval < 0.50:
-            self.weld_trap_to_gripper(side)
+        # Prefer the interactively highlighted arm(s), then the other.
+        sides = ["left", "right"]
+        selected = tuple(getattr(self, "_interactive_selected_arms", ()) or ())
+        if selected:
+            sides = [s for s in selected if s in ("left", "right")]
+            sides += [s for s in ("left", "right") if s not in sides]
+        for side in sides:
+            ok, _, _ = self._arm_can_latch_trap(side)
+            if ok:
+                if self.weld_trap_to_gripper(side):
+                    print(f"[trap_bug] trap latched to {side} gripper")
+                return
 
     def _stop_bug(self):
         """Halt scuttle once trapped — keeps PhysX trap collision intact."""
@@ -927,8 +1107,11 @@ class trap_bug(Office_base_task):
         arm_tag = ArmTag(self.arm_side)
 
         # Trap stays kinematic always — carry via EE weld (no unlock/lock).
+        # Pinch the outer walls (hold width), do not crush through the cavity.
+        hold = float(getattr(self, "trap_hold_gripper", self.TRAP_HOLD_GRIPPER))
         self.move(self.grasp_actor(
-            self.trap, arm_tag=arm_tag, pre_grasp_dis=0.08, contact_point_id=[0, 1, 2, 3]))
+            self.trap, arm_tag=arm_tag, pre_grasp_dis=0.08,
+            gripper_pos=hold, contact_point_id=[0, 1, 2, 3]))
         self.weld_trap_to_gripper(arm_tag)
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.10, move_axis="arm"))
 

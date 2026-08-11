@@ -1280,6 +1280,51 @@ class whack_moles(Base_Task):
                 pass
         self._cubes_ready = True
 
+    def try_latch_staged_mallet(self, arm_tag, max_xy: float = 0.055, max_z: float = 0.07):
+        """Interactive latch: weld the staged mallet if the gripper is on the handle.
+
+        Used by teleop (G close near the cradle). Returns True when already held
+        or when the latch succeeds.
+        """
+        arm = str(arm_tag)
+        if arm in getattr(self, "hammer_cubes", {}):
+            return True
+        staged = getattr(self, "staged_mallets", {}).get(arm)
+        if staged is None:
+            return False
+
+        pose = staged.get_pose()
+        handle_local = np.array([0.0, float(self.MALLET_GRASP_HANDLE_Y), 0.0], dtype=float)
+        handle_p = (
+            np.asarray(pose.p, dtype=float)
+            + pose.to_transformation_matrix()[:3, :3] @ handle_local
+        )
+        mid = self._finger_midpoint_world(arm_tag)
+        if mid is None:
+            mid = np.asarray(self.get_arm_pose(arm_tag), dtype=float)[:3]
+
+        dxy = float(np.linalg.norm(mid[:2] - handle_p[:2]))
+        dz = abs(float(mid[2] - handle_p[2]))
+        contacted = False
+        try:
+            contacted = len(self.get_gripper_actor_contact_position(staged.get_name())) > 0
+        except Exception:
+            contacted = False
+        if not contacted and (dxy > float(max_xy) or dz > float(max_z)):
+            return False
+
+        self._disable_mallet_robot_collision(staged)
+        self._weld_mallet(arm_tag)
+        try:
+            self._paint_inhand_cube()
+        except Exception:
+            pass
+        try:
+            self._hide_wrist_camera_mounts()
+        except Exception:
+            pass
+        return True
+
     def pickup_mallets(self, arm_tags=None):
         """Pick up both staged mallets at once (one scripted move per phase).
 

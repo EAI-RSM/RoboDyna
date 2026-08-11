@@ -1213,6 +1213,8 @@ class make_soup(KitchenS_base_task):
         self._board_weld_offset = self._ee_pose(arm).inv() * self.board.get_pose()
         self._board_weld_arm = arm
         self._board_welded = True
+        # Tip-to-pour is allowed as soon as the board is in hand (no C arming).
+        self._pour_armed = True
         # Keep task helpers (pour / place) on the hand that actually holds the board.
         self.arm = arm
         self.board_arm = arm

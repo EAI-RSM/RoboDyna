@@ -456,7 +456,7 @@
         <h3><code>pour_beer</code> — Pour Beer</h3>
         <div class="badges"><span class="pill env">env / eval only</span><span class="pill hh">household</span> <span class="pill cat">Household</span></div>
       </header>
-      <p class="desc">Draft-tap pour with foam control; overflow fails.</p>
+      <p class="desc">Draft-tap pour with foam control; click finish bell to score; overflow fails.</p>
       <table>
         <thead><tr><th>Metric</th><th>Type</th><th>Meaning</th></tr></thead>
         <tbody><tr><td><code>success / SR</code></td><td>bool / float</td><td>Binary success; aggregated as Success Rate</td></tr><tr><td><code>manipulation_score (MS)</code></td><td>float</td><td>Route completion × penalties (eval_metrics.py)</td></tr><tr><td><code>route_completion (RC)</code></td><td>float</td><td>0–100 route progress</td></tr><tr><td><code>beer_level / foam / overflowed</code></td><td>float/bool</td><td>Pour state from obs</td></tr><tr><td><code>total_time_sim_s / total_steps</code></td><td>float/int</td><td>Shared timing + eval MS/RC</td></tr></tbody>
@@ -540,7 +540,7 @@
         <h3><code>stop_ball</code> — Stop Ball</h3>
         <div class="badges"><span class="pill env">env / eval only</span><span class="pill hh">household</span> <span class="pill cat">Household</span></div>
       </header>
-      <p class="desc">Block a TT ball falling from a shelf before the table edge.</p>
+      <p class="desc">Grasp a TT ball falling from a shelf before the table edge.</p>
       <table>
         <thead><tr><th>Metric</th><th>Type</th><th>Meaning</th></tr></thead>
         <tbody><tr><td><code>success / SR</code></td><td>bool / float</td><td>Binary success; aggregated as Success Rate</td></tr><tr><td><code>manipulation_score (MS)</code></td><td>float</td><td>Route completion × penalties (eval_metrics.py)</td></tr><tr><td><code>route_completion (RC)</code></td><td>float</td><td>0–100 route progress</td></tr><tr><td><code>total_time_sim_s / total_steps</code></td><td>float/int</td><td>Shared timing + eval MS/RC</td></tr></tbody>

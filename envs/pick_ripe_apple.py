@@ -23,13 +23,14 @@ class pick_ripe_apple(Base_Task):
     Metric: ripeness_score = clamp(1 - |r_grasp - red_window| / 0.5, 0, 1), latched at detach of
     the good apple; episode succeeds only if the good apple was picked inside the ripeness
     window (|r_grasp - red_window| <= red_tolerance), it ends up in the basket, and the
-    spoiled apple (if any) does not.
+    spoiled apple (if any) does not. Dropping the picked good apple on the table (missed
+    basket) is a failure and ends the episode.
 
     ========================================================================
     FROZEN SETUP STRATEGY — DO NOT CHANGE (user-locked)
     ========================================================================
     Tree:     tree_x=0, tree_y≈0.05 (toward back wall); tall trunk; staggered
-              high/low branches; visual foliage only; thin trunk collision.
+              high/low branches; visual foliage only; trunk+branch collision.
     Stem:     black thin stem under the fruit branch; same hang_x as the apple.
     Apple:    APPLE_HANG_Q = identity [1,0,0,0] (visual +Z top into the stem);
               APPLE_DROP_BELOW_BRANCH so ~½ black stem shows; Y offset so mesh
@@ -37,7 +38,8 @@ class pick_ripe_apple(Base_Task):
     Hang X:   outer bound = branch tip; sample Uniform(0, APPLE_X_JITTER=2cm)
               inward toward trunk/bark for BOTH stem and apple together:
                 hang_x = tip - apple_side * U(0, jitter)
-    Basket:   076_breadbasket in front; BASKET_Q = pack_fruits upright then +90° Z.
+    Basket:   076_breadbasket in front; BASKET_Q = packing upright then +90° Z;
+              sample model_id ∈ {0..4}; keep original asset appearance.
     Do NOT revisit Rx±90° hang quats, tip-only X, or dual boards/bowls.
     ========================================================================
     FROZEN CONTROL / GRASPING — DO NOT CHANGE (user-locked)
@@ -57,11 +59,12 @@ class pick_ripe_apple(Base_Task):
     """
 
     # ---- task params (class defaults; override via task_args.pick_ripe_apple) ----
-    RIPEN_STEPS_DEFAULT = 2500
-    RED_WINDOW_MIN_DEFAULT = 0.48
-    RED_WINDOW_MAX_DEFAULT = 0.52
+    RIPEN_STEPS_DEFAULT = 3600        # +20% vs 3000 → another 20% slower ripen
+    # Mean target ripeness ~0.8; ±0.02 band.
+    RED_WINDOW_MIN_DEFAULT = 0.78
+    RED_WINDOW_MAX_DEFAULT = 0.82
     RED_TOLERANCE_DEFAULT = 0.12
-    GRASP_LEAD_STEPS = 700            # lead so r_grasp lands near red (~0.5) after grasp motion
+    GRASP_LEAD_STEPS = 1008           # scaled with ripen_steps (was 840 @ 3000)
     # Table y spans ~[-0.35, +0.35]; the back wall is at y=1. Default tree sits near the back edge.
     TREE_X_DEFAULT = 0.0
     TREE_Y_DEFAULT = 0.05             # toward back wall (wall at y=1; table ~±0.35)
@@ -79,6 +82,8 @@ class pick_ripe_apple(Base_Task):
     DROP_ALIGN_MAX_STEPS = 1000
     APPLE_HANG_DX_DEFAULT = 0.18      # |x| of hanging apple at branch tip (outer bound)
     APPLE_SCALE_DEFAULT = 0.78
+    # ~real medium apple; mesh@density=1000 is ~0.21 kg — keep mass near that range.
+    APPLE_MASS = 0.30
     # Branch heights (m above table). One side is high, the other low (randomized).
     BRANCH_Z_HIGH = 0.25              # was 0.15; +10 cm
     BRANCH_Z_LOW = 0.20               # was 0.10; +10 cm
@@ -97,15 +102,17 @@ class pick_ripe_apple(Base_Task):
     APPLE_HANG_Q = [1.0, 0.0, 0.0, 0.0]
     # Packing upright [0.5,0.5,0.5,0.5] then +90° about world Z.
     BASKET_Q = [0.0, 0.0, 0.70710678, 0.70710678]
+    BASKET_MODEL = "076_breadbasket"
+    BASKET_IDS = [0, 1, 2, 3, 4]
     COLOR_STOPS = [
         (0.0, [0.20, 0.62, 0.18]),     # unripe: green
-        (0.5, [0.92, 0.10, 0.08]),     # ripe: vivid red
+        (0.8, [0.92, 0.10, 0.08]),     # ripe: vivid red (aligned with red_window mean)
         (1.0, [0.05, 0.04, 0.03]),     # overripe: near-black
     ]
     # Spoiled / distractor apple — never enters a red pick window as "good".
     SPOILED_COLOR_STOPS = [
         (0.0, [0.20, 0.62, 0.18]),     # unripe: green
-        (0.5, [0.92, 0.78, 0.08]),     # yellowing
+        (0.8, [0.92, 0.78, 0.08]),     # yellowing
         (1.0, [0.05, 0.04, 0.03]),     # rotten: near-black
     ]
     TRUNK_COLOR = [0.45, 0.28, 0.12]
@@ -129,12 +136,37 @@ class pick_ripe_apple(Base_Task):
             return 1.0
         return float(np.random.choice([-1.0, 1.0]))
 
+    def _apply_apple_mass_properties(self, rigid, mass=None):
+        """Set mass *and* matching inertia/COM.
+
+        ``Actor`` / ``set_mass`` alone leave the default ~10 g inertia tensor, so a
+        "heavy" apple still spins and skates like a light one. Match play_billiard /
+        save_goal: solid-sphere I = 2/5 m R^2 about the collision hull centre.
+        """
+        if rigid is None:
+            return
+        m = float(self.APPLE_MASS if mass is None else mass)
+        try:
+            shapes = list(rigid.get_collision_shapes())
+            verts = np.asarray(shapes[0].get_vertices(), dtype=np.float64)
+            center = 0.5 * (verts.min(axis=0) + verts.max(axis=0))
+            rms_r = float(np.sqrt(np.mean(np.sum((verts - center) ** 2, axis=1))))
+            inertia = 0.4 * m * (rms_r ** 2)
+            rigid.set_mass(m)
+            rigid.set_cmass_local_pose(sapien.Pose(center.tolist()))
+            rigid.set_inertia([inertia, inertia, inertia])
+        except Exception:
+            try:
+                rigid.set_mass(m)
+            except Exception:
+                pass
+
     def _configure_hanging_apple(self, apple):
         """Apply frozen hang physics: kinematic, no gravity, high jaw friction."""
-        apple.set_mass(0.05)
         rigid = next(
             (c for c in apple.actor.get_components()
              if isinstance(c, sapien.physx.PhysxRigidDynamicComponent)), None)
+        self._apply_apple_mass_properties(rigid)
         if rigid is not None:
             try:
                 rigid.set_disable_gravity(True)
@@ -285,16 +317,17 @@ class pick_ripe_apple(Base_Task):
             self._spoiled_rigid = None
             self._spoiled_shapes = []
 
-        # ---- basket (same asset as pack_fruits) in front of the tree ----
-        # Start at center; Opt 2 oscillates between branch-tip X bounds.
-        self.basket_id = int(np.random.choice([0, 1, 2, 3, 4]))
+        # ---- receptacle: 076_breadbasket, random visual id ----
+        # Start at center; Opt 2 oscillates between branch-tip X bounds via set_pose
+        # when static, or kinematic target when dynamic.
+        self.basket_id = int(np.random.choice(self.BASKET_IDS))
         self.basket = create_actor(
             self,
             pose=sapien.Pose(
                 [self.basket_x, self.basket_y, z0],
                 list(self.BASKET_Q),
             ),
-            modelname="076_breadbasket",
+            modelname=self.BASKET_MODEL,
             model_id=self.basket_id,
             convex=True,
             is_static=not self.basket_move_enabled,
@@ -309,6 +342,8 @@ class pick_ripe_apple(Base_Task):
                 self._basket_rigid.set_disable_gravity(True)
             except Exception:
                 pass
+        self.basket_color = None
+        self.basket_texture = None
         self.basket_base_z = float(self.basket.get_pose().p[2])
         bcfg = getattr(self.basket, "config", None) or {}
         extents = bcfg.get("extents", [0.0, 0.7, 0.0])
@@ -339,8 +374,9 @@ class pick_ripe_apple(Base_Task):
                     hang_dx, apple_drop, hang_x_locals):
         """Simple concept-sketch tree: tall trunk, top-only canopy, two staggered branches.
 
-        Foliage / branches / stems are visual-only so they don't block curobo approach.
-        A thin trunk collision keeps the tree physically grounded.
+        Trunk and branches have collision matching their visuals so the gripper
+        cannot pass through the tree body. Canopy foliage and stems stay
+        visual-only (do not block the front grasp approach).
         ``hang_x_locals`` maps side (−1 left / +1 right) → tree-local hang X for each stem.
         """
         builder = self.scene.create_actor_builder()
@@ -350,11 +386,11 @@ class pick_ripe_apple(Base_Task):
         leaf_mat = sapien.render.RenderMaterial(base_color=[*self.LEAF_COLOR, 1.0])
         stem_mat = sapien.render.RenderMaterial(base_color=[*self.STEM_COLOR, 1.0])
 
-        # ---- tall thin trunk ----
+        # ---- tall thin trunk (collision matches visual radius) ----
         trunk_r = 0.014
         trunk_pose = sapien.Pose([0, 0, trunk_h / 2], self.VERTICAL_CYL_Q)
         builder.add_cylinder_collision(
-            pose=trunk_pose, radius=trunk_r * 0.7, half_length=trunk_h / 2, material=phys)
+            pose=trunk_pose, radius=trunk_r, half_length=trunk_h / 2, material=phys)
         builder.add_cylinder_visual(
             pose=trunk_pose, radius=trunk_r, half_length=trunk_h / 2, material=trunk_mat)
 
@@ -366,6 +402,8 @@ class pick_ripe_apple(Base_Task):
         branch_z = {-1.0: float(branch_z_left), +1.0: float(branch_z_right)}
         for sign, bz in branch_z.items():
             bp = sapien.Pose([sign * branch_len / 2, 0.0, bz], [1, 0, 0, 0])
+            builder.add_box_collision(
+                pose=bp, half_size=branch_half, material=phys)
             builder.add_box_visual(pose=bp, half_size=branch_half, material=branch_mat)
 
         # ---- stem under EACH apple (frozen hang: same X as that side's apple) ----
@@ -400,6 +438,12 @@ class pick_ripe_apple(Base_Task):
 
         builder.set_initial_pose(pose)
         entity = builder.build_static(name="apple_tree")
+        # Match create_box groups so robot/gripper PhysX contacts the trunk & branches.
+        for comp in entity.get_components():
+            if not isinstance(comp, sapien.physx.PhysxRigidBaseComponent):
+                continue
+            for shape in comp.get_collision_shapes():
+                shape.set_collision_groups([1, 1, 0, 0])
         data = {
             "center": [0, 0, 0],
             "extents": [2 * branch_len, 0.12, trunk_h + 0.10],
@@ -462,9 +506,14 @@ class pick_ripe_apple(Base_Task):
             body.set_disable_gravity(not bool(gravity))
             body.set_linear_velocity(np.zeros(3))
             body.set_angular_velocity(np.zeros(3))
-            # Light damping: stable enough in a pinch, still drops promptly.
-            body.set_linear_damping(0.8)
-            body.set_angular_damping(4.0)
+            # Light damping so mass/inertia dominate (heavy viscous damping made all
+            # masses feel identical — terminal speed ≈ F/c).
+            if gravity:
+                body.set_linear_damping(0.6)
+                body.set_angular_damping(2.5)
+            else:
+                body.set_linear_damping(0.4)
+                body.set_angular_damping(1.5)
         except Exception:
             pass
 
@@ -497,6 +546,25 @@ class pick_ripe_apple(Base_Task):
         try:
             body.set_kinematic(False)
             body.set_disable_gravity(False)
+            # Mild settle damping; restitution=0 + proper inertia do the real work.
+            body.set_linear_damping(0.8)
+            body.set_angular_damping(3.0)
+        except Exception:
+            pass
+
+    def _dampen_apple_for_basket_drop(self, rigid=None):
+        """Zero restitution + mild damping at release so the apple seats in the basket."""
+        body = self._apple_rigid if rigid is None else rigid
+        if body is None:
+            return
+        try:
+            body.set_linear_damping(1.0)
+            body.set_angular_damping(4.0)
+            for s in body.get_collision_shapes():
+                m = s.get_physical_material()
+                m.set_restitution(0.0)
+                m.set_static_friction(6.0)
+                m.set_dynamic_friction(6.0)
         except Exception:
             pass
 
@@ -530,7 +598,7 @@ class pick_ripe_apple(Base_Task):
         new_pose = sapien.Pose(
             [next_x, float(self.basket_y), float(pose.p[2])], list(pose.q))
         try:
-            # Prefer kinematic_target so contacts can ride; set_pose keeps visual sync.
+            # Basket is static+nonconvex (hollow); Opt 2 teleports via set_pose.
             if self._basket_rigid is not None:
                 self._basket_rigid.set_kinematic_target(new_pose)
             self.basket.actor.set_pose(new_pose)
@@ -816,7 +884,7 @@ class pick_ripe_apple(Base_Task):
                       f"apple={np.array(self.apple.get_pose().p)}", flush=True)
             self.info["info"] = {
                 "{A}": "220_apple_plain/base0",
-                "{B}": f"076_breadbasket/base{self.basket_id}",
+                "{B}": f"{self.BASKET_MODEL}/base{self.basket_id}",
                 "{a}": str(arm),
             }
             return self.info
@@ -861,6 +929,7 @@ class pick_ripe_apple(Base_Task):
                   f"basket_x={float(self.basket.get_pose().p[0]):+.3f} "
                   f"(basket keeps moving through drop)", flush=True)
         # Open while basket is still oscillating — natural gravity drop / settle.
+        self._dampen_apple_for_basket_drop()
         self.move(self.open_gripper(arm))
         for j in range(int(self.DROP_SETTLE_STEPS)):
             self._update_kinematic_tasks()
@@ -872,7 +941,7 @@ class pick_ripe_apple(Base_Task):
 
         self.info["info"] = {
             "{A}": "220_apple_plain/base0",
-            "{B}": f"076_breadbasket/base{self.basket_id}",
+            "{B}": f"{self.BASKET_MODEL}/base{self.basket_id}",
             "{a}": str(arm),
         }
         return self.info
@@ -899,6 +968,42 @@ class pick_ripe_apple(Base_Task):
         settled = float(ap[2]) < (self.basket_top_z + 0.06)
         return bool(xy_close and settled and not_floor)
 
+    def _apple_held_by_gripper(self, apple) -> bool:
+        """True while either gripper still contacts ``apple``."""
+        if apple is None:
+            return False
+        try:
+            return len(self.get_gripper_actor_contact_position(apple.get_name())) > 0
+        except Exception:
+            return False
+
+    def _good_apple_dropped_on_table(self) -> bool:
+        """Picked good apple released and settled on the table (missed the basket).
+
+        Used to terminate interactive / eval episodes as FAILURE once the fruit
+        is no longer held and rests outside the basket near table height.
+        """
+        if self.r_grasp is None or getattr(self, "_apple_attached", True):
+            return False
+        if getattr(self, "apple", None) is None:
+            return False
+        if self._apple_held_by_gripper(self.apple):
+            return False
+        ap = np.array(self.apple.get_pose().p, dtype=np.float64)
+        bp = np.array(self.basket.get_pose().p, dtype=np.float64)
+        basket_xy = np.array([bp[0], bp[1]], dtype=np.float64)
+        if self._pose_in_basket(ap, basket_xy):
+            return False
+        table_z = float(getattr(self, "_z0", 0.74 + float(self.table_z_bias)))
+        # Near tabletop (resting) — not still mid-air above the basket lip.
+        z = float(ap[2])
+        if z > float(self.basket_top_z) + 0.04:
+            return False
+        if z < table_z - 0.08:
+            # Fell off the table entirely — still a miss.
+            return True
+        return bool(z <= table_z + 0.10)
+
     def check_success(self):
         # Success = good apple picked inside the ripeness window AND in the basket
         # AND spoiled (if any) not in basket.
@@ -909,6 +1014,7 @@ class pick_ripe_apple(Base_Task):
         ap = np.array(self.apple.get_pose().p)
         good_in = bool(self._pose_in_basket(ap, basket_xy) and (self.r_grasp is not None))
         ripeness_ok = self._grasp_in_red_window()
+        on_table = bool(self._good_apple_dropped_on_table())
 
         spoiled = getattr(self, "spoiled_apple", None)
         spoiled_in = False
@@ -918,7 +1024,9 @@ class pick_ripe_apple(Base_Task):
 
         success = bool(good_in and ripeness_ok and not spoiled_in)
         if not success:
-            if good_in and not ripeness_ok:
+            if on_table:
+                self._last_fail_reason = "good apple dropped on table (missed basket)"
+            elif good_in and not ripeness_ok:
                 self._last_fail_reason = (
                     f"picked outside ripeness window (r_grasp="
                     f"{-1.0 if self.r_grasp is None else float(self.r_grasp):.3f}, "
@@ -935,6 +1043,7 @@ class pick_ripe_apple(Base_Task):
         self.info["r_grasp"] = float(self.r_grasp) if self.r_grasp is not None else -1.0
         self.info["final_score"] = ripe if success else 0.0
         self.info["in_basket"] = bool(good_in)
+        self.info["on_table"] = bool(on_table)
         self.info["ripeness_ok"] = bool(ripeness_ok)
         self.info["red_window"] = float(self.red_window)
         self.info["red_tolerance"] = float(
@@ -945,6 +1054,10 @@ class pick_ripe_apple(Base_Task):
         self.info["spoiled_side"] = float(getattr(self, "spoiled_side", 0.0))
         self.info["basket_speed"] = float(getattr(self, "basket_speed", 0.0))
         self.info["basket_move_enabled"] = bool(getattr(self, "basket_move_enabled", False))
+        self.info["basket_id"] = int(getattr(self, "basket_id", self.BASKET_IDS[0]))
+        self.info["basket_model"] = str(getattr(self, "BASKET_MODEL", "076_breadbasket"))
+        self.info["basket_color"] = list(getattr(self, "basket_color", []) or [])
+        self.info["basket_texture"] = getattr(self, "basket_texture", None)
         self.info["two_apples_enabled"] = bool(getattr(self, "two_apples_enabled", False))
         self.info["spoiled_apple_enabled"] = bool(getattr(self, "spoiled_apple_enabled", False))
         self.info["n_apples"] = int(len(getattr(self, "apples", {}) or {}))
@@ -971,6 +1084,10 @@ class pick_ripe_apple(Base_Task):
             "basket_speed": float(getattr(self, "basket_speed", 0.0)),
             "basket_move_enabled": bool(getattr(self, "basket_move_enabled", False)),
             "basket_dir": float(getattr(self, "_basket_move_dir", 0.0)),
+            "basket_id": int(getattr(self, "basket_id", self.BASKET_IDS[0])),
+            "basket_model": str(getattr(self, "BASKET_MODEL", "076_breadbasket")),
+            "basket_color": list(getattr(self, "basket_color", []) or []),
+            "basket_texture": getattr(self, "basket_texture", None),
             "two_apples_enabled": bool(getattr(self, "two_apples_enabled", False)),
             "n_apples": int(len(getattr(self, "apples", {}) or {})),
         }

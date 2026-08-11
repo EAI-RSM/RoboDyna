@@ -15,11 +15,12 @@ class catch_cup(Office_base_task):
 
     Scene: deep wall shelf with a 2× plant and several 021_cup instances. One
     cup is chosen at random to tip, roll, and drop; the rest are dynamic décor
-    that gets knocked aside rather than passed through. From episode start the
-    robot walks its closed gripper into one face of the pillow and shoves it
-    across the table under the predicted landing — the pillow is an ordinary
-    dynamic body, so it only moves while the hand is on it. Hitting the bare
-    table is a failure.
+    that gets knocked aside rather than passed through. Tabletop under the
+    pillow slide is kept clear — kettle / tissue / alarm live on the opposite
+    half of the lower shelf only. From episode start the robot walks its closed
+    gripper into one face of the pillow and shoves it across the table under the
+    predicted landing — the pillow is an ordinary dynamic body, so it only moves
+    while the hand is on it. Hitting the bare table is a failure.
     """
 
     CUP_MODEL = "021_cup"
@@ -157,6 +158,7 @@ class catch_cup(Office_base_task):
         self._occ_shelf = []
         self._occ_shelf_lower = []
         self._occ_table = []
+        self._pillow_corridor = {}
         super().setup_demo(**kwags)
         self._configure_observer_camera()
         # After check_stable (which keeps the cushion kinematic so it cannot
@@ -499,6 +501,44 @@ class catch_cup(Office_base_task):
             cx - hx - pad, cy - hy - pad, cx + hx + pad, cy + hy + pad,
         ))
 
+    def _reserve_pillow_catch_corridor(self, roll_x):
+        """Keep lower-shelf décor off the active-side pillow slide + drop corridor.
+
+        The cushion lives on the bare table (no table props). Lower-shelf items on
+        the same half — especially near the lip — sit in that path visually and can
+        overhang the landing XY, so they are confined to the opposite half, back.
+        """
+        active_right = float(roll_x) >= 0.0
+        # Match the pillow/drop side clamps used later in load_actors.
+        side_min = 0.08 if active_right else -0.38
+        side_max = 0.38 if active_right else -0.08
+        cx = 0.5 * (side_min + side_max)
+        hx = 0.5 * (side_max - side_min) + 0.04
+
+        y0, y1 = self.shelf_plate_ylim
+        # Front strip of the lower shelf on the catch half (props overhang the lip).
+        front_depth = 0.14
+        cy_front = float(y0) + 0.5 * front_depth
+        self._reserve(
+            self._occ_shelf_lower, cx, cy_front, hx, 0.5 * front_depth, pad=0.02,
+        )
+        # Also block the whole active half so fallbacks cannot land there.
+        cy_half = float(0.5 * (y0 + y1))
+        hy_half = 0.5 * (float(y1) - float(y0))
+        self._reserve(
+            self._occ_shelf_lower, cx, cy_half, hx, hy_half, pad=0.01,
+        )
+        self._pillow_corridor = {
+            "active_right": bool(active_right),
+            "side_min": float(side_min),
+            "side_max": float(side_max),
+            # Opposite half for lower-shelf décor (back of shelf).
+            "decor_x_lo": -0.45 if active_right else 0.06,
+            "decor_x_hi": -0.06 if active_right else 0.45,
+            "decor_y_lo": float(y0) + 0.10,
+            "decor_y_hi": float(y1) - 0.04,
+        }
+
     @staticmethod
     def _prop_height(modelname, model_id, scale_mult=1.0):
         """World-frame height of a prop under ``PROP_UPRIGHT_Q`` (y extent → z)."""
@@ -550,12 +590,12 @@ class catch_cup(Office_base_task):
 
     def _spawn_prop(
         self, modelname, model_id, xy, surface_z, hx, hy,
-        scale_mult=1.0, surface="table", face_robot=False,
+        scale_mult=1.0, surface="table", face_robot=False, is_static=False,
     ):
-        """Dynamic convex-collider prop seated on ``surface_z``.
+        """Convex-collider prop seated on ``surface_z``.
 
-        Décor is fully simulated: a knock from the rolling cup or the pillow
-        shoves it instead of passing through it.
+        Dynamic décor (default) moves when knocked. Pass ``is_static=True`` for
+        lower-shelf clutter that must not drift into the pillow corridor.
         """
         cx, cy = float(xy[0]), float(xy[1])
         if surface == "shelf":
@@ -579,22 +619,24 @@ class catch_cup(Office_base_task):
         try:
             actor = create_actor(
                 self, pose=pose, modelname=modelname, model_id=int(model_id),
-                convex=True, is_static=False, scale_mult=float(scale_mult),
+                convex=True, is_static=bool(is_static),
+                scale_mult=float(scale_mult),
             )
         except Exception:
             actor = None
         if actor is None:
             return None
-        rigid = self._get_rigid(actor)
-        if rigid is not None:
-            try:
-                rigid.set_mass(float(self.PROP_MASSES.get(modelname, 0.25)))
-                rigid.set_linear_damping(float(self.PROP_LIN_DAMP))
-                rigid.set_angular_damping(float(self.PROP_ANG_DAMP))
-                for shape in rigid.get_collision_shapes():
-                    shape.set_collision_groups([1, 1, 0, 0])
-            except Exception:
-                pass
+        if not is_static:
+            rigid = self._get_rigid(actor)
+            if rigid is not None:
+                try:
+                    rigid.set_mass(float(self.PROP_MASSES.get(modelname, 0.25)))
+                    rigid.set_linear_damping(float(self.PROP_LIN_DAMP))
+                    rigid.set_angular_damping(float(self.PROP_ANG_DAMP))
+                    for shape in rigid.get_collision_shapes():
+                        shape.set_collision_groups([1, 1, 0, 0])
+                except Exception:
+                    pass
         self._seat_on_surface(actor, surface_z)
         self._reserve(occ, cx, cy, hx, hy)
         self.decor.append(actor)
@@ -773,8 +815,10 @@ class catch_cup(Office_base_task):
         self._occ_shelf_lower = []
         self._occ_table = []
         self._rolling_slot = None
+        self._pillow_corridor = {}
 
-        # Plant + randomized cup row on upper shelf; décor on lower shelf.
+        # Plant + randomized cup row on upper shelf; décor on lower shelf
+        # (opposite half only — pillow catch corridor stays clear).
         self._load_decorations(cup_ids)
         assert self._rolling_slot is not None, "need a rolling cup slot"
 
@@ -959,7 +1003,11 @@ class catch_cup(Office_base_task):
         return [(float(x), y) for x in xs]
 
     def _load_decorations(self, cup_ids):
-        """Upper shelf: plant + cup row (one random cup rolls). Lower shelf: décor."""
+        """Upper shelf: plant + cup row (one random cup rolls). Lower shelf: décor.
+
+        Décor never sits on the table or on the active-side lower-shelf front —
+        that corridor is reserved for the pillow slide and cup landing.
+        """
         z_shelf = self.shelf_z_surf
         z_lower = float(getattr(self, "shelf_lower_surf", z_shelf - 0.18))
         y0, y1 = self.shelf_plate_ylim
@@ -969,7 +1017,7 @@ class catch_cup(Office_base_task):
             "120_plant", 0,
             [-0.48, y_shelf + 0.02], z_shelf,
             hx=0.12, hy=0.12, scale_mult=self.plant_scale, surface="shelf",
-            face_robot=True,
+            face_robot=True, is_static=True,
         )
 
         n_cups = int(getattr(self, "N_SHELF_CUPS", 4))
@@ -986,6 +1034,9 @@ class catch_cup(Office_base_task):
             float(slots[roll_i][1]),
             int(cup_ids_pick[roll_i]),
         )
+        # Clear the active-side pillow path before placing any lower décor.
+        self._reserve_pillow_catch_corridor(self._rolling_slot[0])
+        corridor = getattr(self, "_pillow_corridor", {})
 
         for i, (mid, (mx, my)) in enumerate(zip(cup_ids_pick, slots)):
             if i == roll_i:
@@ -1000,38 +1051,50 @@ class catch_cup(Office_base_task):
             if actor is not None:
                 self.shelf_cups.append(actor)
 
-        # Former table props → lower shelf, randomized, facing the robot.
+        # Former table props → lower shelf on the *inactive* half only, toward
+        # the back, so they cannot sit in the pillow / landing corridor.
         lower_specs = [
             ("091_kettle", self.KETTLE_IDS, 0.11, 0.11, self.KETTLE_SCALE),
             ("023_tissue-box", self.TISSUE_IDS, 0.07, 0.055, self.TISSUE_SCALE),
             ("046_alarm-clock", self.ALARM_IDS, 0.09, 0.07, self.ALARM_SCALE),
         ]
+        x_lo = float(corridor.get("decor_x_lo", -0.45))
+        x_hi = float(corridor.get("decor_x_hi", 0.45))
+        y_lo = float(corridor.get("decor_y_lo", y0 + 0.10))
+        y_hi = float(corridor.get("decor_y_hi", y1 - 0.04))
+        # Stable opposite-side fallbacks (back of shelf).
+        if bool(corridor.get("active_right", True)):
+            fallbacks = {
+                "091_kettle": (-0.38, y_shelf + 0.04),
+                "023_tissue-box": (-0.22, y_shelf + 0.02),
+                "046_alarm-clock": (-0.08, y_shelf + 0.02),
+            }
+        else:
+            fallbacks = {
+                "091_kettle": (0.38, y_shelf + 0.04),
+                "023_tissue-box": (0.22, y_shelf + 0.02),
+                "046_alarm-clock": (0.08, y_shelf + 0.02),
+            }
         for model, id_pool, hx, hy, scale in lower_specs:
             placed = False
             for _ in range(60):
-                x = float(np.random.uniform(-0.45, 0.45))
-                y = float(np.random.uniform(y0 + 0.04, y1 - 0.04))
+                x = float(np.random.uniform(x_lo, x_hi))
+                y = float(np.random.uniform(y_lo, y_hi))
                 actor = self._spawn_prop(
                     model, int(np.random.choice(id_pool)),
                     [x, y], z_lower,
                     hx=hx, hy=hy, scale_mult=scale,
-                    surface="shelf_lower", face_robot=True,
+                    surface="shelf_lower", face_robot=True, is_static=True,
                 )
                 if actor is not None:
                     placed = True
                     break
             if not placed:
-                # Fallback anchors along the lower shelf.
-                fallback = {
-                    "091_kettle": (-0.35, y_shelf),
-                    "023_tissue-box": (0.0, y_shelf),
-                    "046_alarm-clock": (0.32, y_shelf),
-                }[model]
                 self._spawn_prop(
                     model, int(np.random.choice(id_pool)),
-                    list(fallback), z_lower,
+                    list(fallbacks[model]), z_lower,
                     hx=hx, hy=hy, scale_mult=scale,
-                    surface="shelf_lower", face_robot=True,
+                    surface="shelf_lower", face_robot=True, is_static=True,
                 )
 
     # ----------------------------------------------------------- kinematics

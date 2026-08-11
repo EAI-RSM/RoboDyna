@@ -166,7 +166,7 @@ task_args:
   stop_ball:
     # Full-width shelf; 1.6× 027_table-tennis rolls off from episode start
     # (reactive) on a randomized heading — may exit front or a side edge.
-    # Matching left/right arm blocks the ball (no grasp).
+    # Matching left/right arm grasps the ball (pack_fruits-style attach).
     # Clock/screen/speaker face robot. Desk-sized trophy; screen 1.05×.
     # Angle / ball pose / shelf décor already randomized; only speed jitters.
     ball_ids: [0, 1]
@@ -177,20 +177,21 @@ task_args:
     roll_speed_jitter_frac: 0.30
     fall_speed_xy: 0.07         # m/s; retained horizontal speed during shelf→table fall
     shelf_roll_duration: 1.00   # s; ball rolls to shelf lip from episode start
-    table_edge_y: -0.30         # m; front edge (past this without stop = fail)
+    table_edge_y: -0.30         # m; front edge (past this without grasp = fail)
     table_x_edge: 0.52          # m; |x| past this = fallen off a side
     roll_angle_max: 0.70        # rad; heading spread from −Y (side exits possible)
-    intercept_frac: 0.55        # fraction along table-roll for the block
+    intercept_frac: 0.55        # fraction along table-roll for the grasp
     catch_shelf_clearance: 0.12 # m; min gap between hand and shelf front lip
     upright_hold: 0.0           # unused; ball releases at play_once start
-    handoff_distance: 0.12      # m; scripted roll ends here, PhysX takes over
-    live_linear_damping: 0.12   # bleeds off the post-contact roll (no bouncing)
+    handoff_distance: 0.10      # m; scripted roll ends here, PhysX takes over
+    live_linear_damping: 0.12   # bleeds off a missed roll
     live_angular_damping: 0.3
     live_friction: 0.006        # convex-hull ball slides; low mu emulates rolling
-    live_restitution: 0.12      # slight liveliness, no rattling off the gripper
-    settle_speed: 0.025         # m/s; below this the ball counts as at rest
-    settle_hold_steps: 12       # consecutive slow steps required to call it settled
-    max_live_steps: 420         # sim-step budget for the contact + roll-out
+    live_restitution: 0.12
+    attach_dist: 0.045          # m; TCP-to-ball centre for attach/weld
+    grasp_tol: 0.06             # m; interactive closed-gripper latch radius
+    post_grasp_lift: 0.08       # m; expert lifts after a successful grasp
+    max_live_steps: 520         # sim-step budget for chase + grasp / miss roll-out
     arm_side: random            # random | left | right
   catch_cup:
     # Two-tier deep shelf: cups+plant on upper; kettle/tissue/alarm on lower
@@ -272,7 +273,8 @@ task_args:
     key_x_left: -0.26           # m; left (green) bowl-key x
     key_x_right: 0.26           # m; right (blue) bowl-key x
     key_y: -0.13                # m; both keys’ y
-    layout_pad_from_key: 0.15   # m; shelves+belt stay in [key_left−pad, key_right+pad], centered at x=0
+    layout_pad_from_key: 0.20   # m; shelves+belt in [key_left−pad, key_right+pad] (+5 cm/side vs 0.15)
+    max_stack_span: 0.65        # m; soft cap on shelf-centre span (fits the wider pad window)
   catch_valley_ball_v1:
     # Options (independent toggles):
     #   Default — red ball goes straight to the exit edge
@@ -606,9 +608,8 @@ task_args:
     #     mirrored: null + random_mirror → 50/50; mirrored true/false forces side
     players_enabled: false      # Option 1: spawn field players; ball bounces off one toward goal
     players_max: 2              # Option 1: number of static field players
-    player_model: 223_soccer_player  # Option 1: CC0 soccer player mesh (width = keeper)
-    player_half_xy: 0.018       # Option 1: m; footprint half-extent (= ball_radius / keeper half)
-    player_half_z: 0.0435       # Option 1: m; player half-height from mesh
+    player_thin_scale: 0.70     # Option 1: XY scale vs keeper (0.70 = 30% thinner); blue jersey
+    # player_half_xy / player_half_z: optional overrides (default = ball_radius*thin / keeper_half_z)
     player_corridor_margin: 0.04 # Option 1: m; keep players clear of ball start
     player_y_spread: 0.20       # Option 1: m; ±y band about goal_center_y for player spawn
     player_separation: 0.15     # Option 1: m; min clear gap (edge-to-edge) between players
@@ -617,12 +618,13 @@ task_args:
     cover_enabled: false        # Option 2: mid-field tunnel/cover; ball enters then exits before red line
     cover_entry_gap: 0.10       # Option 2: m; min open gap on the ball-drop side
     cover_exit_gap_frac: 0.10   # Option 2: fraction of (start→red_line) left open before red line
-    cover_half_y: 0.12          # Option 2: m; half-width of cover cavity
+    # cover_half_y: omit to match red-line half-width (goal_half_w + red_line_y_extra)
     cover_clearance_z: 0.12     # Option 2: m; clear height under roof
     cover_wall_t: 0.008         # Option 2: m; side wall thickness
     cover_roof_t: 0.006         # Option 2: m; roof thickness
     cover_len_min: 0.10         # Option 2: m; min cover length (x); max = full spannable mid region
     cover_player_clearance: 0.02 # Option 1+2: m; cover ends this far before nearest player
+    red_line_y_extra: 0.10      # m; red line (and default tunnel) half-width = goal_half_w + this
     net_enabled: true           # Soccer-style visual net bag behind the goal mouth
     net_depth: 0.09             # m; net depth behind the posts
     net_cell: 0.028             # m; approximate mesh cell size
@@ -646,6 +648,7 @@ task_args:
     keeper_x: 0.16              # m; |target keeper x| in green zone
     keeper_goal_clearance: 0.05 # m; keep keeper clear of goal frame
     keeper_pose_tol: 0.03       # m; place accuracy tol for expert/check
+    keeper_mass: 0.5            # kg; heavy enough to plant upright, light enough to grasp
   hit_target:
     # Options (independent toggles):
     #   Opt 1 — static blocker  →  blocker_enabled   (green disc, fixed at x=0)
@@ -764,39 +767,40 @@ task_args:
     bowl_scale_mult: 0.65       # uniform bowl asset scale
     bowl_catch_radius: 0.032    # m; XY catch tolerance around bowl center
   pack_fruits:
-    # Options (independent toggles; Opt 1+2 can both be on):
-    #   Opt 1 — random single-or-pair waves  →  spawn_mode: random
-    #           (+ pair_stagger_enabled, single_wave_any_belt)
-    #   Opt 2 — black distractor fruit       →  distractor_enabled
-    n_per_color: 3              # number of each colored fruit (apples + oranges)
-    # n_apple: 3                # optional per-color override (falls back to n_per_color)
-    # n_orange: 3
-    spawn_mode: random          # Opt 1: random (single|pair per wave) | parallel | single
-    spawn_delay_s: 2.0          # unused (compat); spawn is gated on drop / belt-exit
+    # Options (independent; Opt 1+2 combines both):
+    #   Opt 1 — two_colors_enabled: red + green apples, both baskets
+    #   Opt 2 — distractor_enabled: ≥1 black distractor (never packed)
+    # Default / either opt: one colored apple at a time; apples on either belt.
+    two_colors_enabled: false   # Opt 1: red + green with both baskets
+    distractor_enabled: false   # Opt 2: black distractor fruit on the belts
+    distractor_extra_prob: 0.3  # Opt 2: chance of a second black apple
+    distractor_prob: 0.3        # legacy alias for distractor_extra_prob
+    distractor_color: [0.05, 0.05, 0.05]
+    distractor_min_gap_mult: 2.0
+    n_items_min: 3              # single-color episode: U{min..max} apples
+    n_items_max: 5
+    n_per_color_min: 2          # two-color: each color independently U{min..max}
+    n_per_color_max: 3
+    # n_items: 4                # optional fixed single-color count
+    # n_apple: 2                # optional fixed per-color counts (two-color)
+    # n_green: 3
+    # n_per_color: 3            # legacy: same fixed count for both colors
+    spawn_delay_s: 2.0          # unused (compat); spawn is gated on pack / belt-exit
     belt_gap: 0.10              # m; gap between the two belts, centered at x=0
     belt_speed: 0.0008          # m per belt tick nominal; both belts use this
     belt_speed_jitter: 0.20     # fraction; each ep/side ~ U((1-j)*nom, (1+j)*nom)
-    # belt_speed_left: 0.0008   # optional per-belt override (falls back to belt_speed)
-    # belt_speed_right: 0.0012
     advance_every: 3            # physics steps between belt ticks
     spawn_gap: 0.16             # m; min spacing between successive spawns
-    randomize_spawn_gap: true   # ±spawn_gap_jitter
-    spawn_gap_jitter: 0.20      # ±20%
-    pick_y: 0.24                # m; start arm approach; fruit keeps rolling
-    pick_y_end: -0.16           # m; past this, too late; fruit loops to far end
-    pick_station_y: 0.02        # m; hover/grab line; fruit rolls through without pausing
-    fruit_scale: 0.80           # larger fruit → easier grasp
-    basket_y: 0.0               # m; table midline (toward belts)
-    basket_x: 0.34              # m; nudged out so the bigger basket clears the belts
-    basket_scale: 1.15          # bigger opening — easier drop-in target
-    pick_lift: 0.10             # m; raise gripper +Z after grasp, then slide over basket and release
-    pair_stagger_enabled: true  # Opt 1: pair Y gap ~ U(0, fruit_diameter) each wave
-    # pair_stagger_y: null      # optional max gap (m); default = fruit diameter
-    single_wave_any_belt: true  # Opt 1: single fruit may appear on either belt
-    distractor_enabled: false   # Opt 2: black distractor fruit on the belts
-    distractor_prob: 0.4        # Opt 2: chance per real spawn-wave that a distractor also spawns
-    distractor_color: [0.05, 0.05, 0.05]  # Opt 2: black
-    distractor_min_gap_mult: 2.0  # Opt 2: min Y gap vs same-belt real fruit, × fruit diameter
+    randomize_spawn_gap: true
+    spawn_gap_jitter: 0.20
+    pick_y: 0.24
+    pick_y_end: -0.16
+    pick_station_y: 0.02
+    fruit_scale: 0.80
+    basket_y: 0.0
+    basket_x: 0.34
+    basket_scale: 1.15
+    pick_lift: 0.10
   pick_cup_behind_fan:
     fan_omega_deg: 2.0          # deg per physics step (then ×U(0.8,1.3) per ep)
     gap_frac: 0.40              # fraction of each 120° period that is a safe blade gap
@@ -807,8 +811,8 @@ task_args:
     # Opt 1 — two_apples_enabled / spoiled_apple_enabled: second yellow→black apple (do not pick)
     # Opt 2 — basket_move_enabled: basket oscillates between branch-tip X bounds
     ripen_steps: 2500           # sim steps for ripeness 0→1 while apple hangs on the tree
-    red_window_min: 0.48        # per-ep red target band low (like cook_meat doneness)
-    red_window_max: 0.52        # high; ~0.5 = vivid red
+    red_window_min: 0.78        # per-ep red target band low (mean ~0.8)
+    red_window_max: 0.82        # high; ~0.8 = vivid red
     red_tolerance: 0.12         # success: |r_grasp - red_window| must be ≤ this
     tree_x: 0.0                 # m; tree at table centerline
     tree_y: 0.05                # m; toward back wall (wall is at y=1; table ~±0.35)
@@ -940,8 +944,8 @@ task_args:
     #   Default — alternating red/green  →  color_mode: alternating
     #   Opt 1 — random red/green         →  color_mode: random   (--option 1)
     #   Opt 2 — rotten apple + dump bin  →  rotten_prob: 0.3     (--option 2)
-    #     With P=rotten_prob, one random apple is brown; both buttons open the
-    #     two-piece wooden plank so it rides into the garbage bin at lowest y.
+    #     Always one brown apple; with P=rotten_prob a second is also brown.
+    #     Both buttons open the two-piece plank into the garbage bin at lowest y.
     color_mode: alternating
     rotten_prob: 0.0
   toast_bread:
@@ -1057,7 +1061,7 @@ task_args:
     range_center_xy: [0.0, 0.14]
     board_y: -0.02
     plate_y: -0.12
-    cook_steps: 1538            # ~30% faster than prior 2000
+    cook_steps: 3076            # 2× prior 1538 (50% slower / mean cook time ×2)
     cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
     # Top-down knob shutoff is a longer reach than the old front knobs.
     shutoff_lead: 0.22
@@ -1084,7 +1088,7 @@ task_args:
     range_center_xy: [0.0, 0.14]
     board_y: -0.02
     plate_y: -0.12
-    cook_steps: 1538
+    cook_steps: 3076
     cook_speed_jitter: 0.20
     shutoff_lead: 0.22
     cook_intensity: 0.70
@@ -1102,8 +1106,9 @@ task_args:
     timer_x: -0.36              # top-left of table (x−, y+)
     timer_y: 0.28
   pour_beer:
-    # KitchenS: pull the hinged beer-tap lever by hand; flow follows opening.
-    # Foam % of stream rises with continuous open time (resets on close). Pause to settle; overflow fails.
+    # KitchenS: hold the fancy tap push-button to pour; release to stop.
+    # Foam % of stream rises with continuous hold time (resets on release). Pause to settle; overflow fails.
+    # When pouring is done, click 050_bell (left/right of tap) to signal finish — scored on that press.
     # Mug glass materials match measure_ingredient jar (transmission / hollow viewer shell).
     # Layout: tap L/R + Y in [baseline−10cm, baseline]; mug under nozzle; bar props AABB-clear.
     scene_id: 0
@@ -1116,17 +1121,18 @@ task_args:
     station_x_range_left: [-0.16, -0.06]
     station_x_range_right: [0.06, 0.16]
     station_x_range: [0.06, 0.16]
+    bell_side: random           # left | right | random of the tap
+    bell_dx: 0.20               # m; lateral clearance from tap center
     pour_rate: 0.000715
-    randomize_rates: true       # ±jitter on pour_rate + foam_gain (other foam params stay fixed)
-    pour_rate_jitter: 0.20      # ±20%
+    randomize_rates: true       # ±jitter on pour_rate + foam_gain (fill speed varies by run)
+    pour_rate_jitter: 0.30      # ±30% fill-speed randomization
     foam_gain_jitter: 0.20      # ±20%
-    # Stream foam % ramps start→peak over foam_ramp_steps of continuous open; resets on close.
-    foam_gain_start: 0.18
-    foam_gain: 0.85
-    foam_ramp_steps: 70
+    # Stream foam % ramps start→peak over foam_ramp_steps of continuous hold; resets on release.
+    foam_gain_start: 0.12
+    foam_gain: 0.55
+    foam_ramp_steps: 90
     foam_decay: 0.0045
-    tap_settle_sec: 1.0  # tap must stay closed this long before success
-    open_gap_timeout_sec: 5.0  # closed >this since last opening → end & score
+    tap_settle_sec: 1.0  # button must stay released this long before fill quality can pass
     expert_foam_pause: 0.16
     expert_foam_resume: 0.09
     target_liquid: 0.85

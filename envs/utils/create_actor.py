@@ -488,20 +488,27 @@ def create_sphere(
     rigid_component.attach(
         sapien.physx.PhysxCollisionShapeSphere(radius=radius, material=scene.default_physical_material))
 
-    # Add texture
+    # Add texture (classic soccer panel map under assets/textures/<id>.png).
     if texture_id is not None:
-
-        # test for both .png and .jpg
         texturepath = f"./assets/textures/{texture_id}.png"
-        # create texture from file
-        texture2d = sapien.render.RenderTexture2D(texturepath)
-        material = sapien.render.RenderMaterial()
-        material.set_base_color_texture(texture2d)
-        # renderer.create_texture_from_file(texturepath)
-        # material.set_diffuse_texture(texturepath)
-        material.base_color = [1, 1, 1, 1]
-        material.metallic = 0.1
-        material.roughness = 0.3
+        if not os.path.isfile(texturepath):
+            # Also accept repo-absolute resolution when cwd is not the root.
+            alt = os.path.join(
+                os.path.dirname(__file__), "..", "..", "assets", "textures", f"{texture_id}.png"
+            )
+            if os.path.isfile(alt):
+                texturepath = alt
+        if os.path.isfile(texturepath):
+            texture2d = sapien.render.RenderTexture2D(texturepath)
+            material = sapien.render.RenderMaterial()
+            material.set_base_color_texture(texture2d)
+            material.base_color = [1, 1, 1, 1]
+            material.metallic = 0.05
+            material.roughness = 0.55
+        else:
+            material = sapien.render.RenderMaterial(
+                base_color=[*(color[:3] if color is not None else (0.95, 0.95, 0.95)), 1]
+            )
     else:
         material = sapien.render.RenderMaterial(base_color=[*color[:3], 1])
 

@@ -4,8 +4,8 @@
 Conditions:
   default   — color_mode=alternating, rotten_prob=0
   opt1      — color_mode=random,      rotten_prob=0
-  opt2      — color_mode=alternating, rotten_prob=1.0 (always one rotten → dump)
-  opt1+2    — color_mode=random,      rotten_prob=1.0
+  opt2      — color_mode=alternating, rotten_prob=0.3 (always ≥1 rotten; P for a 2nd)
+  opt1+2    — color_mode=random,      rotten_prob=0.3
 
 Success (must match envs/sort_apples_belt.check_success):
   - every red apple in the red basket
@@ -41,8 +41,8 @@ TASK = "sort_apples_belt"
 CONFIG = "demo_dynamic"
 FINAL_DIR = os.path.join("final_task_demos", TASK)
 
-# Opt2 suite uses rotten_prob=1.0 so every episode has a dump target (option meaning).
-# Demos use the same so the garbage-bin behavior is visible.
+# Opt2: rotten_prob>0 always yields ≥1 rotten; P=rotten_prob may add a second.
+# Demos use the suite so the garbage-bin behavior is visible.
 # n_apples 4–5: expert is reliable at this length; 7–10 still flaky mid-stream.
 _SHARED = {"n_apples_min": 4, "n_apples_max": 5}
 CONDITIONS = [
@@ -61,14 +61,14 @@ CONDITIONS = [
     {
         "key": "opt2",
         "tag": "opt2",
-        "label": "Opt 2 — always one rotten (dump)",
-        "args": {"color_mode": "alternating", "rotten_prob": 1.0, **_SHARED},
+        "label": "Opt 2 — always ≥1 rotten (dump)",
+        "args": {"color_mode": "alternating", "rotten_prob": 0.3, **_SHARED},
     },
     {
         "key": "opt1+2",
         "tag": "opt1+2",
-        "label": "Opt 1+2 — random colors + always rotten",
-        "args": {"color_mode": "random", "rotten_prob": 1.0, **_SHARED},
+        "label": "Opt 1+2 — random colors + always ≥1 rotten",
+        "args": {"color_mode": "random", "rotten_prob": 0.3, **_SHARED},
     },
 ]
 
@@ -278,8 +278,8 @@ def write_conditions_txt() -> None:
         "",
         "default  : color_mode=alternating, rotten_prob=0",
         "opt1     : color_mode=random,      rotten_prob=0",
-        "opt2     : color_mode=alternating, rotten_prob=1.0 (always one rotten)",
-        "opt1+2   : color_mode=random,      rotten_prob=1.0",
+        "opt2     : color_mode=alternating, rotten_prob=0.3 (always ≥1; P for 2nd)",
+        "opt1+2   : color_mode=random,      rotten_prob=0.3",
         "",
         "Suite/demo apple count: n_apples in [4, 5] (expert-stable length).",
         "Eval seeds: 100–104 (fixed).",

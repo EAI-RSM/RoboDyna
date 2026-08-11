@@ -371,6 +371,7 @@ def format_episode_condition(env, task: str | None = None) -> str:
     elif task == "pour_beer":
         tgt = 100.0 * float(getattr(env, "target_liquid", 0.90))
         parts.append(f"need beer>{tgt:.0f}%")
+        parts.append("then click finish bell")
 
     elif task in ("cook_food", "cook_food_timer"):
         food = str(getattr(env, "food_type", "") or "")
@@ -638,8 +639,9 @@ def toggle_selected_grippers(env, *, fallback=("left", "right"), threshold: floa
 class ViewerViewToggle:
     """V cycles head_camera ↔ gripper/wrist views (no top-down).
 
-    G (edge) opens/closes the selected gripper(s) via ``toggle_selected_grippers``.
-    Camera switching is V-only.
+    Head view matches GUI ``scene_snapshot`` / training ``head_camera`` RGB
+    (pose + fovy). Space (edge) opens/closes the selected gripper(s) via
+    ``toggle_selected_grippers``. Camera switching is V-only.
 
     sapien's ``focus_camera`` follow-path is disabled in this build
     (``_handle_focused_camera`` commented out), so we copy the active camera
@@ -650,8 +652,12 @@ class ViewerViewToggle:
     DEFAULT_TOPDOWN_XYZ = (_TOPDOWN_VIEW_X_OFFSET, 0.0, 1.68)
     DEFAULT_TOPDOWN_RPY = (0.0, -np.pi / 2.0, -np.pi / 2.0)
     DEFAULT_TOPDOWN_FOVY = float(np.deg2rad(65.0))
-    # Fallback only: when available, the selected head camera's own fovy is used.
-    DEFAULT_HEAD_FOVY = float(np.pi / 2.0)
+    # Fallback only: shared D435 head fovy when render camera fovy is missing.
+    try:
+        from envs.utils.household_view import HEAD_CAMERA_FOVY as _HEAD_FOVY
+    except Exception:  # pragma: no cover - import during partial bootstraps
+        _HEAD_FOVY = float(np.deg2rad(37.0))
+    DEFAULT_HEAD_FOVY = float(_HEAD_FOVY)
     # D435-ish wrist fallback when collect_wrist_camera is off.
     DEFAULT_GRIPPER_FOVY = float(np.deg2rad(42.0))
     _GRIPPER_MODES = ("right_gripper", "left_gripper")
@@ -676,7 +682,7 @@ class ViewerViewToggle:
         self.viewer = viewer
         self.env = env
         self._prev_v = False
-        self._prev_g = False
+        self._prev_space = False
         self._head = head_camera
         self.robot_controls = robot_controls
         self._warned_missing_gripper = False
@@ -745,9 +751,53 @@ class ViewerViewToggle:
         except Exception:
             pass
         self.viewer.set_camera_pose(pose)
+        # Mirror ControlWindow._sync_fps_camera_controller so mouse/WASD (when
+        # re-enabled) start from the same orientation we just applied. Prefer
+        # setXYZ/setRPY over the no-op FPSCameraController.pose setter.
         cw = self._control_window()
-        if cw is not None and hasattr(cw, "_sync_fps_camera_controller"):
-            cw._sync_fps_camera_controller()
+        if cw is None:
+            return
+        fps = getattr(cw, "fps_camera_controller", None)
+        if fps is None:
+            return
+        try:
+            from transforms3d.euler import quat2euler
+
+            fps.setXYZ(*np.asarray(pose.p, dtype=np.float64))
+            r, p, y = quat2euler(np.asarray(pose.q, dtype=np.float64))
+            fps.setRPY(r, -p, -y)
+        except Exception:
+            if hasattr(cw, "_sync_fps_camera_controller"):
+                try:
+                    cw._sync_fps_camera_controller()
+                except Exception:
+                    pass
+
+    def _head_render_pose(self):
+        """Pose of the sapien head render camera (matches GUI snapshot RGB)."""
+        head = self._head
+        if head is None:
+            return None
+        try:
+            return head.global_pose
+        except Exception:
+            pass
+        try:
+            return head.entity.get_pose()
+        except Exception:
+            return None
+
+    def _apply_head_view(self, announce: bool = False):
+        """Lock free-fly viewer to head_camera pose + fovy (GUI snapshot view)."""
+        pose = self._head_render_pose()
+        if pose is None:
+            if announce:
+                print("View: head_camera unavailable.")
+            return
+        self._set_fovy(self._head_fovy())
+        self._set_viewer_pose(pose)
+        if announce:
+            print("View: head_camera")
 
     def _view_cycle_modes(self) -> list[str]:
         """V targets: head_camera then each active gripper/wrist view."""
@@ -846,10 +896,7 @@ class ViewerViewToggle:
             self.mode = modes[0]
             if self.mode != "head":
                 return self.apply(announce=announce)
-        self._set_fovy(self._head_fovy())
-        self._set_viewer_pose(self._head.global_pose)
-        if announce:
-            print("View: head_camera")
+        self._apply_head_view(announce=announce)
 
     def _edge_key(self, window, key: str, prev_attr: str) -> bool:
         down = bool(window.key_down(key))
@@ -865,8 +912,8 @@ class ViewerViewToggle:
     def _v_pressed(self, window) -> bool:
         return self._edge_key(window, "v", "_prev_v")
 
-    def _g_pressed(self, window) -> bool:
-        return self._edge_key(window, "g", "_prev_g")
+    def _space_pressed(self, window) -> bool:
+        return self._edge_key(window, "space", "_prev_space")
 
     def _cycle_view(self):
         """Cycle head_camera ↔ active gripper/wrist view(s)."""
@@ -891,23 +938,63 @@ class ViewerViewToggle:
             self.robot_controls.update(window)
         elif self.env is not None:
             # Restore red failure tint when UniversalRobotControls is absent
-            # (keyboard mode still uses Space / G action paths).
+            # (keyboard mode still uses Space gripper / task action paths).
             gripper_failure_feedback(self.env).update()
-        # G opens/closes selected gripper(s).
-        if self.env is not None and self._g_pressed(window):
+        # Space opens/closes selected gripper(s).
+        if self.env is not None and self._space_pressed(window):
             toggle_selected_grippers(self.env)
         if self._v_pressed(window):
             self._cycle_view()
             return
         # Keep head / gripper views locked to the moving cameras.
+        # Head also re-applies fovy so the free-fly frustum stays matched to
+        # head_camera RGB (GUI snapshots / training view).
         if self.mode == "head" and self._head is not None:
-            self._set_viewer_pose(self._head.global_pose)
+            self._apply_head_view(announce=False)
         else:
             side = self._gripper_side()
             if side is not None:
                 pose = self._wrist_pose(side)
                 if pose is not None:
+                    self._set_fovy(self._gripper_fovy(side))
                     self._set_viewer_pose(self._gripper_viewer_pose(pose))
+
+
+def declutter_interactive_viewer(viewer) -> None:
+    """Show only the 3D scene: hide ImGui panels and camera frustum lines.
+
+    Keeps ControlWindow camera/input logic; suppresses its (and every other
+    plugin's) black side windows. Safe to call more than once.
+    """
+    if viewer is None:
+        return
+    for plugin in getattr(viewer, "plugins", []) or []:
+        # Drop ImGui windows while leaving before/after_render hooks intact.
+        try:
+            plugin.get_ui_windows = lambda: []
+        except Exception:
+            pass
+        try:
+            if hasattr(plugin, "show_camera_linesets"):
+                plugin.show_camera_linesets = False
+        except Exception:
+            pass
+        try:
+            if hasattr(plugin, "show_joint_axes"):
+                plugin.show_joint_axes = False
+        except Exception:
+            pass
+        try:
+            if hasattr(plugin, "show_origin_frame"):
+                plugin.show_origin_frame = False
+        except Exception:
+            pass
+        # Contact overlay only (other plugins may reuse ``enabled``).
+        try:
+            if type(plugin).__name__ == "ContactWindow" and hasattr(plugin, "enabled"):
+                plugin.enabled = False
+        except Exception:
+            pass
 
 
 def make_viewer_view_toggle(
@@ -920,13 +1007,23 @@ def make_viewer_view_toggle(
 ) -> ViewerViewToggle:
     """Build V (head ↔ gripper) view switching for an interactive env.
 
-    Always starts on ``head_camera`` when available. Legacy ``topdown_*`` /
-    ``capture_current_as_topdown`` kwargs are accepted but ignored.
+    Always starts on the shared suite ``head_camera`` framing (same pose/FOV as
+    GUI ``scene_snapshot`` cards) for both base and household tasks. Legacy
+    ``topdown_*`` / ``capture_current_as_topdown`` kwargs are accepted but ignored.
     """
     if viewer is None:
         viewer = getattr(env, "viewer", None)
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+    declutter_interactive_viewer(viewer)
+    # Mark + force shared head pose so base interactives match household / GUI.
+    try:
+        env._interactive_session = True
+        from envs.utils.household_view import configure_standard_head_camera
+
+        configure_standard_head_camera(env)
+    except Exception:
+        pass
     robot_controls = None
     robot_mode = bool(getattr(env, "_interactive_robot_mode", False))
     control_from_argv = None
@@ -1034,10 +1131,13 @@ class UniversalRobotControls:
     unseeded and returns elbow/wrist flips that are unusable for teleop.
 
     Z / X tip the gripper about world +Y (left / right) for pour-style motions.
+    R / T yaw about world +Z (counter-clockwise / clockwise) continuously via IK.
     O returns the selected arm(s) to the pose captured when teleop started
-    (task ``original`` / start pose). G opens/closes the selected gripper.
-    is handled by ``ViewerViewToggle`` so it also works when teleop is not
-    attached.
+    (task ``original`` / start pose). Space opens/closes the selected gripper
+    via ``ViewerViewToggle`` so it also works when teleop is not attached.
+
+    No arm is highlighted at start — press 1 / 2 / 3 to activate left / right /
+    both (until then both grippers stay gray and teleop / Space do nothing).
     """
 
     # Interactive teleop rates (m/s). 20% slower than the prior snappy sandbox
@@ -1046,6 +1146,8 @@ class UniversalRobotControls:
     Z_SPEED = 0.224
     # World-Y tip rate for Z/X (rad/s) — enough to dump a board without feeling twitchy.
     ROLL_SPEED = 1.28
+    # World-Z yaw rate for R/T (rad/s).
+    YAW_SPEED = 0.64
     MAX_DT = 0.05
     # How far the commanded pose may run ahead of the achieved pose, so a
     # blocked or joint-limited arm cannot accumulate an unrecoverable lead.
@@ -1061,15 +1163,17 @@ class UniversalRobotControls:
 
     def __init__(self, env):
         self.env = env
-        initial = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
-        self.selected = initial or ("left",)
+        # No arm is active until the user presses 1 / 2 / 3 for the first time
+        # (both grippers stay gray). Task pre-seeds of ``_interactive_selected_arms``
+        # are ignored for highlight / teleop until that explicit selection.
+        self.selected = ()
         self._previous = {key: False for key in ("1", "2", "3", "o")}
         self._last_update = None
         self._command = {}
         self._highlight_materials = {}
         self._origin_joints = {}
         self._origin_pose = {}
-        env._interactive_selected_arms = self.selected
+        env._interactive_selected_arms = ()
         env._interactive_universal_controls = True
         env._interactive_robot_controls = self
         # Ensure the shared failure feedback exists for Space/action paths.
@@ -1314,7 +1418,8 @@ class UniversalRobotControls:
             + float(self.FINGER_TABLE_CLEARANCE)
         )
         floor_fn = getattr(self.env, "interactive_ee_z_floor", None)
-        # Task floors only raise the band floor (never lower the ceiling here).
+        # Raise-only here; press-key tasks replace the band in ``_drive`` the
+        # same way ``_reactive_buttons.min_ee_z_over_key`` does.
         if callable(floor_fn):
             override = floor_fn(side, pose)
             if override is not None:
@@ -1328,7 +1433,7 @@ class UniversalRobotControls:
             z_min = z_max
         return z_min, z_max
 
-    def _drive(self, side, step, dt, roll: float = 0.0):
+    def _drive(self, side, step, dt, roll: float = 0.0, yaw: float = 0.0):
         """Advance this arm's commanded pose and track it with seeded IK."""
         from transforms3d.quaternions import axangle2quat, qmult
 
@@ -1352,24 +1457,48 @@ class UniversalRobotControls:
         pose = state["pose"].copy()
         prev_z = float(pose[2])
         pose[:3] += step
+        freeze_wrist = False
+        freeze_fn = getattr(self.env, "interactive_freeze_wrist_orientation", None)
+        if callable(freeze_fn):
+            try:
+                freeze_wrist = bool(freeze_fn(side))
+            except Exception:
+                freeze_wrist = False
         # World-Y tip (Z/X): rotate the commanded gripper orientation in place.
-        if abs(float(roll)) > 1e-9:
+        if (not freeze_wrist) and abs(float(roll)) > 1e-9:
             dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
+        # World-Z yaw (R/T): table-plane spin, premultiply for fixed-axis turn.
+        if (not freeze_wrist) and abs(float(yaw)) > 1e-9:
+            dq = axangle2quat([0.0, 0.0, 1.0], float(yaw))
+            pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
+        if freeze_wrist:
+            # Keep the orientation from when the grasp engaged so the wrist
+            # stays rigid while the free tap hinge absorbs the pull.
+            pose[3:7] = np.asarray(state["pose"][3:7], dtype=np.float64)
         # Absolute world-frame Q/E band (not relative to current EE height).
         z_min, z_max = self._global_ee_z_band(side, pose)
-        # Over a cook / reactive key: replace the table+finger floor with the
-        # trigger-depth EE floor so Q can finish the press after fingers contact
-        # the keycap, without continuing down to full key travel.
+        # Over a cook / reactive / dispenser key: *replace* the table+finger
+        # floor with the key press-depth EE floor so Q can finish the press
+        # after fingers contact the keycap, then stop (no dive past full force).
+        key_floor = None
         bank = getattr(self.env, "_reactive_buttons", None)
         if bank is not None:
-            key_floor = None
             if hasattr(bank, "min_ee_z_over_key"):
                 key_floor = bank.min_ee_z_over_key(pose[:2])
             elif hasattr(bank, "min_ee_z_over_pressed"):
                 key_floor = bank.min_ee_z_over_pressed(pose[:2])
-            if key_floor is not None:
-                z_min = float(key_floor)
+        if key_floor is None:
+            floor_fn = getattr(self.env, "interactive_ee_z_floor", None)
+            if callable(floor_fn):
+                try:
+                    override = floor_fn(side, pose)
+                    if override is not None:
+                        key_floor = float(override)
+                except Exception:
+                    key_floor = None
+        if key_floor is not None:
+            z_min = float(key_floor)
         # Billiard / tool-on-surface: if the held cue is already on the felt,
         # reject further -Z on that arm so it stops with the stick.
         if float(step[2]) < -1e-9:
@@ -1439,7 +1568,9 @@ class UniversalRobotControls:
         z_dir = float(window.key_down("e")) - float(window.key_down("q"))
         # Z tip left / X tip right about world +Y (pour axis for board tasks).
         roll_dir = float(window.key_down("x")) - float(window.key_down("z"))
-        if not (x_dir or y_dir or z_dir or roll_dir):
+        # R counter-clockwise / T clockwise about world +Z (table-plane yaw).
+        yaw_dir = float(window.key_down("r")) - float(window.key_down("t"))
+        if not (x_dir or y_dir or z_dir or roll_dir or yaw_dir):
             self._stop()
             return
         if dt <= 0.0:
@@ -1450,8 +1581,21 @@ class UniversalRobotControls:
             z_dir * self.Z_SPEED * dt,
         ], dtype=np.float64)
         roll = float(roll_dir) * self.ROLL_SPEED * dt
+        yaw = float(yaw_dir) * self.YAW_SPEED * dt
+        scale_fn = getattr(self.env, "interactive_teleop_z_speed_scale", None)
         for side in self.selected:
-            self._drive(side, step, dt, roll=roll)
+            local_step = step
+            if callable(scale_fn) and abs(float(step[2])) > 1e-12:
+                try:
+                    state = self._command.get(side)
+                    pose = state["pose"] if state is not None else self._ee_pose(side)
+                    scale = scale_fn(side, pose, float(step[2]))
+                    if scale is not None:
+                        local_step = step.copy()
+                        local_step[2] *= float(np.clip(scale, 0.0, 1.0))
+                except Exception:
+                    local_step = step
+            self._drive(side, local_step, dt, roll=roll, yaw=yaw)
 
 
 # Keep stepping/rendering this long after a terminal SUCCESS/FAILURE so the
@@ -1469,17 +1613,32 @@ class RealtimePhysicsPacer:
     that makes motion ~4× slower on 60 Hz than on 240 Hz. This pacer accumulates
     wall time and returns how many fixed ``dt`` physics steps to run before the
     next render (typically ~1 at 240 Hz, ~4 at 60 Hz for dt=1/250).
+
+    Blocking planner moves (``env.move`` / ``take_dense_action``) should set
+    ``env._interactive_pacer_resync = True`` when they finish so the next frame
+    does not treat the blocked wall time as catch-up debt.
     """
 
     def __init__(self, env, max_substeps: int = REALTIME_MAX_SUBSTEPS):
+        self.env = env
         self.dt = float(env.scene.get_timestep())
         self.max_substeps = max(1, int(max_substeps))
+        self._accum = 0.0
+        self._prev = time.perf_counter()
+
+    def resync(self) -> None:
+        """Drop accumulated wall time after a blocking planner/dwell section."""
         self._accum = 0.0
         self._prev = time.perf_counter()
 
     def begin_frame(self) -> int:
         """Advance the wall-clock accumulator; return physics steps for this frame."""
         now = time.perf_counter()
+        if getattr(self.env, "_interactive_pacer_resync", False):
+            self.env._interactive_pacer_resync = False
+            self._accum = 0.0
+            self._prev = now
+            return 0
         self._accum += now - self._prev
         self._prev = now
         # Drop excess after a long pause / hitch (accept temporary slow-mo).
@@ -1622,51 +1781,81 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
 
 def _line_documents_key(lines: list[str], key: str) -> bool:
     """True when a control banner line already documents ``key`` as a binding."""
-    key = key.strip().upper()
+    key_u = key.strip().upper()
     for ln in lines:
         s = ln.strip()
-        if s.startswith(f"{key} ") or s.startswith(f"{key}:") or s.startswith(f"{key}\t"):
+        s_u = s.upper()
+        if (
+            s_u.startswith(f"{key_u} ")
+            or s_u.startswith(f"{key_u}:")
+            or s_u.startswith(f"{key_u}\t")
+            or s_u.startswith(f"{key_u} —")
+            or s_u.startswith(f"{key_u} -")
+        ):
             return True
-        if f"{key}                 " in ln or f"{key}: " in ln:
+        if f"{key_u}                 " in ln.upper() or f"{key_u}: " in ln.upper():
             return True
-        # Compact banners: "V: camera | G: open/close | Escape"
-        if f"{key}:" in s or f"| {key}:" in s or f"|{key}:" in s:
+        # Compact banners: "V: camera | Space: open/close | Escape"
+        if f"{key_u}:" in s_u or f"| {key_u}:" in s_u or f"|{key_u}:" in s_u:
             return True
     return False
+
+
+_GRIPPER_TOGGLE_HELP = "Space             open / close selected gripper(s)"
+
+
+def _is_gripper_toggle_help_line(line: str) -> bool:
+    """True for F/G/Space lines that document open/close gripper."""
+    s = line.strip()
+    if not (
+        s.startswith("F ")
+        or s.startswith("F:")
+        or s.startswith("F\t")
+        or s.startswith("G ")
+        or s.startswith("G:")
+        or s.startswith("G\t")
+        or s.startswith("G —")
+        or s.startswith("Space ")
+        or s.startswith("Space:")
+        or s.startswith("Space\t")
+        or s.startswith("Space —")
+    ):
+        return False
+    low = line.lower()
+    return "gripper" in low and ("open" in low or "close" in low or "grasp" in low)
 
 
 def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str) -> None:
     """Print only the help block for the selected ``--control`` mode."""
     body = (robot if mode == "robot" else keyboard).strip("\n")
     if mode == "robot":
-        # Shared teleop keys; skip G here when the task banner already lists it.
+        # Shared teleop keys; skip Space here when the task banner already lists it.
         shared = (
             "  Arrow keys        move selected arm(s) in world XY\n"
             "  E / Q             raise / lower selected arm(s)\n"
             "  Z / X             tip gripper left / right (world Y)\n"
+            "  R / T             yaw gripper CCW / CW (world Z)\n"
             "  1 / 2 / 3         select left / right / both arms\n"
             "  O                 return selected arm(s) to original position\n"
         )
-        if not _line_documents_key(body.splitlines(), "G"):
-            shared += "  G                 open / close selected gripper(s)\n"
+        if not _line_documents_key(body.splitlines(), "Space"):
+            shared += f"  {_GRIPPER_TOGGLE_HELP}\n"
         body = shared + body
     lines = _normalize_view_help_lines(body.splitlines())
-    # Rewrite stale F gripper-toggle help to G; inject G when missing.
+    # Rewrite stale F/G gripper-toggle help to Space; inject Space when missing.
     rewritten = []
+    saw_space_grip = False
     for ln in lines:
-        s = ln.strip()
-        if (
-            (s.startswith("F ") or s.startswith("F:") or s.startswith("F\t"))
-            and "open" in ln.lower()
-            and "close" in ln.lower()
-            and "gripper" in ln.lower()
-        ):
+        if _is_gripper_toggle_help_line(ln):
+            if saw_space_grip:
+                continue
             indent = ln[: len(ln) - len(ln.lstrip(" "))]
-            rewritten.append(f"{indent}G                 open / close selected gripper(s)")
+            rewritten.append(f"{indent}{_GRIPPER_TOGGLE_HELP}")
+            saw_space_grip = True
         else:
             rewritten.append(ln)
     lines = rewritten
-    if not _line_documents_key(lines, "G"):
+    if not _line_documents_key(lines, "Space"):
         inserted = False
         for i, ln in enumerate(lines):
             if (
@@ -1677,14 +1866,11 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
                 or "V                 " in ln
             ):
                 indent = ln[: len(ln) - len(ln.lstrip(" "))]
-                lines.insert(
-                    i + 1,
-                    f"{indent}G                 open / close selected gripper(s)",
-                )
+                lines.insert(i + 1, f"{indent}{_GRIPPER_TOGGLE_HELP}")
                 inserted = True
                 break
         if not inserted:
-            lines.append("  G                 open / close selected gripper(s)")
+            lines.append(f"  {_GRIPPER_TOGGLE_HELP}")
     body = "\n".join(lines)
     bar = "=" * 60
     print_instructions(f"{bar}\n {task_name} — {mode} controls\n{bar}\n{body}\n{bar}")
@@ -1698,10 +1884,17 @@ def default_arms_for_mode(mode):
 
 
 def selected_robot_arms(env, fallback=("left",)):
-    """Return the arms selected by the universal 1/2/3 robot controls."""
+    """Return the arms selected by the universal 1/2/3 robot controls.
 
+    When universal controls are active and nothing is selected yet, returns
+    ``()`` (no fallback) so grippers stay inactive until 1 / 2 / 3.
+    """
     selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
-    return selected or tuple(fallback)
+    if selected:
+        return selected
+    if bool(getattr(env, "_interactive_universal_controls", False)):
+        return ()
+    return tuple(fallback)
 
 
 GRIPPER_LINK_NAMES = frozenset({

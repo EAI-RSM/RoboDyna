@@ -33,7 +33,8 @@ from transforms3d.euler import euler2quat
 class catch_mouse_object_drop(Office_base_task):
     """Mouse knocks one fragile shelf object; catch it in a pillow-lined basket."""
 
-    CUP_IDS = [0, 1, 2, 5, 6, 3]
+    # Skip base6: silver metallic mug (wrong look / mesh orientation for this task).
+    CUP_IDS = [0, 1, 2, 5, 3]
     WINEGLASS_IDS = [1, 2, 4]  # skip oversized base0 / tall base3
     BASKET_IDS = list(range(5))
     TISSUE_IDS = list(range(7))
@@ -55,7 +56,7 @@ class catch_mouse_object_drop(Office_base_task):
     PLANT_SCALE = 0.90          # doubled vs prior 0.45
     MUG_SCALE = 0.715           # prior 0.55 * 1.30
     N_OBJECTS_DEFAULT = 4
-    MOUSE_SPEED_DEFAULT = 0.10
+    MOUSE_SPEED_DEFAULT = 0.05  # 50% of prior 0.10 m/s mean
     MOUSE_SPEED_JITTER_FRAC = 0.30  # slow side: mean × (1 − frac)
     # Fast-side cap is (1 + frac) raised by this factor (e.g. 1.3 → 1.56).
     MOUSE_SPEED_FAST_SIDE_MULT = 1.20
@@ -66,6 +67,31 @@ class catch_mouse_object_drop(Office_base_task):
     # If a shove leaves the target on the shelf, back up and push again.
     MOUSE_SHOVE_RETRIES = 4     # total shove attempts (1 first + up to 3 retries)
     MOUSE_SHOVE_OBSERVE_STEPS = 45  # wait after path end before deciding to retry
+    MOUSE_RETRY_SPEED_CAP = 0.09  # soft retries — hard re-hits launch bottles
+    MOUSE_RETRY_SPEED_MULT = 1.15
+    # Kinematic mouse penetration can invent huge impulses; clamp while seated.
+    SHELF_MAX_LINEAR_SPEED = 0.30   # m/s; tip/slide, not ballistic launch
+    SHELF_MAX_ANGULAR_SPEED = 5.0   # rad/s
+    FALL_MAX_LINEAR_SPEED = 2.5     # m/s once off the lip (gravity ok)
+    # Masses: bottles were ~0.12 kg and flew when the mouse drove through them.
+    MASS_BY_LABEL = {
+        "cup": 0.16,
+        "wineglass": 0.12,
+        "beer_bottle": 0.38,
+        "wine_bottle": 0.42,
+    }
+    LIN_DAMP_BY_LABEL = {
+        "cup": 0.70,
+        "wineglass": 0.85,
+        "beer_bottle": 1.10,
+        "wine_bottle": 1.20,
+    }
+    ANG_DAMP_BY_LABEL = {
+        "cup": 0.80,
+        "wineglass": 1.00,
+        "beer_bottle": 1.40,
+        "wine_bottle": 1.50,
+    }
     # Clear gap between fragile footprints so the mouse can scurry between them.
     OBJ_X_GAP_MIN = 0.06
     SETTLE_STEPS = 420          # sim steps allowed for the object to come to rest
@@ -591,6 +617,9 @@ class catch_mouse_object_drop(Office_base_task):
             name="mouse_head",
         )
         self._make_kinematic(head)
+        # Visual only — multi-part kinematic contact stacked impulses and launched
+        # tall bottles. Body alone does the shove.
+        self._disable_collision(head)
         self.mouse_parts.append(("head", head, np.array([0.032, 0.0, 0.004])))
 
         for side, name in ((1.0, "mouse_ear_l"), (-1.0, "mouse_ear_r")):
@@ -603,6 +632,7 @@ class catch_mouse_object_drop(Office_base_task):
                 name=name,
             )
             self._make_kinematic(ear)
+            self._disable_collision(ear)
             self.mouse_parts.append(
                 (name, ear, np.array([0.018, side * 0.012, 0.016]))
             )
@@ -616,6 +646,7 @@ class catch_mouse_object_drop(Office_base_task):
             name="mouse_tail",
         )
         self._make_kinematic(tail)
+        self._disable_collision(tail)
         self.mouse_parts.append(("tail", tail, np.array([-0.042, 0.0, 0.0])))
         self.mouse = body
         self.mouse_pos = np.array([x, y, z], dtype=np.float64)
@@ -979,7 +1010,7 @@ class catch_mouse_object_drop(Office_base_task):
             if actor is None:
                 continue
             try:
-                actor.set_mass(0.08 if "bottle" not in label else 0.12)
+                actor.set_mass(float(self.MASS_BY_LABEL.get(label, 0.16)))
             except Exception:
                 pass
             self._make_kinematic(actor)
@@ -1015,7 +1046,7 @@ class catch_mouse_object_drop(Office_base_task):
                 self, pose=pose, modelname=model, model_id=model_id,
                 convex=True, is_static=False, scale_mult=float(smult),
             )
-            actor.set_mass(0.08)
+            actor.set_mass(float(self.MASS_BY_LABEL.get(label, 0.16)))
             self._make_kinematic(actor)
             self.shelf_objects = [{
                 "actor": actor, "model": model, "model_id": model_id,
@@ -1290,7 +1321,9 @@ class catch_mouse_object_drop(Office_base_task):
         return 0.0, float(0.5 * (lo + hi))
 
     # ----------------------------------------------------------- kinematics
-    def _release_actor_to_physics(self, actor, *, mass=None):
+    def _release_actor_to_physics(
+        self, actor, *, mass=None, lin_damp=0.70, ang_damp=0.80,
+    ):
         """Make a shelf actor a free dynamic body the mouse can shove."""
         rigid = self._get_rigid(actor)
         if rigid is None:
@@ -1303,10 +1336,28 @@ class catch_mouse_object_drop(Office_base_task):
         try:
             rigid.set_kinematic(False)
             rigid.set_disable_gravity(False)
-            rigid.set_linear_damping(0.02)
-            rigid.set_angular_damping(0.05)
+            # Near-zero damping made kinematic mouse contacts launch bottles.
+            rigid.set_linear_damping(float(lin_damp))
+            rigid.set_angular_damping(float(ang_damp))
         except Exception:
             pass
+        # Do not set_max_linear_velocity here — that would also throttle freefall.
+        # Shelf launch is clamped per-step in _tame_shelf_velocities.
+        try:
+            for shape in rigid.get_collision_shapes():
+                m = shape.get_physical_material()
+                m.set_restitution(0.0)
+                m.set_static_friction(1.05)
+                m.set_dynamic_friction(0.90)
+        except Exception:
+            pass
+
+    def _object_mass_damping(self, label: str):
+        lab = str(label)
+        mass = float(self.MASS_BY_LABEL.get(lab, 0.16))
+        lin = float(self.LIN_DAMP_BY_LABEL.get(lab, 0.70))
+        ang = float(self.ANG_DAMP_BY_LABEL.get(lab, 0.80))
+        return mass, lin, ang
 
     def _activate_target(self):
         """Hand every shelf object over to physics just before the mouse sets off.
@@ -1318,11 +1369,55 @@ class catch_mouse_object_drop(Office_base_task):
         """
         if self._target_live:
             return
-        for i, entry in enumerate(self.shelf_objects):
+        for entry in self.shelf_objects:
             label = str(entry.get("label", ""))
-            mass = 0.12 if "bottle" in label else 0.08
-            self._release_actor_to_physics(entry["actor"], mass=mass)
+            mass, lin, ang = self._object_mass_damping(label)
+            self._release_actor_to_physics(
+                entry["actor"], mass=mass, lin_damp=lin, ang_damp=ang,
+            )
         self._target_live = True
+
+    def _tame_shelf_velocities(self):
+        """Clamp runaway speeds from kinematic mouse penetration.
+
+        While an object still sits on the shelf plate, keep tip/slide speeds
+        near the mouse's push rate. Once it has left the lip, allow a normal fall
+        but still reject absurd launch velocities.
+        """
+        if not self._target_live:
+            return
+        shelf_z = float(self.shelf_z_surf)
+        for entry in self.shelf_objects:
+            actor = entry.get("actor")
+            rigid = self._get_rigid(actor)
+            if rigid is None:
+                continue
+            try:
+                lo, _ = rigid.compute_global_aabb_tight()
+                bottom = float(lo[2])
+            except Exception:
+                p = np.asarray(
+                    (actor.actor if hasattr(actor, "actor") else actor).get_pose().p,
+                    dtype=np.float64,
+                )
+                bottom = float(p[2]) - float(entry.get("radius", 0.03))
+            on_shelf = bottom >= shelf_z - 0.025
+            max_v = (
+                float(self.SHELF_MAX_LINEAR_SPEED) if on_shelf
+                else float(self.FALL_MAX_LINEAR_SPEED)
+            )
+            max_w = float(self.SHELF_MAX_ANGULAR_SPEED) if on_shelf else 12.0
+            try:
+                v = np.asarray(rigid.get_linear_velocity(), dtype=np.float64)
+                speed = float(np.linalg.norm(v))
+                if speed > max_v and speed > 1e-8:
+                    rigid.set_linear_velocity((v * (max_v / speed)).tolist())
+                w = np.asarray(rigid.get_angular_velocity(), dtype=np.float64)
+                w_n = float(np.linalg.norm(w))
+                if w_n > max_w and w_n > 1e-8:
+                    rigid.set_angular_velocity((w * (max_w / w_n)).tolist())
+            except Exception:
+                pass
 
     def _release_mouse(self):
         if self._mouse_state != "idle":
@@ -1393,8 +1488,8 @@ class catch_mouse_object_drop(Office_base_task):
         behind_y = float(
             min(ty + hy + mh + float(self.MOUSE_STANDOFF) + 0.020, y_hi)
         )
-        # Push farther past the lip on retries — first shove often stops short.
-        push_y1 = float(self.shelf_front_y - 0.035)
+        # Nudge past the lip, but not deep into free space (that launches bottles).
+        push_y1 = float(self.shelf_front_y - 0.012)
         mx = float(self.mouse_pos[0])
         my = float(self.mouse_pos[1])
         route = [
@@ -1408,9 +1503,11 @@ class catch_mouse_object_drop(Office_base_task):
         self._allow_shove = True
         self._mouse_state = "running"
         self._shove_observe = 0
-        # Slightly harder second/third contact.
+        # Mildly firmer retry — large speed jumps eject tall bottles.
         base = float(getattr(self, "mouse_speed_mean", self.mouse_speed))
-        self.mouse_speed = float(min(0.22, max(float(self.mouse_speed), base) * 1.35))
+        cap = float(getattr(self, "MOUSE_RETRY_SPEED_CAP", 0.09))
+        mult = float(getattr(self, "MOUSE_RETRY_SPEED_MULT", 1.15))
+        self.mouse_speed = float(min(cap, max(float(self.mouse_speed), base) * mult))
         # Kill residual object velocity so the next contact is a clean push.
         rigid = self._get_rigid(self.target)
         if rigid is not None:
@@ -1569,6 +1666,7 @@ class catch_mouse_object_drop(Office_base_task):
             self._allow_shove = True
             self._basket_placed = True
         self._advance_mouse()
+        self._tame_shelf_velocities()
         self._maybe_retry_mouse_shove()
         self._update_catch_state()
         # Pin non-targets only while the shelf is still kinematic. After

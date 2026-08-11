@@ -6,10 +6,12 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Space             toggle the cooktop knob
+  Prefer --control robot: Space only opens/closes the gripper.
+  Close on the cooktop knob and twist with teleop to control the stove.
 """
 ROBOT = """
-  Space             selected arm turns the knob
+  Space opens/closes the gripper only — no automatic knob twist.
+  Close on the cooktop knob and twist with teleop to turn the stove on/off.
 """
 
 if __name__ == "__main__":

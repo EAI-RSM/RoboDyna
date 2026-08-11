@@ -28,9 +28,12 @@ class sort_apples_belt(Base_Task):
       - Option 1 — independent random red/green: ``color_mode: random``
           CLI: ``--task-arg color_mode=random`` or legacy ``--option 1``.
       - Option 2 — rotten apple + dump hatch: ``rotten_prob`` > 0 (default 0.3 via ``--option 2``)
-          With probability ``rotten_prob`` per episode, one random apple is brown (rotten). A garbage
-          bin sits at the lowest-y end of the belt. Holding BOTH buttons opens the dump passage;
-          releasing closes the plank back to horizontal.
+          Exactly one random apple is always brown (rotten). Independently, with probability
+          ``rotten_prob``, a second apple is also marked rotten. Rotten fruit use the same
+          belt→PhysX divert dynamics as colored fruit (plank collision, left/right slide).
+          A garbage bin sits at the lowest-y end of the belt; holding BOTH buttons opens the
+          dump passage so rotten fruit can ride off into the bin (success). Landing in a
+          color basket is failure. Releasing closes the plank back to horizontal.
           CLI: ``--task-arg rotten_prob=0.3`` or legacy ``--option 2``.
 
     The diverter / hatch moves ONLY while a gripper PHYSICALLY holds a side button (EE-to-button
@@ -68,8 +71,8 @@ class sort_apples_belt(Base_Task):
     BUTTON_DX = 0.25
     BUTTON_Y_DEFAULT = -0.16
     COLOR_MODE_DEFAULT = "alternating"  # Default; Opt 1 = "random"
-    ROTTEN_PROB_DEFAULT = 0.0           # Default off; Opt 2 sets ~0.3
-    ROTTEN_PROB_WHEN_OPT2 = 0.3
+    ROTTEN_PROB_DEFAULT = 0.0           # Default off; Opt 2 sets 0.3 (extra rotten chance)
+    ROTTEN_PROB_WHEN_OPT2 = 0.3         # P(second rotten); first is always present when enabled
 
     RED = [0.85, 0.10, 0.10]
     GREEN = [0.15, 0.70, 0.18]
@@ -142,7 +145,7 @@ class sort_apples_belt(Base_Task):
         """Map record_demo ``--option`` / config ``option`` onto named toggles.
 
         1 / random / color_mode → Opt 1 color_mode=random
-        2 / rotten / dump → Opt 2 rotten_prob=0.3
+        2 / rotten / dump → Opt 2 rotten_prob=0.3 (always ≥1 rotten; P=0.3 for a second)
         """
         legacy = self._cfg.get("option", None)
         if legacy is None:
@@ -505,7 +508,7 @@ class sort_apples_belt(Base_Task):
             self.add_prohibit_area(b, padding=0.04)
 
     def _sample_apple_colors(self, n):
-        """Sample red/green by color_mode; optionally mark one apple rotten (Opt 2)."""
+        """Sample red/green by color_mode; Opt 2 always marks ≥1 rotten (+ optional second)."""
         if self.color_mode == "random":
             colors = [int(np.random.rand() < 0.5) for _ in range(n)]
         else:
@@ -514,11 +517,19 @@ class sort_apples_belt(Base_Task):
 
         self.has_rotten = False
         self.rotten_idx = None
-        if self.rotten_enabled and n >= 1 and float(np.random.rand()) < self.rotten_prob:
+        self.rotten_indices = []
+        # Opt 2 (rotten_prob > 0): always one rotten; with P=rotten_prob add a second.
+        if self.rotten_enabled and n >= 1:
             idx = int(np.random.randint(0, n))
             colors[idx] = self.COLOR_ROTTEN
             self.has_rotten = True
             self.rotten_idx = idx
+            self.rotten_indices = [idx]
+            if n >= 2 and float(np.random.rand()) < self.rotten_prob:
+                others = [i for i in range(n) if i != idx]
+                idx2 = int(others[int(np.random.randint(0, len(others)))])
+                colors[idx2] = self.COLOR_ROTTEN
+                self.rotten_indices.append(idx2)
         return colors
 
     def _rgb_for_color(self, c):
@@ -664,13 +675,21 @@ class sort_apples_belt(Base_Task):
         Belts carry apples kinematically (sitting, not rolling). Near the fork they become
         dynamic with belt-direction velocity only — no sideways bias. The static diagonal
         plank provides the deflection; apples slide along its edge into the basket.
+
+        Rotten fruit use this same path for left/right divert contact. ``side="dump"`` is
+        only applied while the dump hatch is open (otherwise fall back to the current
+        divert side so the apple still collides with the plank like a colored apple).
         """
         if side is None:
             if self._gate_mode == "dump" or self._dump_open:
                 side = "dump"
             else:
                 side = "left" if self.gate_left else "right"
+        if side == "dump" and not self._dump_gap_open():
+            side = "left" if self.gate_left else "right"
         if self._apple_mode[idx] == "physics":
+            # Allow re-route (e.g. dump hatch just opened on an already-dynamic rotten).
+            self._routed[idx] = side
             return
         self._routed[idx] = side
         self._apple_mode[idx] = "physics"
@@ -822,34 +841,40 @@ class sort_apples_belt(Base_Task):
             over_belt = (abs(p[0]) < self.BELT_HALF_W * 1.15
                          and p[1] > self._belt_near - 0.04
                          and p[2] < self._belt_surf + self.APPLE_R + 0.06)
-            # Rotten / dump: keep belt push until past the near end, then fall — never stick.
+            # Rotten / dump: only while the hatch is open (or already past the belt end).
+            # If the hatch closed while still at the plank, fall back to normal divert
+            # collision so rotten fruit behave like colored fruit.
             if self._routed[i] == "dump":
-                gx, gy = float(self._garbage_xy[0]), float(self._garbage_xy[1])
-                vb = -self._belt_vel()
-                try:
-                    comp.set_angular_velocity([0.0, 0.0, 0.0])
-                except Exception:
-                    pass
-                # Still over the slab: keep riding off the end (do not try to fall through mesh).
-                if over_belt and p[1] > self.BELT_Y_END - 0.01:
-                    if p[2] < self._belt_surf + self.APPLE_R - 0.002:
-                        comp.set_linear_velocity([0.0, vb, 0.03])
-                    else:
-                        try:
-                            vz_cur = float(np.array(comp.get_linear_velocity(), dtype=float)[2])
-                        except Exception:
-                            vz_cur = 0.0
-                        comp.set_linear_velocity([0.0, vb, min(0.0, vz_cur)])
+                past_end = float(p[1]) <= float(self.BELT_Y_END) - 0.01
+                if (not self._dump_gap_open()) and (not past_end):
+                    self._routed[i] = "left" if self.gate_left else "right"
                 else:
-                    # Clear of the belt — fall into the bin.
+                    gx, gy = float(self._garbage_xy[0]), float(self._garbage_xy[1])
+                    vb = -self._belt_vel()
                     try:
-                        v = np.array(comp.get_linear_velocity(), dtype=float)
+                        comp.set_angular_velocity([0.0, 0.0, 0.0])
                     except Exception:
-                        v = np.zeros(3)
-                    vy = min(float(v[1]), (gy - p[1]) * 2.5, -0.12)
-                    vz = min(float(v[2]), -0.35)
-                    comp.set_linear_velocity([0.0, vy, vz])
-                continue
+                        pass
+                    # Still over the slab: keep riding off the end (do not try to fall through mesh).
+                    if over_belt and p[1] > self.BELT_Y_END - 0.01:
+                        if p[2] < self._belt_surf + self.APPLE_R - 0.002:
+                            comp.set_linear_velocity([0.0, vb, 0.03])
+                        else:
+                            try:
+                                vz_cur = float(np.array(comp.get_linear_velocity(), dtype=float)[2])
+                            except Exception:
+                                vz_cur = 0.0
+                            comp.set_linear_velocity([0.0, vb, min(0.0, vz_cur)])
+                    else:
+                        # Clear of the belt — fall into the bin.
+                        try:
+                            v = np.array(comp.get_linear_velocity(), dtype=float)
+                        except Exception:
+                            v = np.zeros(3)
+                        vy = min(float(v[1]), (gy - p[1]) * 2.5, -0.12)
+                        vz = min(float(v[2]), -0.35)
+                        comp.set_linear_velocity([0.0, vy, vz])
+                    continue
             # Keep feeding belt velocity — never teleport toward a basket.
             if over_belt and self._routed[i] != "dump":
                 try:
@@ -936,16 +961,6 @@ class sort_apples_belt(Base_Task):
         """Y of the front queue slot (just upstream of the plank)."""
         return self.BELT_Y_FORK + self.PHYSICS_RELEASE_DY
 
-    def _closed_dump_stop_y(self):
-        """Apple-center Y flush against the upstream face of the closed diverter.
-
-        Rest-pose halves span ``±_blade_half_w`` along belt Y about ``BELT_Y_FORK``.
-        Stopping at ``fork + half_w + APPLE_R`` puts the fruit in contact with the wood
-        (not at the divert release line, which sits several cm upstream).
-        """
-        half_w = float(getattr(self, "_blade_half_w", 0.007))
-        return float(self.BELT_Y_FORK) + half_w + float(self.APPLE_R)
-
     def _queue_indices(self):
         """Belt-riding undeposited apples, frontmost (lowest y) first."""
         idxs = []
@@ -1011,22 +1026,20 @@ class sort_apples_belt(Base_Task):
             if self._apple_mode[i] in ("physics", "done"):
                 continue
             y = float(self._apple_y[i])
-            # Opt 2: rotten stay kinematic on the belt. Closed hatch → stop flush against
-            # the plank face (do not teleport through wood). Open hatch → ride the parted
-            # gap past the belt end, then fall into the bin (physics cannot fall through
-            # the slab).
-            if self.apple_colors[i] == self.COLOR_ROTTEN:
-                if not self._dump_gap_open():
-                    self._apple_y[i] = max(y, self._closed_dump_stop_y())
-                    continue
-                if y <= float(self.BELT_Y_END) - 0.03:
-                    self._release_dump_fall(i)
-                continue
-            # Near the fork: become dynamic for the *matching* divert. If the plank is
-            # aimed the other way, hold just upstream so mixed colors don't all ride the
-            # wrong divert (v22 plank physics; expert waits for matching hold).
+            # Near the fork: become dynamic and collide with the plank — identical for
+            # colored and rotten fruit. Dump routing is only used while the hatch is open;
+            # otherwise rotten use the current divert side so they deflect left/right.
             if y <= release_y:
+                is_rotten = self.apple_colors[i] == self.COLOR_ROTTEN
+                if is_rotten and self._dump_gap_open():
+                    if y <= float(self.BELT_Y_END) - 0.03:
+                        self._release_dump_fall(i)
+                    else:
+                        self._release_to_physics(i, side="dump")
+                    continue
                 tgt = self._target_side_for_apple(i)
+                if is_rotten:
+                    tgt = want  # plank contact / divert; scoring still requires dump
                 if tilted and tgt in ("left", "right") and tgt != want:
                     self._apple_y[i] = max(y, release_y)
                     continue
@@ -1040,9 +1053,12 @@ class sort_apples_belt(Base_Task):
         if tilted:
             # Stamp divert side onto matching apples already at the plank.
             for i in self._plank_queue():
-                if self._deposited[i] or self.apple_colors[i] == self.COLOR_ROTTEN:
+                if self._deposited[i]:
                     continue
-                if self._target_side_for_apple(i) != want:
+                tgt = self._target_side_for_apple(i)
+                if self.apple_colors[i] == self.COLOR_ROTTEN:
+                    tgt = want
+                if tgt != want:
                     continue
                 if self._apple_mode[i] == "belt":
                     self._release_to_physics(i, side=want)
@@ -1052,6 +1068,17 @@ class sort_apples_belt(Base_Task):
                 if i not in cur:
                     cur.append(i)
                 self._divert_batch = cur
+
+        # Dump hatch just opened: re-route in-flight rotten still over the belt center.
+        if self._dump_gap_open():
+            for i in range(self._spawned):
+                if (self._deposited[i]
+                        or self.apple_colors[i] != self.COLOR_ROTTEN
+                        or self._apple_mode[i] != "physics"):
+                    continue
+                p = np.array(self.apples[i].get_pose().p, dtype=float)
+                if abs(p[0]) < self.BELT_HALF_W * 0.95 and p[1] > self.BELT_Y_END - 0.02:
+                    self._routed[i] = "dump"
 
         for i in self._queue_indices():
             if self._apple_mode[i] in ("physics", "done"):
@@ -1676,6 +1703,7 @@ class sort_apples_belt(Base_Task):
             "color_mode": str(getattr(self, "color_mode", self.COLOR_MODE_DEFAULT)),
             "rotten_prob": float(getattr(self, "rotten_prob", 0.0)),
             "has_rotten": bool(getattr(self, "has_rotten", False)),
+            "n_rotten": int(len(getattr(self, "rotten_indices", []) or [])),
             "option": self._option_label(),
         }
         return obs

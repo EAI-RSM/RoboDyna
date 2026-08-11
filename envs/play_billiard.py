@@ -3,6 +3,7 @@ from .utils import *
 from .utils.actor_utils import Actor
 import os
 import tempfile
+import time
 import sapien
 import sapien.render
 import sapien.physx
@@ -18,7 +19,8 @@ class play_billiard(Base_Task):
     Table is centered at (x=0, y=0.1). The primary ball spawns on a random side; the
     matching arm (left/right) grasps a cue placed on that same side. Success = primary
     ball falls through an allowed pocket into the hollow interior. Robot-link contact
-    with the primary ball fails (cue contact is allowed).
+    with the primary ball fails. Only the blue cue tip may contact balls, and only for
+    a single hit (shaft/butt never collide with balls; tip collision disables after).
 
     Options (independent toggles; CLI via ``--task-arg`` or legacy ``--option``):
       Default — only the red target ball; success in any of the 6 pockets.
@@ -130,9 +132,11 @@ class play_billiard(Base_Task):
     # alignment error; PhysX contact is still required to fire the impulse.
     STRIKE_CONTACT_GAP = 0.008
     # Collision ignore pair: cue ↔ robot links share this g2/g3 so they do not
-    # collide after weld, while cue ↔ ball (default g3) still generates contacts.
+    # collide after weld, while cue tip ↔ ball (default g3) still generates contacts.
     _CUE_ROBOT_IGNORE_BIT = 1 << 8
     _CUE_ROBOT_IGNORE_ID = 0xB111
+    # Same ignore id, extra g2 bit: shaft/butt (and spent tip) ignore all balls.
+    _CUE_SHAFT_BALL_IGNORE_BIT = 1 << 9
     POCKET_SINK_Z = 0.012
 
     def setup_demo(self, **kwags):
@@ -149,6 +153,9 @@ class play_billiard(Base_Task):
         self._robot_ball_contact = False
         self._strike_armed = False
         self._strike_done = False
+        self._cue_tip_hit_allowed = True
+        self._cue_tip_shapes = []
+        self._cue_shaft_shapes = []
         self.cue = None
         self.primary_ball = None
         self.extra_balls = []
@@ -288,6 +295,8 @@ class play_billiard(Base_Task):
         self.felt_top = self.base_top + 2.0 * self.LID_HALF_Z
         self.floor_top = self.z0 + 2.0 * self.FLOOR_HALF_Z
         self.ball_z = self.felt_top + self.ball_radius + 0.001
+        # Workspace table surface for interactive Q floor (fingers ≥ this height).
+        self.table_top = float(self.z0)
 
         self._primary_pocketed = False
         self._primary_pocket_id = None
@@ -296,6 +305,9 @@ class play_billiard(Base_Task):
         self._cue_welded = False
         self._strike_armed = False
         self._strike_done = False
+        self._cue_tip_hit_allowed = True
+        self._cue_tip_shapes = []
+        self._cue_shaft_shapes = []
         self._aim_dir = np.array([1.0, 0.0], dtype=np.float64)
         self._target_pocket = None
         self._target_pocket_id = None
@@ -748,6 +760,7 @@ class play_billiard(Base_Task):
                     shape.set_physical_material(mat)
             except Exception:
                 pass
+            self._tag_ball_ignore_shaft(rigid)
             try:
                 rigid.wake_up()
             except Exception:
@@ -825,16 +838,26 @@ class play_billiard(Base_Task):
         self.cue = self._build_cue(pose)
         self.cue.set_mass(self.CUE_MASS)
         self._cue_rigid = self._get_rigid(self.cue)
+        self._cache_cue_collision_shapes()
+        self._apply_cue_collision_groups(
+            ignore_robot=False, tip_hits_balls=True
+        )
         self.add_prohibit_area(self.cue, padding=0.04)
 
     def _build_cue(self, pose):
-        """Round cue rod: cylinder shaft with spherical tip and butt."""
+        """Round cue rod: cylinder shaft with spherical tip and butt.
+
+        Shaft collision is shortened so only the blue tip sphere can touch balls;
+        the cylinder + butt still collide with the table / cradle.
+        """
         builder = self.scene.create_actor_builder()
         r = self.CUE_RADIUS
         half = self.CUE_HALF_LEN
         mat = self.scene.default_physical_material
-        # Cylinder default axis = local +X (tip direction).
-        builder.add_cylinder_collision(radius=r, half_length=half, material=mat)
+        # Stop the shaft capsule before the tip sphere so shaft/ball ignore is
+        # meaningful near the tip (otherwise the cylinder end still pokes balls).
+        shaft_half = max(1e-4, float(half) - float(r))
+        builder.add_cylinder_collision(radius=r, half_length=shaft_half, material=mat)
         builder.add_sphere_collision(pose=sapien.Pose([half, 0, 0]), radius=r, material=mat)
         builder.add_sphere_collision(pose=sapien.Pose([-half, 0, 0]), radius=r, material=mat)
 
@@ -996,22 +1019,84 @@ class play_billiard(Base_Task):
         return pool[0][2], pool[0][3]
 
     # ---------------------------------------------------- weld / kinematics
+    def _cache_cue_collision_shapes(self):
+        """Split cue collision shapes into blue tip vs shaft/butt."""
+        self._cue_tip_shapes = []
+        self._cue_shaft_shapes = []
+        rigid = self._get_rigid(self.cue)
+        if rigid is None:
+            return
+        tip_x = float(self.CUE_HALF_LEN)
+        try:
+            for shape in rigid.get_collision_shapes():
+                x = float(shape.get_local_pose().p[0])
+                if abs(x - tip_x) < 1e-3:
+                    self._cue_tip_shapes.append(shape)
+                else:
+                    self._cue_shaft_shapes.append(shape)
+        except Exception:
+            pass
+
+    def _tag_ball_ignore_shaft(self, rigid):
+        """Balls ignore cue shaft/butt (and a spent tip) via shared g2/g3 bits."""
+        if rigid is None:
+            return
+        bit = int(self._CUE_SHAFT_BALL_IGNORE_BIT)
+        iid = int(self._CUE_ROBOT_IGNORE_ID) & 0xFFFF
+        try:
+            for shape in rigid.get_collision_shapes():
+                g0, g1, g2, g3 = shape.get_collision_groups()
+                shape.set_collision_groups([
+                    int(g0),
+                    int(g1),
+                    int(g2) | bit,
+                    (int(g3) & ~0xFFFF) | iid,
+                ])
+        except Exception:
+            pass
+
+    def _apply_cue_collision_groups(self, *, ignore_robot: bool, tip_hits_balls: bool):
+        """Tip may hit balls once; shaft/butt never do. Optional cue↔robot ignore."""
+        if not self._cue_tip_shapes and not self._cue_shaft_shapes:
+            self._cache_cue_collision_shapes()
+        robot_bit = int(self._CUE_ROBOT_IGNORE_BIT) if ignore_robot else 0
+        shaft_ball_bit = int(self._CUE_SHAFT_BALL_IGNORE_BIT)
+        iid = int(self._CUE_ROBOT_IGNORE_ID) & 0xFFFF
+        tip_g2 = robot_bit if tip_hits_balls else (robot_bit | shaft_ball_bit)
+        shaft_g2 = robot_bit | shaft_ball_bit
+        # g3 must match balls whenever shaft_ball_bit is set on either side.
+        tip_g3 = iid if tip_g2 else 0
+        shaft_g3 = iid
+        try:
+            for shape in self._cue_tip_shapes:
+                shape.set_collision_groups([1, 1, int(tip_g2), int(tip_g3)])
+            for shape in self._cue_shaft_shapes:
+                shape.set_collision_groups([1, 1, int(shaft_g2), int(shaft_g3)])
+        except Exception:
+            pass
+
+    def _disable_cue_tip_ball_collision(self):
+        """After the first tip hit, never contact balls again with this cue."""
+        self._cue_tip_hit_allowed = False
+        self._apply_cue_collision_groups(
+            ignore_robot=bool(self._cue_welded),
+            tip_hits_balls=False,
+        )
+
     def _disable_cue_robot_collision(self):
-        """Ignore cue↔robot collisions after weld; keep cue↔ball contacts.
+        """Ignore cue↔robot collisions after weld; keep tip↔ball until first hit.
 
         Previously set cue groups to [0,0,0,0], which disabled *all* cue
         collisions (including the ball), so strikes never registered real
         contact and the impulse had to fire on tip proximity alone.
         """
-        rigid = self._get_rigid(self.cue)
-        if rigid is None:
-            return
+        self._apply_cue_collision_groups(
+            ignore_robot=True,
+            tip_hits_balls=bool(self._cue_tip_hit_allowed),
+        )
         ignore_bit = int(self._CUE_ROBOT_IGNORE_BIT)
         ignore_id = int(self._CUE_ROBOT_IGNORE_ID) & 0xFFFF
         try:
-            for shape in rigid.get_collision_shapes():
-                # g0/g1 = default contact type/affinity so cue still hits balls.
-                shape.set_collision_groups([1, 1, ignore_bit, ignore_id])
             for articulation in (self.robot.left_entity, self.robot.right_entity):
                 if articulation is None:
                     continue
@@ -1055,6 +1140,9 @@ class play_billiard(Base_Task):
             rigid.set_kinematic_target(seated)
         self._disable_cue_robot_collision()
         self._cue_welded = True
+        # While welded, gripper pads can ghost through the cue; do not fail on
+        # those contacts until after the tip has spent its one hit.
+        self._strike_armed = True
 
     def _finger_pad_z(self, arm):
         """Mean world-Z of the WSG finger links (approx. pad height)."""
@@ -1148,12 +1236,16 @@ class play_billiard(Base_Task):
         self._dwell(8)
 
     def _cue_ball_contacting(self):
-        """True only when PhysX reports touching cue↔ball contact.
+        """True only when PhysX reports touching tip↔ball contact.
 
-        Accepts a contact pair if any point is penetrating/near-touching
-        (separation <= 1 mm) or carries a non-zero impulse.
+        Shaft/butt shapes ignore balls via collision groups, so any cue↔ball
+        contact here is from the blue tip sphere. Accepts a contact pair if any
+        point is penetrating/near-touching (separation <= 1 mm) or carries a
+        non-zero impulse.
         """
         if self.cue is None or self.primary_ball is None:
+            return False
+        if not getattr(self, "_cue_tip_hit_allowed", True):
             return False
         cue_name = self.cue.get_name()
         ball_name = self.primary_ball.get_name()
@@ -1220,28 +1312,60 @@ class play_billiard(Base_Task):
             return False
         return bool(min_z <= self._felt_contact_z() + float(tol))
 
-    def interactive_ee_z_floor(self, side, ee_pose):
-        """Lowest allowed EE Z while the welded cue is on / would enter the felt.
+    def interactive_support_z(self, side, ee_pose):
+        """Workspace table top — fingertips must stay at or above this."""
+        return float(getattr(self, "table_top", getattr(self, "z0", 0.74)))
 
-        Used by ``UniversalRobotControls`` so Q/-Z teleop stops when the stick
-        contacts the table instead of driving the arm through the surface.
+    def _finger_extent_below_ee(self, side, ee_z) -> float:
+        """How far below the EE the lowest finger geometry sits (meters)."""
+        ent = (
+            self.robot.left_entity if str(side) == "left" else self.robot.right_entity
+        )
+        lo = None
+        if ent is not None:
+            for link in ent.get_links():
+                name = str(link.get_name() or "").lower()
+                if "finger" not in name and "gripper" not in name:
+                    continue
+                try:
+                    aabb = link.compute_global_aabb_tight()
+                    z = float(aabb[0][2])
+                except Exception:
+                    try:
+                        z = float(link.entity_pose.p[2])
+                    except Exception:
+                        continue
+                lo = z if lo is None else min(lo, z)
+        if lo is None:
+            return 0.18
+        return max(float(ee_z) - float(lo), 0.05)
+
+    def interactive_ee_z_floor(self, side, ee_pose):
+        """Lowest allowed EE Z so fingertips stay at/above the workspace table.
+
+        Also raises the floor further when a welded cue would enter the felt.
         """
-        if not getattr(self, "_cue_welded", False):
-            return None
-        if str(side) != str(getattr(self, "_cue_arm", "")):
-            return None
-        if getattr(self, "_cue_ee_T", None) is None:
-            return None
         ee = np.asarray(ee_pose, dtype=np.float64).reshape(-1)
-        if ee.size < 7:
+        if ee.size < 3:
             return None
-        floor = self._felt_contact_z()
-        cue_pose = self._mat_to_pose(self._pose_to_mat(ee) @ self._cue_ee_T)
-        min_z = self._cue_min_z(cue_pose)
-        if min_z < floor - 1e-6:
-            # World +Z on the EE raises the welded cue by the same amount.
-            return float(ee[2]) + (floor - min_z)
-        return None
+        table_z = float(getattr(self, "table_top", getattr(self, "z0", 0.74)))
+        finger_below = self._finger_extent_below_ee(side, float(ee[2]))
+        # +4 cm vs fingertip-at-table so the gripper clears the workspace surface.
+        floor = table_z + finger_below + 0.008 + 0.04
+
+        # Welded-cue felt contact (if any) can only raise this floor.
+        if (
+            getattr(self, "_cue_welded", False)
+            and str(side) == str(getattr(self, "_cue_arm", ""))
+            and getattr(self, "_cue_ee_T", None) is not None
+            and ee.size >= 7
+        ):
+            felt = self._felt_contact_z()
+            cue_pose = self._mat_to_pose(self._pose_to_mat(ee) @ self._cue_ee_T)
+            min_z = self._cue_min_z(cue_pose)
+            if min_z < felt - 1e-6:
+                floor = max(floor, float(ee[2]) + (felt - min_z))
+        return float(floor)
 
     def _update_welded_cue(self):
         if not self._cue_welded:
@@ -1259,10 +1383,9 @@ class play_billiard(Base_Task):
             return
         if self.primary_ball is None:
             return
-        # During the cue-strike window the WSG pads can ghost through the welded
-        # cue (cue↔robot collisions are disabled) and spuriously touch the ball.
-        # Fail only on arm/ball contact outside that window.
-        if self._strike_armed or self._strike_done:
+        # While the cue is welded (or after the tip has spent its hit), WSG pads
+        # can ghost through the stick and spuriously touch the ball — ignore.
+        if self._cue_welded or self._strike_armed or self._strike_done:
             return
         ball_name = self.primary_ball.get_name()
         for contact in self.scene.get_contacts():
@@ -1286,8 +1409,17 @@ class play_billiard(Base_Task):
         return d / n
 
     def _try_apply_strike_impulse(self):
-        """Impart velocity only after real cue–ball PhysX contact, along the stick."""
-        if not self._strike_armed or self._strike_done or self._primary_pocketed:
+        """One-shot tip hit: impart velocity on first blue-tip↔ball contact.
+
+        Shaft/butt never collide with balls. After this fires, tip↔ball collision
+        is disabled so the stick cannot push or re-hit. Used by the expert push
+        and by interactive/manual tip contact (no Space strike).
+        """
+        if (
+            self._strike_done
+            or self._primary_pocketed
+            or not getattr(self, "_cue_tip_hit_allowed", True)
+        ):
             return
         tip = self._tip_xyz()
         ball_p = np.asarray(self.primary_ball.get_pose().p, dtype=np.float64)
@@ -1298,7 +1430,7 @@ class play_billiard(Base_Task):
         )
         if dist > contact_thresh:
             return
-        # Hard gate: PhysX must report actual touching contact (no proximity kick).
+        # Hard gate: PhysX must report actual touching tip contact (no proximity kick).
         if not self._cue_ball_contacting():
             return
         rigid = self._primary_rigid
@@ -1323,6 +1455,7 @@ class play_billiard(Base_Task):
         self._wake_all_balls()
         self._strike_done = True
         self._strike_armed = False
+        self._disable_cue_tip_ball_collision()
         if os.environ.get("PLAY_BILLIARD_DEBUG"):
             print(
                 f"[PLAY_BILLIARD] strike_impulse: tip_dist={dist:.4f} "
@@ -1448,9 +1581,20 @@ class play_billiard(Base_Task):
         # distractor that also falls is still detected as a failure.
         post_primary_steps = 80
         post = None
-        for i in range(max(0, int(steps))):
+        pace_realtime = self._interactive_viewer_realtime_pace()
+        t_start = time.perf_counter()
+        last_render_t = t_start - 1.0
+        n = max(0, int(steps))
+        for i in range(n):
             self._update_kinematic_tasks()
             self.scene.step()
+            if pace_realtime:
+                last_render_t = self._pace_interactive_control_step(
+                    i,
+                    t_start,
+                    last_render_t,
+                    force_render=(i + 1 == n),
+                )
             if self.save_freq and i % self.save_freq == 0:
                 self._take_picture()
             if self._robot_ball_contact or self._distractor_pocketed:
@@ -1462,6 +1606,8 @@ class play_billiard(Base_Task):
                     post += 1
                     if post >= post_primary_steps:
                         break
+        if pace_realtime:
+            self._interactive_pacer_resync = True
 
     def _dbg(self, tag):
         if os.environ.get("PLAY_BILLIARD_DEBUG"):

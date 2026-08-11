@@ -5,8 +5,8 @@ Run from any directory:
 
     /path/to/RoboDynaExp/script_exp/interactive_catch_ramp_ball.py --control robot
 
-Teleop the arm(s) and close the gripper (G) to pick up the cup; place it under
-the predicted catch aim before the ball leaves the ramp. No Space auto-grasp.
+Teleop the arm(s) and close the gripper (Space) to pick up the cup; place it under
+the predicted catch aim before the ball leaves the ramp. No auto-grasp beyond Space gripper.
 """
 
 import argparse
@@ -37,14 +37,14 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Prefer --control robot. Teleop the arm and use G to grasp the cup.
+  Prefer --control robot. Teleop the arm and use Space to grasp the cup.
 """
 
 CONTROLS_ROBOT = """
-  G                 open / close selected gripper(s) to pick / place the cup
+  Space             open / close selected gripper(s) to pick / place the cup
 
   Manually grasp the cup and place it under the predicted catch aim.
-  There is no Space auto-grasp or keyboard teleport.
+  There is no keyboard teleport; Space opens/closes the gripper.
 """
 
 
@@ -128,9 +128,9 @@ def main():
     env._start_ball_motion(expert_demo=False)
     print(
         f"Predicted catch aim ≈ ({x:.3f}, {y:.3f}). Ball is rolling. "
-        "Teleop the arm and use G to grasp the cup."
+        "Teleop the arm and use Space to grasp the cup."
     )
-    print_instructions("Arrows/E/Q move the arm; G opens/closes the gripper to pick the cup.")
+    print_instructions("Arrows/E/Q move the arm; Space opens/closes the gripper to pick the cup.")
 
     viewer = env.viewer
     if viewer is None:

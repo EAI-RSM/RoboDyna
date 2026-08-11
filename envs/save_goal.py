@@ -6,7 +6,7 @@ import numpy as np
 
 
 class save_goal(Base_Task):
-    """Keep a moving ball out of the goal by placing a square blocker in time.
+    """Keep a moving ball out of the goal by placing a stylized goalkeeper in time.
 
     A ball travels across the table toward a goal on one side. Layout can be mirrored
     across the table midline (x → −x): default puts the goal/keeper on +x (right gripper);
@@ -14,17 +14,20 @@ class save_goal(Base_Task):
     the side is chosen per episode when ``mirrored`` is unset.
     A red deadline line marks the last moment the robot is allowed to reposition the save_goal;
     it sits on the field side of the green placement area with a clear gap (≥1 cm by default).
-    A green placement area sits directly in front of the goal. The robot must grasp the square
-    save_goal, place it fully inside that green area while the ball is still behind the red line,
-    then release it before the ball reaches the goal mouth. A save requires the ball to hit the
-    keeper's front face; the shot then rebounds with a mass-aware bounce (ball 100 g, keeper 300 g).
-    Side grazes do not stop the ball. A soccer-style net bag
+    A green placement area sits directly in front of the goal. The robot must grasp the
+    goalkeeper (yellow jersey / black shorts blocker), place it fully inside that green area
+    while the ball is still behind the red line,
+    then release it before the ball reaches the goal mouth. The goalkeeper is a solid
+    blocker at whatever pose it was left in: a hit from any angle rebounds with a
+    mass-aware bounce (ball 100 g, keeper 500 g). A legal save still requires the
+    keeper fully inside the green area before the deadline. A soccer-style net bag
     (visual lattice) hangs behind the goal mouth when ``net_enabled`` is true.
 
     Task options (set in ``task_args.save_goal``; independent toggles):
       - Option 1 — field players (bounce): ``players_enabled``
-        Spawn ``players_max`` static soccer-player meshes before the red line, outside
-        the green zone, and no farther from the goal than
+        Spawn ``players_max`` static field players (same stylized figure as the
+        goalkeeper, blue jersey, 30% thinner) before the red line, outside the green
+        zone, and no farther from the goal than
         ``player_max_goal_dist_mult`` × green-zone depth (default 2×). The ball aims at
         one player at random, "bounces", then continues toward the goal mouth.
         CLI: ``--task-arg players_enabled=true`` or legacy ``--option 1``.
@@ -32,6 +35,7 @@ class save_goal(Base_Task):
         A partial tunnel/cover over the center of the approach field (ball drop → red
         line). Ball enters after a ≥10 cm opening on the drop side, travels under the
         cover, then exits with a ≥10% field-length opening before the red line.
+        Tunnel cavity width matches the red deadline line; side walls are solid.
         With Option 1, the cover ends before the field players.
         CLI: ``--task-arg cover_enabled=true`` or legacy ``--option 2``.
       - Mirror — ``mirrored`` / ``random_mirror``
@@ -41,7 +45,8 @@ class save_goal(Base_Task):
 
     BALL_RADIUS_DEFAULT = 0.018
     BALL_MASS = 0.1          # kg (100 g)
-    KEEPER_MASS = 0.3        # kg (300 g)
+    # Heavy enough to plant upright on release / resist tip from the light ball.
+    KEEPER_MASS = 0.5        # kg (500 g)
     # Coefficient of restitution for the mass-aware front-face bounce handoff.
     BOUNCE_RESTITUTION = 0.85
     # PhysX ignores restitution below bounce_threshold (default 2 m/s); our shot is slow.
@@ -79,16 +84,21 @@ class save_goal(Base_Task):
     KEEPER_SPAWN_Y_DEFAULT = -0.12
     KEEPER_GOAL_CLEARANCE_DEFAULT = 0.05
     KEEPER_POSE_TOL_DEFAULT = 0.03
+    # Collision half-height as a multiple of ball_radius (XY still matches the ball).
+    # ~1.45 → modestly taller than the old cube so the figure reads as a keeper.
+    KEEPER_HALF_Z_MULT_DEFAULT = 1.45
+    KEEPER_SHIRT_COLOR = (0.95, 0.82, 0.10)   # yellow jersey
+    KEEPER_SHORTS_COLOR = (0.06, 0.06, 0.07)  # black shorts
+    KEEPER_SKIN_COLOR = (0.92, 0.72, 0.55)
+    KEEPER_BOOT_COLOR = (0.05, 0.05, 0.05)
 
     BALL_SETTLE_STEPS_DEFAULT = 120
 
     # Option 1 — field players the ball can bounce off
     PLAYERS_ENABLED_DEFAULT = False  # Option 1 toggle
     PLAYERS_MAX_DEFAULT = 2
-    PLAYER_MODEL_DEFAULT = "223_soccer_player"
-    # Footprint half-width matches the goalkeeper square (ball_radius); height from mesh.
-    PLAYER_HALF_XY_DEFAULT = 0.018
-    PLAYER_HALF_Z_DEFAULT = 0.0435
+    # Same stylized figure as the keeper; XY footprint scaled by this (0.7 = 30% thinner).
+    PLAYER_THIN_SCALE_DEFAULT = 0.70
     PLAYER_CORRIDOR_MARGIN_DEFAULT = 0.04
     PLAYER_Y_SPREAD_DEFAULT = 0.20
     # Min clear gap (edge-to-edge) between players; center spacing adds footprint widths.
@@ -97,16 +107,13 @@ class save_goal(Base_Task):
     PLAYER_MAX_GOAL_DIST_MULT_DEFAULT = 2.0
     # Blend of "face partner" vs "face goal" when orienting players (0=partner only, 1=goal only).
     PLAYER_GOAL_FACE_BIAS_DEFAULT = 0.22
-    PLAYER_COLORS = (
-        (0.15, 0.40, 0.90),
-        (0.90, 0.20, 0.18),
-    )
+    PLAYER_SHIRT_COLOR = (0.15, 0.40, 0.90)  # blue jersey (keeper is yellow)
 
     # Option 2 — partial field cover / tunnel over the approach corridor
     COVER_ENABLED_DEFAULT = False  # Option 2 toggle
     COVER_ENTRY_GAP_DEFAULT = 0.10       # m; min open gap on the ball-drop side
     COVER_EXIT_GAP_FRAC_DEFAULT = 0.10   # fraction of field length open before red line
-    COVER_HALF_Y_DEFAULT = 0.12          # m; half-width of cover cavity about goal_center_y
+    COVER_HALF_Y_DEFAULT = None          # None → match red-line half-width (goal_half_w + RED_LINE_Y_EXTRA)
     COVER_CLEARANCE_Z_DEFAULT = 0.12     # m; clear height under roof (fits ball + players)
     COVER_WALL_T_DEFAULT = 0.008         # m; side-wall thickness
     COVER_ROOF_T_DEFAULT = 0.006         # m; roof thickness
@@ -114,6 +121,8 @@ class save_goal(Base_Task):
     # Clear gap between cover exit and the nearest Opt-1 player (when both enabled).
     COVER_PLAYER_CLEARANCE_DEFAULT = 0.02
     COVER_COLOR = (0.42, 0.45, 0.50)
+    # Red deadline line extends this far past each goal post (half-width = goal_half_w + extra).
+    RED_LINE_Y_EXTRA_DEFAULT = 0.10
 
     # Soccer-style goal net (visual lattice behind the posts)
     NET_ENABLED_DEFAULT = True
@@ -344,11 +353,72 @@ class save_goal(Base_Task):
                 return pts[i] + (pts[i + 1] - pts[i]) * t
         return pts[-1].copy()
 
+    def _soccer_ball_quat_at_progress(self, progress: float):
+        """Roll the textured ball along its path (no-slip) matching travel direction.
+
+        Right-hand rule: for velocity ``v`` on the table, ``ω = (ẑ × v) / r``, so a
+        ball moving +X rotates about +Y and the top surface moves with the travel.
+        """
+        progress = float(np.clip(progress, 0.0, 1.0))
+        r = max(float(getattr(self, "ball_radius", self.BALL_RADIUS_DEFAULT)), 1e-6)
+        if self._ball_waypoints is not None and self._ball_path_len >= 1e-8:
+            pts = self._ball_waypoints
+            cum = self._ball_seg_cum
+            path_len = float(self._ball_path_len)
+        else:
+            p0 = np.asarray(self.ball_start_pose, dtype=np.float64)
+            p1 = np.asarray(self.ball_target_pose, dtype=np.float64)
+            pts = [p0, p1]
+            path_len = float(np.linalg.norm(p1 - p0))
+            cum = [0.0, path_len]
+        dist_target = progress * path_len
+        # Accumulate rotations along each segment (handles Opt-1 bounce kinks).
+        qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
+        traveled = 0.0
+        for i in range(len(pts) - 1):
+            seg = float(cum[i + 1] - cum[i])
+            if seg < 1e-12:
+                continue
+            take = float(min(seg, dist_target - traveled))
+            if take <= 1e-12:
+                if traveled >= dist_target - 1e-12:
+                    break
+                traveled += seg
+                continue
+            d = np.asarray(pts[i + 1][:2], dtype=np.float64) - np.asarray(pts[i][:2], dtype=np.float64)
+            dn = float(np.linalg.norm(d))
+            if dn > 1e-12:
+                d /= dn
+                # ω axis = ẑ × d̂ = (-dy, dx, 0)
+                ax, ay = -float(d[1]), float(d[0])
+                an = float(np.hypot(ax, ay))
+                if an > 1e-12:
+                    ax /= an
+                    ay /= an
+                    ang = take / r
+                    hw = float(np.cos(0.5 * ang))
+                    hs = float(np.sin(0.5 * ang))
+                    dq_w, dq_x, dq_y, dq_z = hw, ax * hs, ay * hs, 0.0
+                    # q = dq * q (apply new roll in world frame)
+                    nw = dq_w * qw - dq_x * qx - dq_y * qy - dq_z * qz
+                    nx = dq_w * qx + dq_x * qw + dq_y * qz - dq_z * qy
+                    ny = dq_w * qy - dq_x * qz + dq_y * qw + dq_z * qx
+                    nz = dq_w * qz + dq_x * qy - dq_y * qx + dq_z * qw
+                    qw, qx, qy, qz = nw, nx, ny, nz
+            traveled += take
+            if traveled >= dist_target - 1e-12:
+                break
+        nrm = float(np.sqrt(qw * qw + qx * qx + qy * qy + qz * qz))
+        if nrm < 1e-12:
+            return [1.0, 0.0, 0.0, 0.0]
+        return [qw / nrm, qx / nrm, qy / nrm, qz / nrm]
+
     def _spawn_field_players(self, start_x: float, start_y: float, goal_end_x: float):
         """Opt 1: place players before the red line, near the goal (≤2× green depth)."""
         self._players = []
         self._bounce_player_idx = -1
         self.ball_bounce_pose = None
+        self._players_hit = set()
         if not self.players_enabled:
             return
 
@@ -436,15 +506,13 @@ class save_goal(Base_Task):
                     ))
                     placed.append((_rand_x(), py))
 
-        # Mesh feet sit at the actor origin (tiny sink so soles meet the table).
-        # Boxes are centered on pose.
-        mesh_z = float(self.table_top_z - 0.002)
+        # Mesh-style feet sit at the actor origin; box figures are centered on pose.
         box_z = float(self.table_top_z + self.player_half_z)
         mid_y = float(np.mean([p[1] for p in placed])) if placed else float(self.goal_center_y)
 
         for i, (px, py) in enumerate(placed):
             # Face each other (toward partner) and slightly toward the goal.
-            # 223_soccer_player faces local -Y at identity (head protrudes in -Y).
+            # Stylized figure faces local +X (arms along ±Y).
             if len(placed) >= 2:
                 others = [p for j, p in enumerate(placed) if j != i]
                 partner = min(others, key=lambda p: (p[0] - px) ** 2 + (p[1] - py) ** 2)
@@ -459,41 +527,19 @@ class save_goal(Base_Task):
             if float(np.linalg.norm(face)) < 1e-6:
                 face = toward
             face /= float(np.linalg.norm(face))
-            # Map local -Y → face: R_z(yaw) @ (0,-1) = (sin yaw, -cos yaw) == face
-            # => yaw = atan2(face_x, -face_y)
-            yaw = float(np.arctan2(face[0], -face[1]))
+            # Map local +X → face: R_z(yaw) @ (1,0) = (cos yaw, sin yaw) == face
+            yaw = float(np.arctan2(face[1], face[0]))
             qz = np.sin(yaw * 0.5)
             qw = np.cos(yaw * 0.5)
-            player = create_actor(
-                self,
-                pose=sapien.Pose(
-                    [px, py, mesh_z],
-                    [qw, 0.0, 0.0, qz],
-                ),
-                modelname=self.player_model,
-                model_id=0,
-                convex=True,
+            player = self._build_player_figure(
+                sapien.Pose([px, py, box_z], [qw, 0.0, 0.0, qz]),
+                hx=float(self.player_half_xy),
+                hy=float(self.player_half_xy),
+                hz=float(self.player_half_z),
+                shirt_color=self.PLAYER_SHIRT_COLOR,
+                name=f"field_player_{i}",
                 is_static=True,
             )
-            if player is None:
-                # Fallback primitive if the mesh asset is missing.
-                color = self.PLAYER_COLORS[i % len(self.PLAYER_COLORS)]
-                player = create_box(
-                    self,
-                    pose=sapien.Pose(
-                        [px, py, box_z],
-                        [qw, 0.0, 0.0, qz],
-                    ),
-                    half_size=[self.player_half_xy, self.player_half_xy, self.player_half_z],
-                    color=color,
-                    is_static=True,
-                    name=f"field_player_{i}",
-                )
-            else:
-                try:
-                    player.set_name(f"field_player_{i}")
-                except Exception:
-                    pass
             self._players.append(player)
             self.add_prohibit_area(player, padding=0.02)
 
@@ -524,7 +570,8 @@ class save_goal(Base_Task):
                     continue
                 if self._segment_clear_of_disk(
                     hit_xy, np.array([goal_end_x, end_y]), np.array([px, py]),
-                    self.player_half_xy + self.ball_radius + 0.01,
+                    # Cover the square OBB corners, not just the inscribed disk.
+                    self.player_half_xy * np.sqrt(2.0) + self.ball_radius + 0.01,
                 ):
                     continue
                 ok = False
@@ -564,6 +611,9 @@ class save_goal(Base_Task):
         self.cover_x_min = None
         self.cover_x_max = None
         self.cover_len = 0.0
+        self.cover_y_min = None
+        self.cover_y_max = None
+        self._cover_wall_boxes = []
         if not self.cover_enabled:
             return
 
@@ -586,7 +636,7 @@ class save_goal(Base_Task):
         if player_xs:
             clearance = float(
                 self.cover_player_clearance
-                + getattr(self, "player_half_xy", self.PLAYER_HALF_XY_DEFAULT)
+                + getattr(self, "player_half_xy", self.ball_radius * self.PLAYER_THIN_SCALE_DEFAULT)
             )
             if self.travel_dir > 0.0:
                 first_player_x = float(min(player_xs))
@@ -617,26 +667,38 @@ class save_goal(Base_Task):
 
         cx = 0.5 * (x_min + x_max)
         half_x = 0.5 * (x_max - x_min)
+        # Cavity half-width matches the red deadline line (same y extent).
         half_y = float(self.cover_half_y)
         wall_t = float(self.cover_wall_t)
         roof_t = float(self.cover_roof_t)
         clear_z = float(self.cover_clearance_z)
         cy = float(self.goal_center_y)
         color = self.COVER_COLOR
+        self.cover_y_min = float(cy - half_y)
+        self.cover_y_max = float(cy + half_y)
+        self._cover_wall_boxes = []
 
         # Side walls (leave cavity open along travel for the ball).
         wall_z = self.table_top_z + 0.5 * clear_z
         for sign, tag in ((-1.0, "neg"), (1.0, "pos")):
             wy = cy + sign * (half_y + 0.5 * wall_t)
+            half_size = [half_x, 0.5 * wall_t, 0.5 * clear_z]
             part = create_box(
                 self,
                 pose=sapien.Pose([cx, wy, wall_z], [1, 0, 0, 0]),
-                half_size=[half_x, 0.5 * wall_t, 0.5 * clear_z],
+                half_size=half_size,
                 color=color,
                 is_static=True,
                 name=f"field_cover_wall_{tag}",
             )
             self._cover_parts.append(part)
+            self._cover_wall_boxes.append(
+                {
+                    "center": np.array([cx, wy, wall_z], dtype=np.float64),
+                    "half": np.array(half_size, dtype=np.float64),
+                    "tag": tag,
+                }
+            )
 
         # Roof slab.
         roof_z = self.table_top_z + clear_z + 0.5 * roof_t
@@ -733,6 +795,163 @@ class save_goal(Base_Task):
                 f"goal_net_top_x_{i}",
             )
 
+    def _build_player_figure(
+        self,
+        pose: sapien.Pose,
+        *,
+        hx: float,
+        hy: float,
+        hz: float,
+        shirt_color,
+        name: str = "player_figure",
+        is_static: bool = False,
+        mass: float = 0.0,
+    ) -> Actor:
+        """Stylized soccer figure: box collision + boots / shorts / shirt / head visuals."""
+        from .utils.create_actor import preprocess
+
+        scene, pose = preprocess(self, pose)
+        hx = float(hx)
+        hy = float(hy)
+        hz = float(hz)
+        H = 2.0 * hz
+
+        # Vertical stack (bottom → top), fractions of total height.
+        boot_h = 0.10 * H
+        shorts_h = 0.30 * H
+        shirt_h = 0.38 * H
+        head_h = H - boot_h - shorts_h - shirt_h
+
+        def _mat(rgb):
+            return sapien.render.RenderMaterial(base_color=[float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0])
+
+        def _add_box(builder, z0, z1, half_xy, color, y_off=0.0, x_off=0.0):
+            half_z = 0.5 * (z1 - z0)
+            cz = 0.5 * (z0 + z1)
+            builder.add_box_visual(
+                pose=sapien.Pose([x_off, y_off, cz]),
+                half_size=[half_xy[0], half_xy[1], half_z],
+                material=_mat(color),
+            )
+
+        builder = scene.create_actor_builder()
+        builder.set_physx_body_type("static" if is_static else "dynamic")
+        builder.add_box_collision(
+            pose=sapien.Pose([0, 0, 0]),
+            half_size=[hx, hy, hz],
+            material=scene.default_physical_material,
+        )
+
+        z = -hz
+        # Boots
+        _add_box(builder, z, z + boot_h, [hx * 0.95, hy * 0.95], self.KEEPER_BOOT_COLOR)
+        z += boot_h
+        # Black shorts
+        _add_box(builder, z, z + shorts_h, [hx * 0.98, hy * 0.98], self.KEEPER_SHORTS_COLOR)
+        z += shorts_h
+        # Jersey / torso (+ arms)
+        shirt_z0, shirt_z1 = z, z + shirt_h
+        _add_box(builder, shirt_z0, shirt_z1, [hx * 0.92, hy * 0.72], shirt_color)
+        # Arms stay inside the collision footprint (±Y) so grasp/AABB stay consistent.
+        arm_half_y = hy * 0.22
+        arm_out = hy - arm_half_y
+        _add_box(
+            builder, shirt_z0 + 0.05 * shirt_h, shirt_z1 - 0.08 * shirt_h,
+            [hx * 0.50, arm_half_y], shirt_color, y_off=arm_out,
+        )
+        _add_box(
+            builder, shirt_z0 + 0.05 * shirt_h, shirt_z1 - 0.08 * shirt_h,
+            [hx * 0.50, arm_half_y], shirt_color, y_off=-arm_out,
+        )
+        z = shirt_z1
+        # Head (box reads better than a sphere at this tiny scale)
+        head_half = min(hx, hy, 0.48 * head_h) * 0.85
+        _add_box(
+            builder, z + 0.05 * head_h, z + head_h - 0.02 * head_h,
+            [head_half, head_half], self.KEEPER_SKIN_COLOR,
+        )
+
+        builder.set_initial_pose(pose)
+        if is_static:
+            entity = builder.build_static(name=name)
+        else:
+            entity = builder.build(name=name)
+        # Match create_box contact groups so ball↔figure PhysX contacts work after unlock.
+        for comp in entity.get_components():
+            if not isinstance(comp, sapien.physx.PhysxRigidBaseComponent):
+                continue
+            for shape in comp.get_collision_shapes():
+                shape.set_collision_groups([1, 1, 0, 0])
+            if isinstance(comp, sapien.physx.PhysxRigidDynamicComponent) and mass > 0.0:
+                comp.set_mass(float(mass))
+
+        # Same contact/functional frames as create_box (scale = half_size).
+        data = {
+            "center": [0, 0, 0],
+            "extents": [hx, hy, hz],
+            "scale": [hx, hy, hz],
+            "target_pose": [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]]],
+            "contact_points_pose": [
+                [
+                    [0, 0, 1, 0],
+                    [1, 0, 0, 0],
+                    [0, 1, 0, 0.0],
+                    [0, 0, 0, 1],
+                ],
+                [
+                    [1, 0, 0, 0],
+                    [0, 0, -1, 0],
+                    [0, 1, 0, 0.0],
+                    [0, 0, 0, 1],
+                ],
+                [
+                    [-1, 0, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 1, 0, 0.0],
+                    [0, 0, 0, 1],
+                ],
+                [
+                    [0, 0, -1, 0],
+                    [-1, 0, 0, 0],
+                    [0, 1, 0, 0.0],
+                    [0, 0, 0, 1],
+                ],
+            ],
+            "transform_matrix": np.eye(4).tolist(),
+            "functional_matrix": [
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, -1.0, 0, 0.0],
+                    [0.0, 0, -1.0, -1],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, -1.0, 0, 0.0],
+                    [0.0, 0, -1.0, 1],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            ],
+            "contact_points_description": [],
+            "contact_points_group": [[0, 1, 2, 3], [4, 5, 6, 7]],
+            "contact_points_mask": [True, True],
+            "target_point_description": ["The center point on the bottom of the figure."],
+        }
+        return Actor(entity, data, mass=float(mass) if mass > 0.0 else 0.01)
+
+    def _build_goalkeeper(self, pose: sapien.Pose) -> Actor:
+        """Blocker with box collision + stylized yellow-shirt / black-shorts visuals."""
+        return self._build_player_figure(
+            pose,
+            hx=float(self.keeper_half_x),
+            hy=float(self.keeper_half_y),
+            hz=float(self.keeper_half_z),
+            shirt_color=self.KEEPER_SHIRT_COLOR,
+            name="goalkeeper",
+            is_static=False,
+            mass=float(getattr(self, "keeper_mass", self.KEEPER_MASS)),
+        )
+
     def _keeper_in_zone(self):
         if getattr(self, "goalkeeper", None) is None:
             return False
@@ -750,53 +969,507 @@ class save_goal(Base_Task):
         )
 
     def _keeper_seated_on_table(self):
-        """True when the cube is on the table (can physically block), even outside green."""
+        """True when the keeper rests on the table (can physically block), even outside green."""
         if getattr(self, "goalkeeper", None) is None:
             return False
-        keeper_z = float(self.goalkeeper.get_pose().p[2])
-        target_z = float(self.table_top_z + self.keeper_half_z)
-        return abs(keeper_z - target_z) <= 0.02
+        # Use the lowest OBB corner so tilted poses still count as seated.
+        pose_m = self.goalkeeper.get_pose().to_transformation_matrix()
+        hx = float(self.keeper_half_x)
+        hy = float(self.keeper_half_y)
+        hz = float(self.keeper_half_z)
+        local = np.array(
+            [
+                [-hx, -hy, -hz, 1.0],
+                [-hx, -hy,  hz, 1.0],
+                [-hx,  hy, -hz, 1.0],
+                [-hx,  hy,  hz, 1.0],
+                [ hx, -hy, -hz, 1.0],
+                [ hx, -hy,  hz, 1.0],
+                [ hx,  hy, -hz, 1.0],
+                [ hx,  hy,  hz, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        world_z = (pose_m @ local.T).T[:, 2]
+        z_min = float(np.min(world_z))
+        return abs(z_min - float(self.table_top_z)) <= max(0.03, 0.4 * hz)
 
-    def _try_front_face_bounce(self, prev_p, next_p):
-        """Bounce off the cube's ball-facing face if the path hits it.
+    def _segment_hit_obb(self, pose_m, half_xyz, prev_p, next_p, inflate: float):
+        """Segment vs oriented box. Returns ``(t, hit_world, n_world)`` or ``None``."""
+        R = pose_m[:3, :3]
+        c = pose_m[:3, 3]
+        half = np.asarray(half_xyz, dtype=np.float64) + float(inflate)
+        p0w = np.asarray(prev_p[:3], dtype=np.float64)
+        p1w = np.asarray(next_p[:3], dtype=np.float64)
+        p0 = R.T @ (p0w - c)
+        p1 = R.T @ (p1w - c)
+        d = p1 - p0
 
-        Works inside or outside the green zone so the ball never tunnels through a
-        seated keeper. Success / late-failure still require green-zone placement.
-        """
+        if np.all(np.abs(p0) <= half + 1e-9):
+            gaps = half - np.abs(p0)
+            axis = int(np.argmin(gaps))
+            sign = 1.0 if float(p0[axis]) >= 0.0 else -1.0
+            hit_local = p0.copy()
+            hit_local[axis] = sign * float(half[axis])
+            n_local = np.zeros(3, dtype=np.float64)
+            n_local[axis] = sign
+            hit_world = c + R @ hit_local
+            n_world = R @ n_local
+            n_n = float(np.linalg.norm(n_world))
+            if n_n > 1e-9:
+                n_world = n_world / n_n
+            return 0.0, hit_world, n_world
+
+        t_enter = 0.0
+        t_exit = 1.0
+        hit_axis = 0
+        hit_sign = 1.0
+        for axis in range(3):
+            lo = -float(half[axis])
+            hi = float(half[axis])
+            if abs(float(d[axis])) < 1e-12:
+                if float(p0[axis]) < lo or float(p0[axis]) > hi:
+                    return None
+                continue
+            inv = 1.0 / float(d[axis])
+            t1 = (lo - float(p0[axis])) * inv
+            t2 = (hi - float(p0[axis])) * inv
+            t_near, t_far = (t1, t2) if t1 <= t2 else (t2, t1)
+            if t_near > t_enter:
+                t_enter = float(t_near)
+                hit_axis = axis
+                hit_sign = -1.0 if t1 <= t2 else 1.0
+            t_exit = float(min(t_exit, t_far))
+            if t_enter > t_exit + 1e-12:
+                return None
+
+        if t_enter < 0.0 or t_enter > 1.0:
+            return None
+        hit_local = p0 + t_enter * d
+        n_local = np.zeros(3, dtype=np.float64)
+        n_local[hit_axis] = hit_sign
+        hit_world = c + R @ hit_local
+        n_world = R @ n_local
+        n_n = float(np.linalg.norm(n_world))
+        if n_n > 1e-9:
+            n_world = n_world / n_n
+        return float(t_enter), hit_world, n_world
+
+    def _segment_hit_keeper_obb(self, prev_p, next_p, inflate: float):
+        """Segment vs oriented keeper box (current pose). Returns (t, hit_world, n_world) or None."""
+        if getattr(self, "goalkeeper", None) is None:
+            return None
+        pose_m = self.goalkeeper.get_pose().to_transformation_matrix()
+        half = np.array(
+            [float(self.keeper_half_x), float(self.keeper_half_y), float(self.keeper_half_z)],
+            dtype=np.float64,
+        )
+        return self._segment_hit_obb(pose_m, half, prev_p, next_p, inflate=inflate)
+
+    def _try_field_player_solid_bounce(self, prev_p, next_p):
+        """Solid OBB bounce off Opt-1 field players (no tunneling through them)."""
+        players = getattr(self, "_players", None) or []
+        if not players:
+            return False
+        inflate = float(self.ball_radius + 0.001)
+        half = np.array(
+            [
+                float(self.player_half_xy),
+                float(self.player_half_xy),
+                float(self.player_half_z),
+            ],
+            dtype=np.float64,
+        )
+        best = None  # (t, hit_p, n_xy, idx)
+        hit_set = getattr(self, "_players_hit", None)
+        if hit_set is None:
+            hit_set = set()
+            self._players_hit = hit_set
+        for i, player in enumerate(players):
+            if i in hit_set:
+                continue
+            try:
+                pose_m = player.get_pose().to_transformation_matrix()
+            except Exception:
+                continue
+            hit = self._segment_hit_obb(pose_m, half, prev_p, next_p, inflate=inflate)
+            if hit is None:
+                continue
+            t, hit_p, n_world = hit
+            n_xy = np.array([float(n_world[0]), float(n_world[1])], dtype=np.float64)
+            n_n = float(np.linalg.norm(n_xy))
+            if n_n < 1e-6:
+                # Mostly vertical contact — push back along approach.
+                n_xy = np.array(
+                    [-float(self.ball_dir[0]), -float(self.ball_dir[1])],
+                    dtype=np.float64,
+                )
+                n_n = float(np.linalg.norm(n_xy))
+                if n_n < 1e-6:
+                    continue
+            n_xy /= n_n
+            if best is None or t < best[0]:
+                best = (t, hit_p, n_xy, i)
+        if best is None:
+            return False
+        _t, hit_p, n_xy, idx = best
+        self._apply_field_player_bounce(hit_p, n_xy, idx)
+        return True
+
+    def _apply_field_player_bounce(self, hit_p, normal_xy, player_idx: int):
+        """Reflect the kinematic shot off a static field player and continue toward goal."""
+        e = float(self._cfg.get("bounce_restitution", self.BOUNCE_RESTITUTION))
+        n = np.asarray(normal_xy[:2], dtype=np.float64)
+        n_n = float(np.linalg.norm(n))
+        if n_n < 1e-9:
+            n = np.array([-float(self.travel_dir), 0.0], dtype=np.float64)
+            n_n = 1.0
+        n = n / n_n
+
+        v = np.array(
+            [
+                float(self.ball_dir[0]) * float(self.ball_speed),
+                float(self.ball_dir[1]) * float(self.ball_speed),
+            ],
+            dtype=np.float64,
+        )
+        vn = float(np.dot(v, n))
+        if vn < 0.0:
+            # Static infinite-mass wall: reflect with restitution.
+            v = v - (1.0 + e) * vn * n
+        else:
+            v = v + max(0.02, e * float(self.ball_speed)) * n
+
+        sep = 0.002
+        p = np.asarray(hit_p, dtype=np.float64).copy()
+        p[0] = float(p[0] + sep * n[0])
+        p[1] = float(p[1] + sep * n[1])
+        p[2] = float(self.table_top_z + self.ball_radius)
+
+        # Prefer continuing into the goal mouth after the bounce (Opt-1 behavior).
+        goal_end_x = float(self.ball_target_pose[0]) if self.ball_target_pose is not None else float(
+            self.goal_x + self.travel_dir * abs(self.ball_goal_end_x_offset)
+        )
+        end_y = float(getattr(self, "_bounce_end_y", self.goal_center_y))
+        if self.ball_target_pose is not None:
+            end_y = float(self.ball_target_pose[1])
+        # If the reflected velocity already aims near the mouth, follow it; else retarget.
+        speed = float(np.linalg.norm(v))
+        if speed > 1e-6:
+            v_hat = v / speed
+            # Ray from hit toward goal_end_x along reflected heading.
+            if abs(float(v_hat[0])) > 1e-6 and (float(v_hat[0]) * float(self.travel_dir) > 0.0):
+                t_x = (goal_end_x - float(p[0])) / float(v_hat[0])
+                if t_x > 0.0:
+                    pred_y = float(p[1] + t_x * v_hat[1])
+                    y_lo = self.goal_center_y - self.goal_half_w + self.ball_target_y_margin
+                    y_hi = self.goal_center_y + self.goal_half_w - self.ball_target_y_margin
+                    if y_lo <= pred_y <= y_hi:
+                        end_y = pred_y
+                    else:
+                        end_y = float(np.clip(pred_y, y_lo, y_hi))
+
+        target = np.array(
+            [goal_end_x, end_y, self.table_top_z + self.ball_radius],
+            dtype=np.float64,
+        )
+        # Ensure post-bounce segment clears remaining players.
+        placed = []
+        for j, pl in enumerate(getattr(self, "_players", []) or []):
+            if j == player_idx or j in getattr(self, "_players_hit", set()):
+                continue
+            try:
+                pp = pl.get_pose().p
+                placed.append((j, float(pp[0]), float(pp[1])))
+            except Exception:
+                pass
+        clear_r = float(self.player_half_xy * np.sqrt(2.0) + self.ball_radius + 0.01)
+        y_lo = self.goal_center_y - self.goal_half_w + self.ball_target_y_margin
+        y_hi = self.goal_center_y + self.goal_half_w - self.ball_target_y_margin
+        chosen_y = end_y
+        for cand in [end_y] + [
+            float(np.random.uniform(y_lo, y_hi)) for _ in range(24)
+        ]:
+            ok = True
+            for _j, px, py in placed:
+                if not self._segment_clear_of_disk(
+                    p[:2], np.array([goal_end_x, cand]), np.array([px, py]), clear_r
+                ):
+                    ok = False
+                    break
+            if ok:
+                chosen_y = float(np.clip(cand, y_lo, y_hi))
+                break
+        target[1] = chosen_y
+
+        self.ball_start_pose = p.copy()
+        self.ball_target_pose = target
+        self.ball_bounce_pose = None
+        self._bounce_end_y = float(chosen_y)
+        self._set_ball_waypoints([p, target])
+        ball_vec = target - p
+        self.ball_dir = ball_vec / max(float(np.linalg.norm(ball_vec)), 1e-8)
+        dt = float(self.scene.get_timestep())
+        self.ball_total_steps = max(
+            1, int(np.ceil(float(self._ball_path_len) / max(self.ball_speed * dt, 1e-8)))
+        )
+        self._ball_step = 0
+        self._players_hit.add(int(player_idx))
+
+        self.ball.set_pose(sapien.Pose(p.tolist(), [1, 0, 0, 0]))
+        try:
+            self._ball_rigid.set_kinematic_target(sapien.Pose(p.tolist(), [1, 0, 0, 0]))
+        except Exception:
+            pass
+
+    def _try_cover_wall_solid_bounce(self, prev_p, next_p):
+        """Solid bounce off Opt-2 tunnel side walls (no tunneling through them)."""
+        walls = getattr(self, "_cover_wall_boxes", None) or []
+        if not walls:
+            return False
+        inflate = float(self.ball_radius + 0.001)
+        best = None  # (t, hit_p, n_xy)
+        for wall in walls:
+            pose_m = np.eye(4, dtype=np.float64)
+            pose_m[:3, 3] = wall["center"]
+            hit = self._segment_hit_obb(pose_m, wall["half"], prev_p, next_p, inflate=inflate)
+            if hit is None:
+                continue
+            t, hit_p, n_world = hit
+            n_xy = np.array([float(n_world[0]), float(n_world[1])], dtype=np.float64)
+            n_n = float(np.linalg.norm(n_xy))
+            if n_n < 1e-6:
+                continue
+            n_xy /= n_n
+            # Only bounce when approaching the wall (inward into the solid).
+            approach = np.array(
+                [float(next_p[0] - prev_p[0]), float(next_p[1] - prev_p[1])],
+                dtype=np.float64,
+            )
+            if float(np.dot(approach, n_xy)) >= 0.0:
+                continue
+            if best is None or t < best[0]:
+                best = (t, hit_p, n_xy)
+        if best is None:
+            return False
+        _t, hit_p, n_xy = best
+        self._apply_cover_wall_bounce(hit_p, n_xy)
+        return True
+
+    def _apply_cover_wall_bounce(self, hit_p, normal_xy):
+        """Reflect the kinematic shot off a tunnel wall and continue toward the goal."""
+        e = float(self._cfg.get("bounce_restitution", self.BOUNCE_RESTITUTION))
+        n = np.asarray(normal_xy[:2], dtype=np.float64)
+        n_n = float(np.linalg.norm(n))
+        if n_n < 1e-9:
+            return
+        n = n / n_n
+
+        v = np.array(
+            [
+                float(self.ball_dir[0]) * float(self.ball_speed),
+                float(self.ball_dir[1]) * float(self.ball_speed),
+            ],
+            dtype=np.float64,
+        )
+        vn = float(np.dot(v, n))
+        if vn < 0.0:
+            v = v - (1.0 + e) * vn * n
+        else:
+            v = v + max(0.02, e * float(self.ball_speed)) * n
+
+        sep = 0.002
+        p = np.asarray(hit_p, dtype=np.float64).copy()
+        p[0] = float(p[0] + sep * n[0])
+        p[1] = float(p[1] + sep * n[1])
+        p[2] = float(self.table_top_z + self.ball_radius)
+
+        # Keep the ball inside the tunnel cavity after a side bounce.
+        if getattr(self, "cover_y_min", None) is not None and getattr(self, "cover_y_max", None) is not None:
+            margin = float(self.ball_radius + 0.001)
+            p[1] = float(np.clip(p[1], self.cover_y_min + margin, self.cover_y_max - margin))
+
+        goal_end_x = float(self.ball_target_pose[0]) if self.ball_target_pose is not None else float(
+            self.goal_x + self.travel_dir * abs(self.ball_goal_end_x_offset)
+        )
+        y_lo = self.goal_center_y - self.goal_half_w + self.ball_target_y_margin
+        y_hi = self.goal_center_y + self.goal_half_w - self.ball_target_y_margin
+        end_y = float(self.ball_target_pose[1]) if self.ball_target_pose is not None else float(self.goal_center_y)
+
+        speed = float(np.linalg.norm(v))
+        if speed > 1e-6 and abs(float(v[0])) > 1e-6 and (float(v[0]) * float(self.travel_dir) > 0.0):
+            v_hat = v / speed
+            t_x = (goal_end_x - float(p[0])) / float(v_hat[0])
+            if t_x > 0.0:
+                pred_y = float(p[1] + t_x * v_hat[1])
+                end_y = float(np.clip(pred_y, y_lo, y_hi))
+        else:
+            end_y = float(np.clip(p[1], y_lo, y_hi))
+
+        # Also keep the post-bounce aim inside the cavity while still under the cover.
+        if (
+            getattr(self, "cover_x_min", None) is not None
+            and getattr(self, "cover_y_min", None) is not None
+            and self.cover_x_min <= goal_end_x <= self.cover_x_max
+        ):
+            end_y = float(np.clip(end_y, self.cover_y_min + self.ball_radius, self.cover_y_max - self.ball_radius))
+
+        target = np.array(
+            [goal_end_x, end_y, self.table_top_z + self.ball_radius],
+            dtype=np.float64,
+        )
+        self.ball_start_pose = p.copy()
+        self.ball_target_pose = target
+        self.ball_bounce_pose = None
+        self._set_ball_waypoints([p, target])
+        ball_vec = target - p
+        self.ball_dir = ball_vec / max(float(np.linalg.norm(ball_vec)), 1e-8)
+        dt = float(self.scene.get_timestep())
+        self.ball_total_steps = max(
+            1, int(np.ceil(float(self._ball_path_len) / max(self.ball_speed * dt, 1e-8)))
+        )
+        self._ball_step = 0
+        self.ball.set_pose(sapien.Pose(p.tolist(), [1, 0, 0, 0]))
+        try:
+            self._ball_rigid.set_kinematic_target(sapien.Pose(p.tolist(), [1, 0, 0, 0]))
+        except Exception:
+            pass
+
+    def _try_keeper_solid_bounce(self, prev_p, next_p):
+        """Bounce the kinematic ball off the solid keeper OBB (any face / pose)."""
         if not self._keeper_seated_on_table():
             return False
-        bounds = self._keeper_xy_bounds()
-        if bounds is None:
+
+        inflate = float(self.ball_radius + 0.001)
+        hit = self._segment_hit_keeper_obb(prev_p, next_p, inflate=inflate)
+        if hit is None:
             return False
-        x_min, x_max, y_min, y_max = bounds
-        face_x = float(
-            (x_min - self.ball_radius - 0.001)
-            if self.travel_dir > 0
-            else (x_max + self.ball_radius + 0.001)
-        )
-        crossed_face = (
-            self.travel_dir * prev_p[0] < self.travel_dir * face_x
-            and self.travel_dir * next_p[0] >= self.travel_dir * face_x
-        ) or (
-            abs(float(next_p[0] - face_x)) <= 1e-4
-            and self.travel_dir * next_p[0] >= self.travel_dir * face_x
-        )
-        if not crossed_face:
-            return False
-        dx = float(next_p[0] - prev_p[0])
-        if abs(dx) < 1e-9:
-            hit_y = float(next_p[1])
-        else:
-            t = float((face_x - prev_p[0]) / dx)
-            hit_y = float(prev_p[1] + t * (next_p[1] - prev_p[1]))
-        y_tol = 0.002
-        if not ((y_min - y_tol) <= hit_y <= (y_max + y_tol)):
-            return False
-        hit_p = np.asarray(next_p, dtype=np.float64).copy()
-        hit_p[0] = face_x
-        hit_p[1] = hit_y
-        self._begin_mass_bounce(hit_p)
+        _t, hit_p, n_world = hit
+        hit_p = np.asarray(hit_p, dtype=np.float64).copy()
+        hit_p[2] = float(self.table_top_z + self.ball_radius)
+        # Keep the contact normal in the table plane for the 2D shot.
+        n_xy = np.array([float(n_world[0]), float(n_world[1])], dtype=np.float64)
+        n_n = float(np.linalg.norm(n_xy))
+        if n_n < 1e-6:
+            # Hit mostly from above/below — push back along approach.
+            n_xy = np.array(
+                [-float(self.ball_dir[0]), -float(self.ball_dir[1])],
+                dtype=np.float64,
+            )
+            n_n = float(np.linalg.norm(n_xy))
+            if n_n < 1e-6:
+                n_xy = np.array([-float(self.travel_dir), 0.0], dtype=np.float64)
+                n_n = 1.0
+        n_xy = n_xy / n_n
+        self._begin_solid_bounce(hit_p, n_xy)
         return True
+
+    def _begin_solid_bounce(self, hit_p, normal_xy):
+        """Mass-aware rebound off the keeper along the contact normal (any angle)."""
+        self._block_was_legal = bool(self._keeper_in_zone())
+        if not self._block_was_legal:
+            self._late_failure = True
+
+        m1 = float(self.BALL_MASS)
+        m2 = float(getattr(self, "keeper_mass", self.KEEPER_MASS))
+        e = float(self._cfg.get("bounce_restitution", self.BOUNCE_RESTITUTION))
+
+        n = np.asarray(normal_xy[:2], dtype=np.float64)
+        n_n = float(np.linalg.norm(n))
+        if n_n < 1e-9:
+            n = np.array([-float(self.travel_dir), 0.0], dtype=np.float64)
+            n_n = 1.0
+        n = n / n_n
+
+        # Incoming table-plane velocity along the scripted path.
+        v1 = np.array(
+            [
+                float(self.ball_dir[0]) * float(self.ball_speed),
+                float(self.ball_dir[1]) * float(self.ball_speed),
+            ],
+            dtype=np.float64,
+        )
+        # Keeper assumed at rest before impact.
+        u1n = float(np.dot(v1, n))
+        u2n = 0.0
+        # If somehow separating already, push out gently.
+        if u1n >= 0.0:
+            u1n = -max(0.02, float(self.ball_speed) * 0.5)
+        v1n, v2n = self._elastic_1d(u1n, u2n, m1, m2, e)
+        # Tangential component unchanged (frictionless face).
+        v1_t = v1 - u1n * n
+        v1_after = v1_t + v1n * n
+        v2_after = v2n * n
+
+        sep = 0.0015
+        p = np.asarray(hit_p, dtype=np.float64).copy()
+        p[0] = float(p[0] + sep * n[0])
+        p[1] = float(p[1] + sep * n[1])
+        p[2] = float(self.table_top_z + self.ball_radius)
+        pose = sapien.Pose(p.tolist(), [1, 0, 0, 0])
+        self.ball.set_pose(pose)
+
+        self._set_collision_enabled(self.ball, True)
+        if self._ball_rigid is not None:
+            try:
+                self._ball_rigid.set_kinematic(False)
+                self._ball_rigid.set_disable_gravity(True)
+                self._ball_rigid.set_linear_velocity(
+                    [float(v1_after[0]), float(v1_after[1]), 0.0]
+                )
+                self._ball_rigid.set_angular_velocity(np.zeros(3))
+                self._ball_rigid.wake_up()
+            except Exception:
+                pass
+
+        # Unlock keeper with impulse along the contact normal; keep current pose.
+        if getattr(self, "goalkeeper", None) is not None:
+            kp = np.asarray(self.goalkeeper.get_pose().p, dtype=np.float64).copy()
+            kq = list(self.goalkeeper.get_pose().q)
+            # Pin feet to the table without resetting orientation.
+            z_lift = float(self.table_top_z + self.keeper_half_z) - float(kp[2])
+            if abs(z_lift) > 0.02:
+                kp[2] = float(self.table_top_z + self.keeper_half_z)
+                try:
+                    self.goalkeeper.set_pose(sapien.Pose(kp.tolist(), kq))
+                except Exception:
+                    try:
+                        self.goalkeeper.actor.set_pose(sapien.Pose(kp.tolist(), kq))
+                    except Exception:
+                        pass
+        keeper_rigid = self._get_rigid(self.goalkeeper)
+        if keeper_rigid is not None:
+            try:
+                keeper_rigid.set_mass(float(m2))
+                keeper_rigid.set_kinematic(False)
+                self._set_collision_enabled(self.goalkeeper, True)
+                self._set_restitution(
+                    keeper_rigid, self.BOUNCE_RESTITUTION, static_f=0.9, dynamic_f=0.7
+                )
+                hx, hy, hz = (
+                    float(self.keeper_half_x),
+                    float(self.keeper_half_y),
+                    float(self.keeper_half_z),
+                )
+                ix = (1.0 / 12.0) * m2 * ((2 * hy) ** 2 + (2 * hz) ** 2)
+                iy = (1.0 / 12.0) * m2 * ((2 * hx) ** 2 + (2 * hz) ** 2)
+                iz = (1.0 / 12.0) * m2 * ((2 * hx) ** 2 + (2 * hy) ** 2)
+                try:
+                    keeper_rigid.set_inertia([ix, iy, iz])
+                except Exception:
+                    pass
+                keeper_rigid.set_linear_damping(3.0)
+                keeper_rigid.set_angular_damping(12.0)
+                kv = np.array([float(v2_after[0]), float(v2_after[1]), 0.0], dtype=np.float64)
+                keeper_rigid.set_linear_velocity(kv.tolist())
+                keeper_rigid.set_angular_velocity(np.zeros(3))
+                keeper_rigid.wake_up()
+            except Exception:
+                pass
+
+        self._ball_blocked = True
+        self._ball_live = True
+        self._keeper_deployed = True
 
     def _wait_for_outcome(self):
         max_steps = int(self.ball_total_steps + self.ball_settle_steps)
@@ -821,8 +1494,8 @@ class save_goal(Base_Task):
         if lift_dz > 1e-4:
             self.move(self.move_by_displacement(arm_tag=arm_tag, z=lift_dz))
 
-        # Approach over the goal, then iteratively correct XY so the *cube*
-        # (not just the EE) lands on the intercept before release.
+        # Approach over the goal, then iteratively correct XY so the *keeper*
+        # footprint lands fully inside the green zone (not just the EE on the intercept).
         keeper_p = np.asarray(self.goalkeeper.get_pose().p, dtype=np.float64)
         goal_over_x = float(self.goal_x - self.travel_dir * (self.keeper_half_x + 0.01))
         goal_over_y = float(self.goal_center_y)
@@ -877,36 +1550,81 @@ class save_goal(Base_Task):
             self.plan_success = True
 
     def _seat_keeper_dynamic(self):
-        """Seat the square on the table but leave it dynamic for mass-aware hits."""
+        """Pin the keeper on the table at its current pose, ready for a solid bounce.
+
+        Held kinematic until impact so it cannot tip/slide before the shot arrives.
+        Orientation from placement is preserved — the OBB bounce uses the live pose.
+        """
         if getattr(self, "goalkeeper", None) is None:
             return
         pose = self.goalkeeper.get_pose()
         p = np.asarray(pose.p, dtype=np.float64).copy()
         p[2] = float(self.table_top_z + self.keeper_half_z)
+        # Preserve placement orientation (solid bounce works for any pose).
         seat_pose = sapien.Pose(p.tolist(), list(pose.q))
-        if abs(float(pose.p[2]) - p[2]) > 1e-4:
+        try:
+            self.goalkeeper.set_pose(seat_pose)
+        except Exception:
             try:
-                self.goalkeeper.set_pose(seat_pose)
+                self.goalkeeper.actor.set_pose(seat_pose)
             except Exception:
-                try:
-                    self.goalkeeper.actor.set_pose(seat_pose)
-                except Exception:
-                    seat_pose = pose
-        else:
-            seat_pose = pose
+                seat_pose = pose
         self._keeper_drop_pose = seat_pose
         rigid = self._get_rigid(self.goalkeeper)
         if rigid is None:
             return
         try:
-            rigid.set_kinematic(False)
-            rigid.set_mass(float(self.KEEPER_MASS))
-            rigid.set_linear_damping(2.5)
-            rigid.set_angular_damping(4.0)
+            m = float(getattr(self, "keeper_mass", self.KEEPER_MASS))
+            rigid.set_mass(m)
+            # Box inertia about center (uniform density) — stable when unlocked.
+            hx, hy, hz = float(self.keeper_half_x), float(self.keeper_half_y), float(self.keeper_half_z)
+            ix = (1.0 / 12.0) * m * ((2 * hy) ** 2 + (2 * hz) ** 2)
+            iy = (1.0 / 12.0) * m * ((2 * hx) ** 2 + (2 * hz) ** 2)
+            iz = (1.0 / 12.0) * m * ((2 * hx) ** 2 + (2 * hy) ** 2)
+            try:
+                rigid.set_inertia([ix, iy, iz])
+            except Exception:
+                pass
+            rigid.set_linear_damping(3.0)
+            rigid.set_angular_damping(12.0)
             rigid.set_linear_velocity(np.zeros(3))
             rigid.set_angular_velocity(np.zeros(3))
             self._set_restitution(rigid, self.BOUNCE_RESTITUTION, static_f=0.9, dynamic_f=0.7)
-            rigid.wake_up()
+            self._set_collision_enabled(self.goalkeeper, True)
+            # Freeze until the solid hit unlocks for mass transfer.
+            rigid.set_kinematic(True)
+        except Exception:
+            pass
+
+    def _hold_keeper_upright(self):
+        """Stabilize the deployed keeper on the table without resetting its orientation."""
+        if getattr(self, "goalkeeper", None) is None:
+            return
+        if getattr(self, "_ball_blocked", False) or getattr(self, "_ball_live", False):
+            return
+        if not getattr(self, "_keeper_deployed", False):
+            return
+        pose = self.goalkeeper.get_pose()
+        p = np.asarray(pose.p, dtype=np.float64)
+        target_z = float(self.table_top_z + self.keeper_half_z)
+        q = list(pose.q)
+        if abs(float(p[2]) - target_z) > 2e-3:
+            seat = sapien.Pose([float(p[0]), float(p[1]), target_z], q)
+            try:
+                self.goalkeeper.set_pose(seat)
+            except Exception:
+                try:
+                    self.goalkeeper.actor.set_pose(seat)
+                except Exception:
+                    return
+        rigid = self._get_rigid(self.goalkeeper)
+        if rigid is None:
+            return
+        try:
+            if not rigid.get_kinematic():
+                rigid.set_kinematic(True)
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
         except Exception:
             pass
 
@@ -967,6 +1685,7 @@ class save_goal(Base_Task):
         self.keeper_spawn_x = float(c.get("keeper_spawn_x", self.KEEPER_SPAWN_X_DEFAULT))
         self.keeper_spawn_y = float(c.get("keeper_spawn_y", self.KEEPER_SPAWN_Y_DEFAULT))
         self.keeper_goal_clearance = float(c.get("keeper_goal_clearance", self.KEEPER_GOAL_CLEARANCE_DEFAULT))
+        self.keeper_mass = float(c.get("keeper_mass", self.KEEPER_MASS))
 
         self.ball_radius = float(c.get("ball_radius", self.BALL_RADIUS_DEFAULT))
         # Nominal speed with per-episode ±20% sampling (override via ball_speed_scale_*).
@@ -1007,10 +1726,7 @@ class save_goal(Base_Task):
         # Option 1 — field players (also accepts legacy ``option: 1`` / --option 1).
         self.players_enabled = self._parse_players_enabled(c)
         self.players_max = max(1, int(c.get("players_max", self.PLAYERS_MAX_DEFAULT)))
-        self.player_model = str(c.get("player_model", self.PLAYER_MODEL_DEFAULT))
-        # Width matches the goalkeeper square (2 * ball_radius); half-z from mesh height.
-        self.player_half_xy = float(c.get("player_half_xy", self.ball_radius))
-        self.player_half_z = float(c.get("player_half_z", self.PLAYER_HALF_Z_DEFAULT))
+        self.player_thin_scale = float(c.get("player_thin_scale", self.PLAYER_THIN_SCALE_DEFAULT))
         self.player_corridor_margin = float(
             c.get("player_corridor_margin", self.PLAYER_CORRIDOR_MARGIN_DEFAULT)
         )
@@ -1022,10 +1738,17 @@ class save_goal(Base_Task):
         self.player_goal_face_bias = float(
             c.get("player_goal_face_bias", self.PLAYER_GOAL_FACE_BIAS_DEFAULT)
         )
+        # Footprint / height filled after keeper sizing below (same figure, thinner XY).
+        self.player_half_xy = None
+        self.player_half_z = None
         self._players = []
         self._bounce_player_idx = -1
         self.ball_bounce_pose = None
         self._bounce_end_y = None
+        self._players_hit = set()
+        # Stash raw overrides for after keeper_half_* are known.
+        self._player_half_xy_override = c.get("player_half_xy", None)
+        self._player_half_z_override = c.get("player_half_z", None)
 
         # Option 2 — field cover (also accepts legacy ``option: 2`` / --option 2).
         self.cover_enabled = self._parse_cover_enabled(c)
@@ -1033,7 +1756,15 @@ class save_goal(Base_Task):
         self.cover_exit_gap_frac = float(
             c.get("cover_exit_gap_frac", self.COVER_EXIT_GAP_FRAC_DEFAULT)
         )
-        self.cover_half_y = float(c.get("cover_half_y", self.COVER_HALF_Y_DEFAULT))
+        self.red_line_y_extra = float(c.get("red_line_y_extra", self.RED_LINE_Y_EXTRA_DEFAULT))
+        self.red_line_half_y = float(self.goal_half_w + self.red_line_y_extra)
+        # Tunnel cavity matches the red line width unless cover_half_y is set explicitly.
+        if "cover_half_y" in c:
+            self.cover_half_y = float(c["cover_half_y"])
+        elif self.COVER_HALF_Y_DEFAULT is not None:
+            self.cover_half_y = float(self.COVER_HALF_Y_DEFAULT)
+        else:
+            self.cover_half_y = float(self.red_line_half_y)
         self.cover_clearance_z = float(
             c.get("cover_clearance_z", self.COVER_CLEARANCE_Z_DEFAULT)
         )
@@ -1044,8 +1775,11 @@ class save_goal(Base_Task):
             c.get("cover_player_clearance", self.COVER_PLAYER_CLEARANCE_DEFAULT)
         )
         self._cover_parts = []
+        self._cover_wall_boxes = []
         self.cover_x_min = None
         self.cover_x_max = None
+        self.cover_y_min = None
+        self.cover_y_max = None
         self.cover_len = 0.0
 
         # Soccer-style visual net behind the goal mouth.
@@ -1067,7 +1801,21 @@ class save_goal(Base_Task):
         self.ball_speed = float(np.random.uniform(self.ball_speed_min, self.ball_speed_max))
         self.keeper_half_x = self.ball_radius
         self.keeper_half_y = self.ball_radius
-        self.keeper_half_z = self.ball_radius
+        keeper_z_mult = float(c.get("keeper_half_z_mult", self.KEEPER_HALF_Z_MULT_DEFAULT))
+        if "keeper_half_z" in c:
+            self.keeper_half_z = float(c["keeper_half_z"])
+        else:
+            self.keeper_half_z = float(self.ball_radius * keeper_z_mult)
+        # Field players: same figure as keeper, blue shirt, thinner XY footprint.
+        thin = float(np.clip(self.player_thin_scale, 0.2, 1.0))
+        if self._player_half_xy_override is not None:
+            self.player_half_xy = float(self._player_half_xy_override)
+        else:
+            self.player_half_xy = float(self.ball_radius * thin)
+        if self._player_half_z_override is not None:
+            self.player_half_z = float(self._player_half_z_override)
+        else:
+            self.player_half_z = float(self.keeper_half_z)
         green_half_x = 0.5 * self.green_area_x_len
         green_half_y = self.goal_half_w + 0.5 * self.green_area_y_extra
         self.green_area_center_x = float(self.goal_x - self.travel_dir * green_half_x)
@@ -1173,7 +1921,7 @@ class save_goal(Base_Task):
         create_visual_box(
             self,
             pose=sapien.Pose([self.red_line_x, self.goal_center_y, self.table_top_z + 0.001], [1, 0, 0, 0]),
-            half_size=[0.002, self.goal_half_w + 0.10, 0.001],
+            half_size=[0.002, self.red_line_half_y, 0.001],
             color=(0.95, 0.12, 0.12),
             name="red_line",
         )
@@ -1188,23 +1936,20 @@ class save_goal(Base_Task):
         keeper_x0 = float(self.goal_x)
         goal_lower_y = float(self.goal_center_y - self.goal_half_w)
         keeper_y0 = float(goal_lower_y - self.keeper_goal_clearance - self.keeper_half_y)
-        self.goalkeeper = create_box(
-            self,
-            pose=sapien.Pose([keeper_x0, keeper_y0, self.table_top_z + self.keeper_half_z], [1, 0, 0, 0]),
-            half_size=[self.keeper_half_x, self.keeper_half_y, self.keeper_half_z],
-            color=(0.90, 0.70, 0.12),
-            name="goalkeeper_square",
-            is_static=False,
+        self.goalkeeper = self._build_goalkeeper(
+            sapien.Pose([keeper_x0, keeper_y0, self.table_top_z + self.keeper_half_z], [1, 0, 0, 0]),
         )
-        self.goalkeeper.set_mass(float(self.KEEPER_MASS))
+        self.goalkeeper.set_mass(float(self.keeper_mass))
         keeper_rigid = self._get_rigid(self.goalkeeper)
         if keeper_rigid is not None:
             try:
-                keeper_rigid.set_linear_damping(2.5)
-                keeper_rigid.set_angular_damping(4.0)
+                keeper_rigid.set_mass(float(self.keeper_mass))
+                keeper_rigid.set_linear_damping(3.0)
+                keeper_rigid.set_angular_damping(12.0)
                 self._set_restitution(
                     keeper_rigid, self.BOUNCE_RESTITUTION, static_f=0.9, dynamic_f=0.7
                 )
+                self._set_collision_enabled(self.goalkeeper, True)
             except Exception:
                 pass
 
@@ -1212,9 +1957,10 @@ class save_goal(Base_Task):
             self.scene,
             pose=sapien.Pose(self.ball_start_pose.tolist(), [1, 0, 0, 0]),
             radius=self.ball_radius,
-            color=(0.18, 0.56, 0.90),
+            color=(0.95, 0.95, 0.95),
             is_static=False,
             name="goal_ball",
+            texture_id="soccer_ball",
         )
         self._ball_rigid = self._get_rigid(self.ball)
         if self._ball_rigid is not None:
@@ -1241,63 +1987,9 @@ class save_goal(Base_Task):
         self._loaded = True
 
     def _begin_mass_bounce(self, hit_p):
-        """Hand the shot to PhysX with a mass-aware front-face rebound."""
-        # Snapshot legality before any pose/velocity changes from the bounce.
-        self._block_was_legal = bool(self._keeper_in_zone())
-        if not self._block_was_legal:
-            self._late_failure = True
-
-        m1 = float(self.BALL_MASS)
-        m2 = float(self.KEEPER_MASS)
-        e = float(self._cfg.get("bounce_restitution", self.BOUNCE_RESTITUTION))
-        # Signed speeds along +x (toward +goal when travel_dir>0).
-        u1 = float(self.ball_speed) * float(self.travel_dir)
-        u2 = 0.0
-        keeper_rigid = self._get_rigid(self.goalkeeper)
-        if keeper_rigid is not None:
-            try:
-                if not keeper_rigid.get_kinematic():
-                    u2 = float(keeper_rigid.get_linear_velocity()[0])
-            except Exception:
-                u2 = 0.0
-        v1_x, v2_x = self._elastic_1d(u1, u2, m1, m2, e)
-        # Keep the path's lateral component (sideways glance on a square face stays small).
-        vy = float(self.ball_dir[1]) * float(self.ball_speed)
-
-        # Slight separation so the solver does not start in deep penetration.
-        sep = 0.001
-        p = np.asarray(hit_p, dtype=np.float64).copy()
-        p[0] = float(p[0] - self.travel_dir * sep)
-        p[2] = float(self.table_top_z + self.ball_radius)
-        pose = sapien.Pose(p.tolist(), [1, 0, 0, 0])
-        self.ball.set_pose(pose)
-
-        self._set_collision_enabled(self.ball, True)
-        if self._ball_rigid is not None:
-            try:
-                self._ball_rigid.set_kinematic(False)
-                self._ball_rigid.set_disable_gravity(True)
-                self._ball_rigid.set_linear_velocity([v1_x, vy, 0.0])
-                self._ball_rigid.set_angular_velocity(np.zeros(3))
-                self._ball_rigid.wake_up()
-            except Exception:
-                pass
-
-        # Ensure keeper is dynamic and receives the complementary impulse.
-        self._seat_keeper_dynamic()
-        if keeper_rigid is not None:
-            try:
-                keeper_rigid.set_kinematic(False)
-                kv = np.array(keeper_rigid.get_linear_velocity(), dtype=np.float64)
-                kv[0] = v2_x
-                keeper_rigid.set_linear_velocity(kv.tolist())
-                keeper_rigid.wake_up()
-            except Exception:
-                pass
-
-        self._ball_blocked = True
-        self._ball_live = True
-        self._keeper_deployed = True
+        """Back-compat: front-normal solid bounce along −travel_dir."""
+        n = np.array([-float(self.travel_dir), 0.0], dtype=np.float64)
+        self._begin_solid_bounce(hit_p, n)
 
     def _update_live_ball(self):
         """After a save bounce: follow PhysX, pin to the table, watch for a late goal."""
@@ -1358,6 +2050,9 @@ class save_goal(Base_Task):
         if self._ball_rigid is None or getattr(self, "ball", None) is None:
             return
 
+        # Keep the deployed keeper planted while the shot approaches (pose preserved).
+        self._hold_keeper_upright()
+
         self._ball_step += 1
         progress = min(1.0, self._ball_step / float(self.ball_total_steps))
         prev_progress = min(1.0, (self._ball_step - 1) / float(self.ball_total_steps))
@@ -1369,9 +2064,16 @@ class save_goal(Base_Task):
         if (not self._late_failure) and (self.travel_dir * next_p[0] >= self.travel_dir * self.red_line_x) and (not keeper_ok):
             self._late_failure = True
 
-        # Seated cube always blocks a front-face hit (even outside the green zone).
-        # Outside-zone blocks still count as FAILURE via _block_was_legal / _late_failure.
-        if self._try_front_face_bounce(prev_p, next_p):
+        # Field players are solid OBBs — bounce instead of tunneling.
+        if self._try_field_player_solid_bounce(prev_p, next_p):
+            return
+
+        # Tunnel side walls are solid — bounce instead of tunneling.
+        if self._try_cover_wall_solid_bounce(prev_p, next_p):
+            return
+
+        # Solid OBB at the live pose: any face / angle bounce (legal if in green zone).
+        if self._try_keeper_solid_bounce(prev_p, next_p):
             return
 
         if self.travel_dir * next_p[0] >= self.travel_dir * self.goal_x:
@@ -1383,7 +2085,7 @@ class save_goal(Base_Task):
         ):
             self._goal_conceded = True
 
-        pose = sapien.Pose(next_p.tolist(), [1, 0, 0, 0])
+        pose = sapien.Pose(next_p.tolist(), self._soccer_ball_quat_at_progress(progress))
         self.ball.set_pose(pose)
         try:
             self._ball_rigid.set_kinematic_target(pose)
@@ -1404,6 +2106,7 @@ class save_goal(Base_Task):
         self._ball_crossed_goal = False
         self._keeper_deployed = False
         self._keeper_drop_pose = None
+        self._players_hit = set()
         self._ball_motion_active = True
         self._set_collision_enabled(self.ball, False)
 
@@ -1422,15 +2125,15 @@ class save_goal(Base_Task):
         )
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.12, move_axis="arm"))
         self._place_keeper_from_top(arm_tag)
-        # After the yellow cube is dropped, always return the arm to its origin pose.
+        # After the keeper is dropped, always return the arm to its origin pose.
         self._retreat_arm_home(arm_tag, lift_z=0.08)
-        # Keep the cube dynamic (mass-aware bounce); only re-seat pose/damping.
+        # Keep the keeper dynamic (mass-aware bounce); only re-seat pose/damping.
         self._seat_keeper_dynamic()
 
         self._wait_for_outcome()
 
         self.info["info"] = {
-            "{A}": "goalkeeper_square",
+            "{A}": "goalkeeper",
             "{B}": "goal_frame",
             "{a}": str(arm_tag),
         }

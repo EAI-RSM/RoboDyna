@@ -156,10 +156,10 @@ SCENARIO_OVERRIDES = {
         "opt1+2": {"continuous_ball_motion": True, "oscillating_bowl_enabled": True},
     },
     "pack_fruits": {
-        "default": {"spawn_mode": "parallel", "pair_stagger_enabled": False, "single_wave_any_belt": False, "distractor_enabled": False},
-        "opt1": {"spawn_mode": "random", "pair_stagger_enabled": True, "single_wave_any_belt": True, "distractor_enabled": False},
-        "opt2": {"spawn_mode": "parallel", "pair_stagger_enabled": False, "single_wave_any_belt": False, "distractor_enabled": True},
-        "opt1+2": {"spawn_mode": "random", "pair_stagger_enabled": True, "single_wave_any_belt": True, "distractor_enabled": True},
+        "default": {"two_colors_enabled": False, "distractor_enabled": False},
+        "opt1": {"two_colors_enabled": True, "distractor_enabled": False},
+        "opt2": {"two_colors_enabled": False, "distractor_enabled": True},
+        "opt1+2": {"two_colors_enabled": True, "distractor_enabled": True},
     },
     "pick_ripe_apple": {
         "default": {"two_apples_enabled": False, "basket_move_enabled": False},
@@ -283,7 +283,12 @@ def build_scenario_config(task: str, scenario: str) -> dict:
     with config_path.open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     task_args = config.setdefault("task_args", {}).setdefault(task, {})
-    task_args.update(SCENARIO_OVERRIDES[task][scenario])
+    overrides = dict(SCENARIO_OVERRIDES.get(task, {}).get(scenario, {}) or {})
+    task_args.update(overrides)
+    # Top-level marker so the task env can recover the scenario even if a
+    # nested key is missing / stale.
+    config["interactive_scenario"] = scenario
+    config["interactive_task"] = task
     return config
 
 
@@ -385,6 +390,10 @@ class RoundedButton(tk.Canvas):
             self.active_color = options.pop("activebackground")
         if "state" in options:
             self.button_state = options.pop("state")
+        if "font" in options:
+            self._font = options.pop("font")
+        if "radius" in options:
+            self.radius = int(options.pop("radius"))
         if options:
             super().configure(**options)
         self._redraw()
@@ -398,12 +407,15 @@ class InteractiveTaskLauncher(tk.Tk):
     IMAGE_SIZE = (1400, 1050)
     CARD_PAD = 8
     PREVIEW_SIDE_PAD = 28
+    DESIGN_SIZE = (1600, 1000)
+    UI_SCALE_MIN = 0.55
+    UI_SCALE_MAX = 1.15
 
     def __init__(self):
         super().__init__()
         self.title("Interactive Tasks")
         self.geometry("1600x1000")
-        self.minsize(1100, 760)
+        self.minsize(900, 640)
         self.configure(bg=PAGE_BG)
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
 
@@ -416,23 +428,31 @@ class InteractiveTaskLauncher(tk.Tk):
         self.preview_photos: list[list[ImageTk.PhotoImage | None]] = []
         self.preview_labels: list[list[tk.Label]] = []
         self.task_buttons: list[list[RoundedButton]] = []
+        self.card_index_labels: list[tk.Label] = []
+        self.card_title_labels: list[tk.Label] = []
+        self.card_badge_labels: list[tk.Label] = []
         self._preview_resize_job: str | None = None
+        self._ui_scale_job: str | None = None
         self._preview_width = self.IMAGE_SIZE[0]
+        self._ui_scale = 1.0
+        self._header_narrow: bool | None = None
         self._idle_status = (
             f"{len(TASKS)} tasks available  |  Hover a scenario key for its README description."
         )
         self._idle_status_fg = TEXT_SECONDARY
 
         self._build_ui()
+        self.bind("<Configure>", self._on_root_configure)
+        self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
 
     def _build_ui(self):
-        style = ttk.Style(self)
+        self.style = ttk.Style(self)
         try:
-            style.theme_use("clam")
+            self.style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure(
+        self.style.configure(
             "Task.TCombobox",
             padding=(14, 10),
             arrowsize=26,
@@ -442,43 +462,46 @@ class InteractiveTaskLauncher(tk.Tk):
             selectforeground="#182633",
         )
 
-        header = tk.Frame(
+        self.header = tk.Frame(
             self,
             bg=HEADER_BG,
             highlightbackground="#34495d",
             highlightthickness=1,
         )
-        header.pack(fill="x", padx=24, pady=(18, 12))
+        self.header.pack(fill="x", padx=24, pady=(18, 12))
 
-        heading = tk.Frame(header, bg=HEADER_BG)
-        heading.pack(side="left", padx=24, pady=18)
-        tk.Label(
-            heading,
+        self.heading = tk.Frame(self.header, bg=HEADER_BG)
+        self.heading.pack(side="left", padx=24, pady=18)
+        self.title_label = tk.Label(
+            self.heading,
             text="Interactive Tasks",
             bg=HEADER_BG,
             fg=TEXT_PRIMARY,
             font=("Sans", 34, "bold"),
-        ).pack(anchor="w")
-        tk.Label(
-            heading,
+        )
+        self.title_label.pack(anchor="w")
+        self.subtitle_label = tk.Label(
+            self.heading,
             text="Choose a task and one of its four scenario variants.",
             bg=HEADER_BG,
             fg=TEXT_SECONDARY,
             font=("Sans", 14),
-        ).pack(anchor="w", pady=(3, 0))
+        )
+        self.subtitle_label.pack(anchor="w", pady=(3, 0))
 
-        controls = tk.Frame(header, bg=HEADER_BG)
-        controls.pack(side="right", padx=22, pady=16)
+        self.controls = tk.Frame(self.header, bg=HEADER_BG)
+        self.controls.pack(side="right", padx=22, pady=16)
 
-        brief_group = tk.Frame(controls, bg=HEADER_BG)
+        brief_group = tk.Frame(self.controls, bg=HEADER_BG)
         brief_group.pack(side="left", padx=(0, 16))
-        tk.Label(
+        self.brief_caption = tk.Label(
             brief_group,
             text="Briefing",
             bg=HEADER_BG,
             fg=TEXT_SECONDARY,
             font=("Sans", 13, "bold"),
-        ).pack(anchor="w")
+        )
+        self.brief_caption.pack(anchor="w")
         self.show_briefing = tk.BooleanVar(value=True)
         self.briefing_check = tk.Checkbutton(
             brief_group,
@@ -497,15 +520,16 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         self.briefing_check.pack(anchor="w", pady=(6, 0))
 
-        seed_group = tk.Frame(controls, bg=HEADER_BG)
+        seed_group = tk.Frame(self.controls, bg=HEADER_BG)
         seed_group.pack(side="left", padx=(0, 18))
-        tk.Label(
+        self.seed_caption = tk.Label(
             seed_group,
             text="Seed (blank = random)",
             bg=HEADER_BG,
             fg=TEXT_SECONDARY,
             font=("Sans", 13, "bold"),
-        ).pack(anchor="w")
+        )
+        self.seed_caption.pack(anchor="w")
         self.seed_entry = tk.Entry(
             seed_group,
             width=14,
@@ -517,15 +541,16 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         self.seed_entry.pack(ipady=8, pady=(4, 0))
 
-        control_group = tk.Frame(controls, bg=HEADER_BG)
+        control_group = tk.Frame(self.controls, bg=HEADER_BG)
         control_group.pack(side="left", padx=(0, 14))
-        tk.Label(
+        self.control_caption = tk.Label(
             control_group,
             text="Control",
             bg=HEADER_BG,
             fg=TEXT_SECONDARY,
             font=("Sans", 13, "bold"),
-        ).pack(anchor="w")
+        )
+        self.control_caption.pack(anchor="w")
         self.control = ttk.Combobox(
             control_group,
             values=("keyboard", "robot"),
@@ -538,7 +563,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.pack(pady=(4, 0))
 
         self.exit_button = RoundedButton(
-            controls,
+            self.controls,
             text="Exit",
             command=self.exit_app,
             bg="#e34a33",
@@ -580,14 +605,127 @@ class InteractiveTaskLauncher(tk.Tk):
         for index, (label, task) in enumerate(TASKS):
             self._add_task_card(index, label, task)
 
+    @staticmethod
+    def _scaled_font(size: float, weight: str = "", scale: float = 1.0) -> tuple:
+        px = max(8, int(round(size * scale)))
+        return ("Sans", px, weight) if weight else ("Sans", px)
+
+    def _compute_ui_scale(self, width: int | None = None, height: int | None = None) -> float:
+        design_w, design_h = self.DESIGN_SIZE
+        width = int(width if width is not None else max(self.winfo_width(), 1))
+        height = int(height if height is not None else max(self.winfo_height(), 1))
+        scale = min(width / design_w, height / design_h)
+        return max(self.UI_SCALE_MIN, min(self.UI_SCALE_MAX, scale))
+
+    def _on_root_configure(self, event):
+        if event.widget is not self:
+            return
+        if self._ui_scale_job is not None:
+            self.after_cancel(self._ui_scale_job)
+        self._ui_scale_job = self.after(80, self._apply_ui_scale)
+
+    def _apply_ui_scale(self):
+        self._ui_scale_job = None
+        if getattr(self, "title_label", None) is None:
+            return
+        scale = self._compute_ui_scale()
+        narrow = self.winfo_width() < 1200 or scale < 0.78
+        if abs(scale - self._ui_scale) < 0.02:
+            # Width-only change near the same scale: refresh wrap + header stack.
+            self.status.configure(
+                wraplength=max(360, self.winfo_width() - self._px(68, scale))
+            )
+            if narrow != getattr(self, "_header_narrow", None):
+                self._header_narrow = narrow
+                self._relayout_header(scale)
+            return
+        self._ui_scale = scale
+        s = scale
+
+        self.header.pack_configure(padx=self._px(24, s), pady=(self._px(18, s), self._px(12, s)))
+        self.title_label.configure(font=self._scaled_font(34, "bold", s))
+        self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
+        self.brief_caption.configure(font=self._scaled_font(13, "bold", s))
+        self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
+        self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
+        self.control_caption.configure(font=self._scaled_font(13, "bold", s))
+        self.seed_entry.configure(font=self._scaled_font(22, "bold", s))
+        self.seed_entry.pack_configure(ipady=self._px(8, s), pady=(self._px(4, s), 0))
+        self.control.configure(font=self._scaled_font(22, "bold", s))
+        self.style.configure(
+            "Task.TCombobox",
+            padding=(self._px(14, s), self._px(10, s)),
+            arrowsize=max(12, self._px(26, s)),
+            fieldbackground="#f7fafc",
+            foreground="#182633",
+            selectbackground="#f7fafc",
+            selectforeground="#182633",
+        )
+        self.exit_button.configure(
+            font=self._scaled_font(17, "bold", s),
+            width=self._px(150, s),
+            height=self._px(76, s),
+            radius=self._px(28, s),
+        )
+        self.exit_button.pack_configure(pady=(self._px(18, s), 0))
+        self.status.configure(
+            font=self._scaled_font(19, scale=s),
+            wraplength=max(360, self.winfo_width() - self._px(68, s)),
+        )
+        self.status.pack_configure(padx=self._px(34, s), pady=(self._px(2, s), self._px(12, s)))
+
+        idx_padx = self._px(13, s)
+        idx_pady = self._px(6, s)
+        for label in self.card_index_labels:
+            label.configure(
+                font=self._scaled_font(17, "bold", s),
+                padx=idx_padx,
+                pady=idx_pady,
+            )
+        for label in self.card_title_labels:
+            label.configure(font=self._scaled_font(27, "bold", s))
+        for label in self.card_badge_labels:
+            label.configure(font=self._scaled_font(12, "bold", s))
+
+        btn_h = self._px(70, s)
+        btn_radius = self._px(26, s)
+        btn_font = self._scaled_font(16, "bold", s)
+        for row in self.task_buttons:
+            for button in row:
+                button.configure(font=btn_font, height=btn_h, radius=btn_radius)
+
+        self._header_narrow = narrow
+        self._relayout_header(s)
+
+    @staticmethod
+    def _px(value: float, scale: float) -> int:
+        return max(1, int(round(value * scale)))
+
+    def _relayout_header(self, scale: float):
+        """Keep header controls on-screen by stacking when the window is narrow."""
+        narrow = self.winfo_width() < 1200 or scale < 0.78
+        self.heading.pack_forget()
+        self.controls.pack_forget()
+        if narrow:
+            self.heading.pack(side="top", anchor="w", padx=self._px(24, scale), pady=(self._px(14, scale), 0))
+            self.controls.pack(
+                side="top",
+                anchor="w",
+                padx=self._px(22, scale),
+                pady=(self._px(8, scale), self._px(14, scale)),
+            )
+        else:
+            self.heading.pack(side="left", padx=self._px(24, scale), pady=self._px(18, scale))
+            self.controls.pack(side="right", padx=self._px(22, scale), pady=self._px(16, scale))
+
     def _update_scroll_region(self, _event=None):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _resize_page(self, event):
-        page_width = max(event.width, 900)
+        page_width = max(event.width, 720)
         self.canvas.itemconfigure(self.page_window, width=page_width)
         preview_width = max(
-            720, page_width - 2 * (self.CARD_PAD + self.PREVIEW_SIDE_PAD)
+            480, page_width - 2 * (self.CARD_PAD + self.PREVIEW_SIDE_PAD)
         )
         if abs(preview_width - self._preview_width) < 8:
             return
@@ -690,7 +828,7 @@ class InteractiveTaskLauncher(tk.Tk):
 
         card_header = tk.Frame(card, bg=CARD_BG)
         card_header.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(14, 8))
-        tk.Label(
+        index_label = tk.Label(
             card_header,
             text=f"{index + 1:02d}",
             bg=PLAY_BLUE,
@@ -698,22 +836,28 @@ class InteractiveTaskLauncher(tk.Tk):
             font=("Sans", 17, "bold"),
             padx=13,
             pady=6,
-        ).pack(side="left", padx=(0, 14))
-        tk.Label(
+        )
+        index_label.pack(side="left", padx=(0, 14))
+        title_label = tk.Label(
             card_header,
             text=label,
             bg=CARD_BG,
             fg=TEXT_PRIMARY,
             anchor="w",
             font=("Sans", 27, "bold"),
-        ).pack(side="left", fill="x", expand=True)
-        tk.Label(
+        )
+        title_label.pack(side="left", fill="x", expand=True)
+        badge_label = tk.Label(
             card_header,
             text="4 SCENARIOS",
             bg=CARD_BG,
             fg="#7fb6dc",
             font=("Sans", 12, "bold"),
-        ).pack(side="right")
+        )
+        badge_label.pack(side="right")
+        self.card_index_labels.append(index_label)
+        self.card_title_labels.append(title_label)
+        self.card_badge_labels.append(badge_label)
 
         # Four columns: screenshot on top, matching scenario key underneath.
         grid = tk.Frame(card, bg=CARD_BG)
@@ -858,6 +1002,17 @@ class InteractiveTaskLauncher(tk.Tk):
 
         try:
             config_name = self._write_temporary_config(task, scenario)
+            child_env = os.environ.copy()
+            child_env.setdefault(
+                "PYTHONWARNINGS",
+                "ignore::UserWarning,ignore::FutureWarning,ignore::DeprecationWarning",
+            )
+            # Authoritative scenario for tasks that read ROBODYNA_SCENARIO
+            # (pack_fruits applies Opt1/Opt2 flags from this even if a stale
+            # temp yml is missing the new keys).
+            child_env["ROBODYNA_SCENARIO"] = scenario
+            self._prepare_result_file()
+            child_env[TASK_RESULT_ENV] = str(self.result_file)
             command = [
                 sys.executable,
                 str(script),
@@ -868,13 +1023,10 @@ class InteractiveTaskLauncher(tk.Tk):
                 "--control",
                 control_mode,
             ]
-            child_env = os.environ.copy()
-            child_env.setdefault(
-                "PYTHONWARNINGS",
-                "ignore::UserWarning,ignore::FutureWarning,ignore::DeprecationWarning",
-            )
-            self._prepare_result_file()
-            child_env[TASK_RESULT_ENV] = str(self.result_file)
+            # Prefer an explicit CLI scenario when the interactive script
+            # understands it (pack_fruits); unknown flags are avoided below.
+            if task == "pack_fruits":
+                command.extend(["--scenario", scenario])
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )

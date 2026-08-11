@@ -6,36 +6,33 @@ except ImportError:
     from _interactive_common import make_parser, print_instructions, run_task
 
 KEYBOARD = """
-  Use --control robot to open the tap with arm teleop (no keyboard lever shortcut).
-  Stream thickness and fill rate follow how far the handle is turned.
+  Use --control robot to pour with arm teleop (press/hold the tap button).
+  Hold the button to pour; release to stop. Fill rate varies by episode.
 """
 ROBOT = """
-  Push the tap lever with the gripper (spring returns when released).
-  Hold the handle open — fill rate and stream thickness scale with how far it turns.
-  Prefer arm 2 (right) for the tap.
+  Lower onto the fancy tap button and hold to pour; lift to stop.
+  Foam % of the stream rises the longer you hold. Overflow fails.
+  When finished pouring, click the finish bell beside the tap to score.
+  EE Z is capped over the key so Q cannot dive through it.
 """
 
 
 def _post_setup(env):
     # Viewer treats a solid transmission cylinder as a filled volume — swap to
-    # a hollow glass shell so the rising beer level is visible from outside
-    # (same path as interactive_measure_ingredient → use_viewer_hollow_jar).
+    # a hollow glass shell so the rising beer level is visible from outside.
     env.use_viewer_hollow_mug()
-    # Expert flow is tuned for fast sim idle-steps; interactive runs one step
-    # per viewer frame, so bump rate so partial teleop pushes fill promptly.
     base = float(getattr(env, "FLOW_RATE_SCALE", 1.55))
-    env.flow_rate_scale = max(float(getattr(env, "flow_rate_scale", base)), base * 1.35)
+    env.flow_rate_scale = max(float(getattr(env, "flow_rate_scale", base)), base * 1.10)
     print_instructions(
         f"[pour_beer] interactive flow_rate_scale={env.flow_rate_scale:.3g} "
-        f"(hollow mug shell; open lever with arm teleop)"
+        f"pour_rate={float(getattr(env, 'pour_rate', 0)):.5f} "
+        f"(hold button to pour; click finish bell to score; EE Z capped on key)"
     )
 
 
 if __name__ == "__main__":
     a = make_parser("pour_beer", __doc__)
     args = a.parse_args()
-    # Keep real transmission glass on the mug by default (do NOT force plain_glass).
-    # Caller may still pass plain_glass=true for other materials if needed.
     result = run_task(
         "pour_beer", args, KEYBOARD, ROBOT, post_setup=_post_setup
     )

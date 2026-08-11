@@ -6,7 +6,7 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control robot
 
-Grasp / release with G (open/close selected gripper). Teleop the cup onto the
+Grasp / release with Space (open/close selected gripper). Teleop the cup onto the
 belt gap; when the cup leaves the fingers (open gripper or slip), landing pose
 is scored after a short settle — gripper open is not required for success.
 """
@@ -49,11 +49,11 @@ INTERACTIVE_CUP_SOUTH_CLEARANCE = 0.05
 
 
 CONTROLS_KEYBOARD = """
-  (Same as robot) G grasp/release; arrows / E / Q teleop the arm.
+  (Same as robot) Space grasp/release; arrows / E / Q teleop the arm.
 """
 
 CONTROLS_ROBOT = """
-  G                 open / close selected gripper to grasp or release the cup
+  Space             open / close selected gripper to grasp or release the cup
   1 / 2 / 3         select left / right / both arms
   Arrows / E / Q    teleop the selected arm(s)
   When the cup leaves the fingers, landing is scored after a short settle.
@@ -136,7 +136,7 @@ def _set_cup_pose(env, x, y, z=None, kinematic=True, quat=None):
 
 
 def _place_cup_south_of_belt(env):
-    """Place the cup 5 cm clear of the belt's south edge (dynamic for G grasp)."""
+    """Place the cup 5 cm clear of the belt's south edge (dynamic for Space grasp)."""
     pose = env.cup.get_pose()
     belt_half_y = float(getattr(env, "belt_plate_half_size", [0.0, 0.0])[1])
     cup_half_y = 0.5 * float(env._actor_world_size(env.cup)[1])
@@ -189,7 +189,7 @@ class CupReleaseMonitor:
             if not self.holding:
                 self.holding = True
                 self.env._attempt_active = True
-                print("Cup grasped — teleop to the belt gap, then G to open / release.")
+                print("Cup grasped — teleop to the belt gap, then Space to open / release.")
             self._hold_contact_seen = True
             self._no_contact_steps = 0
             return
@@ -238,7 +238,7 @@ def main():
     print_mode_controls("put_cup_belt", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = put_cup_belt()
-    # Always enable arm teleop + G grasp/release (Space is not used).
+    # Always enable arm teleop + Space grasp/release.
     env._interactive_robot_mode = True
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
     env._interactive_selected_arms = (
@@ -262,7 +262,7 @@ def main():
         views.robot_controls = UniversalRobotControls(env)
 
     print_instructions(
-        "G opens/closes the gripper to grasp/release the cup. "
+        "Space opens/closes the gripper to grasp/release the cup. "
         "When the cup leaves the fingers, landing is scored."
     )
 

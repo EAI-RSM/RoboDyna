@@ -6,18 +6,12 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Space             hold/release vegetable board
-  Arrow keys        move held board in XY
-  E / Q             move held board in Z
-  C                 turn on burner; while holding, move board over pot
-  Z / X             tip board left / right
-
-  Hold Z/X until vegetables release into the pot.
+  Prefer --control robot: Space only opens/closes the gripper.
+  Close on the board handle, carry over the pot, then tip with Z/X to pour.
 """
 ROBOT = """
-  Space             grasp/release board
-  C                 turn burner on (then carry board over pot)
-  Z / X             tip gripper left / right to pour
+  Space opens/closes the gripper only — no automatic board grasp.
+  Close on the board handle to pick it up, carry over the pot, tip with Z/X to pour.
 """
 
 if __name__ == "__main__":

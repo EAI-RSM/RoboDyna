@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball_v1.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball_v1.py --control robot
 
-Keyboard mode freezes the catcher on Space.
-Robot mode: Space picks up the catcher, Space again drops it in place.
+Keyboard mode teleports the catcher with arrow keys (always placed).
+Robot mode: teleop to the catcher, Space-close to latch, Space-open to drop.
 """
 
 import argparse
@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "script_exp"))
 
 from _interactive_common import (  # noqa: E402
     action_failed,
+    gripper_width,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
@@ -39,13 +40,13 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Space             freeze/place catcher at current XY
+  Arrow keys        move catcher in XY (always placed / ready)
 """
 
 CONTROLS_ROBOT = """
-  Space             pick up catcher; press again to drop it
+  Space             close near catcher to latch; open to drop it
 
-  Flow: Space to pick up → move with arrows / E/Q → Space to drop.
+  Flow: teleop to catcher → Space close to pick up → move → Space open to drop.
 """
 
 
@@ -159,29 +160,30 @@ class EdgeKey:
 
 
 class KeyboardBowlController:
+    """Arrow-nudge the catcher; always treated as placed (no Space freeze)."""
+
     def __init__(self, env):
         self.env = env
-        self.placed = False
-        self._space = EdgeKey()
+        p = np.asarray(env.bowl.get_pose().p, dtype=float)
+        x, y = _clamp_table_xy(env, p[0], p[1])
+        _set_bowl_xy(env, x, y, _bowl_place_z(env))
+        env._fix_bowl_at_placed_pose()
+        env._bowl_ready = True
 
     def update(self, window):
-        if not self.placed:
-            dx, dy = _nudge_from_keys(window)
-            if dx or dy:
-                p = np.asarray(self.env.bowl.get_pose().p, dtype=float)
-                x, y = _clamp_table_xy(self.env, p[0] + dx, p[1] + dy)
-                _set_bowl_xy(self.env, x, y)
-        if self._space.poll(window.key_down("space")):
-            p = np.asarray(self.env.bowl.get_pose().p, dtype=float)
-            x, y = _clamp_table_xy(self.env, p[0], p[1])
-            _set_bowl_xy(self.env, x, y, _bowl_place_z(self.env))
-            self.env._fix_bowl_at_placed_pose()
-            self.env._bowl_ready = True
-            self.placed = True
-            print(f"Bowl placed at ({x:.3f}, {y:.3f}) behind red line.")
+        dx, dy = _nudge_from_keys(window)
+        if not (dx or dy):
+            return
+        p = np.asarray(self.env.bowl.get_pose().p, dtype=float)
+        x, y = _clamp_table_xy(self.env, p[0] + dx, p[1] + dy)
+        _set_bowl_xy(self.env, x, y)
+        self.env._fix_bowl_at_placed_pose()
+        self.env._bowl_ready = True
 
 
 class RobotBowlController:
+    """Latch catcher on Space-close; drop on Space-open (shared gripper toggle)."""
+
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
@@ -190,6 +192,7 @@ class RobotBowlController:
         self.placed = False
         self.busy = False
         self._space = EdgeKey()
+        self._prev_width = {"left": 1.0, "right": 1.0}
 
     def _choose_arm(self):
         return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
@@ -205,7 +208,7 @@ class RobotBowlController:
             self.env._weld_bowl_to_end_effector(self.arm)
             self.env.move(self.env.move_by_displacement(self.arm, z=0.05, move_axis="arm"))
             self.holding = True
-            print(f"Picked up bowl with {self.arm} arm. Move, then Space to drop.")
+            print(f"Picked up bowl with {self.arm} arm. Move, then Space to open / drop.")
         else:
             action_failed(self.env, (str(self.arm),), detail="grasp failed")
         self.busy = False
@@ -230,11 +233,17 @@ class RobotBowlController:
     def update(self, window):
         if self.busy or self.placed:
             return
-        if self._space.poll(window.key_down("space")):
-            if not self.holding:
-                self.grasp()
-            else:
-                self.drop()
+        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
+        arms = list(selected) if selected else []
+        space_edge = self._space.poll(window.key_down("space"))
+        closing = space_edge and any(self._prev_width.get(a, 1.0) > 0.5 for a in arms)
+        opening = space_edge and any(self._prev_width.get(a, 1.0) <= 0.5 for a in arms)
+        for side in ("left", "right"):
+            self._prev_width[side] = gripper_width(self.env, side)
+        if closing and not self.holding:
+            self.grasp()
+        elif opening and self.holding:
+            self.drop()
 
 
 def main():
@@ -289,9 +298,9 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     if args.control == "robot":
-        print_instructions("Space picks up the catcher; Space again drops it.")
+        print_instructions("Teleop to the catcher; Space close to latch, Space open to drop.")
     else:
-        print_instructions("Space places the catcher at its current XY.")
+        print_instructions("Arrow keys move the catcher; it stays placed/ready.")
 
     settle_after = None
     terminal_started_at = None

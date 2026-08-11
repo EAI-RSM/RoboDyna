@@ -36,6 +36,10 @@ assets/*
 !assets/static/
 !assets/static/**
 
+# Sphere / actor textures (e.g. soccer_ball.png for save_goal)
+!assets/textures/
+!assets/textures/**
+
 # Custom background textures only (not HF seen/unseen)
 !assets/background_texture/
 assets/background_texture/*

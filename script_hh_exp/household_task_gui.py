@@ -199,6 +199,10 @@ class RoundedButton(tk.Canvas):
             self.active_color = options.pop("activebackground")
         if "state" in options:
             self.button_state = options.pop("state")
+        if "font" in options:
+            self._font = options.pop("font")
+        if "radius" in options:
+            self.radius = int(options.pop("radius"))
         if options:
             super().configure(**options)
         self._redraw()
@@ -209,12 +213,15 @@ class RoundedButton(tk.Canvas):
 class HouseholdTaskLauncher(tk.Tk):
     # Head-camera stills are ~4:3; width is the card max, height follows aspect.
     IMAGE_SIZE = (1280, 960)
+    DESIGN_SIZE = (1560, 980)
+    UI_SCALE_MIN = 0.55
+    UI_SCALE_MAX = 1.15
 
     def __init__(self):
         super().__init__()
         self.title("Household Interactive Tasks")
         self.geometry("1560x980")
-        self.minsize(980, 700)
+        self.minsize(900, 640)
         self.configure(bg=PAGE_BG)
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
 
@@ -223,68 +230,90 @@ class HouseholdTaskLauncher(tk.Tk):
         self.result_file: Path | None = None
         self.preview_photos: list[ImageTk.PhotoImage | None] = []
         self.task_buttons: list[RoundedButton] = []
+        self.card_index_labels: list[tk.Label] = []
+        self.card_title_labels: list[tk.Label] = []
+        self.card_badge_labels: list[tk.Label] = []
+        self._ui_scale_job: str | None = None
+        self._ui_scale = 1.0
+        self._header_narrow: bool | None = None
         self._idle_status = f"{len(TASKS)} scenarios available  |  Select a task and press Play."
         self._idle_status_fg = TEXT_SECONDARY
 
         self._build_ui()
+        self.bind("<Configure>", self._on_root_configure)
+        self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
 
     def _build_ui(self):
-        style = ttk.Style(self)
+        self.style = ttk.Style(self)
         try:
-            style.theme_use("clam")
+            self.style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure(
+        self.style.configure(
             "Task.TCombobox",
-            padding=(28, 18),
-            arrowsize=42,
+            padding=(14, 10),
+            arrowsize=26,
             fieldbackground="#f7fafc",
             foreground="#182633",
             selectbackground="#f7fafc",
             selectforeground="#182633",
         )
-        # Popup was 156 pt / 276 px; reduce both by 30 percent.
-        self.option_add("*TCombobox*Listbox.font", ("Sans", 109, "bold"))
-        self.option_add("*TCombobox*Listbox.rowHeight", 193)
 
-        header = tk.Frame(
+        self.header = tk.Frame(
             self,
             bg=HEADER_BG,
             highlightbackground="#34495d",
             highlightthickness=1,
         )
-        header.pack(fill="x", padx=24, pady=(18, 12))
+        self.header.pack(fill="x", padx=24, pady=(18, 12))
 
-        heading = tk.Frame(header, bg=HEADER_BG)
-        heading.pack(side="left", padx=24, pady=18)
-        tk.Label(
-            heading,
+        self.heading = tk.Frame(self.header, bg=HEADER_BG)
+        self.heading.pack(side="left", padx=24, pady=18)
+        self.title_label = tk.Label(
+            self.heading,
             text="Household Interactive Tasks",
             bg=HEADER_BG,
             fg=TEXT_PRIMARY,
-            font=("Sans", 36, "bold"),
-        ).pack(anchor="w")
-        tk.Label(
-            heading,
+            font=("Sans", 34, "bold"),
+        )
+        self.title_label.pack(anchor="w")
+        self.subtitle_label = tk.Label(
+            self.heading,
             text="Choose a scenario, deploy the robot, and return here when it finishes.",
             bg=HEADER_BG,
             fg=TEXT_SECONDARY,
             font=("Sans", 14),
-        ).pack(anchor="w", pady=(3, 0))
+        )
+        self.subtitle_label.pack(anchor="w", pady=(3, 0))
 
-        controls = tk.Frame(header, bg=HEADER_BG)
-        controls.pack(side="right", padx=22, pady=16)
+        self.controls = tk.Frame(self.header, bg=HEADER_BG)
+        self.controls.pack(side="right", padx=22, pady=16)
 
-        brief_group = tk.Frame(controls, bg=HEADER_BG)
+        # Pack Exit first on the right so it stays visible when the header is tight.
+        self.exit_button = RoundedButton(
+            self.controls,
+            text="Exit",
+            command=self.exit_app,
+            bg="#e34a33",
+            activebackground="#eb6854",
+            font=("Sans", 17, "bold"),
+            width=150,
+            height=76,
+            radius=28,
+        )
+        self.exit_button.pack(side="right", pady=(18, 0))
+
+        brief_group = tk.Frame(self.controls, bg=HEADER_BG)
         brief_group.pack(side="left", padx=(0, 16))
-        tk.Label(
+        self.brief_caption = tk.Label(
             brief_group,
             text="Briefing",
             bg=HEADER_BG,
             fg=TEXT_SECONDARY,
             font=("Sans", 13, "bold"),
-        ).pack(anchor="w")
+        )
+        self.brief_caption.pack(anchor="w")
         self.show_briefing = tk.BooleanVar(value=True)
         self.briefing_check = tk.Checkbutton(
             brief_group,
@@ -303,15 +332,16 @@ class HouseholdTaskLauncher(tk.Tk):
         )
         self.briefing_check.pack(anchor="w", pady=(6, 0))
 
-        seed_group = tk.Frame(controls, bg=HEADER_BG)
+        seed_group = tk.Frame(self.controls, bg=HEADER_BG)
         seed_group.pack(side="left", padx=(0, 18))
-        tk.Label(
+        self.seed_caption = tk.Label(
             seed_group,
             text="Seed (blank = random)",
             bg=HEADER_BG,
             fg=TEXT_SECONDARY,
             font=("Sans", 13, "bold"),
-        ).pack(anchor="w")
+        )
+        self.seed_caption.pack(anchor="w")
         self.seed_entry = tk.Entry(
             seed_group,
             width=14,
@@ -323,37 +353,26 @@ class HouseholdTaskLauncher(tk.Tk):
         )
         self.seed_entry.pack(ipady=8, pady=(4, 0))
 
-        control_group = tk.Frame(controls, bg=HEADER_BG)
-        control_group.pack(side="left", padx=(0, 12))
-        tk.Label(
+        control_group = tk.Frame(self.controls, bg=HEADER_BG)
+        control_group.pack(side="left", padx=(0, 14))
+        self.control_caption = tk.Label(
             control_group,
             text="Control",
             bg=HEADER_BG,
             fg=TEXT_SECONDARY,
             font=("Sans", 13, "bold"),
-        ).pack(anchor="w")
+        )
+        self.control_caption.pack(anchor="w")
         self.control = ttk.Combobox(
             control_group,
             values=("keyboard", "robot"),
             state="readonly",
-            width=11,
+            width=10,
             font=("Sans", 22, "bold"),
             style="Task.TCombobox",
         )
         self.control.set("robot")
-        self.control.pack(ipady=4, pady=(4, 0))
-        self.exit_button = RoundedButton(
-            controls,
-            text="Exit",
-            command=self.exit_app,
-            bg="#e34a33",
-            activebackground="#eb6854",
-            font=("Sans", 18, "bold"),
-            width=190,
-            height=88,
-            radius=30,
-        )
-        self.exit_button.pack(side="left")
+        self.control.pack(pady=(4, 0))
 
         self.status = tk.Label(
             self,
@@ -363,16 +382,16 @@ class HouseholdTaskLauncher(tk.Tk):
             anchor="w",
             justify="left",
             wraplength=1460,
-            font=("Sans", 21),
+            font=("Sans", 19),
         )
         self.status.pack(fill="x", padx=34, pady=(2, 12))
 
         # Scrollable table of task cards. The window stays fixed while the
         # vertically extended page contains every large task preview.
-        outer = tk.Frame(self, bg=PAGE_BG)
-        outer.pack(fill="both", expand=True, padx=22, pady=(0, 22))
-        self.canvas = tk.Canvas(outer, bg=PAGE_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=self.canvas.yview)
+        self.outer = tk.Frame(self, bg=PAGE_BG)
+        self.outer.pack(fill="both", expand=True, padx=22, pady=(0, 22))
+        self.canvas = tk.Canvas(self.outer, bg=PAGE_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.outer, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=scrollbar.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -387,11 +406,134 @@ class HouseholdTaskLauncher(tk.Tk):
         for index, (label, task, script_name) in enumerate(TASKS):
             self._add_task_card(index, label, task, script_name)
 
+    @staticmethod
+    def _scaled_font(size: float, weight: str = "", scale: float = 1.0) -> tuple:
+        px = max(8, int(round(size * scale)))
+        return ("Sans", px, weight) if weight else ("Sans", px)
+
+    @staticmethod
+    def _px(value: float, scale: float) -> int:
+        return max(1, int(round(value * scale)))
+
+    def _compute_ui_scale(self, width: int | None = None, height: int | None = None) -> float:
+        design_w, design_h = self.DESIGN_SIZE
+        width = int(width if width is not None else max(self.winfo_width(), 1))
+        height = int(height if height is not None else max(self.winfo_height(), 1))
+        scale = min(width / design_w, height / design_h)
+        return max(self.UI_SCALE_MIN, min(self.UI_SCALE_MAX, scale))
+
+    def _on_root_configure(self, event):
+        if event.widget is not self:
+            return
+        if self._ui_scale_job is not None:
+            self.after_cancel(self._ui_scale_job)
+        self._ui_scale_job = self.after(80, self._apply_ui_scale)
+
+    def _apply_ui_scale(self):
+        self._ui_scale_job = None
+        if getattr(self, "title_label", None) is None:
+            return
+        scale = self._compute_ui_scale()
+        # Longer title than the base suite GUI — stack earlier so Exit stays on-screen.
+        narrow = self.winfo_width() < 1320 or scale < 0.82
+        if abs(scale - self._ui_scale) < 0.02:
+            self.status.configure(
+                wraplength=max(360, self.winfo_width() - self._px(68, scale))
+            )
+            if narrow != getattr(self, "_header_narrow", None):
+                self._header_narrow = narrow
+                self._relayout_header(scale)
+            return
+        self._ui_scale = scale
+        s = scale
+
+        self.header.pack_configure(padx=self._px(24, s), pady=(self._px(18, s), self._px(12, s)))
+        self.title_label.configure(font=self._scaled_font(34, "bold", s))
+        self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
+        self.brief_caption.configure(font=self._scaled_font(13, "bold", s))
+        self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
+        self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
+        self.control_caption.configure(font=self._scaled_font(13, "bold", s))
+        self.seed_entry.configure(font=self._scaled_font(22, "bold", s))
+        self.seed_entry.pack_configure(ipady=self._px(8, s), pady=(self._px(4, s), 0))
+        self.control.configure(font=self._scaled_font(22, "bold", s))
+        self.control.pack_configure(pady=(self._px(4, s), 0))
+        self.style.configure(
+            "Task.TCombobox",
+            padding=(self._px(14, s), self._px(10, s)),
+            arrowsize=max(12, self._px(26, s)),
+            fieldbackground="#f7fafc",
+            foreground="#182633",
+            selectbackground="#f7fafc",
+            selectforeground="#182633",
+        )
+        self.exit_button.configure(
+            font=self._scaled_font(17, "bold", s),
+            width=self._px(150, s),
+            height=self._px(76, s),
+            radius=self._px(28, s),
+        )
+        self.exit_button.pack_configure(pady=(self._px(18, s), 0))
+        self.status.configure(
+            font=self._scaled_font(19, scale=s),
+            wraplength=max(360, self.winfo_width() - self._px(68, s)),
+        )
+        self.status.pack_configure(padx=self._px(34, s), pady=(self._px(2, s), self._px(12, s)))
+        self.outer.pack_configure(padx=self._px(22, s), pady=(0, self._px(22, s)))
+
+        idx_padx = self._px(13, s)
+        idx_pady = self._px(6, s)
+        for label in self.card_index_labels:
+            label.configure(
+                font=self._scaled_font(17, "bold", s),
+                padx=idx_padx,
+                pady=idx_pady,
+            )
+        for label in self.card_title_labels:
+            label.configure(font=self._scaled_font(27, "bold", s))
+        for label in self.card_badge_labels:
+            label.configure(font=self._scaled_font(12, "bold", s))
+
+        # Match base suite Play button scale (was oversized and crowded the cards).
+        btn_font = self._scaled_font(16, "bold", s)
+        for button in self.task_buttons:
+            button.configure(
+                font=btn_font,
+                width=self._px(220, s),
+                height=self._px(70, s),
+                radius=self._px(26, s),
+            )
+
+        self._header_narrow = narrow
+        self._relayout_header(s)
+
+    def _relayout_header(self, scale: float):
+        """Keep header controls on-screen by stacking when the window is narrow."""
+        narrow = self.winfo_width() < 1320 or scale < 0.82
+        self.heading.pack_forget()
+        self.controls.pack_forget()
+        if narrow:
+            self.heading.pack(
+                side="top",
+                anchor="w",
+                padx=self._px(24, scale),
+                pady=(self._px(14, scale), 0),
+            )
+            self.controls.pack(
+                side="top",
+                anchor="w",
+                padx=self._px(22, scale),
+                pady=(self._px(8, scale), self._px(14, scale)),
+            )
+        else:
+            self.heading.pack(side="left", padx=self._px(24, scale), pady=self._px(18, scale))
+            self.controls.pack(side="right", padx=self._px(22, scale), pady=self._px(16, scale))
+
     def _update_scroll_region(self, _event=None):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _resize_page(self, event):
-        self.canvas.itemconfigure(self.page_window, width=max(event.width, 900))
+        self.canvas.itemconfigure(self.page_window, width=max(event.width, 720))
 
     def _mousewheel(self, event):
         if event.delta:
@@ -442,7 +584,7 @@ class HouseholdTaskLauncher(tk.Tk):
 
         card_header = tk.Frame(card, bg=CARD_BG)
         card_header.pack(fill="x", padx=20, pady=(16, 10))
-        tk.Label(
+        index_label = tk.Label(
             card_header,
             text=f"{index + 1:02d}",
             bg=PLAY_BLUE,
@@ -450,7 +592,8 @@ class HouseholdTaskLauncher(tk.Tk):
             font=("Sans", 17, "bold"),
             padx=13,
             pady=6,
-        ).pack(side="left", padx=(0, 14))
+        )
+        index_label.pack(side="left", padx=(0, 14))
         title = tk.Label(
             card_header,
             text=label,
@@ -460,13 +603,17 @@ class HouseholdTaskLauncher(tk.Tk):
             font=("Sans", 27, "bold"),
         )
         title.pack(side="left", fill="x", expand=True)
-        tk.Label(
+        badge = tk.Label(
             card_header,
             text="ROBOT SCENARIO",
             bg=CARD_BG,
             fg="#7fb6dc",
             font=("Sans", 12, "bold"),
-        ).pack(side="right")
+        )
+        badge.pack(side="right")
+        self.card_index_labels.append(index_label)
+        self.card_title_labels.append(title)
+        self.card_badge_labels.append(badge)
 
         preview_holder = tk.Frame(card, bg="#080a0d")
         preview_holder.pack(padx=20, pady=(0, 20))
@@ -497,10 +644,10 @@ class HouseholdTaskLauncher(tk.Tk):
             command=lambda i=index: self.play_or_stop(i),
             bg=PLAY_BLUE,
             activebackground=PLAY_BLUE_ACTIVE,
-            font=("Sans", 20, "bold"),
-            width=270,
-            height=106,
-            radius=38,
+            font=("Sans", 16, "bold"),
+            width=220,
+            height=70,
+            radius=26,
             on_enter=lambda t=task, l=label: self._show_task_hint(t, l),
             on_leave=self._clear_task_hint,
         )

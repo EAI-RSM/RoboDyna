@@ -58,7 +58,7 @@ CONTROLS_ROBOT = """
   Key is green when up, red when down.
   Latch: press ON/OFF. Hold (Opt 1): cook while pressed.
   Pie timer advances with cooking.
-  Teleop + G to grasp/place steaks between board and pan.
+  Teleop + Space to grasp/place steaks between board and pan.
 """
 
 
@@ -424,7 +424,7 @@ def main():
     print_instructions(
         f"Cook-key sandbox ready ({n} station(s)). "
         "Select an arm, press the cook key to latch ON, press again to latch OFF. "
-        "Teleop steaks with G (keyboard: P/B snap)."
+        "Teleop steaks with Space (keyboard: P/B snap)."
     )
 
     last_status = None

@@ -90,7 +90,7 @@ task_args:
     randomize_layout: false
     stove_pose: current
     burner: left_front
-    cook_steps: 769
+    cook_steps: 1538
     cook_speed_jitter: 0.20
     shutoff_lead: 0.22
     cook_intensity: 0.70
@@ -257,9 +257,8 @@ task_args:
     #     CLI: --task-arg mirrored=true
     players_enabled: false      # Option 1: spawn field players; ball bounces off one toward goal
     players_max: 2              # Option 1: number of static field players
-    player_model: 223_soccer_player  # Option 1: CC0 soccer player mesh (width = keeper)
-    player_half_xy: 0.018       # Option 1: m; footprint half-extent (= ball_radius / keeper half)
-    player_half_z: 0.0435       # Option 1: m; player half-height from mesh
+    player_thin_scale: 0.70     # Option 1: XY scale vs keeper (0.70 = 30% thinner); blue jersey
+    # player_half_xy / player_half_z: optional overrides (default = ball_radius*thin / keeper_half_z)
     player_corridor_margin: 0.04 # Option 1: m; keep players clear of ball start
     player_y_spread: 0.20       # Option 1: m; ±y band about goal_center_y for player spawn
     player_separation: 0.15     # Option 1: m; min clear gap (edge-to-edge) between players
@@ -268,7 +267,7 @@ task_args:
     cover_enabled: false        # Option 2: mid-field tunnel/cover; ball enters then exits before red line
     cover_entry_gap: 0.10       # Option 2: m; min open gap on the ball-drop side
     cover_exit_gap_frac: 0.10   # Option 2: fraction of (start→red_line) left open before red line
-    cover_half_y: 0.12          # Option 2: m; half-width of cover cavity
+    # cover_half_y omitted → matches red-line half-width (goal_half_w + red_line_y_extra)
     cover_clearance_z: 0.12     # Option 2: m; clear height under roof
     cover_wall_t: 0.008         # Option 2: m; side wall thickness
     cover_roof_t: 0.006         # Option 2: m; roof thickness
@@ -294,6 +293,7 @@ task_args:
     keeper_x: 0.16
     keeper_goal_clearance: 0.05
     keeper_pose_tol: 0.03
+    keeper_mass: 0.5
   pick_cup_behind_fan:
     fan_omega_deg: 2.0
     gap_frac: 0.40
@@ -304,8 +304,8 @@ task_args:
     # Opt 1 — two_apples_enabled: spoiled yellow→black apple (do not pick)
     # Opt 2 — basket_move_enabled: oscillating basket
     ripen_steps: 2500   # slow ripening: apple stays ~red through the grasp
-    red_window_min: 0.48   # per-episode red target band (like cook_meat doneness)
-    red_window_max: 0.52
+    red_window_min: 0.78   # per-episode red target band (mean ~0.8)
+    red_window_max: 0.82
     red_tolerance: 0.12
     tree_x: 0.0
     tree_y: 0.05
@@ -419,7 +419,7 @@ task_args:
     advance_every: 4
     gate_center_y: -0.03        # divert plank hinge center along belt Y (m)
     gate_default_left: true
-    # Default: alternating; Opt1 color_mode=random; Opt2 rotten_prob=0.3
+    # Default: alternating; Opt1 color_mode=random; Opt2 rotten_prob=0.3 (always ≥1; P for 2nd)
     color_mode: alternating
     rotten_prob: 0.0
   hit_target:

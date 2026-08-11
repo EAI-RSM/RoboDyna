@@ -294,17 +294,34 @@ class Base_Task(gym.Env):
         if self.render_freq:
             self.viewer = Viewer(self.renderer)
             self.viewer.set_scene(self.scene)
-            # Defaults match ur5-wsg demo_camera (v1 demo framing).
+            # Shared head framing for base + household interactive (GUI snapshots).
+            from .utils.household_view import (
+                HEAD_CAMERA_FOVY,
+                HEAD_VIEWER_RPY,
+                HEAD_VIEWER_XYZ,
+            )
+
+            xyz = HEAD_VIEWER_XYZ
+            rpy = HEAD_VIEWER_RPY
             self.viewer.set_camera_xyz(
-                x=kwargs.get("camera_xyz_x", 0.477),
-                y=kwargs.get("camera_xyz_y", 0.253),
-                z=kwargs.get("camera_xyz_z", 1.625),
+                x=kwargs.get("camera_xyz_x", xyz[0]),
+                y=kwargs.get("camera_xyz_y", xyz[1]),
+                z=kwargs.get("camera_xyz_z", xyz[2]),
             )
             self.viewer.set_camera_rpy(
-                r=kwargs.get("camera_rpy_r", 0),
-                p=kwargs.get("camera_rpy_p", -0.8),
-                y=kwargs.get("camera_rpy_y", 2.45),
+                r=kwargs.get("camera_rpy_r", rpy[0]),
+                p=kwargs.get("camera_rpy_p", rpy[1]),
+                y=kwargs.get("camera_rpy_y", rpy[2]),
             )
+            try:
+                window = getattr(self.viewer, "window", None)
+                if window is not None and hasattr(window, "set_camera_parameters"):
+                    fovy = float(kwargs.get("camera_fovy", HEAD_CAMERA_FOVY))
+                    near = float(getattr(window, "near", 0.1))
+                    far = float(getattr(window, "far", 1000.0))
+                    window.set_camera_parameters(near, far, fovy)
+            except Exception:
+                pass
 
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):
         self.table_xy_bias = table_xy_bias
@@ -785,12 +802,17 @@ class Base_Task(gym.Env):
             **kwags,
         )
         self.cameras.load_camera(self.scene)
-        # Household tasks share one elevated head framing.
+        # Shared elevated head framing for household always, and for any
+        # interactive session (base suite GUI / script_exp viewers).
         try:
-            from .utils.household_view import HOUSEHOLD_TASKS, configure_household_head_camera
+            from .utils.household_view import (
+                HOUSEHOLD_TASKS,
+                configure_standard_head_camera,
+            )
 
-            if getattr(self, "task_name", None) in HOUSEHOLD_TASKS:
-                configure_household_head_camera(self)
+            task_name = getattr(self, "task_name", None)
+            if task_name in HOUSEHOLD_TASKS or getattr(self, "_interactive_session", False):
+                configure_standard_head_camera(self)
         except Exception:
             pass
         self._update_kinematic_tasks()
@@ -1440,6 +1462,10 @@ class Base_Task(gym.Env):
 
         left_n_step = left_result["position"].shape[0] if left_success else 0
         right_n_step = right_result["position"].shape[0] if right_success else 0
+        pace_realtime = self._interactive_viewer_realtime_pace()
+        t_start = time.perf_counter()
+        last_render_t = t_start - 1.0
+        total_steps = max(left_n_step, right_n_step)
 
         while now_left_id < left_n_step or now_right_id < right_n_step:
             # set the joint positions and velocities for move group joints only.
@@ -1464,7 +1490,14 @@ class Base_Task(gym.Env):
 
             self._update_kinematic_tasks()
             self.scene.step()
-            if self.render_freq and i % self.render_freq == 0:
+            if pace_realtime:
+                last_render_t = self._pace_interactive_control_step(
+                    i,
+                    t_start,
+                    last_render_t,
+                    force_render=(i + 1 >= total_steps),
+                )
+            elif self.render_freq and i % self.render_freq == 0:
                 self._update_render()
                 self.viewer.render()
 
@@ -1472,6 +1505,9 @@ class Base_Task(gym.Env):
                 self._update_render()
                 self._take_picture()
             i += 1
+
+        if pace_realtime:
+            self._interactive_pacer_resync = True
 
         if save_freq != None:
             self._take_picture()
@@ -3890,6 +3926,40 @@ class Base_Task(gym.Env):
 
     # =========================================================== Control Robot ===========================================================
 
+    def _interactive_viewer_realtime_pace(self) -> bool:
+        """True when planner dense steps must track wall-clock (interactive viewer)."""
+        return bool(self.render_freq) and getattr(self, "viewer", None) is not None
+
+    def _pace_interactive_control_step(
+        self,
+        step_idx: int,
+        t_start: float,
+        last_render_t: float,
+        *,
+        force_render: bool = False,
+    ) -> float:
+        """Keep one dense control step near realtime; throttle renders off vsync.
+
+        Interactive configs use ``render_freq=1``. Rendering every physics step under
+        60 Hz vsync locks sim to ~60 Hz (~4× slow-mo vs dt=1/250). The shared
+        viewer loop then uses ``RealtimePhysicsPacer`` (true realtime), so balls
+        etc. suddenly look much faster once the arm stops. Sleep to the sim clock
+        and render at most ~60 Hz instead.
+        """
+        dt = float(self.scene.get_timestep())
+        target = float(t_start) + float(step_idx + 1) * dt
+        now = time.perf_counter()
+        remaining = target - now
+        if remaining > 5e-4:
+            time.sleep(remaining)
+            now = time.perf_counter()
+        render_interval = max(dt, 1.0 / 60.0) * float(max(1, int(self.render_freq)))
+        if force_render or (now - last_render_t) >= render_interval:
+            self._update_render()
+            self.viewer.render()
+            return time.perf_counter()
+        return last_render_t
+
     def take_dense_action(self, control_seq, save_freq=-1):
         """
         control_seq:
@@ -3916,6 +3986,10 @@ class Base_Task(gym.Env):
             max_control_len = max(max_control_len, right_arm["position"].shape[0])
         if right_gripper is not None:
             max_control_len = max(max_control_len, right_gripper["num_step"])
+
+        pace_realtime = self._interactive_viewer_realtime_pace()
+        t_start = time.perf_counter()
+        last_render_t = t_start - 1.0
 
         for control_idx in range(max_control_len):
 
@@ -3953,13 +4027,24 @@ class Base_Task(gym.Env):
             if not self.transient_event:
                 self._update_transient_checks()
 
-            if self.render_freq and control_idx % self.render_freq == 0:
+            if pace_realtime:
+                last_render_t = self._pace_interactive_control_step(
+                    control_idx,
+                    t_start,
+                    last_render_t,
+                    force_render=(control_idx + 1 == max_control_len),
+                )
+            elif self.render_freq and control_idx % self.render_freq == 0:
                 self._update_render()
                 self.viewer.render()
 
             if save_freq != None and control_idx % save_freq == 0:
                 self._update_render()
                 self._take_picture()
+
+        if pace_realtime:
+            # Blocking move held the shared viewer loop; drop catch-up debt.
+            self._interactive_pacer_resync = True
 
         if save_freq != None:
             self._take_picture()
