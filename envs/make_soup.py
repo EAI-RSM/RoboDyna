@@ -120,8 +120,8 @@ class make_soup(KitchenS_base_task):
     # Lie on the board: upright (Y→Z) tipped 90° about world Y (stem along table).
     SIDE_QPOS: ClassVar[list[float]] = [0.5, 0.5, 0.5, -0.5]
 
-    # Soft-friction model during an armed pour: pieces stay on the board until
-    # the board's up-axis drops below this (≈35° tip). Past that they free-fall.
+    # Produce is always dynamic. Level carry holds via board/veg friction;
+    # tipping past ~arctan(μ) slides pieces into the pot.
     TILT_HOLD_DOT: ClassVar[float] = 0.82
     # Accidental spill during carry (top-down grasp wobble is ~0.87–0.90): only
     # free-fall if tipped nearly sideways (~60°).
@@ -175,6 +175,7 @@ class make_soup(KitchenS_base_task):
         self._veg_fallen = False
         self._pour_armed = False
         self._force_veg_hold = False
+        self._score_veg_spill = False
         self._veg_offsets: list[sapien.Pose] = []
         self.veggies: list[Any] = []
         self._veg_rigids: list[Any] = []
@@ -429,6 +430,7 @@ class make_soup(KitchenS_base_task):
         self._veg_fallen = False
         self._pour_armed = False
         self._force_veg_hold = False
+        self._score_veg_spill = False
         self._veg_offsets = []
         self.veggies = []
         self._veg_rigids = []
@@ -517,6 +519,8 @@ class make_soup(KitchenS_base_task):
         # Stove starts lit — the episode is only about pouring produce in.
         self.knob_angle = float(self.KNOB_ON_ANGLE)
         self._set_knob_joint_angle(float(self.KNOB_ON_ANGLE), hard=True)
+        # Force fire refresh after ring rebuild (cache cleared in base clear).
+        self.stove_on = False
         self._set_stove(True)
 
         self.board = self._spawn_board(board_x, board_y, bz)
@@ -993,8 +997,11 @@ class make_soup(KitchenS_base_task):
                             # SAPIEN box/mesh shapes can ship with contype 0.
                             shape.set_collision_groups([1, 1, 1, 1])
                             m = shape.get_physical_material()
-                            m.set_static_friction(0.10)
-                            m.set_dynamic_friction(0.06)
+                            # Produce stays dynamic on the board: enough friction
+                            # for a level carry, still slides under a ~40° tip
+                            # (friction angle ≈ arctan(0.45) ≈ 24°).
+                            m.set_static_friction(0.45)
+                            m.set_dynamic_friction(0.30)
                             m.set_restitution(0.0)
                     except Exception:
                         pass
@@ -1005,9 +1012,14 @@ class make_soup(KitchenS_base_task):
             pad = max(fh) + 0.008
             self.add_prohibit_area(veg, padding=pad)
 
-        # Soft-weld relative poses while the board is level.
-        self._capture_veg_offsets()
-        self._freeze_veggies_to_board()
+        # Produce is always dynamic — settle contact on the board (no soft-weld).
+        self._ensure_veggies_dynamic()
+        self._veg_released = True
+        if self.board is not None:
+            hold = self.board.get_pose()
+            for _ in range(48):
+                self._set_entity_pose(self.board, hold)
+                self.scene.step()
 
     # ---------------------------------------------------------------- liquid / stove
     def _rebuild_water(self, force: bool = False) -> None:
@@ -1100,12 +1112,35 @@ class make_soup(KitchenS_base_task):
         p[2] += lift
         return sapien.Pose(p.tolist(), list(pose.q))
 
-    def _set_entity_pose(self, entity: Any, pose: sapien.Pose) -> None:
+    def _set_entity_pose(
+        self, entity: Any, pose: sapien.Pose, *, snap: bool | None = None
+    ) -> None:
+        """Pose a body. For the kinematic board, prefer kinematic targets so
+        dynamic produce can ride via contact instead of falling through a
+        ``set_pose`` teleport each frame.
+        """
         if self._board_is_entity(entity):
             pose = self._clamp_board_pose_above_pot(pose)
         obj = entity.actor if hasattr(entity, "actor") else entity
-        obj.set_pose(pose)
         rigid = self._get_rigid(entity)
+        use_snap = True if snap is None else bool(snap)
+        if self._board_is_entity(entity) and rigid is not None:
+            try:
+                is_kin = bool(rigid.kinematic)
+            except Exception:
+                is_kin = False
+            if is_kin:
+                cur = np.asarray(obj.get_pose().p, dtype=float)
+                tgt = np.asarray(pose.p, dtype=float)
+                # Large gap (first seat / recover): must snap. Small follow: target only.
+                if use_snap and float(np.linalg.norm(cur - tgt)) > 0.04:
+                    obj.set_pose(pose)
+                try:
+                    rigid.set_kinematic_target(pose)
+                except Exception:
+                    obj.set_pose(pose)
+                return
+        obj.set_pose(pose)
         if rigid is not None:
             try:
                 rigid.set_kinematic_target(pose)
@@ -1119,73 +1154,63 @@ class make_soup(KitchenS_base_task):
         R = self.board.get_pose().to_transformation_matrix()[:3, :3]
         return float(R[:, 2] @ np.array([0.0, 0.0, 1.0]))
 
-    def _capture_veg_offsets(self) -> None:
-        if self.board is None:
-            return
-        board_pose = self.board.get_pose()
-        self._veg_offsets = []
+    def _veggies_on_board(self) -> bool:
+        """True if every piece still rests on/near the chopping board."""
+        if self.board is None or not self.veggies:
+            return False
+        bp = np.asarray(self.board.get_pose().p, dtype=float)
+        R = self.board.get_pose().to_transformation_matrix()[:3, :3]
+        hx, hy, hz = [float(v) for v in self.board_half]
         for veg in self.veggies:
-            self._veg_offsets.append(board_pose.inv() * veg.get_pose())
+            p = np.asarray(veg.get_pose().p, dtype=float)
+            local = R.T @ (p - bp)
+            if abs(float(local[0])) > hx + 0.03:
+                return False
+            if abs(float(local[1])) > hy + 0.03:
+                return False
+            if float(local[2]) < hz - 0.01 or float(local[2]) > hz + 0.08:
+                return False
+        return True
 
-    def _freeze_veggies_to_board(self) -> None:
+    def _ensure_veggies_dynamic(self) -> None:
+        """Produce is always a dynamic rigid body (never kinematic / welded)."""
         for rigid in self._veg_rigids:
-            if rigid is None:
-                continue
-            try:
-                rigid.set_disable_gravity(True)
-                rigid.set_kinematic(True)
-                rigid.set_linear_velocity(np.zeros(3))
-                rigid.set_angular_velocity(np.zeros(3))
-            except Exception:
-                pass
-
-    def _release_veggies_physics(self, *, settle_on_board: bool = False) -> None:
-        """Free produce as dynamic bodies so they can slide under gravity + contact.
-
-        Soft-welded kinematics often sit slightly inside the board collider; releasing
-        in place causes PhysX penetration explosions. Lift each piece a few mm along
-        the board normal before enabling dynamics. Optionally settle while the board
-        is still flat so contact is established before tipping.
-        """
-        if self._veg_released:
-            return
-        self._veg_released = True
-        if self.board is None:
-            return
-        board_pose = self.board.get_pose()
-        R = board_pose.to_transformation_matrix()[:3, :3]
-        up = R[:, 2]
-        sep = 0.003  # meters — clear the board surface without looking floated
-        for veg, offset, rigid in zip(self.veggies, self._veg_offsets, self._veg_rigids):
-            pose_v = board_pose * offset
-            p = np.asarray(pose_v.p, dtype=float) + sep * up
-            self._set_entity_pose(veg, sapien.Pose(p.tolist(), list(pose_v.q)))
             if rigid is None:
                 continue
             try:
                 rigid.set_kinematic(False)
                 rigid.set_disable_gravity(False)
-                rigid.set_linear_velocity(np.zeros(3))
-                rigid.set_angular_velocity(np.zeros(3))
             except Exception:
                 pass
-        if settle_on_board:
-            # Establish board contact before any tip motion.
+
+    def _capture_veg_offsets(self) -> None:
+        """Deprecated no-op — veggies are not soft-welded to the board."""
+        self._veg_offsets = []
+
+    def _freeze_veggies_to_board(self) -> None:
+        """Deprecated no-op — veggies stay dynamic."""
+        self._ensure_veggies_dynamic()
+
+    def _release_veggies_physics(self, *, settle_on_board: bool = False) -> None:
+        """Ensure produce is dynamic; optionally settle contact on a held board.
+
+        No pose teleport / soft-weld. Pieces already ride the board under PhysX.
+        """
+        self._ensure_veggies_dynamic()
+        self._veg_released = True
+        if settle_on_board and self.board is not None:
             hold = self.board.get_pose()
             for _ in range(36):
                 self._set_entity_pose(self.board, hold)
                 self.scene.step()
         print(
-            f"[make_soup] veggies free (board_up_dot={self._board_up_dot():.3f} "
+            f"[make_soup] veggies dynamic (board_up_dot={self._board_up_dot():.3f} "
             f"pour_armed={self._pour_armed})"
         )
 
     def _sync_veggies_to_board(self) -> None:
-        if self._veg_released or self.board is None:
-            return
-        board_pose = self.board.get_pose()
-        for veg, offset in zip(self.veggies, self._veg_offsets):
-            self._set_entity_pose(veg, board_pose * offset)
+        """Deprecated no-op — never teleport produce onto the board."""
+        return
 
     def _ee_pose(self, arm: ArmTag) -> sapien.Pose:
         p = self.get_arm_pose(str(arm))
@@ -1219,7 +1244,7 @@ class make_soup(KitchenS_base_task):
         self.arm = arm
         self.board_arm = arm
         self._ignore_board_robot_collision()
-        self._capture_veg_offsets()
+        self._ensure_veggies_dynamic()
 
     def _release_board_weld(self) -> None:
         """Detach the board so it can drop under gravity when the gripper opens."""
@@ -1245,9 +1270,11 @@ class make_soup(KitchenS_base_task):
         pose = self._ee_pose(arm) * self._board_weld_offset
         self._set_entity_pose(self.board, pose)
 
-    def _set_board_pose_keep_weld(self, pose: sapien.Pose) -> None:
+    def _set_board_pose_keep_weld(
+        self, pose: sapien.Pose, *, snap: bool | None = None
+    ) -> None:
         """Set board pose and rebuild the weld so it stays in the same hand."""
-        self._set_entity_pose(self.board, pose)
+        self._set_entity_pose(self.board, pose, snap=snap)
         arm = self._board_hold_arm()
         if self._board_welded and arm is not None:
             self._board_weld_offset = self._ee_pose(arm).inv() * self.board.get_pose()
@@ -1298,8 +1325,6 @@ class make_soup(KitchenS_base_task):
             if self._board_gripper_closed(arm) and self._board_handle_near(arm):
                 self._weld_board_to_ee(arm)
                 self._seat_board_in_hand()
-                self._capture_veg_offsets()
-                self._sync_veggies_to_board()
                 print(f"[make_soup] board attached to {arm} (policy-agnostic)")
                 return
 
@@ -1366,17 +1391,23 @@ class make_soup(KitchenS_base_task):
         self._set_collision_ignore(ents, bit, gid)
 
     def _veg_in_pot(self, veg: Any) -> bool:
+        """True only when the piece has fallen *into* the pot (below the rim).
+
+        Pieces still sitting on a board lip that overhangs the mouth must not
+        count — that falsely short-circuits the tip and looks like a teleport.
+        """
         p = np.asarray(veg.get_pose().p, dtype=float)
         dxy = float(np.linalg.norm(p[:2] - np.asarray(self.pot_xy)))
         return (
             dxy < self.pot_inner_radius * 0.95
             and float(p[2]) > self.pot_bottom_z - 0.01
-            and float(p[2]) < self.pot_rim_z + 0.06
+            and float(p[2]) < self.pot_rim_z - 0.008
         )
 
     def _check_veg_fallen(self) -> None:
-        """Fail if any released piece settles anywhere other than inside the pot."""
-        if not self._veg_released:
+        """Fail if any piece settles outside the pot after pour/spill starts."""
+        # Produce is always dynamic (may sit on the board before the pour).
+        if not getattr(self, "_score_veg_spill", False):
             return
         pot_xy = np.asarray(self.pot_xy, dtype=float)
         for veg in self.veggies:
@@ -1405,17 +1436,8 @@ class make_soup(KitchenS_base_task):
         self._try_policy_board_attach()
         self._sync_board_to_ee()
 
-        # Soft-weld while held (level carry + tip). Once freed, PhysX owns them.
-        if not self._veg_released:
-            if (
-                self._pour_armed
-                and not getattr(self, "_force_veg_hold", False)
-                and self._board_up_dot() < self.tilt_hold_dot
-            ):
-                self._release_veggies_physics()
-            else:
-                self._sync_veggies_to_board()
-
+        # Produce stays dynamic on the board / in free-fall under PhysX.
+        self._ensure_veggies_dynamic()
         self._check_veg_fallen()
         # Knob grasp / fire: KitchenS_base_task._update_stove_knob_control
 
@@ -1526,13 +1548,15 @@ class make_soup(KitchenS_base_task):
         # (Policy-agnostic attach in _update_kinematic_tasks does the same.)
         self._weld_board_to_ee(arm)
         self._seat_board_in_hand()
-        self._capture_veg_offsets()
-        self._sync_veggies_to_board()
         print(f"[make_soup] grasped handle tcp-dist={dist:.3f} arm={arm}")
         return True
 
     def _seat_board_in_hand(self) -> None:
-        """Level board with handle under the TCP of the grasping arm."""
+        """Level board with handle under the TCP of the grasping arm.
+
+        Steps the board toward the seat pose so dynamic produce can ride via
+        contact (no veg teleport).
+        """
         arm = self._board_hold_arm()
         if self.board is None or not self._board_welded or arm is None:
             return
@@ -1543,18 +1567,51 @@ class make_soup(KitchenS_base_task):
         board_p = tcp - local
         min_z = float(self.table_top) + float(self.board_half[2]) + 0.02
         board_p[2] = max(float(board_p[2]), min_z)
-        self._set_board_pose_keep_weld(sapien.Pose(board_p.tolist(), [1, 0, 0, 0]))
-        if not self._veg_released:
-            self._sync_veggies_to_board()
+        target = sapien.Pose(board_p.tolist(), [1, 0, 0, 0])
+        start = self.board.get_pose()
+        sp = np.asarray(start.p, dtype=float)
+        tp = np.asarray(target.p, dtype=float)
+        steps = int(np.clip(np.ceil(np.linalg.norm(tp - sp) / 0.006), 1, 36))
+        for i in range(1, steps + 1):
+            a = i / steps
+            p = (1.0 - a) * sp + a * tp
+            self._set_board_pose_keep_weld(
+                sapien.Pose(p.tolist(), [1, 0, 0, 0]), snap=False
+            )
+            self.scene.step()
+        self._set_board_pose_keep_weld(target, snap=False)
+        # Let dynamic produce settle on the seated board.
+        for _ in range(12):
+            self._sync_board_to_ee()
+            self.scene.step()
 
     def _flatten_board(self) -> None:
-        """Keep the board level in the same hand (no reparent / teleport)."""
+        """Ease the board level in the same hand so dynamic produce can ride."""
         if self.board is None:
             return
-        p = np.asarray(self.board.get_pose().p, dtype=float)
-        self._set_board_pose_keep_weld(sapien.Pose(p.tolist(), [1, 0, 0, 0]))
-        if not self._veg_released:
-            self._sync_veggies_to_board()
+        start = self.board.get_pose()
+        sp = np.asarray(start.p, dtype=float)
+        if self._board_up_dot() > 0.995:
+            self._set_board_pose_keep_weld(sapien.Pose(sp.tolist(), [1, 0, 0, 0]))
+            return
+        # Small stepped flatten — avoid one big orientation teleport under produce.
+        steps = 16
+        for i in range(1, steps + 1):
+            a = i / float(steps)
+            # Nudge toward identity quaternion on the scalar path.
+            q0 = np.asarray(start.q, dtype=float)
+            q1 = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+            if float(np.dot(q0, q1)) < 0.0:
+                q0 = -q0
+            q = (1.0 - a) * q0 + a * q1
+            q = q / max(1e-8, float(np.linalg.norm(q)))
+            self._set_board_pose_keep_weld(
+                sapien.Pose(sp.tolist(), [float(v) for v in q]), snap=False
+            )
+            self.scene.step()
+        self._set_board_pose_keep_weld(
+            sapien.Pose(sp.tolist(), [1, 0, 0, 0]), snap=False
+        )
 
     def _carry_board_level(self, target_xy, z: float) -> None:
         """Translate with top-down EE; board stays welded and follows the hand."""
@@ -1670,11 +1727,12 @@ class make_soup(KitchenS_base_task):
         # Keep board↔pot collision / rim contact so the board cannot sink through.
         self._pour_armed = True
         self._force_veg_hold = False
+        self._score_veg_spill = True
 
         def in_pot() -> bool:
             return all(self._veg_in_pot(v) for v in self.veggies)
 
-        # Free while flat so contact settles, then tip the wrist.
+        # Produce is already dynamic — settle contact, then tip so they slide.
         self._release_veggies_physics(settle_on_board=True)
 
         # Tip: rotate wrist + board together about the pour edge.
@@ -1684,6 +1742,7 @@ class make_soup(KitchenS_base_task):
         tip_steps = 120
         wrist_at = (tip_steps // 2, tip_steps)
         hold_pose = pour_flat
+        save_freq = self.save_freq if self.save_freq is not None else 15
 
         def _roll(frac: float) -> tuple[sapien.Pose, list[float]]:
             theta = -side_sign * tip_max * frac
@@ -1715,19 +1774,30 @@ class make_soup(KitchenS_base_task):
         for i in range(1, tip_steps + 1):
             tip_i = i
             hold_pose, ee_target = _roll(i / tip_steps)
-            self._set_entity_pose(self.board, hold_pose)
+            self._set_entity_pose(self.board, hold_pose, snap=False)
             if i in wrist_at:
                 self.plan_success = True
                 self.move(self.move_to_pose(arm, ee_target))
                 self.plan_success = True
-                self._set_entity_pose(self.board, hold_pose)
+                self._set_entity_pose(self.board, hold_pose, snap=False)
             self.scene.step()
+            # Tip advances via set_pose; snapshot so demos show the pour.
+            if (
+                self.save_data
+                and save_freq
+                and i % max(1, int(save_freq)) == 0
+            ):
+                try:
+                    self._update_render()
+                    self._take_picture()
+                except Exception:
+                    pass
             self._check_veg_fallen()
             if in_pot():
                 break
 
         for _ in range(120):
-            self._set_entity_pose(self.board, hold_pose)
+            self._set_entity_pose(self.board, hold_pose, snap=False)
             if in_pot():
                 break
             self.scene.step()
@@ -1742,17 +1812,17 @@ class make_soup(KitchenS_base_task):
         untilt_steps = max(1, tip_i // 15)
         for j in range(tip_i, -1, -untilt_steps):
             hold_pose, ee_target = _roll(j / tip_steps)
-            self._set_entity_pose(self.board, hold_pose)
+            self._set_entity_pose(self.board, hold_pose, snap=False)
             self.plan_success = True
             self.move(self.move_to_pose(arm, ee_target))
             self.plan_success = True
-            self._set_entity_pose(self.board, hold_pose)
+            self._set_entity_pose(self.board, hold_pose, snap=False)
         hold_pose, ee_level = _roll(0.0)
-        self._set_entity_pose(self.board, hold_pose)
+        self._set_entity_pose(self.board, hold_pose, snap=False)
         self.plan_success = True
         self.move(self.move_to_pose(arm, ee_level))
         self.plan_success = True
-        self._set_entity_pose(self.board, hold_pose)
+        self._set_entity_pose(self.board, hold_pose, snap=False)
 
         # Re-hold in the gripper for the place-back (still closed jaws).
         self._board_weld_offset = weld_offset
@@ -1875,7 +1945,8 @@ class make_soup(KitchenS_base_task):
         pour_flat = self.board.get_pose()
         ee_flat = self._ee_pose(arm)
         pivot = np.asarray(pour_flat.p, dtype=float)
-        # Free produce while the board is still level, then tip away from the pot.
+        # Produce already dynamic — settle, then tip away from the pot.
+        self._score_veg_spill = True
         self._release_veggies_physics(settle_on_board=True)
 
         tip_steps = 100
@@ -1898,17 +1969,17 @@ class make_soup(KitchenS_base_task):
 
         for i in range(1, tip_steps + 1):
             hold_pose, ee_target = _roll(i / tip_steps)
-            self._set_entity_pose(self.board, hold_pose)
+            self._set_entity_pose(self.board, hold_pose, snap=False)
             if i in wrist_at:
                 self.plan_success = True
                 self.move(self.move_to_pose(arm, ee_target))
                 self.plan_success = True
-                self._set_entity_pose(self.board, hold_pose)
+                self._set_entity_pose(self.board, hold_pose, snap=False)
             self.scene.step()
             self._check_veg_fallen()
 
         for _ in range(160):
-            self._set_entity_pose(self.board, hold_pose)
+            self._set_entity_pose(self.board, hold_pose, snap=False)
             self.scene.step()
             self._check_veg_fallen()
 
@@ -1926,19 +1997,22 @@ class make_soup(KitchenS_base_task):
             self.plan_success = False
             return self.info
 
-        # Level lift — board stays welded in the gripper; veggies soft-welded on it.
-        self.move(
-            self.move_by_displacement(
-                arm,
-                z=0.10,
-                quat=list(GRASP_DIRECTION_DIC["top_down"]),
-                move_axis="world",
+        # Level lift — slower so dynamic produce can ride the kinematic board.
+        for _ in range(4):
+            self.move(
+                self.move_by_displacement(
+                    arm,
+                    z=0.025,
+                    quat=list(GRASP_DIRECTION_DIC["top_down"]),
+                    move_axis="world",
+                )
             )
-        )
+            self._sync_board_to_ee()
+            for _ in range(4):
+                self.scene.step()
         self._flatten_board()
-        self._capture_veg_offsets()
-        self._sync_veggies_to_board()
-        if self._veg_released or self._veg_fallen:
+        self._ensure_veggies_dynamic()
+        if not self._veggies_on_board():
             print("[make_soup] veggies fell during lift — fail")
             self.plan_success = False
             return self.info

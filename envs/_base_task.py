@@ -776,7 +776,15 @@ class Base_Task(gym.Env):
         """
         load aloha robot urdf file, set root pose and set joints
         """
-        if not hasattr(self, "robot"):
+        # After close_env/release_episode_resources the Robot wrapper may still
+        # exist with left_entity=None. Rebuild a fresh Robot so drive targets
+        # bind to the new articulation (reusing a cleared Robot left demos idle).
+        need_new = (
+            not hasattr(self, "robot")
+            or self.robot is None
+            or getattr(self.robot, "left_entity", None) is None
+        )
+        if need_new:
             self.robot = Robot(self.scene, self.need_topp, **kwags)
             self.robot.set_planner(self.scene)
             self.robot.init_joints()
@@ -1073,6 +1081,11 @@ class Base_Task(gym.Env):
         self.need_plan = args.get("need_plan", True)
         self.left_joint_path = args.get("left_joint_path", [])
         self.right_joint_path = args.get("right_joint_path", [])
+        # Always restart replay from the first segment. setup_demo resets these,
+        # but callers that only set_path_lst (or reuse an env) must not resume
+        # mid-trajectory from a prior plan/render pass.
+        self.left_cnt = 0
+        self.right_cnt = 0
 
     def _set_eval_video_ffmpeg(self, ffmpeg):
         self.eval_video_ffmpeg = ffmpeg
@@ -1080,7 +1093,7 @@ class Base_Task(gym.Env):
     def close_env(self, clear_cache=False):
         # Clear all kinematic tasks
         self.active_kinematic_tasks = []
-        
+
         if clear_cache and hasattr(self, 'scene') and self.scene is not None:
             try:
                 for actor in self.scene.get_all_actors():
@@ -1093,7 +1106,14 @@ class Base_Task(gym.Env):
                         pass
             except:
                 pass
-        
+
+        # Drop articulation / camera / scene handles before sapien_clear_cache so
+        # the next setup_demo cannot drive stale joints (idle-arm demo bug).
+        try:
+            self.release_episode_resources()
+        except Exception:
+            pass
+
         if clear_cache or getattr(self, "force_clear_cache_on_close", True):
             # for actor in self.scene.get_all_actors():
             #     self.scene.remove_actor(actor)
