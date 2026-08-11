@@ -427,11 +427,6 @@ def main():
     settle_after = None
     terminal_started_at = None
     pacer = RealtimePhysicsPacer(env)
-
-    # Start the ball's pre-roll hold now, not at setup: the freeze is meant to give
-    # the player time once the window is live, so it must not tick during settle.
-    env._ball_freeze_armed = True
-
     try:
         while not viewer.closed:
             n_steps = pacer.begin_frame()

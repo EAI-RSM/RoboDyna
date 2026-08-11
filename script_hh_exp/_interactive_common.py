@@ -847,8 +847,8 @@ class HouseholdController:
             elif self.task == "catch_cup":
                 e._release_cup()
             elif self.task == "catch_mouse_object_drop":
-                # Release shelf objects and start the mouse immediately (no
-                # stand-off wait for basket placement).
+                # Release all shelf objects to PhysX and let the mouse finish the
+                # shove (do not leave it waiting forever at the stand-off).
                 e._activate_target()
                 e._allow_shove = True
                 e._release_mouse()

@@ -183,8 +183,6 @@ def main():
     def is_done(step):
         if env.check_success():
             return True, "ball in box"
-        if getattr(env, "_ball_fell_off_table", False):
-            return True, "ball dropped off the table"
         if getattr(env, "_drop_timed_out", False):
             return True, (
                 f"drop timeout ({float(env.drop_timeout_s):.0f}s) — ball not in box"
