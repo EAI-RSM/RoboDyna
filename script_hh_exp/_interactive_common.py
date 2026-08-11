@@ -6,8 +6,9 @@ checks.  This module only adds the same viewer/arm teleoperation used by
 Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
 G opens/closes the selected gripper(s); V cycles head_camera ↔ gripper views
 (shared ``ViewerViewToggle`` handler; top-down is not available).
-Space grasps/releases the task's primary prop and C invokes a task-specific
-control where needed (cook_food / make_soup burner and pour sequence).
+Space grasps/releases the task's primary prop (except trap_bug / stop_ball /
+pour_beer, where Space is gripper open/close only via ViewerViewToggle).
+C invokes a task-specific control where needed (cook_food / make_soup).
 """
 from __future__ import annotations
 
@@ -136,6 +137,11 @@ class HouseholdController:
         self.board_over_pot = False
         self.trap_released = False
         self.scenario_started = False
+        if task == "trap_bug" and robot:
+            # Highlight the trap-side arm so Space closes the correct gripper.
+            side = str(getattr(env, "arm_side", "right") or "right")
+            if side in ("left", "right"):
+                env._interactive_selected_arms = (side,)
         if task in (
             "fill_coffee_jar", "pour_beer", "measure_ingredient", "catch_cup",
             "stop_ball",
@@ -612,6 +618,10 @@ class HouseholdController:
             return
         if self.task == "stop_ball":
             return
+        # trap_bug: Space is gripper open/close only (ViewerViewToggle). Env
+        # auto-welds / releases the trap from proximity + gripper width.
+        if self.task == "trap_bug":
+            return
         # measure_ingredient: Space always grasps/releases the jar — never the oil key.
         if self.task == "measure_ingredient":
             self._grasp_or_release_measure_jar()
@@ -628,16 +638,11 @@ class HouseholdController:
                     _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
                     print(f"[{self.task}] prop held; arrows/Q/E move it")
                 else:
-                    if self.task == "trap_bug":
-                        # Trap stays kinematic; release arms evaluation + kinematic fall.
-                        self.env.release_trap()
-                        self.trap_released = True
-                    else:
-                        try:
-                            body.set_kinematic(False)
-                            body.set_disable_gravity(False)
-                        except Exception:
-                            pass
+                    try:
+                        body.set_kinematic(False)
+                        body.set_disable_gravity(False)
+                    except Exception:
+                        pass
                     print(f"[{self.task}] prop released")
             return
         if self.actor is None:
@@ -706,8 +711,6 @@ class HouseholdController:
                     grasped = moved is not False and bool(
                         getattr(self.env, "plan_success", True)
                     )
-                    if grasped and self.task == "trap_bug":
-                        self.env.weld_trap_to_gripper(arm)
                 self.holding = grasped
                 if self.holding:
                     print(f"[{self.task}] grasp ok ({arm})")
@@ -748,9 +751,6 @@ class HouseholdController:
                         self.env._set_pad_collision_enabled(True)
                     except Exception:
                         pass
-                elif self.task == "trap_bug":
-                    self.env.release_trap()
-                    self.trap_released = True
                 self.holding = False
                 print(f"[{self.task}] released")
         except Exception as exc:
@@ -939,12 +939,13 @@ class HouseholdController:
             except Exception:
                 pass
             return
-        if self.task != "trap_bug" or not self.trap_released:
+        if self.task != "trap_bug":
             return
         if env.trap is None:
             return
-        if not bool(getattr(env, "_trap_released", False)):
-            env.release_trap()
+        # Gripper open / slip is detected in env._maybe_auto_weld_or_release.
+        if bool(getattr(env, "_trap_released", False)):
+            self.trap_released = True
         if bool(getattr(env, "_trap_anchored", False)) and not getattr(self, "_trap_land_logged", False):
             self._trap_land_logged = True
             print("[trap_bug] trap landed; pose frozen as-is")
