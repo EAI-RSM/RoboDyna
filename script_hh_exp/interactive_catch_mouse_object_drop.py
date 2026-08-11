@@ -6,16 +6,12 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Space             hold/release catcher basket
-  Arrow keys        move held basket in XY
-  E / Q             move held basket in Z
-
-  Mouse/object motion starts as soon as the viewer is ready.
+  Prefer --control robot: Space only opens/closes the gripper.
+  Close on the basket handle and place it under the landing before the object falls.
 """
 ROBOT = """
-  Space             grasp/release basket
-
-  Mouse/object motion starts as soon as the viewer is ready.
+  Space opens/closes the gripper only — no automatic basket grasp.
+  Close on the basket handle, carry under the landing, then open to place.
 """
 
 if __name__ == "__main__":
