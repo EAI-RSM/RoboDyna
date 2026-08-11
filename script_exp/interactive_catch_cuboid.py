@@ -37,20 +37,6 @@ from _interactive_common import (  # noqa: E402
     print_episode_condition,
 )
 
-# ur5-wsg gripper visual links (recolored to show arm selection).
-_GRIPPER_LINK_NAMES = (
-    "wsg_50_base_link",
-    "gripper_left",
-    "gripper_right",
-    "finger_left",
-    "finger_right",
-)
-_ARM_HIGHLIGHT = {
-    "left": [1.0, 0.85, 0.10, 1.0],   # yellow
-    "right": [0.15, 0.75, 1.0, 1.0],  # cyan
-}
-
-
 CONTROLS_KEYBOARD = """
   Space             open / close gripper (closing latches a rising cuboid; you lift it out)
 """
@@ -110,90 +96,6 @@ class EdgeKey:
         edge = bool(down) and not self._prev
         self._prev = bool(down)
         return edge
-
-
-class ArmGripperHighlight:
-    """Recolor gripper meshes so the selected arm is obvious in the viewer."""
-
-    def __init__(self, env):
-        self.env = env
-        self._orig = {}  # id(material) -> (material, rgba)
-        self._entities = {
-            "left": self._gripper_entities("left"),
-            "right": self._gripper_entities("right"),
-        }
-        self._selected = None
-
-    def _gripper_entities(self, side):
-        robot = self.env.robot
-        art = robot.left_entity if side == "left" else robot.right_entity
-        out = []
-        for link in art.get_links():
-            if link.get_name() in _GRIPPER_LINK_NAMES:
-                out.append(link.entity)
-        return out
-
-    def _iter_materials(self, entity):
-        for comp in entity.get_components():
-            if not isinstance(comp, sapien.render.RenderBodyComponent):
-                continue
-            for shape in comp.render_shapes:
-                try:
-                    yield shape.material
-                except Exception:
-                    continue
-
-    def _remember(self, mat):
-        key = id(mat)
-        if key in self._orig:
-            return
-        try:
-            rgba = list(mat.base_color)
-        except Exception:
-            rgba = [0.75, 0.75, 0.75, 1.0]
-        self._orig[key] = (mat, rgba)
-
-    def _apply(self, mat, rgba):
-        self._remember(mat)
-        try:
-            mat.set_base_color_texture(None)
-        except Exception:
-            pass
-        try:
-            mat.set_base_color(list(rgba))
-            mat.base_color = list(rgba)
-        except Exception:
-            try:
-                mat.set_base_color(list(rgba))
-            except Exception:
-                pass
-        try:
-            mat.set_metallic(0.05)
-            mat.set_roughness(0.35)
-        except Exception:
-            pass
-
-    def _restore_all(self):
-        for mat, rgba in self._orig.values():
-            try:
-                mat.set_base_color(list(rgba))
-                mat.base_color = list(rgba)
-            except Exception:
-                try:
-                    mat.set_base_color(list(rgba))
-                except Exception:
-                    pass
-
-    def set_selected(self, side):
-        side = "left" if side == "left" else "right"
-        if side == self._selected:
-            return
-        self._restore_all()
-        color = _ARM_HIGHLIGHT[side]
-        for entity in self._entities.get(side, []):
-            for mat in self._iter_materials(entity):
-                self._apply(mat, color)
-        self._selected = side
 
 
 def _cuboid_rising(env, idx=0):
@@ -322,7 +224,10 @@ class KeyboardCatchController:
 
 
 class RobotCatchController:
-    """On Space close, latch the cuboid; user teleops the lift."""
+    """On Space close, latch the cuboid; user teleops the lift.
+
+    Gripper highlight is owned by UniversalRobotControls (1/2/3) only.
+    """
 
     def __init__(self, env, ArmTag):
         self.env = env
@@ -334,20 +239,10 @@ class RobotCatchController:
         if not self.dual:
             hole = env._cuboid_holes[0]
             self.selected = "right" if env.holes[hole][0] > 0 else "left"
-        self._highlight = ArmGripperHighlight(env)
-        # Stay gray until 1 / 2 / 3 selects an arm (shared UniversalRobotControls).
         self._prev_width = {"left": 1.0, "right": 1.0}
         self._latched = set()
         self.done = False
         self.fail_detail = None
-
-    def _select(self, side):
-        side = "left" if side == "left" else "right"
-        changed = side != self.selected
-        self.selected = side
-        self._highlight.set_selected(side)
-        if changed:
-            print(f"Selected {side.upper()} (gripper highlighted).")
 
     def _latch_selected(self, arms):
         self.busy = True
@@ -375,9 +270,7 @@ class RobotCatchController:
         if not selected:
             return
         if len(selected) == 1:
-            self._select(selected[0])
-        elif len(selected) == 2:
-            self._highlight.set_selected(selected)
+            self.selected = selected[0]
 
         arms = list(selected)
         space_close = self._space.poll(window.key_down("space")) and any(

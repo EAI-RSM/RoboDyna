@@ -89,8 +89,8 @@ class catch_valley_ball_v1(Base_Task):
     # The arms are NOT held — only the ball waits. Counted only once the freeze
     # clock is armed (see `_ball_freeze_armed`), so the settle / check_stable
     # phase before the viewer opens does not eat into it.
-    # Off here (v1 keeps its original pacing); the catch_valley_ball /
-    # stop_valley_ball subclasses opt in to 3.0 s.
+    # Off here (v1 keeps its original pacing). stop_valley_ball opts in to 3.0 s;
+    # catch_valley_ball stays at 0 (ball drops immediately).
     START_FREEZE_S_DEFAULT = 0.0
 
     CATCHER_MODEL_DEFAULT = "021_cup"

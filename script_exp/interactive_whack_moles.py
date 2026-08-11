@@ -102,56 +102,6 @@ class EdgeKey:
         return edge
 
 
-_GRIPPER_LINK_NAMES = (
-    "wsg_50_base_link", "gripper_left", "gripper_right", "finger_left", "finger_right",
-)
-_ARM_HIGHLIGHT = {
-    "left": [1.0, 0.85, 0.10, 1.0],
-    "right": [0.15, 0.75, 1.0, 1.0],
-}
-
-
-class ArmGripperHighlight:
-    """Recolor the selected gripper so arm selection is unambiguous."""
-
-    def __init__(self, env):
-        self._orig = {}
-        self._entities = {
-            side: [link.entity for link in articulation.get_links()
-                   if link.get_name() in _GRIPPER_LINK_NAMES]
-            for side, articulation in (("left", env.robot.left_entity), ("right", env.robot.right_entity))
-        }
-
-    def set_selected(self, side):
-        if isinstance(side, str):
-            sides = (side,)
-        else:
-            sides = tuple(side)
-        for material, color in self._orig.values():
-            try:
-                material.set_base_color(color)
-                material.base_color = color
-            except Exception:
-                pass
-        for s in sides:
-            if s not in self._entities:
-                continue
-            for entity in self._entities[s]:
-                for component in entity.get_components():
-                    if not isinstance(component, sapien.render.RenderBodyComponent):
-                        continue
-                    for shape in component.render_shapes:
-                        material = shape.material
-                        if id(material) not in self._orig:
-                            self._orig[id(material)] = (material, list(material.base_color))
-                        try:
-                            material.set_base_color_texture(None)
-                            material.set_base_color(_ARM_HIGHLIGHT[s])
-                            material.base_color = _ARM_HIGHLIGHT[s]
-                        except Exception:
-                            pass
-
-
 def _arm_for_mole(env, idx, ArmTag):
     return env._arm_for_hole(env.mole_holes[idx])
 
@@ -226,7 +176,10 @@ class KeyboardMoleController:
 
 
 class RobotMoleController:
-    """Latch cradle mallets on Space-close; strike by teleoping the head onto moles."""
+    """Latch cradle mallets on Space-close; strike by teleoping the head onto moles.
+
+    Gripper highlight is owned by UniversalRobotControls (1/2/3) only.
+    """
 
     def __init__(self, env, ArmTag):
         self.env = env
@@ -235,8 +188,6 @@ class RobotMoleController:
         self.busy = False
         self._space = EdgeKey()
         self._prev_width = {"left": 1.0, "right": 1.0}
-        self.highlight = ArmGripperHighlight(env)
-        # Stay gray until 1 / 2 / 3 selects an arm (shared UniversalRobotControls).
 
     def _try_latch(self, selected):
         self.busy = True
@@ -278,11 +229,7 @@ class RobotMoleController:
         if not selected:
             return
         if len(selected) == 1:
-            if selected[0] != self.selected_arm:
-                self.selected_arm = selected[0]
-            self.highlight.set_selected(self.selected_arm)
-        elif len(selected) == 2:
-            self.highlight.set_selected(selected)
+            self.selected_arm = selected[0]
 
         arms = list(selected)
         space_close = self._space.poll(window.key_down("space")) and any(
