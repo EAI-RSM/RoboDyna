@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_save_goal.py --control keyboard
     /path/to/RoboDynaExp/script_exp/interactive_save_goal.py --control robot
 
-Place the square keeper in the green zone before the red line so its front
-face can bounce the ball (mass-aware: ball 100 g, keeper 300 g).
+Place the square keeper in the green zone before the red line so the solid
+keeper can bounce the ball from any angle (mass-aware: ball 100 g, keeper 500 g).
 """
 
 import argparse
@@ -114,7 +114,8 @@ def _set_keeper_xy(env, x, y, clip=True):
     if clip:
         x, y = _clip_keeper_xy(env, x, y)
     z = float(env.table_top_z + env.keeper_half_z)
-    pose = sapien.Pose([x, y, z], [1, 0, 0, 0])
+    q = list(env.goalkeeper.get_pose().q)
+    pose = sapien.Pose([x, y, z], q)
     try:
         env.goalkeeper.set_pose(pose)
     except Exception:
@@ -175,14 +176,14 @@ class KeyboardKeeperController:
 
 
 class RobotKeeperController:
-    """Teleop only — no Space auto-grasp / auto-release."""
+    """Teleop only — Space opens/closes the gripper only."""
 
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
 
     def update(self, window):
-        # Shared viewer G / arrows / E/Q own gripper and arm motion.
+        # Shared viewer Space / arrows / E/Q own gripper and arm motion.
         return
 
 
