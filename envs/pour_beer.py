@@ -90,9 +90,10 @@ class pour_beer(KitchenS_base_task):
     # Max rate while button held (per physics step); randomized per episode.
     POUR_RATE = 0.000715
     FLOW_RATE_SCALE = 1.55
-    # Stream cylinder radius while pouring (meters).
-    STREAM_R_MIN = 0.006
-    STREAM_R_MAX = 0.014
+    # Stream cylinder radius while pouring (meters). Kept <= NOZZLE_R so the
+    # visual column stays inside the spout opening instead of overhanging it.
+    STREAM_R_MIN = 0.003
+    STREAM_R_MAX = 0.006
     # Foam % of the stream ramps with continuous hold time (resets on release).
     # Start low so a fresh press is mostly beer; peak encourages pause-and-pour.
     FOAM_GAIN_START = 0.12
