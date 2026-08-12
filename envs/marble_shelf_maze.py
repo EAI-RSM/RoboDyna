@@ -12,8 +12,10 @@ class marble_shelf_maze(Base_Task):
     Two thin vertical glass panes face the robot, separated by a narrow gap. Short glass shelves
     (catch_shelf_marble / catch_cuboid window-glass look: light-blue tint + 80% transmission) are
     wedged crosswise in that gap. A marble starts at rest on the centre of the top shelf. Two
-    buttons sit on the table; pressing one tilts the active shelf 45 deg toward that side so the
-    marble rolls off and drops onto the shelf below (or, from the bottom shelf, into the bowl).
+    spring push-buttons sit on the table; pressing one tilts the active shelf toward that side so
+    the marble rolls off and drops onto the shelf below (or, from the bottom shelf, into the bowl).
+    In the interactive viewer, hold-to-tilt / release-to-return is driven by gripper-Z (Q) on the
+    keycaps (same ReactivePushButtons model as catch_marbles_trapdoors).
 
     Options (independent toggles; Opt 1+2 can both be on):
       - Default — after each inter-shelf drop the marble snaps to rest at the shelf centre.
@@ -91,6 +93,9 @@ class marble_shelf_maze(Base_Task):
     SHELF_ROUGHNESS = 0.02
     SHELF_IOR = 1.45
 
+    # Interactive hold-to-tilt: at least 50% slower shelf sweep than expert demos.
+    INTERACTIVE_TILT_SPEED_SCALE = 0.5
+
     GRAVITY = 9.81
 
     def setup_demo(self, **kwags):
@@ -131,6 +136,12 @@ class marble_shelf_maze(Base_Task):
         self._bowl_base_z = 0.0
         self._bowl_q = [0.5, 0.5, 0.5, 0.5]
         self.tilt_clearance = self.TILT_CLEARANCE_DEFAULT
+        self._expert_hold = None  # interactive keyboard: "left" / "right" / None
+        self._hold_dir = None     # last interactive held button (None / left / right)
+        self._pending_tilt_dir = None
+        self._pending_active_shelf = None  # land while held → promote on release
+        self._hold_tilt_shelf_idx = None   # shelf kept tilted until release after a drop
+        self._button_arrows = {"left": [], "right": []}
         super()._init_task_env_(**kwags)
 
     # ------------------------------------------------------------------ helpers
@@ -502,17 +513,33 @@ class marble_shelf_maze(Base_Task):
         self._ball_mode = "resting"
         self._sliding_shelf_idx = -1
         self._sliding_dir = 0
+        self._pending_active_shelf = None
+        self._hold_tilt_shelf_idx = None
+        self._hold_dir = None
 
-        # ---- two buttons in the near zone, one per side/arm ----
+        # ---- two push buttons (spring keycaps + hollow bezel), one per side/arm ----
         self.buttons = []
+        self.button_bases = []
         button_homes = []
         button_tops = []
         button_ids = []
+        self._button_arrows = {"left": [], "right": []}
         for bx in self.button_x:
             bz = self.table_z + self.button_half[2]
             is_right = bx > 0
             direction = "right" if is_right else "left"
             home = sapien.Pose([bx, self.button_y, bz])
+            # Hollow dark bezel like catch_marbles_trapdoors / catch_shelf_marble.
+            self.button_bases.extend(
+                add_key_base_border(
+                    self.scene,
+                    float(bx),
+                    float(self.button_y),
+                    float(self.table_z),
+                    self.button_half,
+                    name_prefix=f"shelf_button_base_{direction}",
+                )
+            )
             btn = create_box(
                 self.scene,
                 pose=home,
@@ -522,15 +549,18 @@ class marble_shelf_maze(Base_Task):
                 name=f"shelf_button_{direction}",
             )
             self.buttons.append(btn)
-            button_homes.append(home)
-            button_tops.append(bz + float(self.button_half[2]))
+            # Live world pose (table_z_bias / scene frame) for spring homes.
+            world_home = btn.get_pose()
+            button_homes.append(world_home)
+            button_tops.append(float(world_home.p[2]) + float(self.button_half[2]))
             button_ids.append(direction)
             self.add_prohibit_area(btn, padding=0.03)
             # Decal on the button's top face: a curved arrow spelling out which way the active
             # shelf will tilt if this button is pressed (clockwise for right, counter-clockwise
             # for left -- matches _set_shelf_pose's +angle-tilts-right-edge-down convention).
-            self._build_turn_arrow(
-                [bx, self.button_y, bz + self.button_half[2]],
+            top_z = float(world_home.p[2]) + float(self.button_half[2])
+            self._button_arrows[direction] = self._build_turn_arrow(
+                [float(world_home.p[0]), float(world_home.p[1]), top_z],
                 radius=min(self.button_half[0], self.button_half[1]) * 0.65,
                 clockwise=is_right,
                 color=[0.96, 0.96, 0.96],
@@ -632,7 +662,10 @@ class marble_shelf_maze(Base_Task):
         The CCW arrow is an open C (≈210 deg of arc) opening left; the CW arrow on the blue
         button is that shape's exact left-right mirror (negate x), so the two tips sit opposite
         each other (≈10 o'clock vs ≈2 o'clock) as true mirror images. A near-full circle used
-        to make both arrows look identical from the demo camera."""
+        to make both arrows look identical from the demo camera.
+
+        Returns a list of ``(entity, rest_xyz)`` so decals can ride the spring keycap.
+        """
         cx, cy, cz = top_center_xyz
         cz += 0.0022  # sit just above the button's top face, clear of z-fighting
 
@@ -645,6 +678,7 @@ class marble_shelf_maze(Base_Task):
 
         seg_half_thick = radius * 0.11
         seg_half_h = 0.0009
+        parts = []
 
         def _place_segment(p0, p1, half_thick):
             mid = (p0 + p1) / 2.0
@@ -653,11 +687,13 @@ class marble_shelf_maze(Base_Task):
                 return
             heading = float(np.arctan2(p1[1] - p0[1], p1[0] - p0[0]))
             quat = t3d.quaternions.axangle2quat([0.0, 0.0, 1.0], heading)
-            create_visual_box(
+            entity = create_visual_box(
                 self.scene, sapien.Pose([cx + mid[0], cy + mid[1], cz], quat),
                 half_size=[seg_len / 2.0 + seg_half_thick, half_thick, seg_half_h],
                 color=color, name="turn_arrow_seg",
             )
+            wp = entity.get_pose()
+            parts.append((entity, [float(wp.p[0]), float(wp.p[1]), float(wp.p[2])]))
 
         for p0, p1 in zip(pts[:-1], pts[1:]):
             _place_segment(p0, p1, seg_half_thick)
@@ -671,6 +707,7 @@ class marble_shelf_maze(Base_Task):
         for side in (1.0, -1.0):
             wing = back + normal * side * head_len * 0.62
             _place_segment(wing, tip, seg_half_thick * 1.3)
+        return parts
 
     def _get_rigid(self, entity):
         base_entity = entity.actor if hasattr(entity, "actor") else entity
@@ -745,6 +782,8 @@ class marble_shelf_maze(Base_Task):
     def _advance_shelf_tilts(self):
         dt = float(self.scene.get_timestep())
         speed = abs(self.tilt_angle_deg) / max(self.tilt_duration_sec, 1e-6)
+        if self._interactive_controls_enabled():
+            speed *= float(self.INTERACTIVE_TILT_SPEED_SCALE)
         step = speed * dt
         for idx in range(self.n_shelves):
             cur = self._shelf_cur_angle[idx]
@@ -791,6 +830,8 @@ class marble_shelf_maze(Base_Task):
         self._ball_mode = "missed"
         self.active_shelf_idx = -1
         self._sliding_shelf_idx = -1
+        self._pending_active_shelf = None
+        self._hold_tilt_shelf_idx = None
         # Abort remaining expert / policy motion immediately.
         self.plan_success = False
         if self._ball_rigid is None:
@@ -808,7 +849,10 @@ class marble_shelf_maze(Base_Task):
         Requires a real drop below the shelf top (not merely sitting near the rim) so a
         near-edge landing does not false-trigger while the expert is still reacting.
         """
-        idx = int(getattr(self, "active_shelf_idx", -1))
+        # While a drop is latched pending button-release, the marble already sits on the
+        # next shelf — miss checks must use that shelf, not the still-active tilted one.
+        pending = getattr(self, "_pending_active_shelf", None)
+        idx = int(pending) if pending is not None else int(getattr(self, "active_shelf_idx", -1))
         if idx < 0 or self.ball is None or not self.shelves:
             return False
         p = np.array(self.ball.get_pose().p, dtype=np.float64)
@@ -865,9 +909,12 @@ class marble_shelf_maze(Base_Task):
         except Exception:
             pass
         self._ball_mode = "falling"
-        self._shelf_target_angle[idx] = 0.0   # ease the fired shelf back to flat once it's done its job
+        # Expert path eases the shelf back immediately; interactive hold-to-tilt keeps it
+        # tilted until the key is released (see `_sync_hold_tilt`).
+        if not self._interactive_controls_enabled():
+            self._shelf_target_angle[idx] = 0.0   # ease the fired shelf back to flat once it's done its job
 
-    def _freeze_ball_on_shelf(self, idx: int):
+    def _freeze_ball_on_shelf(self, idx: int, *, advance_active: bool = True):
         if self._ball_rigid is None:
             return
         # Never "rescue" a table miss by freezing onto a shelf.
@@ -898,8 +945,24 @@ class marble_shelf_maze(Base_Task):
                 self._ball_rigid.set_kinematic(True)
             except Exception:
                 pass
-        self.active_shelf_idx = idx
         self._ball_mode = "resting"
+        if advance_active:
+            self.active_shelf_idx = idx
+            self._sliding_shelf_idx = -1
+            self._sliding_dir = 0
+            self._pending_active_shelf = None
+            self._hold_tilt_shelf_idx = None
+        else:
+            # Park on the next shelf but keep the fired shelf "active" until key release.
+            fired = int(getattr(self, "_sliding_shelf_idx", -1))
+            if fired < 0:
+                fired = int(getattr(self, "active_shelf_idx", -1))
+            self._pending_active_shelf = int(idx)
+            self._hold_tilt_shelf_idx = fired if fired >= 0 else None
+            if fired >= 0:
+                self.active_shelf_idx = fired
+            self._sliding_shelf_idx = -1
+            # Keep `_sliding_dir` / `_sliding_release_angle` so hold can latch the same tilt.
 
     def _ball_on_table(self) -> bool:
         """True when the marble is resting on / near the table and not inside the bowl.
@@ -1000,28 +1063,250 @@ class marble_shelf_maze(Base_Task):
         self.bowl_side = "right"
         return "right"
 
+    def _interactive_controls_enabled(self) -> bool:
+        return bool(
+            getattr(self, "_interactive_universal_controls", False)
+            or getattr(self, "_interactive_robot_mode", False)
+        )
+
+    def _button_engaged(self, bank, side: str) -> bool:
+        """True while a key is held past trigger (with release hysteresis)."""
+        if hasattr(bank, "is_engaged"):
+            return bool(bank.is_engaged(side))
+        return bool(bank.is_held(side))
+
+    def _sync_button_arrow_decals(self):
+        """Keep curved-arrow decals glued to the spring keycaps."""
+        bank = getattr(self, "_reactive_buttons", None)
+        arrows = getattr(self, "_button_arrows", None) or {}
+        if bank is None or not arrows:
+            return
+        for side in ("left", "right"):
+            try:
+                depth = float(bank.visual_depth[bank.resolve_index(side)])
+            except Exception:
+                depth = 0.0
+            for entity, rest_xyz in arrows.get(side, []) or []:
+                try:
+                    pose = entity.get_pose()
+                    entity.set_pose(
+                        sapien.Pose(
+                            [rest_xyz[0], rest_xyz[1], rest_xyz[2] - depth],
+                            list(pose.q),
+                        )
+                    )
+                except Exception:
+                    pass
+
+    def _begin_hold_tilt(self, direction: str) -> bool:
+        """Start (or keep) a non-blocking tilt of the active shelf toward ``direction``."""
+        if self.active_shelf_idx < 0 or not self.plan_success:
+            return False
+        if str(getattr(self, "_ball_mode", "")) not in ("resting", "sliding"):
+            return False
+        if direction not in ("left", "right"):
+            return False
+
+        idx = int(self.active_shelf_idx)
+        dir_sign = 1.0 if direction == "right" else -1.0
+        max_tilt = self._max_tilt_deg_for_shelf(idx)
+        release_angle = dir_sign * max_tilt
+
+        # Already sliding the same way: just keep the target latched at full tilt.
+        if (
+            str(self._ball_mode) == "sliding"
+            and int(self._sliding_shelf_idx) == idx
+            and abs(float(self._sliding_dir) - dir_sign) < 1e-6
+        ):
+            self._shelf_target_angle[idx] = release_angle
+            return True
+
+        cur_p = self.ball.get_pose().p
+        if self._ball_rigid is not None:
+            try:
+                self._ball_rigid.set_linear_velocity([0.0, 0.0, 0.0])
+                self._ball_rigid.set_angular_velocity([0.0, 0.0, 0.0])
+                self._ball_rigid.set_disable_gravity(True)
+                self._ball_rigid.set_kinematic(True)
+            except Exception:
+                pass
+        self._sliding_start_local_x = float(cur_p[0]) - self.shelf_centers_x[idx]
+        self._sliding_release_angle = release_angle
+        self._sliding_shelf_idx = idx
+        self._sliding_dir = dir_sign
+        self._ball_mode = "sliding"
+        self._shelf_target_angle[idx] = release_angle
+        # Any previously fired shelf should ease back while this one tilts.
+        for i in range(self.n_shelves):
+            if i != idx:
+                self._shelf_target_angle[i] = 0.0
+        return True
+
+    def _restore_ball_after_cancelled_tilt(self, idx: int):
+        """Shelf returned to flat before release — park the marble and resume resting."""
+        if self.ball is None or self._ball_rigid is None:
+            return
+        cx = float(self.shelf_centers_x[idx])
+        if self.continuous_ball_motion:
+            cur_p = np.array(self.ball.get_pose().p, dtype=np.float64)
+            local_x = float(np.clip(cur_p[0] - cx, -self.shelf_half_len, self.shelf_half_len))
+            p = np.array(
+                [cx + local_x, self.maze_y,
+                 self.shelf_z[idx] + self.shelf_half_thick + self.ball_radius + 0.001],
+                dtype=np.float64,
+            )
+            try:
+                self.ball.set_pose(sapien.Pose(p.tolist()))
+                self._ball_rigid.set_linear_velocity([0.0, 0.0, 0.0])
+                self._ball_rigid.set_angular_velocity([0.0, 0.0, 0.0])
+                self._ball_rigid.set_disable_gravity(False)
+                self._ball_rigid.set_kinematic(False)
+                self._ball_rigid.set_linear_damping(self.CONTINUOUS_LINEAR_DAMPING)
+                self._ball_rigid.set_angular_damping(self.CONTINUOUS_ANGULAR_DAMPING)
+            except Exception:
+                pass
+            self.active_shelf_idx = idx
+            self._ball_mode = "resting"
+            self._sliding_shelf_idx = -1
+            self._sliding_dir = 0
+        else:
+            self._freeze_ball_on_shelf(idx)
+
+    def _promote_pending_active_shelf(self):
+        """On button release: hand control to the shelf the marble already landed on."""
+        pending = getattr(self, "_pending_active_shelf", None)
+        if pending is None:
+            self._hold_tilt_shelf_idx = None
+            return
+        self.active_shelf_idx = int(pending)
+        self._pending_active_shelf = None
+        self._hold_tilt_shelf_idx = None
+        self._sliding_dir = 0
+
+    def _keep_hold_tilt_latched(self, held_dir):
+        """While held after a drop (or mid-fall), keep the fired shelf at its release angle."""
+        lock = getattr(self, "_hold_tilt_shelf_idx", None)
+        if lock is None:
+            lock = int(getattr(self, "_sliding_shelf_idx", -1))
+        if lock is None or int(lock) < 0:
+            return
+        lock = int(lock)
+        if held_dir in ("left", "right"):
+            want = 1.0 if held_dir == "right" else -1.0
+            if abs(float(getattr(self, "_sliding_dir", 0.0)) - want) < 1e-6:
+                self._shelf_target_angle[lock] = float(self._sliding_release_angle)
+                return
+        self._shelf_target_angle[lock] = 0.0
+
+    def _resolve_hold_tilt_ball(self):
+        """Non-blocking landing / cancel / bowl resolution for interactive hold-to-tilt."""
+        mode = str(getattr(self, "_ball_mode", ""))
+        if mode == "sliding":
+            idx = int(getattr(self, "_sliding_shelf_idx", -1))
+            if (
+                idx >= 0
+                and abs(float(self._shelf_target_angle[idx])) < 1e-3
+                and abs(float(self._shelf_cur_angle[idx])) < 1e-2
+            ):
+                self._restore_ball_after_cancelled_tilt(idx)
+            return
+        if mode != "falling":
+            return
+        if self._ball_in_bowl():
+            self._ball_mode = "done"
+            self.active_shelf_idx = -1
+            self._pending_active_shelf = None
+            self._hold_tilt_shelf_idx = None
+            return
+        if self._ball_on_table():
+            self._mark_ball_missed()
+            return
+        from_idx = int(getattr(self, "_sliding_shelf_idx", -1))
+        if from_idx < 0 or from_idx >= self.n_shelves - 1:
+            return
+        landed_idx = self._locate_landed_shelf(from_idx)
+        if landed_idx is None or self._ball_on_table():
+            return
+        # Hold still down: park on next shelf but keep the fired shelf active until release.
+        defer = getattr(self, "_hold_dir", None) in ("left", "right")
+        self._freeze_ball_on_shelf(landed_idx, advance_active=not defer)
+
+    def _sync_hold_tilt(self, held_dir):
+        """Drive active-shelf target from the currently held push button (or release)."""
+        mode = str(getattr(self, "_ball_mode", ""))
+        idx = int(getattr(self, "active_shelf_idx", -1))
+        sliding_idx = int(getattr(self, "_sliding_shelf_idx", -1))
+        pending = getattr(self, "_pending_active_shelf", None)
+
+        if mode in ("missed", "done"):
+            for i in range(self.n_shelves):
+                self._shelf_target_angle[i] = 0.0
+            self._pending_active_shelf = None
+            self._hold_tilt_shelf_idx = None
+            return
+
+        if mode == "falling":
+            # Keep the fired shelf tilted while the key stays held; ease back on release.
+            if sliding_idx >= 0:
+                self._hold_tilt_shelf_idx = sliding_idx
+            self._keep_hold_tilt_latched(held_dir)
+            return
+
+        # Released: flatten every shelf, then (if marble already landed) promote next level.
+        if held_dir is None:
+            for i in range(self.n_shelves):
+                self._shelf_target_angle[i] = 0.0
+            self._promote_pending_active_shelf()
+            return
+
+        # Still holding after a deferred landing: keep last shelf active/tilted — do not
+        # start tilting the next level until the key is released.
+        if pending is not None and mode == "resting":
+            self._keep_hold_tilt_latched(held_dir)
+            return
+
+        if held_dir in ("left", "right") and mode in ("resting", "sliding") and idx >= 0:
+            self._begin_hold_tilt(held_dir)
+            return
+
+        # Fallback: ease active / sliding shelf flat.
+        if mode == "sliding" and sliding_idx >= 0:
+            self._shelf_target_angle[sliding_idx] = 0.0
+        elif idx >= 0:
+            self._shelf_target_angle[idx] = 0.0
+
     def _update_reactive_buttons(self):
         bank = getattr(self, "_reactive_buttons", None)
         if bank is None:
             return
-        triggered = bank.update()
-        interactive = bool(
-            getattr(self, "_interactive_universal_controls", False)
-            or getattr(self, "_interactive_robot_mode", False)
-        )
-        if not interactive:
+        expert = getattr(self, "_expert_hold", None)
+        for side in ("left", "right"):
+            try:
+                bank.set_forced(side, expert == side)
+            except Exception:
+                pass
+        bank.update()
+        self._sync_button_arrow_decals()
+
+        if not self._interactive_controls_enabled():
+            self._hold_dir = None
             return
-        for direction in triggered:
-            # Queue for interactive loop (tilt settle is blocking).
-            self._pending_tilt_dir = str(direction)
+
+        left_on = self._button_engaged(bank, "left")
+        right_on = self._button_engaged(bank, "right")
+        if left_on and not right_on:
+            held = "left"
+        elif right_on and not left_on:
+            held = "right"
+        else:
+            held = None
+        self._hold_dir = held
+        self._sync_hold_tilt(held)
 
     def consume_pending_tilt(self) -> bool:
-        """Run a queued gripper-triggered tilt (interactive sandbox)."""
-        direction = getattr(self, "_pending_tilt_dir", None)
+        """Deprecated: interactive hold-to-tilt no longer queues blocking presses."""
         self._pending_tilt_dir = None
-        if not direction:
-            return False
-        return bool(self._press_tilt_direct(direction))
+        return False
 
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
@@ -1029,6 +1314,8 @@ class marble_shelf_maze(Base_Task):
             return
         self._update_reactive_buttons()
         self._advance_shelf_tilts()
+        if self._interactive_controls_enabled():
+            self._resolve_hold_tilt_ball()
         self._animate_oscillating_bowl()
         # Catch Opt-1 roll-offs / table hits from the *previous* step so the next control
         # iteration can abort (also see take_dense_action / _dwell post-step watches).
