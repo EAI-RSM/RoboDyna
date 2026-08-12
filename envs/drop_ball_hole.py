@@ -515,7 +515,7 @@ class drop_ball_hole(Base_Task):
             ],
             "functional_matrix": [],
         }
-        ball_actor = Actor(entity, data, mass=0.03)
+        ball_actor = Actor(entity, data, mass=0.1)  # 100 g
         rigid = self._get_rigid(entity)
         if rigid is not None:
             try:
