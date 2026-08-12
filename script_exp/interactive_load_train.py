@@ -121,9 +121,6 @@ def main():
     use_robot = args.control == "robot"
     env = load_train()
     env.setup_demo(**configure_task("load_train", args.config, args.seed, use_robot=use_robot))
-    env._interactive_selected_arms = (
-        "left" if env.ball_side == "left" else "right",
-    )
     print_episode_condition(env)
     env._train_running = True
 

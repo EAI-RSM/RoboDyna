@@ -119,7 +119,6 @@ def main():
     print_episode_condition(env)
 
     x, y = _aim_xy(env)
-    env._interactive_selected_arms = ("right" if x > 0 else "left",)
     try:
         env.together_open_gripper(save_freq=None)
     except Exception:

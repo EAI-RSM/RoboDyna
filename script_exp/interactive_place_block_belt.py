@@ -118,15 +118,15 @@ def main():
             "(key-press sandboxes use joint interpolation)."
         )
 
-    selected_arm = "right" if env.block.get_pose().p[0] > 0 else "left"
-    env._interactive_selected_arms = (selected_arm,)
+    suggested_arm = "right" if env.block.get_pose().p[0] > 0 else "left"
     env._interactive_holding = False
     env._interactive_released = False
     env._released = False
     env._belt_active = False
     env._release_delay_left = 0
     print_instructions(
-        f"Selected {selected_arm} arm. Space closes/opens the gripper to grasp/release the block. "
+        f"Press 1/2/3 to select an arm (block is on the {suggested_arm}). "
+        "Space closes/opens the gripper to grasp/release the block. "
         "When the block leaves the fingers on the belt, the conveyor engages."
     )
 

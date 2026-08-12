@@ -201,9 +201,6 @@ def main():
     print_mode_controls("hit_target", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
     env = hit_target()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
-    env._interactive_selected_arms = (
-        "right" if env.dart_side > 0 else "left",
-    )
     print_episode_condition(env)
     print(
         f"Arm={'right' if env.dart_side > 0 else 'left'}; "

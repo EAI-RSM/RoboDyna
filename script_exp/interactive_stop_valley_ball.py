@@ -384,9 +384,6 @@ def main():
 
     env = stop_valley_ball()
     env.setup_demo(**config)
-    env._interactive_selected_arms = (
-        "left" if env.mirrored else "right",
-    )
     print_episode_condition(env)
     try:
         env.together_open_gripper(save_freq=None)

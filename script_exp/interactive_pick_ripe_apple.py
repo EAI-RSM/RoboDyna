@@ -150,9 +150,6 @@ def main():
     print_episode_condition(env)
     env._ripen_started = True
 
-    selected_arm = "left" if env.apple_side < 0 else "right"
-    env._interactive_selected_arms = (selected_arm,)
-
     _move_arms_to_pre_grasp_orientation(env)
 
     print_banner(

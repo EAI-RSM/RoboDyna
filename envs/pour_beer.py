@@ -824,8 +824,6 @@ class pour_beer(KitchenS_base_task):
         side, cup_y, tap_dy = self._resolve_station_layout(cfg, rng)
         self.arm = ArmTag("right" if side >= 0 else "left")
         self.arm_side = str(self.arm)
-        # Match other household interactives: pre-select the working arm for teleop.
-        self._interactive_selected_arms = (self.arm_side,)
         self.cup_xy = np.array([side, cup_y], dtype=float)
         self.tap_xy = np.array([side, cup_y + tap_dy], dtype=float)
 

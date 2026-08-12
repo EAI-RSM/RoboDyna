@@ -23,12 +23,5 @@ if __name__ == "__main__":
     if not any(str(x).startswith("plain_trap=") for x in (args.task_arg or [])):
         args.task_arg.append("plain_trap=true")
 
-    def _preselect_trap_arm(env):
-        # Trap always spawns on arm_side; highlight that gripper so Space works.
-        side = str(getattr(env, "arm_side", "right") or "right")
-        if side in ("left", "right"):
-            env._interactive_selected_arms = (side,)
-            print(f"[trap_bug] selected {side} arm (trap side) — Space closes/opens gripper")
-
-    result = run_task("trap_bug", args, KEYBOARD, ROBOT, post_setup=_preselect_trap_arm)
+    result = run_task("trap_bug", args, KEYBOARD, ROBOT)
     raise SystemExit(10 if result is False else 0 if result is True else 2)

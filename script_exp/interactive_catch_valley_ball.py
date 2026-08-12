@@ -116,12 +116,11 @@ def main():
     env._bowl_ready = False
 
     catcher = "left" if env.mirrored else "right"
-    env._interactive_selected_arms = (catcher,)
     env.together_close_gripper(save_freq=None)
 
     landing = env.landing
     print(
-        f"Catch arm={catcher}; predicted landing ≈ "
+        f"Suggested catch arm={catcher} (press 1/2/3 to select); predicted landing ≈ "
         f"({float(landing[0]):.3f}, {float(landing[1]):.3f}); "
         f"red_line_x={env.red_line_x:.3f}; mirrored={env.mirrored}. "
         f"Shove the box with the closed gripper (PhysX)."

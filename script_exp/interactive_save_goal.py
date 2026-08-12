@@ -219,9 +219,6 @@ def main():
 
     env = save_goal()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
-    env._interactive_selected_arms = (
-        "left" if env.mirrored else "right",
-    )
     print_episode_condition(env)
     _start_shot(env)
     target = env.goalkeeper_target_pose.p if env.goalkeeper_target_pose is not None else [0, 0, 0]

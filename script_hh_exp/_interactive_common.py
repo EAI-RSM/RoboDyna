@@ -119,11 +119,6 @@ class HouseholdController:
         self._fill_press_state = None
         self.trap_released = False
         self.scenario_started = False
-        if task == "trap_bug" and robot:
-            # Highlight the trap-side arm so Space closes the correct gripper.
-            side = str(getattr(env, "arm_side", "right") or "right")
-            if side in ("left", "right"):
-                env._interactive_selected_arms = (side,)
         if task in (
             "fill_coffee_jar", "pour_beer", "measure_ingredient", "catch_cup",
         ) and robot:

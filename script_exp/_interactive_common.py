@@ -550,9 +550,9 @@ def resolve_wrist_render_camera(env, side: str):
 def active_gripper_sides(env) -> tuple[str, ...]:
     """Sides whose gripper/wrist views V may cycle through.
 
-    Uses ``env._interactive_selected_arms`` when set (1/2/3 selection, or a
-    task's single-arm default). Otherwise both sides that have a wrist camera
-    link. Missing links are dropped so single-arm / no-wrist setups degrade.
+    Uses ``env._interactive_selected_arms`` when set (after 1/2/3). Otherwise both
+    sides that have a wrist camera link. Missing links are dropped so single-arm /
+    no-wrist setups degrade.
     """
     available = []
     for side in ("right", "left"):
@@ -1150,6 +1150,8 @@ class UniversalRobotControls:
 
     No arm is highlighted at start — press 1 / 2 / 3 to activate left / right /
     both (until then both grippers stay gray and teleop / Space do nothing).
+    Task scripts must not pre-seed ``_interactive_selected_arms``; any leftover
+    value is cleared here so every interactive starts unselected.
     """
 
     # Interactive teleop rates (m/s). 20% slower than the prior snappy sandbox
@@ -1175,20 +1177,15 @@ class UniversalRobotControls:
 
     def __init__(self, env):
         self.env = env
-        # Default: no arm until 1 / 2 / 3. Honor task pre-seeds (e.g. trap_bug
-        # trap-side arm) so Space / teleop work without a redundant press.
-        pre = tuple(
-            s for s in (getattr(env, "_interactive_selected_arms", ()) or ())
-            if s in ("left", "right")
-        )
-        self.selected = pre
+        # Always start with no arm selected — press 1 / 2 / 3 to activate.
+        self.selected = ()
         self._previous = {key: False for key in ("1", "2", "3", "o")}
         self._last_update = None
         self._command = {}
         self._highlight_materials = {}
         self._origin_joints = {}
         self._origin_pose = {}
-        env._interactive_selected_arms = pre
+        env._interactive_selected_arms = ()
         env._interactive_universal_controls = True
         env._interactive_robot_controls = self
         # Ensure the shared failure feedback exists for Space/action paths.

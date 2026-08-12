@@ -241,9 +241,6 @@ def main():
     # Always enable arm teleop + Space grasp/release.
     env._interactive_robot_mode = True
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    env._interactive_selected_arms = (
-        "left" if env.mirrored else "right",
-    )
     print_episode_condition(env)
     _place_cup_south_of_belt(env)
     print(

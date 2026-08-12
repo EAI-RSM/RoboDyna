@@ -324,13 +324,6 @@ def main():
     env = catch_cuboid()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     print_episode_condition(env)
-    if env.dual_catch:
-        env._interactive_selected_arms = ("left", "right")
-    else:
-        hole = env._cuboid_holes[0]
-        env._interactive_selected_arms = (
-            "right" if env.holes[hole][0] > 0 else "left",
-        )
     # Start with open grippers so Space close has an effect.
     try:
         env.together_open_gripper(save_freq=None)

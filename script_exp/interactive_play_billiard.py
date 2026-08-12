@@ -241,7 +241,6 @@ def main():
     # Always enable arm teleop + Space grasp/release; hit by driving the tip into the ball.
     env._interactive_robot_mode = True
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    env._interactive_selected_arms = (env._arm_side,)
     print_episode_condition(env)
     print(
         f"Arm={env._arm_side}; target pocket={env._target_pocket_name}; "

@@ -58,9 +58,6 @@ def main():
         "drop_ball_hole", args.config, args.seed, use_robot=use_robot,
     ))
     print_episode_condition(env)
-    env._interactive_selected_arms = (
-        "left" if env.ball_side == "left" else "right",
-    )
     env._interactive_released = False
     # Spin the platform for the interactive session.
     env._cap_tracking = True
@@ -137,7 +134,7 @@ def main():
         # Robot: mark release only after a real manual grasp (closed near ball),
         # then Space-open. Opening before pickup must not start the drop timeout.
         if use_robot and not bool(getattr(env, "ball_released", False)):
-            arms = selected_robot_arms(env, fallback=env._interactive_selected_arms)
+            arms = selected_robot_arms(env)
             if arms:
                 closed_now = all(float(gripper_width(env, side)) < 0.5 for side in arms)
                 near_now = any(_ball_near_gripper(side) for side in arms)

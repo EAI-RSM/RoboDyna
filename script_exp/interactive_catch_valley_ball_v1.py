@@ -302,9 +302,6 @@ def main():
 
     env = catch_valley_ball_v1()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
-    env._interactive_selected_arms = (
-        "left" if env.mirrored else "right",
-    )
     print_episode_condition(env)
     x, y = _target_xy(env)
     print(

@@ -268,14 +268,6 @@ def main():
     print_episode_condition(env)
     env._belt_running = True
 
-    if env.two_colors_enabled:
-        # Opt1 / Opt1+2: red→left basket, green→right — both arms needed.
-        env._interactive_selected_arms = ("left", "right")
-    else:
-        env._interactive_selected_arms = (
-            ("left",) if env.active_colors[0] == "apple" else ("right",)
-        )
-
     for side in ("left", "right"):
         try:
             env.robot.set_gripper(1.0, side, gripper_eps=0.0)
