@@ -162,7 +162,6 @@ class KeyboardCatchController:
         if not self.dual:
             hole = env._cuboid_holes[0]
             self.selected = "right" if env.holes[hole][0] > 0 else "left"
-        self._space = EdgeKey()
         self._q = EdgeKey()
         self._e = EdgeKey()
         self._pending = None  # (arms, cuboid_indices, steps_left)
@@ -214,17 +213,19 @@ class KeyboardCatchController:
                 print("Selected RIGHT arm.")
 
         arms = list(_selected_arms(self.env, (self.selected,)))
-        space_close = self._space.poll(window.key_down("space")) and any(
-            self._prev_width.get(a, 1.0) > 0.5 for a in arms
-        )
+        closing = False
         for side in ("left", "right"):
-            self._prev_width[side] = gripper_width(self.env, side)
-        if space_close:
+            width = gripper_width(self.env, side)
+            prev = self._prev_width.get(side, 1.0)
+            if side in arms and prev > 0.5 and width <= 0.5:
+                closing = True
+            self._prev_width[side] = width
+        if closing:
             self._begin_latch(arms)
 
 
 class RobotCatchController:
-    """On Space close, latch the cuboid; user teleops the lift.
+    """When the gripper closes near a cuboid, latch it; user teleops the lift.
 
     Gripper highlight is owned by UniversalRobotControls (1/2/3) only.
     """
@@ -234,7 +235,6 @@ class RobotCatchController:
         self.ArmTag = ArmTag
         self.dual = bool(env.dual_catch)
         self.busy = False
-        self._space = EdgeKey()
         self.selected = "right"
         if not self.dual:
             hole = env._cuboid_holes[0]
@@ -273,12 +273,14 @@ class RobotCatchController:
             self.selected = selected[0]
 
         arms = list(selected)
-        space_close = self._space.poll(window.key_down("space")) and any(
-            self._prev_width.get(a, 1.0) > 0.5 for a in arms
-        )
+        closing = False
         for side in ("left", "right"):
-            self._prev_width[side] = gripper_width(self.env, side)
-        if space_close:
+            width = gripper_width(self.env, side)
+            prev = self._prev_width.get(side, 1.0)
+            if side in arms and prev > 0.5 and width <= 0.5:
+                closing = True
+            self._prev_width[side] = width
+        if closing:
             self._latch_selected(arms)
 
 def main():

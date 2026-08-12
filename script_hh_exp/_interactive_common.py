@@ -4,14 +4,10 @@ The household environments deliberately keep their normal physics and success
 checks.  This module only adds the same viewer/arm teleoperation used by
 ``script_exp``: arrows move the selected end-effector in XY, Q/E move it in Z,
 Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
-G opens/closes the selected gripper(s); V cycles head_camera ↔ gripper views
-(shared ``ViewerViewToggle``; default head framing matches base suite GUI
-snapshots — top-down is not available).
-Space grasps/releases the task's primary prop (except boil_milk / trap_bug /
-cook_food / cook_food_timer / make_soup / catch_mouse_object_drop /
-pour_beer / clean_table, where Space is gripper open/close only via
-ViewerViewToggle; stop_ball Space closes/opens the gripper to grasp the
-rolling ball).
+Space opens/closes the selected gripper(s) only (shared ``ViewerViewToggle``);
+V cycles head_camera ↔ gripper views (default head framing matches base suite
+GUI snapshots — top-down is not available).  Space never auto-grasps, teleports,
+or runs planner pick/place shortcuts.
 """
 from __future__ import annotations
 
@@ -68,17 +64,6 @@ PROFILES = {
 }
 
 
-class _Edge:
-    def __init__(self):
-        self.down = False
-
-    def poll(self, value):
-        value = bool(value)
-        edge = value and not self.down
-        self.down = value
-        return edge
-
-
 def _rigid(actor):
     obj = getattr(actor, "actor", actor)
     for comp in getattr(obj, "get_components", lambda: ())():
@@ -131,9 +116,6 @@ class HouseholdController:
         actor_attr = PROFILES[task][3]
         self.actor = getattr(env, actor_attr, None) if actor_attr else None
         self.holding = False
-        self.space = _Edge()
-        self._fill_space_started_at = None
-        self._fill_space_was_down = False
         self._fill_press_state = None
         self.trap_released = False
         self.scenario_started = False
@@ -392,7 +374,6 @@ class HouseholdController:
     def _finish_fill_press(self):
         state = self._fill_press_state
         self._fill_press_state = None
-        self._fill_space_started_at = None
         if state is None:
             self.env._interactive_teleop_locked = False
             return
@@ -516,324 +497,11 @@ class HouseholdController:
         else:
             self._keyboard_action()
 
-    def _grasp_or_release(self):
-        # pour_beer: no Space shortcut — open the lever with arm teleop / contact.
-        if self.task == "pour_beer":
-            return
-        if self.task == "fill_coffee_jar":
-            self._task_action()
-            return
-        if self.task == "stop_ball":
-            self._toggle_stop_ball_grasp_grip()
-            return
-        # boil_milk / trap_bug / cook_food* / make_soup / catch_mouse* /
-        # clean_table: Space is gripper open/close only (ViewerViewToggle).
-        # Physical teleop for props (pinch the sponge handle to lift it).
-        if self.task in (
-            "boil_milk",
-            "trap_bug",
-            "cook_food",
-            "cook_food_timer",
-            "make_soup",
-            "catch_mouse_object_drop",
-            "clean_table",
-        ):
-            return
-        # measure_ingredient: Space always grasps/releases the jar — never the oil key.
-        if self.task == "measure_ingredient":
-            self._grasp_or_release_measure_jar()
-            return
-        # catch_cup: the pillow is shoved by contact, never welded/grasped.
-        if self.task == "catch_cup":
-            self._toggle_catch_cup_push_grip()
-            return
-        if not self.robot:
-            if self.actor is not None:
-                self.holding = not self.holding
-                body = _rigid(self.actor)
-                if self.holding:
-                    _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
-                    print(f"[{self.task}] prop held; arrows/Q/E move it")
-                else:
-                    try:
-                        body.set_kinematic(False)
-                        body.set_disable_gravity(False)
-                    except Exception:
-                        pass
-                    print(f"[{self.task}] prop released")
-            return
-        if self.actor is None:
-            self._task_action()
-            return
-        arm = _arm_tag(self.env)
-        if arm is None:
-            return
-        try:
-            if not self.holding:
-                self.env.plan_success = True
-                if self.task == "make_soup":
-                    # Grasp with the highlighted gripper. Keep env.arm on that
-                    # hand after success — restoring the layout arm made the
-                    # board weld sync to the other EE (left grasp → right hand).
-                    previous_arm = getattr(self.env, "arm", None)
-                    grasped = False
-                    try:
-                        self.env.arm = arm
-                        grasped = bool(self.env._grasp_board())
-                    finally:
-                        if grasped:
-                            self.env.arm = arm
-                            self.env.board_arm = arm
-                        else:
-                            self.env.arm = previous_arm
-                    if grasped:
-                        # Allow PhysX release once the board tips past the hold angle.
-                        self.env._pour_armed = True
-                elif self.task == "clean_table":
-                    # Sponge lives on the mug-side arm; require that gripper.
-                    task_arm = getattr(self.env, "arm", None)
-                    if task_arm is None or str(arm) != str(task_arm):
-                        action_failed(
-                            self.env,
-                            (str(arm),),
-                            detail=(
-                                f"select the {task_arm} arm (sponge side) "
-                                f"with {'2' if str(task_arm) == 'right' else '1'}"
-                            ),
-                        )
-                        return
-                    grasped = bool(self.env._grasp_sponge())
-                elif self.task == "catch_mouse_object_drop":
-                    # grasp_actor's constrained descent cannot reach the handle.
-                    grasped = bool(self.env.interactive_grasp_basket(arm))
-                else:
-                    # Always grasp with the highlighted gripper — never a
-                    # reachability-based other arm (e.g. cook_food.food_arm).
-                    grasp_fn = getattr(self.env, "_safe_grasp_actor", None)
-                    if callable(grasp_fn) and self.task in ("cook_food", "cook_food_timer"):
-                        moved = self.env.move(
-                            grasp_fn(
-                                self.actor,
-                                arm_tag=arm,
-                                pre_grasp_dis=0.10,
-                                contact_point_id=0,
-                            )
-                        )
-                    else:
-                        moved = self.env.move(
-                            self.env.grasp_actor(
-                                self.actor, arm_tag=arm, pre_grasp_dis=0.08
-                            )
-                        )
-                    grasped = moved is not False and bool(
-                        getattr(self.env, "plan_success", True)
-                    )
-                self.holding = grasped
-                if self.holding:
-                    print(f"[{self.task}] grasp ok ({arm})")
-                else:
-                    action_failed(
-                        self.env, (str(arm),),
-                        detail="could not grasp (out of reach or plan failed)",
-                    )
-            else:
-                if self.task == "catch_mouse_object_drop":
-                    released = bool(self.env.interactive_release_basket(arm))
-                    if not released:
-                        action_failed(
-                            self.env, (str(arm),),
-                            detail="release failed",
-                        )
-                        return
-                    self.holding = False
-                    return
-                self.env.plan_success = True
-                moved = self.env.move(self.env.open_gripper(arm))
-                released = moved is not False and bool(
-                    getattr(self.env, "plan_success", True)
-                )
-                if not released:
-                    action_failed(
-                        self.env, (str(arm),),
-                        detail="release failed",
-                    )
-                    return
-                if self.task == "make_soup":
-                    self.env._release_board_weld()
-                elif self.task == "clean_table":
-                    self.env._sponge_welded = False
-                    self.env._sponge_weld_offset = None
-                    try:
-                        self.env._set_sponge_collision_enabled(True)
-                        self.env._set_pad_collision_enabled(True)
-                    except Exception:
-                        pass
-                self.holding = False
-                print(f"[{self.task}] released")
-        except Exception as exc:
-            action_failed(
-                self.env, (str(arm),),
-                detail=f"grasp/release unavailable: {exc}",
-            )
-
-    def _toggle_catch_cup_push_grip(self):
-        """Space closes/opens the gripper for a physical pillow shove (no weld)."""
-        e = self.env
-        try:
-            e._enable_pillow_physics()
-        except Exception:
-            pass
-        if not self.robot:
-            # Keyboard god-mode: optional teleport hold; release restores PhysX.
-            if self.actor is None:
-                return
-            self.holding = not self.holding
-            body = _rigid(self.actor)
-            if self.holding:
-                _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
-                print("[catch_cup] pillow held (god-mode); arrows/Q/E move it")
-            else:
-                try:
-                    if body is not None:
-                        body.set_kinematic(False)
-                        body.set_disable_gravity(False)
-                    e._enable_pillow_physics()
-                except Exception:
-                    pass
-                print("[catch_cup] pillow released — PhysX pushable again")
-            return
-        arm = _arm_tag(e)
-        if arm is None:
-            return
-        try:
-            e.plan_success = True
-            if not self.holding:
-                moved = e.move(e.close_gripper(arm))
-                ok = moved is not False and bool(getattr(e, "plan_success", True))
-                self.holding = bool(ok)
-                if ok:
-                    print("[catch_cup] gripper closed — shove the pillow with contact")
-                else:
-                    action_failed(e, (str(arm),), detail="close gripper failed")
-            else:
-                moved = e.move(e.open_gripper(arm))
-                ok = moved is not False and bool(getattr(e, "plan_success", True))
-                if not ok:
-                    action_failed(e, (str(arm),), detail="open gripper failed")
-                    return
-                self.holding = False
-                print("[catch_cup] gripper opened")
-        except Exception as exc:
-            action_failed(e, (str(arm),), detail=f"gripper toggle unavailable: {exc}")
-
-    def _toggle_stop_ball_grasp_grip(self):
-        """Space closes/opens the gripper to grasp the rolling ball."""
-        e = self.env
-        arm = _arm_tag(e)
-        if arm is None:
-            return
-        try:
-            e.plan_success = True
-            if not self.holding:
-                moved = e.move(e.close_gripper(arm, pos=0.0))
-                ok = moved is not False and bool(getattr(e, "plan_success", True))
-                self.holding = bool(ok)
-                if ok:
-                    # Env auto-welds when closed jaws sit around the ball.
-                    try:
-                        e._maybe_interactive_grasp()
-                    except Exception:
-                        pass
-                    print("[stop_ball] gripper closed — grasp the ball when it is between the fingers")
-                else:
-                    action_failed(e, (str(arm),), detail="close gripper failed")
-            else:
-                moved = e.move(e.open_gripper(arm, pos=1.0))
-                ok = moved is not False and bool(getattr(e, "plan_success", True))
-                if not ok:
-                    action_failed(e, (str(arm),), detail="open gripper failed")
-                    return
-                try:
-                    e._release_ball_weld()
-                    if getattr(e, "_ball_state", "") == "grasped":
-                        e._ball_state = "live"
-                        e._grasped = False
-                except Exception:
-                    pass
-                self.holding = False
-                print("[stop_ball] gripper opened")
-        except Exception as exc:
-            action_failed(e, (str(arm),), detail=f"gripper toggle unavailable: {exc}")
-
-    def _grasp_or_release_measure_jar(self):
-        """Space: grasp/release the oil jar. Oil key is Z-press only (no C)."""
-        e = self.env
-        if not self.robot:
-            if self.actor is None:
-                print("[measure_ingredient] jar not available")
-                return
-            self.holding = not self.holding
-            body = _rigid(self.actor)
-            if self.holding:
-                e._jar_locked = False
-                _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
-                print("[measure_ingredient] jar held; arrows/Q/E move it")
-            else:
-                try:
-                    body.set_kinematic(False)
-                    body.set_disable_gravity(False)
-                except Exception:
-                    pass
-                e._episode_jar_released = True
-                print("[measure_ingredient] jar released — episode ending")
-            return
-
-        arm = _arm_tag(e)
-        if arm is None:
-            return
-        try:
-            e.plan_success = True
-            if not self.holding:
-                self.holding = bool(e.interactive_grasp_jar(arm))
-                if not self.holding:
-                    action_failed(
-                        e, (str(arm),),
-                        detail="could not grasp jar (out of reach or plan failed)",
-                    )
-            else:
-                released = bool(e.interactive_release_jar(arm))
-                if not released:
-                    action_failed(e, (str(arm),), detail="release failed")
-                    return
-                self.holding = False
-        except Exception as exc:
-            action_failed(
-                e, (str(arm),),
-                detail=f"grasp/release unavailable: {exc}",
-            )
-
     def update(self, window):
+        del window  # Space / teleop owned by shared ViewerViewToggle + UniversalRobotControls
         self._update_failure_visual()
-        space_down = bool(window.key_down("space"))
-        if self.task == "fill_coffee_jar":
-            # Space is intentionally unused for fill_coffee_jar.  The user
-            # presses the blue key by moving the selected closed gripper in Z;
-            # env._detect_lid_touch converts that physical engagement to force.
-            self._fill_space_was_down = space_down
-        elif self.space.poll(space_down):
-            self._grasp_or_release()
-        # Space = gripper open/close (ViewerViewToggle) for make_soup / cook_food*
-        # / clean_table / etc. when `_grasp_or_release` early-returns.
-        # measure_ingredient: oil key = lower closed gripper onto red key;
-        # Space = grasp/release jar for the scale step.
-        if not self.robot and self.holding and self.actor is not None:
-            p = np.asarray(self.actor.get_pose().p, dtype=float)
-            step = 0.012
-            dz = step * (bool(window.key_down("q")) - bool(window.key_down("e")))
-            p += [step * (bool(window.key_down("right")) - bool(window.key_down("left"))),
-                  step * (bool(window.key_down("up")) - bool(window.key_down("down"))), dz]
-            if np.any(np.asarray([window.key_down(k) for k in ("left", "right", "up", "down", "q", "e")])):
-                _set_pose(self.actor, p, kinematic=True)
+        # Space opens/closes grippers only (ViewerViewToggle). No auto-grasp,
+        # teleport hold, or planner pick/place shortcuts from this controller.
 
     def start_scenario(self):
         """Start time-sensitive scene motion after the first rendered frame."""

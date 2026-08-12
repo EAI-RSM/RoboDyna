@@ -7,7 +7,8 @@ Run from any directory:
     /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball_v1.py --control robot
 
 Keyboard mode teleports the catcher with arrow keys (always placed).
-Robot mode: teleop to the catcher, Space-close to latch, Space-open to drop.
+Robot mode: teleop to the catcher; Space only opens/closes the gripper.
+Close near the catcher to latch, open to drop (no planner auto-pick).
 """
 
 import argparse
@@ -44,9 +45,9 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Space             close near catcher to latch; open to drop it
+  Space             open / close selected gripper(s) only
 
-  Flow: teleop to catcher → Space close to pick up → move → Space open to drop.
+  Flow: teleop to catcher → Space close near it to latch → move → Space open to drop.
 """
 
 
@@ -149,16 +150,6 @@ def _clamp_table_xy(env, x, y):
     return x, y
 
 
-class EdgeKey:
-    def __init__(self):
-        self._prev = False
-
-    def poll(self, down):
-        edge = bool(down) and not self._prev
-        self._prev = bool(down)
-        return edge
-
-
 class KeyboardBowlController:
     """Arrow-nudge the catcher; always treated as placed (no Space freeze)."""
 
@@ -182,7 +173,13 @@ class KeyboardBowlController:
 
 
 class RobotBowlController:
-    """Latch catcher on Space-close; drop on Space-open (shared gripper toggle)."""
+    """Latch catcher when the gripper closes near it; drop when it opens.
+
+    Space only toggles the gripper (shared ViewerViewToggle). This watches
+    gripper width + proximity — no planner ``grasp_actor`` auto-pick.
+    """
+
+    LATCH_DIST = 0.14
 
     def __init__(self, env, ArmTag):
         self.env = env
@@ -191,26 +188,48 @@ class RobotBowlController:
         self.holding = False
         self.placed = False
         self.busy = False
-        self._space = EdgeKey()
         self._prev_width = {"left": 1.0, "right": 1.0}
 
     def _choose_arm(self):
         return resolve_action_arm(self.env, self.ArmTag, exactly_one=True)
 
-    def grasp(self):
+    def _near_bowl(self, arm) -> bool:
+        side = str(arm)
+        robot = getattr(self.env, "robot", None)
+        if robot is None or getattr(self.env, "bowl", None) is None:
+            return False
+        getter = robot.get_left_tcp_pose if side == "left" else robot.get_right_tcp_pose
+        try:
+            tcp = np.asarray(getter()[:3], dtype=float)
+        except Exception:
+            return False
+        bowl = np.asarray(self.env.bowl.get_pose().p[:3], dtype=float)
+        if float(np.linalg.norm(tcp - bowl)) <= self.LATCH_DIST:
+            return True
+        try:
+            return len(self.env.get_gripper_actor_contact_position(self.env.bowl.get_name())) > 0
+        except Exception:
+            return False
+
+    def latch(self):
         self.busy = True
         self.arm = self._choose_arm()
         if self.arm is None:
             self.busy = False
             return
-        self.env.move(self.env.grasp_actor(self.env.bowl, arm_tag=self.arm, pre_grasp_dis=0.10))
-        if self.env.plan_success:
-            self.env._weld_bowl_to_end_effector(self.arm)
-            self.env.move(self.env.move_by_displacement(self.arm, z=0.05, move_axis="arm"))
-            self.holding = True
-            print(f"Picked up bowl with {self.arm} arm. Move, then Space to open / drop.")
-        else:
-            action_failed(self.env, (str(self.arm),), detail="grasp failed")
+        side = str(self.arm)
+        try:
+            self.env.robot.set_gripper(0.0, side, gripper_eps=0.0)
+        except Exception:
+            pass
+        self.env._dwell(12)
+        if not self._near_bowl(self.arm):
+            action_failed(self.env, (side,), detail="close on the catcher to latch")
+            self.busy = False
+            return
+        self.env._weld_bowl_to_end_effector(self.arm)
+        self.holding = True
+        print(f"Latched catcher to {side} gripper. Move, then Space to open / drop.")
         self.busy = False
 
     def drop(self):
@@ -218,11 +237,10 @@ class RobotBowlController:
             return
         self.busy = True
         self.env._unweld_bowl()
-        self.env.move(self.env.open_gripper(self.arm))
         for _ in range(8):
             self.env._update_kinematic_tasks()
             self.env.scene.step()
-        self.env._fix_bowl_at_placed_pose()
+        self.env._form_bowl_at_placed_pose()
         p = np.asarray(self.env.bowl.get_pose().p, dtype=float)
         self.env._bowl_ready = True
         self.holding = False
@@ -231,17 +249,23 @@ class RobotBowlController:
         self.busy = False
 
     def update(self, window):
+        del window  # Space owned by shared ViewerViewToggle gripper toggle
         if self.busy or self.placed:
             return
         selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
         arms = list(selected) if selected else []
-        space_edge = self._space.poll(window.key_down("space"))
-        closing = space_edge and any(self._prev_width.get(a, 1.0) > 0.5 for a in arms)
-        opening = space_edge and any(self._prev_width.get(a, 1.0) <= 0.5 for a in arms)
+        closing = opening = False
         for side in ("left", "right"):
-            self._prev_width[side] = gripper_width(self.env, side)
+            width = gripper_width(self.env, side)
+            prev = self._prev_width.get(side, 1.0)
+            if side in arms:
+                if prev > 0.5 and width <= 0.5:
+                    closing = True
+                if prev <= 0.5 and width > 0.5:
+                    opening = True
+            self._prev_width[side] = width
         if closing and not self.holding:
-            self.grasp()
+            self.latch()
         elif opening and self.holding:
             self.drop()
 
@@ -298,7 +322,10 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     if args.control == "robot":
-        print_instructions("Teleop to the catcher; Space close to latch, Space open to drop.")
+        print_instructions(
+            "Teleop to the catcher; Space opens/closes the gripper. "
+            "Close near the catcher to latch, open to drop."
+        )
     else:
         print_instructions("Arrow keys move the catcher; it stays placed/ready.")
 

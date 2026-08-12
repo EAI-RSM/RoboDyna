@@ -114,6 +114,7 @@ class load_train(Base_Task):
         self._latched_car_idx = None
         self._latch_local = None
         self._bed_contact_steps = 0
+        self._ball_fell_off_table = False
         self.selected_arm = None
         self.ball_in_train = False
         self.target_wagon_mode = False
@@ -1000,6 +1001,46 @@ class load_train(Base_Task):
                     return wait, i
         return best_steps, best_wagon
 
+    def _ball_off_table(self):
+        """True when the free ball has fallen off the tabletop onto the floor.
+
+        Table footprint matches ``create_table`` (length=1.2, width=0.7). A ball
+        still in a wagon or currently pinched by the gripper is not a failure.
+        """
+        if getattr(self, "ball", None) is None:
+            return False
+        if getattr(self, "_ball_latched", False) or self._success_in_target_wagon():
+            return False
+        try:
+            if len(self.get_gripper_actor_contact_position(self.ball.get_name())) > 0:
+                return False
+        except Exception:
+            pass
+        p = np.asarray(self.ball.get_pose().p, dtype=np.float64)
+        table_z = float(getattr(self, "table_top_z", 0.74))
+        if float(p[2]) < table_z - 0.05:
+            return True
+        bias = getattr(self, "table_xy_bias", [0.0, 0.0])
+        half_x, half_y = 0.60, 0.35
+        margin = 0.03
+        off_xy = (
+            abs(float(p[0]) - float(bias[0])) > half_x + margin
+            or abs(float(p[1]) - float(bias[1])) > half_y + margin
+        )
+        near_surface = float(p[2]) < table_z + float(getattr(self, "ball_radius", 0.02)) + 0.06
+        return bool(off_xy and near_surface)
+
+    def _try_latch_ball_off_table(self):
+        """Latch off-table failure so interactive / eval can terminate."""
+        if getattr(self, "_ball_fell_off_table", False):
+            return True
+        if not self._ball_off_table():
+            return False
+        self._ball_fell_off_table = True
+        self.ball_in_train = False
+        self._last_fail_reason = "ball dropped off the table"
+        return True
+
     # -------------------------------------------------------------- kinematics
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
@@ -1012,6 +1053,7 @@ class load_train(Base_Task):
             self._try_latch_ball()
         if self._ball_latched:
             self._update_latched_ball()
+        self._try_latch_ball_off_table()
         self.ball_in_train = self._success_in_target_wagon()
 
     def _dwell(self, steps: int):
@@ -1219,12 +1261,15 @@ class load_train(Base_Task):
         )
 
     def check_success(self):
-        self.ball_in_train = self._success_in_target_wagon()
+        self._try_latch_ball_off_table()
+        off_table = bool(getattr(self, "_ball_fell_off_table", False))
+        self.ball_in_train = (not off_table) and self._success_in_target_wagon()
         self.info["ball_side"] = str(getattr(self, "ball_side", "left"))
         self.info["selected_arm"] = str(getattr(self, "selected_arm", "left"))
         self.info["n_wagons"] = int(getattr(self, "n_wagons", max(0, getattr(self, "n_cars", 1) - 1)))
         self.info["n_cars"] = int(getattr(self, "n_cars", 0))
         self.info["ball_in_train"] = bool(self.ball_in_train)
+        self.info["ball_off_table"] = bool(off_table)
         self.info["target_wagon_mode"] = bool(getattr(self, "target_wagon_mode", False))
         self.info["target_wagon_idx"] = (
             None if self.target_wagon_idx is None else int(self.target_wagon_idx)
@@ -1235,6 +1280,8 @@ class load_train(Base_Task):
         self.info["tunnel_present"] = bool(getattr(self, "tunnel_present", False))
         self.info["tunnel_n_wagons"] = int(getattr(self, "tunnel_n_wagons", 0))
         self.info["option_label"] = self._option_label()
+        if off_table:
+            self._last_fail_reason = "ball dropped off the table"
         return bool(self.ball_in_train)
 
     def get_obs(self):
@@ -1251,6 +1298,7 @@ class load_train(Base_Task):
                 self._drop_target_xy.tolist() if hasattr(self, "_drop_target_xy") else [0.0, 0.0]
             ),
             "ball_in_train": bool(getattr(self, "ball_in_train", False)),
+            "ball_off_table": bool(getattr(self, "_ball_fell_off_table", False)),
             "ball_latched": bool(getattr(self, "_ball_latched", False)),
             "target_wagon_mode": bool(getattr(self, "target_wagon_mode", False)),
             "target_wagon_idx": (

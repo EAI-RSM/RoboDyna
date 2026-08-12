@@ -9,7 +9,10 @@ KEYBOARD = """
   Ball starts rolling as soon as the viewer is ready. Open the gripper, intercept the ball, and close to grasp it before it falls off the table.
 """
 ROBOT = """
-  Ball starts rolling as soon as the viewer is ready. Open the gripper, intercept the ball, and close (G) to grasp it before it falls off the table.
+  Space             open / close selected gripper(s) only
+
+  Ball starts rolling as soon as the viewer is ready. Open the gripper,
+  intercept the ball, and close (Space) to grasp it before it falls off.
 """
 
 if __name__ == "__main__":

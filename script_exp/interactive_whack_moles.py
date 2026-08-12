@@ -47,7 +47,7 @@ CONTROLS_KEYBOARD = """
 
 CONTROLS_ROBOT = """
   1 / 2 / 3         select left, right, or both arms
-  Space             close on a cradle mallet handle to pick it up
+  Space             open / close selected gripper only (close on mallet handle to latch)
   Arrows / E / Q    teleop; lower the mallet head onto rising moles to strike
 """
 
@@ -186,7 +186,6 @@ class RobotMoleController:
         self.ArmTag = ArmTag
         self.selected_arm = "left"
         self.busy = False
-        self._space = EdgeKey()
         self._prev_width = {"left": 1.0, "right": 1.0}
 
     def _try_latch(self, selected):
@@ -232,12 +231,14 @@ class RobotMoleController:
             self.selected_arm = selected[0]
 
         arms = list(selected)
-        space_close = self._space.poll(window.key_down("space")) and any(
-            self._prev_width.get(a, 1.0) > 0.5 for a in arms
-        )
+        closing = False
         for side in ("left", "right"):
-            self._prev_width[side] = gripper_width(self.env, side)
-        if space_close:
+            width = gripper_width(self.env, side)
+            prev = self._prev_width.get(side, 1.0)
+            if side in arms and prev > 0.5 and width <= 0.5:
+                closing = True
+            self._prev_width[side] = width
+        if closing:
             self._try_latch(arms)
 
 

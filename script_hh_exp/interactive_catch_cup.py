@@ -6,15 +6,12 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Space             optional god-mode hold of the pillow
-  Arrow keys        teleport held pillow in XY
-  E / Q             teleport held pillow in Z
-
+  Prefer --control robot: Space only opens/closes the gripper.
   Cup starts moving as soon as the viewer is ready.
-  Pillow is PhysX-dynamic (pushable).
+  Pillow is PhysX-dynamic (pushable with the closed gripper).
 """
 ROBOT = """
-  Space             close/open gripper for pushing
+  Space             open / close selected gripper(s) only
 
   Cup starts moving as soon as the viewer is ready.
   Pillow is PhysX-dynamic — shove it with the closed gripper (no teleport).

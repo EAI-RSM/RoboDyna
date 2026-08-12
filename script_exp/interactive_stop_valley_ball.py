@@ -44,7 +44,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Space             open / close selected gripper (close on bat handle to latch; 1/2 pick arm)
+  Space             open / close selected gripper only (close on bat handle to latch; 1/2 pick arm)
   Arrow keys        move selected arm in XY
   E / Q             move selected arm in Z
 """
@@ -269,16 +269,6 @@ def _gripper_can_latch_bat(env, arm) -> bool:
     return False
 
 
-class EdgeKey:
-    def __init__(self):
-        self._prev = False
-
-    def poll(self, down):
-        edge = bool(down) and not self._prev
-        self._prev = bool(down)
-        return edge
-
-
 class KeyboardBatController:
     """Free bat teleport. Prefer --control robot for gripper latch."""
 
@@ -295,7 +285,7 @@ class KeyboardBatController:
 
 
 class RobotBatController:
-    """Latch the bat when Space closes the gripper on/near the handle."""
+    """Latch the bat when the gripper closes on/near the handle (Space = gripper only)."""
 
     def __init__(self, env, ArmTag):
         self.env = env
@@ -303,7 +293,6 @@ class RobotBatController:
         self.arm = None
         self.holding = False
         self.busy = False
-        self._space = EdgeKey()
         self._prev_width = {"left": 1.0, "right": 1.0}
 
     def _latch(self):
@@ -335,12 +324,14 @@ class RobotBatController:
             return
         selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
         arms = list(selected) if selected else []
-        space_close = self._space.poll(window.key_down("space")) and any(
-            self._prev_width.get(a, 1.0) > 0.5 for a in arms
-        )
+        closing = False
         for side in ("left", "right"):
-            self._prev_width[side] = gripper_width(self.env, side)
-        if space_close:
+            width = gripper_width(self.env, side)
+            prev = self._prev_width.get(side, 1.0)
+            if side in arms and prev > 0.5 and width <= 0.5:
+                closing = True
+            self._prev_width[side] = width
+        if closing:
             self._latch()
 
 
