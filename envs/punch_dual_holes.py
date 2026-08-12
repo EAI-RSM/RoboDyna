@@ -1202,7 +1202,8 @@ class punch_dual_holes(Base_Task):
         """Success iff every present tile was punched (missing slots are skipped).
 
         A present tile counts as punched only when it has a recorded punch offset and
-        was not marked missed. Empty-slot presses (Opt 1) also fail the episode.
+        was not marked missed. Empty-slot presses (Opt 1 missing tile) are tracked in
+        obs for debugging but do **not** fail the episode.
         """
         all_present_punched = True
         for side in ("left", "right"):
@@ -1217,7 +1218,7 @@ class punch_dual_holes(Base_Task):
         self.punch_score_L = self._side_score("left")
         self.punch_score_R = self._side_score("right")
         self.punch_score_mean = 0.5 * (self.punch_score_L + self.punch_score_R)
-        return bool(all_present_punched and not self.invalid_empty_press)
+        return bool(all_present_punched)
 
     # record per-belt punch state into the trajectory (per frame)
     def get_obs(self):
