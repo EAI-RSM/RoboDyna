@@ -151,7 +151,7 @@ class HouseholdController:
         self.env.plan_success = True
 
     def _open_stop_ball_grippers_at_start(self):
-        """stop_ball: start open so the hand can close around the rolling ball."""
+        """stop_ball: start open so the fingers can catch the rolling ball."""
         try:
             self.env.plan_success = True
             opener = getattr(self.env, "together_open_gripper", None)
@@ -723,7 +723,7 @@ def _terminal_failure(env, task):
             return "object fell on the table"
     elif task == "stop_ball":
         if bool(getattr(env, "_fell_off", False)) or getattr(env, "_ball_state", "") == "fallen":
-            return "ball fell off the table without being grasped"
+            return "ball fell off the table without being stopped"
     elif task == "clean_table":
         if bool(getattr(env, "laptop_reached", False)):
             return "spill reached the laptop"

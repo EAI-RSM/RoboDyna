@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Five-episode stop_ball sweep with forced roll headings + one miss check.
 
-Success criterion: gripper grasps the moving ball. Without the arm, the ball
-must fall off the table.
+Success criterion: arm stops the moving ball on the table. Without the arm,
+the ball must fall off the table.
 """
 from __future__ import annotations
 
@@ -117,18 +117,19 @@ def run_case(case: dict, miss: bool = False) -> dict:
         row["check"] = bool(env.check_success())
         row["ball_state"] = str(env._ball_state)
         row["fell_off"] = bool(env._fell_off)
-        row["grasped"] = bool(getattr(env, "_grasped", False))
-        row["welded"] = bool(getattr(env, "_welded", False))
+        row["stopped"] = bool(getattr(env, "_stopped", False))
+        row["arm_contacted"] = bool(getattr(env, "_arm_contacted", False))
         row["arm"] = str(env.arm_side)
         row["roll_angle"] = round(float(env._roll_angle), 3)
         row["exit_edge"] = str(env._exit_edge)
         c = env._ball_centre()
         row["ball_xyz"] = [round(float(x), 3) for x in c]
         row["ball_speed"] = round(float(env._ball_speed()), 4)
+        row["ball_diam"] = round(2.0 * float(env.ball_radius), 4)
         row["success_crit"] = {
             "not_fallen": not (row["fell_off"] or row["ball_state"] == "fallen"),
-            "grasped": row["grasped"],
-            "welded": row["welded"],
+            "stopped": row["stopped"],
+            "arm_contacted": row["arm_contacted"],
             "check_success": row["check"],
         }
     except Exception as e:  # noqa: BLE001
@@ -143,40 +144,42 @@ def run_case(case: dict, miss: bool = False) -> dict:
 
 
 def main() -> None:
-    print(f"=== {TASK}: 5 diverse layout / roll-direction grasp trials ===", flush=True)
+    print(f"=== {TASK}: 5 diverse layout / roll-direction stop trials ===", flush=True)
     rows = []
     for case in CASES:
         r = run_case(case, miss=False)
         rows.append(r)
-        ok = r["check"] and r.get("grasped") and not r["fell_off"]
+        ok = r["check"] and r.get("stopped") and r.get("arm_contacted") and not r["fell_off"]
         mark = "PASS" if ok else "FAIL"
         print(
             f"[{mark}] seed={r['seed']} {r['label']:12s} "
             f"angle={r.get('roll_angle')} edge={r.get('exit_edge')} "
             f"arm={r.get('arm')} state={r.get('ball_state')} "
-            f"grasped={r.get('grasped')} check={r['check']} "
-            f"fell={r.get('fell_off')} xyz={r.get('ball_xyz')} err={r.get('err')}",
+            f"stopped={r.get('stopped')} hit={r.get('arm_contacted')} "
+            f"check={r['check']} fell={r.get('fell_off')} "
+            f"diam={r.get('ball_diam')} xyz={r.get('ball_xyz')} err={r.get('err')}",
             flush=True,
         )
 
     n_ok = sum(
         1 for r in rows
-        if r["check"] and r.get("grasped") and not r["fell_off"] and not r["err"]
+        if r["check"] and r.get("stopped") and r.get("arm_contacted")
+        and not r["fell_off"] and not r["err"]
     )
-    print(f"\nExpert grasp success: {n_ok}/{len(rows)}", flush=True)
+    print(f"\nExpert stop success: {n_ok}/{len(rows)}", flush=True)
 
-    print("\n=== Miss control (no arm grasp) — ball must fall ===", flush=True)
+    print("\n=== Miss control (no arm) — ball must fall ===", flush=True)
     miss = run_case(CASES[0], miss=True)
-    miss_ok = (not miss["check"]) and miss["fell_off"] and not miss.get("grasped")
+    miss_ok = (not miss["check"]) and miss["fell_off"] and not miss.get("stopped")
     print(
         f"[{'PASS' if miss_ok else 'FAIL'}] miss seed={miss['seed']} "
         f"state={miss.get('ball_state')} check={miss['check']} "
-        f"grasped={miss.get('grasped')} fell={miss.get('fell_off')} "
+        f"stopped={miss.get('stopped')} fell={miss.get('fell_off')} "
         f"xyz={miss.get('ball_xyz')} err={miss.get('err')}",
         flush=True,
     )
     print(
-        f"\nSummary: expert {n_ok}/{len(rows)} grasped; "
+        f"\nSummary: expert {n_ok}/{len(rows)} stopped; "
         f"miss control {'ok' if miss_ok else 'BROKEN'}",
         flush=True,
     )

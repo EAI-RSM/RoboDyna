@@ -50,7 +50,7 @@ HH_BLURBS = {
     "make_soup": "Tip 2–4 distinct chopping-board vegetables into a pot of water on an already-lit stove without dropping any pieces.",
     "catch_cup": "Push a pillow under a tipping mug so it lands softly instead of hitting the table.",
     "catch_mouse_object_drop": "Place a pillow-lined basket under a shelf object knocked by a scurrying mouse so it does not hit the table.",
-    "stop_ball": "Grasp a table-tennis ball that falls from the shelf and rolls toward the near table edge.",
+    "stop_ball": "Block a table-tennis ball that falls from the shelf and rolls toward the near table edge.",
     "clean_table": "Wipe a spreading coffee spill with a sponge before it reaches a laptop on the opposite side.",
 }
 

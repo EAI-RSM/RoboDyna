@@ -150,7 +150,7 @@ task_args:
     ball_ids:
     - 0
     - 1
-    ball_scale_mult: 1.6
+    ball_scale_mult: 2.64
     trophy_scale_mult: 1.0
     screen_scale_mult: 1.05
     roll_speed: 0.15
@@ -168,9 +168,8 @@ task_args:
     live_angular_damping: 0.3
     live_friction: 0.006
     live_restitution: 0.12
-    attach_dist: 0.045
-    grasp_tol: 0.06
-    post_grasp_lift: 0.08
+    settle_speed: 0.025
+    settle_hold_steps: 12
     max_live_steps: 520
     arm_side: random
   catch_cup:

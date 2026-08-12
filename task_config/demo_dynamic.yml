@@ -164,34 +164,34 @@ task_args:
     post_grasp_lift: 0.10       # m; lift after grasping the stopped cup
     upright_hold: 0.30          # s; cup stands on shelf before tipping
   stop_ball:
-    # Full-width shelf; 1.6× 027_table-tennis rolls off from episode start
-    # (reactive) on a randomized heading — may exit front or a side edge.
-    # Matching left/right arm grasps the ball (pack_fruits-style attach).
+    # Full-width shelf; ball diameter = open WSG finger gap + 0.5 cm
+    # (~11.5 cm). Rolls off from episode start (reactive) on a randomized
+    # heading — may exit front or a side edge.
+    # Matching left/right arm blocks the ball (no grasp).
     # Clock/screen/speaker face robot. Desk-sized trophy; screen 1.05×.
     # Angle / ball pose / shelf décor already randomized; only speed jitters.
     ball_ids: [0, 1]
-    ball_scale_mult: 1.6        # 2× then −20% (~6.4 cm diameter)
+    ball_scale_mult: 2.64       # 11.5 cm diam = WSG open gap 11.0 cm + 0.5 cm
     trophy_scale_mult: 1.00     # 100% larger than the previous 0.50 scale
     screen_scale_mult: 1.05     # 30% smaller than prior 1.5×
     roll_speed: 0.15            # m/s mean; actual = mean × (1 ± roll_speed_jitter_frac)
     roll_speed_jitter_frac: 0.30
     fall_speed_xy: 0.07         # m/s; retained horizontal speed during shelf→table fall
     shelf_roll_duration: 1.00   # s; ball rolls to shelf lip from episode start
-    table_edge_y: -0.30         # m; front edge (past this without grasp = fail)
+    table_edge_y: -0.30         # m; front edge (past this without stop = fail)
     table_x_edge: 0.52          # m; |x| past this = fallen off a side
     roll_angle_max: 0.70        # rad; heading spread from −Y (side exits possible)
-    intercept_frac: 0.55        # fraction along table-roll for the grasp
+    intercept_frac: 0.55        # fraction along table-roll for the block
     catch_shelf_clearance: 0.12 # m; min gap between hand and shelf front lip
     upright_hold: 0.0           # unused; ball releases at play_once start
     handoff_distance: 0.10      # m; scripted roll ends here, PhysX takes over
-    live_linear_damping: 0.12   # bleeds off a missed roll
+    live_linear_damping: 0.12   # bleeds off the post-contact roll (no bouncing)
     live_angular_damping: 0.3
     live_friction: 0.006        # convex-hull ball slides; low mu emulates rolling
-    live_restitution: 0.12
-    attach_dist: 0.045          # m; TCP-to-ball centre for attach/weld
-    grasp_tol: 0.06             # m; interactive closed-gripper latch radius
-    post_grasp_lift: 0.08       # m; expert lifts after a successful grasp
-    max_live_steps: 520         # sim-step budget for chase + grasp / miss roll-out
+    live_restitution: 0.12      # slight liveliness, no rattling off the gripper
+    settle_speed: 0.025         # m/s; below this the ball counts as at rest
+    settle_hold_steps: 12       # consecutive slow steps required to call it settled
+    max_live_steps: 520         # sim-step budget for the contact + roll-out
     arm_side: random            # random | left | right
   catch_cup:
     # Two-tier deep shelf: cups+plant on upper; kettle/tissue/alarm on lower
