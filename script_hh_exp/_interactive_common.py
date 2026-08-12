@@ -572,11 +572,16 @@ def _fill_level_detail(env, task: str) -> str:
         return f"level={lvl:.0f}% target={tgt:.0f}%"
     if task == "measure_ingredient":
         lvl = 100.0 * float(getattr(env, "liquid_level", 0.0))
-        tgt = 100.0 * float(getattr(env, "target_fill", 0.0))
-        tol = 100.0 * float(getattr(env, "fill_tol", 0.05))
+        try:
+            lo, hi = env._fill_band()
+            lo_pct, hi_pct = 100.0 * float(lo), 100.0 * float(hi)
+        except Exception:
+            tgt = 100.0 * float(getattr(env, "target_fill", 0.0))
+            tol = 100.0 * float(getattr(env, "fill_tol", 0.05))
+            lo_pct, hi_pct = tgt - tol, tgt + tol
         if bool(getattr(env, "overflowed", False)):
             return f"OVERFLOW fill={lvl:.0f}%"
-        return f"fill={lvl:.0f}% target={tgt - tol:.0f}–{tgt + tol:.0f}%"
+        return f"fill={lvl:.0f}% target={lo_pct:.0f}–{hi_pct:.0f}%"
     if task == "fill_coffee_jar":
         try:
             fill = 100.0 * float(env._current_fill())
@@ -632,15 +637,19 @@ def _terminal_failure(env, task):
             # first in the viewer loop; this path is the fail branch).
             if bool(getattr(env, "closed_after_pour", False)):
                 lvl = float(getattr(env, "liquid_level", 0.0))
-                tgt = float(getattr(env, "target_fill", 0.0))
-                tol = float(getattr(env, "fill_tol", 0.05))
                 try:
                     under = bool(env._jar_under_nozzle())
                 except Exception:
                     under = False
                 if not under:
                     return "switch turned off with jar not under the nozzle"
-                if lvl + 1e-3 < tgt - tol or lvl - 1e-3 > tgt + tol:
+                try:
+                    lo, hi = env._fill_band()
+                except Exception:
+                    tgt = float(getattr(env, "target_fill", 0.0))
+                    tol = float(getattr(env, "fill_tol", 0.05))
+                    lo, hi = tgt - tol, tgt + tol
+                if lvl + 1e-3 < float(lo) or lvl - 1e-3 > float(hi):
                     return "switch turned off with incorrect fill level"
                 return "switch turned off without meeting success criteria"
     elif task == "fill_coffee_jar":

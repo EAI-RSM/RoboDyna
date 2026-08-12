@@ -75,12 +75,13 @@ class measure_ingredient(KitchenS_base_task):
     KEY_PRESS_DEPTH = 0.024                     # expert depress from hover
 
     # catch_cup-style contact push (closed gripper shoves the jar under nozzle).
+    # Gravity + table Coulomb friction brake the slide; lin damp is residual only.
     PUSH_CONTACT_GAP = 0.014
     PUSH_FINGER_DROP = 0.043
     PUSH_EDGE_MARGIN = 0.025
     PUSH_BEHIND_STANDOFF = 0.07
     PUSH_FINGER_HEIGHT_FRAC = 0.40
-    PUSH_LIN_DAMP = 0.85
+    PUSH_LIN_DAMP = 0.6
     PUSH_MU_STATIC = 0.95
     PUSH_MU_DYNAMIC = 0.85
     PUSH_STEP_DEFAULT = 0.040
@@ -91,6 +92,8 @@ class measure_ingredient(KitchenS_base_task):
     # Ring marks at 25% / 50% / 75%; 100% = jar rim (no extra ring).
     FILL_LEVELS = (0.25, 0.50, 0.75, 1.0)
     FILL_TOL = 0.05             # ±5% absolute fill tolerance
+    # Full (100%) target cannot exceed 1.0, so success is one-sided: [90%, 100%].
+    FILL_FULL_LO = 0.90
     # Slow enough that opening the switch does not already overshoot the mark;
     # oil still rises continuously while the switch stays on.
     POUR_RATE = 0.00022         # fill fraction per physics step while switch on
@@ -1052,9 +1055,10 @@ class measure_ingredient(KitchenS_base_task):
         decor_on_mw = [
             n for n, d in (self._decor_layout or {}).items() if d.get("on_microwave")
         ]
+        lo, hi = self._fill_band()
         print(
             f"[measure_ingredient] KitchenS scene={self.scene_id} "
-            f"target={self.target_fill:.0%}±{self.fill_tol:.0%} arm={self.arm} "
+            f"target={self.target_fill:.0%} band=[{lo:.0%},{hi:.0%}] arm={self.arm} "
             f"pour_rate={self.pour_rate:.6g} "
             f"(base={self.pour_rate_base:.6g}±{self.pour_rate_jitter:.0%}) "
             f"jar={self.jar_xy.tolist()} fill={self.fill_xy.tolist()} scale={None if self.scale_xy is None else self.scale_xy.tolist()} "
@@ -2722,15 +2726,22 @@ class measure_ingredient(KitchenS_base_task):
         self._push_active = False
 
     def _enable_jar_push_physics(self) -> None:
-        """Dynamic jar on the table for a contact shove (catch_cup pillow)."""
+        """Dynamic jar resting on the table for a contact shove (catch_cup pillow).
+
+        Z stays unlocked so gravity makes a real table normal force; Coulomb
+        friction then brakes the slide. Roll/pitch stay locked so a low shove
+        cannot tip the cylinder; yaw stays free.
+        """
         if self.jar is None:
             return
         rigid = self._get_rigid(self.jar)
         if rigid is None:
             return
         if not getattr(self, "_push_active", False):
+            # Cylinder collision bottom is at actor origin — seat flush on the
+            # counter so contact (and friction) engage once gravity is on.
             p = np.asarray(self.jar.get_pose().p, dtype=float)
-            p[2] = float(self.table_top) + 0.001
+            p[2] = float(self.table_top)
             self.jar.actor.set_pose(
                 sapien.Pose([float(p[0]), float(p[1]), float(p[2])], list(self.jar.get_pose().q))
             )
@@ -2741,9 +2752,8 @@ class measure_ingredient(KitchenS_base_task):
             except Exception:
                 pass
             rigid.set_disable_gravity(False)
-            # Planar slide: free XY + yaw; lock Z / roll / pitch so the jar
-            # cannot hop or tip when the gripper glances the cylinder.
-            rigid.set_locked_motion_axes([False, False, True, True, True, False])
+            # Translation free (rests on the table); no roll/pitch, yaw free.
+            rigid.set_locked_motion_axes([False, False, False, True, True, False])
             rigid.set_linear_damping(float(self.PUSH_LIN_DAMP))
             rigid.set_angular_damping(2.0)
             try:
@@ -3174,11 +3184,26 @@ class measure_ingredient(KitchenS_base_task):
         return self.info
 
 
+    def _fill_band(self):
+        """Success fill window ``[lo, hi]``.
+
+        Ordinary targets use ``target ± fill_tol``. A 100% target cannot go
+        above full, so the band is one-sided ``[FILL_FULL_LO, 1.0]`` (90–100%).
+        """
+        tol = float(getattr(self, "fill_tol", self.FILL_TOL))
+        tgt = float(self.target_fill)
+        lo = tgt - tol
+        hi = tgt + tol
+        if tgt >= 0.999:
+            hi = min(hi, float(getattr(self, "overflow_level", self.OVERFLOW_LEVEL)))
+            lo = float(getattr(self, "FILL_FULL_LO", 0.90))
+        return float(lo), float(hi)
+
     def check_success(self):
         """Success only after the nozzle key is turned OFF.
 
         Requires: switch latched off after a pour, jar under the nozzle, fill in
-        [target±tol], and no spill/overflow.
+        the target band, and no spill/overflow.
         """
         # Do not score while the switch is still ON — wait for OFF.
         if bool(getattr(self, "tab_open", False)):
@@ -3191,10 +3216,7 @@ class measure_ingredient(KitchenS_base_task):
             return False
         if not self._jar_under_nozzle():
             return False
-        lo = float(self.target_fill) - float(self.fill_tol)
-        hi = float(self.target_fill) + float(self.fill_tol)
-        if float(self.target_fill) >= 0.999:
-            hi = min(hi, float(self.overflow_level) + 1e-6)
+        lo, hi = self._fill_band()
         lvl = float(self.liquid_level)
         if lvl + 1e-3 < lo:
             return False
@@ -3208,9 +3230,12 @@ class measure_ingredient(KitchenS_base_task):
         mw = getattr(self, "microwave_xy_override", None) or getattr(
             self, "microwave_xy", None
         )
+        lo, hi = self._fill_band()
         obs["measure_ingredient"] = {
             "target_fill": float(self.target_fill),
             "fill_tol": float(getattr(self, "fill_tol", self.FILL_TOL)),
+            "fill_lo": float(lo),
+            "fill_hi": float(hi),
             "pour_rate": float(getattr(self, "pour_rate", self.POUR_RATE)),
             "pour_rate_base": float(
                 getattr(self, "pour_rate_base", getattr(self, "pour_rate", self.POUR_RATE))
