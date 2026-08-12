@@ -112,6 +112,35 @@ class pack_fruits(Base_Task):
     def _type_rgb(cls, ftype):
         return cls.APPLE_COLOR if ftype == "apple" else cls.GREEN_COLOR
 
+    def _apply_fruit_mass_properties(self, rigid, mass=None):
+        """Set mass *and* matching inertia/COM.
+
+        ``Actor.set_mass`` alone leaves the default ~10 g inertia tensor, so a
+        dropped apple still spins and contact-explodes like a light shell —
+        often jumping out of the basket. Match pick_ripe_apple / play_billiard:
+        solid-sphere I = 2/5 m R^2 about the collision hull centre.
+        """
+        if rigid is None:
+            return
+        m = float(self.FRUIT_MASS if mass is None else mass)
+        try:
+            shapes = list(rigid.get_collision_shapes())
+            verts = np.asarray(shapes[0].get_vertices(), dtype=np.float64)
+            center = 0.5 * (verts.min(axis=0) + verts.max(axis=0))
+            rms_r = float(np.sqrt(np.mean(np.sum((verts - center) ** 2, axis=1))))
+            inertia = 0.4 * m * (rms_r ** 2)
+            rigid.set_mass(m)
+            rigid.set_cmass_local_pose(sapien.Pose(center.tolist()))
+            rigid.set_inertia([inertia, inertia, inertia])
+        except Exception:
+            try:
+                rigid.set_mass(m)
+                r = float(getattr(self, "fruit_r", self.FRUIT_R))
+                inertia = 0.4 * m * (r ** 2)
+                rigid.set_inertia([inertia, inertia, inertia])
+            except Exception:
+                pass
+
     def setup_demo(self, **kwags):
         self._cfg = dict(kwags.get("task_args", {}).get("pack_fruits", {}) or {})
         # Resolve scenario from (in order): explicit kwarg, top-level config
@@ -423,7 +452,6 @@ class pack_fruits(Base_Task):
                 scale_mult=self.fruit_scale,
             )
             self._recolor(fruit, rgb)
-            fruit.set_mass(self.FRUIT_MASS)
             try:
                 fruit.actor.set_name(f"pack_fruit_{i}")
             except Exception:
@@ -432,6 +460,7 @@ class pack_fruits(Base_Task):
             for c in fruit.actor.get_components():
                 if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
                     comp = c
+                    self._apply_fruit_mass_properties(c)
                     try:
                         c.set_linear_damping(5.0)
                         c.set_angular_damping(20.0)
@@ -492,7 +521,6 @@ class pack_fruits(Base_Task):
                 scale_mult=self.fruit_scale,
             )
             self._recolor(distractor, self.distractor_color)
-            distractor.set_mass(self.FRUIT_MASS)
             try:
                 distractor.actor.set_name(f"pack_distractor_{s}")
             except Exception:
@@ -501,6 +529,7 @@ class pack_fruits(Base_Task):
             for c in distractor.actor.get_components():
                 if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
                     d_comp = c
+                    self._apply_fruit_mass_properties(c)
                     try:
                         c.set_linear_damping(5.0)
                         c.set_angular_damping(20.0)
