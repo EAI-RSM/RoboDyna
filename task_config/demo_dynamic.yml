@@ -1003,8 +1003,8 @@ task_args:
     hover_clearance: 0.018       # m; short jab above raised mole
     touch_tol: 0.04             # m; legacy XY touch tol (head footprint is authoritative)
     hole_count: 9               # openings on board
-    hole_size: 0.0825           # m; hole opening side length
-    hole_bar_thickness: 0.014   # m; bar thickness between holes
+    hole_size: 0.070            # m; circular hole diameter (~mole/rabbit footprint)
+    hole_bar_thickness: 0.014   # m; min rim / spacing between hole edges
     cube_hole_scale: 1.20       # legacy; mallets use head size, not cubes
     cube_grasp_drop_z: 0.05     # m; legacy grasp drop (mallet uses cradle height)
     mole_scale_mult: 1.80       # 1.5x prior mole size
@@ -1013,7 +1013,8 @@ task_args:
     rabbit_height: 0.1047       # m; rabbit world height
     table_height_bias: 0.05     # m; raise table (+board) this much
     board_z_lift: 0.06          # m; half-height compact board above the table
-    board_color: [0.98, 0.82, 0.05]  # RGB board color (yellow)
+    board_color: [0.34, 0.62, 0.24]  # RGB grass-green play surface
+    board_body_color: [0.18, 0.09, 0.04]  # dark brown box walls
   boil_milk:
     # KitchenS: no sink/tap. Stove left or right; microwave on the opposite side.
     # Pot of milk on a random burner; grasp and twist the cooktop knob (same-side

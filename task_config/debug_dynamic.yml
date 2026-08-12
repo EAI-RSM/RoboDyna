@@ -145,7 +145,7 @@ task_args:
     pop_steps: 90
     touch_tol: 0.04
     hole_count: 9
-    hole_size: 0.0825         # 1.5x former openings
+    hole_size: 0.070          # circular hole diameter (~mole/rabbit footprint)
     hole_bar_thickness: 0.014
     cube_hole_scale: 1.20     # blue mallet cube side = hole_size * scale (>1 so it can't enter)
     cube_grasp_drop_z: 0.05   # lower cube 5 cm below finger midpoint
@@ -155,7 +155,8 @@ task_args:
     rabbit_height: 0.1047
     table_height_bias: 0.05   # raise table (+board) 5 cm
     board_z_lift: 0.06        # play surface ~6 cm above table; compact base sits on table
-    board_color: [0.98, 0.82, 0.05]  # yellow
+    board_color: [0.34, 0.62, 0.24]  # grass green play surface
+    board_body_color: [0.18, 0.09, 0.04]  # dark brown walls
   collect_falling_bowl:
     num_objects: 4
     emit_interval: 40

@@ -7,15 +7,18 @@ import numpy as np
 
 
 class whack_moles(Base_Task):
-    """Whack-a-mole. A fixed yellow board with a grid of holes spans both arms' reach.
-    Default: 2 moles bob out of / back into fixed holes at randomized pop speeds
-    (uniform in [0.6, 1.0] × POP_SPEED, with a smooth cosine bob). Each arm picks
-    up a wooden mallet from a side cradle and carries it in a hammer pose: handle
-    horizontal, head axis along world Z. A hit requires the mole's crown to be
-    struck by the flat lower face of the head while above the board; handle tips,
-    gripper pads, and side brushes do not count. The head is wider than a hole
-    (0.10 m vs 0.0825 m) so it cannot plunge into one. Hit moles turn green and
-    stay down.
+    """Whack-a-mole. A fixed grass-green box with a flat top and nine circular
+    holes spans both arms' reach. Hole diameter matches the mole/rabbit footprint
+    so critters fit the openings. Default: 2 moles bob out of / back into fixed
+    holes at randomized pop speeds (uniform in [0.6, 1.0] × POP_SPEED, with a
+    smooth cosine bob). Each arm picks up a wooden mallet from a side cradle and
+    carries it in a hammer pose: handle horizontal, head axis along world Z. A
+    hit requires the mole's crown to be struck by the flat lower face of the head
+    while above the board; handle tips, gripper pads, and side brushes do not
+    count. The head is wider than a hole (0.10 m vs ~0.070 m) so it cannot plunge
+    into one. Hit moles turn bright green and stay down. Each unhit mole may
+    complete at most ``num_appearances`` (default 5) rise→fall cycles; missing
+    all of them fails the episode.
 
     Task options (independent toggles in ``task_args.whack_moles``; combinable):
       - Opt 1 — rabbit distractor: ``distractor_enabled``
@@ -34,12 +37,13 @@ class whack_moles(Base_Task):
     difficulty=easy  — hit one mole at a time with the arm on that side.
     difficulty=hard  — hit two non-adjacent opposite-side moles with both arms at once.
 
-    Success = every mole has been touched from above at least once, and no rabbit
-    distractor has been touched (Opt 1). Board-deck contact is logged but is not
-    part of the success criteria.
+    Success = every mole has been touched from above at least once, no rabbit
+    distractor has been touched (Opt 1), and no mole exhausted its appearance
+    budget. Board-deck contact is logged but is not part of the success criteria.
     """
 
     NUM_MOLES_DEFAULT = 2
+    NUM_APPEARANCES_DEFAULT = 5  # max rise→fall cycles per unhit mole
     NUM_DISTRACTORS_DEFAULT = 0
     NUM_DISTRACTORS_MAX = 4       # hard cap M on rabbit distractors
     DISTRACTOR_ENABLED_DEFAULT = False   # Opt 1
@@ -51,16 +55,18 @@ class whack_moles(Base_Task):
     PRE_POP_STEPS_DEFAULT = 0
     TOUCH_TOL_DEFAULT = 0.04
     HOLE_COUNT_DEFAULT = 9
-    HOLE_SIZE_DEFAULT = 0.0825    # 1.5x former 0.055 openings
-    HOLE_BAR_THICKNESS_DEFAULT = 0.014
+    # Circular hole diameter ≈ mole/rabbit XY footprint (mole max extent after scale).
+    HOLE_SIZE_DEFAULT = 0.070
+    HOLE_BAR_THICKNESS_DEFAULT = 0.014  # min rim / edge-to-edge spacing between holes
     CUBE_HOLE_SCALE_DEFAULT = 1.20  # cube side / hole_size (>1 so it can't enter a hole)
 
-    # XY half-extents of the hole board (sized for 1.5x openings, still in reach).
+    # XY half-extents of the hole board (sized for circular openings, still in reach).
     # Z half is computed so the board sits on the table while the play surface
     # stays raised (board_z_lift).
     BOARD_HALF_XY = [0.245, 0.16]
     BOARD_TOP_HALF_Z = 0.024          # Thin deck; total board height is half the prior default.
-    BOARD_COLOR = [0.98, 0.82, 0.05]  # yellow box
+    BOARD_COLOR = [0.34, 0.62, 0.24]  # grass-green play surface
+    BOARD_BODY_COLOR = [0.18, 0.09, 0.04]  # dark brown box body / walls
     # Raise the play surface above the table; the solid base fills down to the tabletop.
     BOARD_Z_LIFT_DEFAULT = 0.06
     HIDE_DEPTH = 0.100
@@ -68,10 +74,13 @@ class whack_moles(Base_Task):
     RABBIT_MODEL = "224_rabbit"    # compact loaf pose (replaces open-hand 222_rabbit)
     # Mesh is Y-up; rotate so height aligns with world Z.
     MOLE_Q = [0.70710678, 0.70710678, 0.0, 0.0]
-    MOLE_COLOR = [0.02, 0.02, 0.02]           # fully black
-    MOLE_TOUCHED_COLOR = [0.20, 0.85, 0.28]  # green when hit
-    RABBIT_COLOR = [0.72, 0.52, 0.35]         # light brown (distinct from black moles)
+    MOLE_COLOR = [0.72, 0.52, 0.35]           # light brown (former rabbit color)
+    MOLE_TOUCHED_COLOR = [0.20, 0.85, 0.28]  # bright green when hit
+    RABBIT_COLOR = [1.0, 1.0, 1.0]           # white distractor
     RABBIT_TOUCHED_COLOR = [0.92, 0.12, 0.10]  # red on illegal touch
+    HOLE_RING_WIDTH = 0.006                   # black rim around each circular hole
+    HOLE_RING_HEIGHT = 0.0025
+    HOLE_RING_COLOR = [0.04, 0.04, 0.04]
     CUBE_COLOR = [0.15, 0.45, 0.95]            # blue — held mallet cubes
     MOLE_SCALE_MULT = 1.80        # 1.5x prior size
     MOLE_HEIGHT = 0.1053          # world height after mole_scale_mult
@@ -81,7 +90,7 @@ class whack_moles(Base_Task):
     # Drop the gripped cube below the finger-pad midpoint (world -Z).
     CUBE_GRASP_DROP_Z = 0.05
     # Head is a squat drum struck on its flat lower face, wider than a hole
-    # (0.10 m across vs an 0.0825 m opening) so it can never drop into one.
+    # (0.10 m across vs a ~0.070 m opening) so it can never drop into one.
     MALLET_HEAD_RADIUS = 0.050
     MALLET_HEAD_HALF_X = 0.030       # Half-height along the head's own axis.
     MALLET_HANDLE_RADIUS = 0.012
@@ -167,9 +176,11 @@ class whack_moles(Base_Task):
         self._rabbit_shapes = []
         self._rabbit_state = []
         self.distractor_hit = False
+        self.appearances_exhausted = False
         self.board_hit = False
         self.distractor_enabled = False
         self.relocating_moles = False
+        self.num_appearances = self.NUM_APPEARANCES_DEFAULT
         self._suppress_board_hit = False
         self._robot_link_names = set()
         self.holes = []
@@ -262,51 +273,74 @@ class whack_moles(Base_Task):
         self.board_center = np.array(
             [0.0, board_cy, self.table_top + board_half_z], dtype=float)
         board_color = self._cfg.get("board_color", self.BOARD_COLOR)
+        board_body_color = self._cfg.get("board_body_color", self.BOARD_BODY_COLOR)
         # Deck collision thickness matches the raised play-surface band so the
-        # mallet head cannot tunnel through a paper-thin lattice.
+        # mallet head cannot tunnel through a paper-thin plate.
         deck_thickness = 2.0 * float(self.BOARD_TOP_HALF_Z)
-        self.board = create_hollow_box_with_holes(
+        self.hole_rows = int(np.floor(np.sqrt(self.hole_count)))
+        self.hole_cols = int(np.ceil(self.hole_count / self.hole_rows))
+        self.board = create_box_with_circular_holes(
             self.scene,
             sapien.Pose(p=self.board_center.tolist()),
             half_size=self.BOARD_HALF,
             color=list(board_color),
+            body_color=list(board_body_color),
             is_static=True,
             name="hole_board",
+            hole_rows=self.hole_rows,
+            hole_cols=self.hole_cols,
             hole_count=self.hole_count,
             hole_size=self.hole_size,
             wall_thickness=0.02,
             top_thickness=deck_thickness,
             bar_thickness=self.hole_bar_thickness,
+            hole_ring_width=float(
+                self._cfg.get("hole_ring_width", self.HOLE_RING_WIDTH)),
+            hole_ring_height=float(
+                self._cfg.get("hole_ring_height", self.HOLE_RING_HEIGHT)),
+            hole_ring_color=list(
+                self._cfg.get("hole_ring_color", self.HOLE_RING_COLOR)),
         )
         self.board_top_z = float(self.board_center[2] + self.BOARD_HALF[2])
 
-        self.hole_rows = int(np.floor(np.sqrt(self.hole_count)))
-        self.hole_cols = int(np.ceil(self.hole_count / self.hole_rows))
-        x_half, y_half = self.BOARD_HALF[0], self.BOARD_HALF[1]
-        gap_x = (2 * x_half - self.hole_cols * self.hole_size) / (self.hole_cols + 1)
-        gap_y = (2 * y_half - self.hole_rows * self.hole_size) / (self.hole_rows + 1)
-        if gap_x < self.hole_bar_thickness or gap_y < self.hole_bar_thickness:
-            raise ValueError("Requested hole_size is too large for the board top")
-        x_centers = np.linspace(
-            -x_half + gap_x + self.hole_size / 2.0,
-            x_half - gap_x - self.hole_size / 2.0,
-            self.hole_cols,
-        )
-        y_centers = np.linspace(
-            -y_half + gap_y + self.hole_size / 2.0,
-            y_half - gap_y - self.hole_size / 2.0,
-            self.hole_rows,
-        )
-        # row-major: (r,c) with r along y, c along x
+        # Prefer centers baked into the mesh actor; fall back to the same layout math.
+        hole_local = None
+        if hasattr(self.board, "config") and isinstance(self.board.config, dict):
+            hole_local = self.board.config.get("hole_centers_local")
         self.holes = []
         self.hole_rc = []
-        for r, dy in enumerate(y_centers):
-            for c, cx in enumerate(x_centers):
-                if len(self.holes) >= self.hole_count:
-                    break
+        if hole_local:
+            cols = self.hole_cols
+            for i, (cx, cy) in enumerate(hole_local):
                 self.holes.append(np.array(
-                    [self.board_center[0] + cx, self.board_center[1] + dy], dtype=float))
-                self.hole_rc.append((r, c))
+                    [self.board_center[0] + float(cx),
+                     self.board_center[1] + float(cy)], dtype=float))
+                self.hole_rc.append((i // cols, i % cols))
+        else:
+            x_half, y_half = self.BOARD_HALF[0], self.BOARD_HALF[1]
+            gap_x = (2 * x_half - self.hole_cols * self.hole_size) / (self.hole_cols + 1)
+            gap_y = (2 * y_half - self.hole_rows * self.hole_size) / (self.hole_rows + 1)
+            if gap_x < self.hole_bar_thickness or gap_y < self.hole_bar_thickness:
+                raise ValueError("Requested hole_size is too large for the board top")
+            x_centers = np.linspace(
+                -x_half + gap_x + self.hole_size / 2.0,
+                x_half - gap_x - self.hole_size / 2.0,
+                self.hole_cols,
+            )
+            y_centers = np.linspace(
+                -y_half + gap_y + self.hole_size / 2.0,
+                y_half - gap_y - self.hole_size / 2.0,
+                self.hole_rows,
+            )
+            # row-major: (r,c) with r along y, c along x
+            for r, dy in enumerate(y_centers):
+                for c, cx in enumerate(x_centers):
+                    if len(self.holes) >= self.hole_count:
+                        break
+                    self.holes.append(np.array(
+                        [self.board_center[0] + cx, self.board_center[1] + dy],
+                        dtype=float))
+                    self.hole_rc.append((r, c))
         self.num_holes = len(self.holes)
 
     # ---------------------------------------------------------------- actors
@@ -321,6 +355,7 @@ class whack_moles(Base_Task):
         self._rabbit_shapes = []
         self._rabbit_state = []
         self.distractor_hit = False
+        self.appearances_exhausted = False
         self.board_hit = False
         self._robot_link_names = set()
         self.holes = []
@@ -336,6 +371,8 @@ class whack_moles(Base_Task):
         self.mallet_rests = {}
 
         self.num_moles = int(self._cfg.get("num_moles", self.NUM_MOLES_DEFAULT))
+        self.num_appearances = max(
+            1, int(self._cfg.get("num_appearances", self.NUM_APPEARANCES_DEFAULT)))
         self.distractor_enabled = self._parse_distractor_enabled(self._cfg)
         self.relocating_moles = self._parse_relocating_moles(self._cfg)
         if self.distractor_enabled:
@@ -477,6 +514,8 @@ class whack_moles(Base_Task):
             "hole": int(hole_idx),
             "raised": bool(raised0),
             "touched": False,
+            "appearances": 0,  # completed rise→fall cycles (moles only; rabbits unused)
+            "exhausted": False,
             # Legacy fields kept for Opt-2 / debug; motion is driven by bob_phase.
             "motion": "rising" if (0.0 < bob_phase < np.pi) else "falling",
             "target_z": float(raised_z),
@@ -645,7 +684,7 @@ class whack_moles(Base_Task):
         if not getattr(self, "relocating_moles", False):
             return
         st = self._mole_state[idx]
-        if st.get("touched"):
+        if st.get("touched") or st.get("exhausted"):
             return
         old = int(st["hole"])
         occ = self._occupied_holes(exclude_mole_idx=idx)
@@ -668,6 +707,42 @@ class whack_moles(Base_Task):
         st["raised_z"] = float(raised[2])
         st["target_z"] = float(raised[2])
 
+    def _mark_mole_appearances_exhausted(self, idx):
+        """Pin an unhit mole down after it used all appearance cycles; fail episode."""
+        st = self._mole_state[idx]
+        if st.get("touched") or st.get("exhausted"):
+            return
+        st["exhausted"] = True
+        st["motion"] = None
+        st["hold_left"] = 0
+        st["raised"] = False
+        st["bob_phase"] = 0.0
+        st["freeze_bob"] = False
+        self._set_mole_pose(idx, raised=False)
+        self.appearances_exhausted = True
+        limit = int(getattr(self, "num_appearances", self.NUM_APPEARANCES_DEFAULT))
+        self._last_fail_reason = (
+            f"mole {idx} missed after {limit}/{limit} appearances")
+        self.plan_success = False
+
+    def _on_mole_gone_down(self, idx):
+        """Count a completed rise→fall; relocate (Opt 2); fail if budget spent."""
+        st = self._mole_state[idx]
+        if st.get("touched") or st.get("exhausted"):
+            return
+        st["appearances"] = int(st.get("appearances", 0)) + 1
+        limit = int(getattr(self, "num_appearances", self.NUM_APPEARANCES_DEFAULT))
+        if st["appearances"] >= limit:
+            self._mark_mole_appearances_exhausted(idx)
+            return
+        self._relocate_mole(idx)
+
+    def _episode_failed(self):
+        """True if a rabbit was hit or a mole exhausted its appearance budget."""
+        return bool(
+            getattr(self, "distractor_hit", False)
+            or getattr(self, "appearances_exhausted", False)
+        )
     def _set_critter_pose(self, actors, rigids, states, idx, raised=None, z=None):
         st = states[idx]
         hole = st["hole"]
@@ -724,6 +799,14 @@ class whack_moles(Base_Task):
             for mat in mats:
                 if mat is None:
                     continue
+                # Drop albedo texture so solid recolors (brown moles / white rabbit) stick.
+                try:
+                    mat.set_base_color_texture(None)
+                except Exception:
+                    try:
+                        mat.base_color_texture = None
+                    except Exception:
+                        pass
                 try:
                     mat.set_base_color(col)
                     mat.base_color = col
@@ -1569,8 +1652,8 @@ class whack_moles(Base_Task):
             if rigid is None:
                 continue
 
-            # Hit critters stay pinned down (pose only if they drifted).
-            if st["touched"]:
+            # Hit / exhausted critters stay pinned down (pose only if they drifted).
+            if st["touched"] or st.get("exhausted"):
                 st["motion"] = None
                 st["raised"] = False
                 st["bob_phase"] = 0.0
@@ -1630,12 +1713,9 @@ class whack_moles(Base_Task):
         self._poll_board_hits()
 
         if getattr(self, "_mole_state", None):
-            relocate = (
-                self._relocate_mole
-                if getattr(self, "relocating_moles", False) else None)
             self._advance_pop_cycle(
                 self.moles, self._mole_rigids, self._mole_state,
-                self._set_mole_pose, on_gone_down=relocate)
+                self._set_mole_pose, on_gone_down=self._on_mole_gone_down)
         if getattr(self, "_rabbit_state", None):
             self._advance_pop_cycle(
                 self.rabbits, self._rabbit_rigids, self._rabbit_state,
@@ -2265,9 +2345,9 @@ class whack_moles(Base_Task):
 
         for group in self.schedule:
             # Soft-recover from motion-plan blips so later moles still get pressed.
-            if not self.plan_success and not getattr(self, "distractor_hit", False):
+            if not self.plan_success and not self._episode_failed():
                 self.plan_success = True
-            if getattr(self, "distractor_hit", False):
+            if self._episode_failed():
                 break
             group = [i for i in group if not self.touched[i]]
             if not group:
@@ -2280,7 +2360,7 @@ class whack_moles(Base_Task):
         # Episode success is moles+no-rabbit; don't leave plan_success False from
         # a late hover blip if every mole was actually hit.
         if (
-            not getattr(self, "distractor_hit", False)
+            not self._episode_failed()
             and getattr(self, "touched", None)
             and all(self.touched)
         ):

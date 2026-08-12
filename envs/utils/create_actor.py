@@ -5,6 +5,7 @@ import transforms3d as t3d
 import sapien.physx as sapienp
 import json
 import os, re
+import tempfile
 
 from .actor_utils import Actor, ArticulationActor
 
@@ -463,6 +464,285 @@ def create_hollow_box_with_holes(
         "contact_points_pose": [],
         "transform_matrix": np.eye(4).tolist(),
         "functional_matrix": [],
+    }
+    return Actor(entity, model_data)
+
+
+def create_box_with_circular_holes(
+    scene,
+    pose: sapien.Pose,
+    half_size,
+    color=None,
+    is_static=True,
+    name="",
+    hole_rows=None,
+    hole_cols=None,
+    hole_count=None,
+    hole_size=None,
+    wall_thickness=0.02,
+    top_thickness=0.02,
+    bottom_thickness=0.0,
+    bar_thickness=0.02,
+    hole_bands=48,
+    hole_ring_width=0.006,
+    hole_ring_height=0.0025,
+    hole_ring_color=None,
+    body_color=None,
+) -> Actor:
+    """Hollow box with a flat top deck and true circular hole cutouts.
+
+    Unlike ``create_hollow_box_with_holes`` (square lattice bars), the play
+    surface is a continuous plate with round openings — same layout math as the
+    square grid (row-major hole centers), but openings are disks of diameter
+    ``hole_size``.
+
+    ``color`` tints the top deck; ``body_color`` tints the side walls (and
+    optional floor). When ``body_color`` is None, walls use ``color``.
+    """
+    from shapely.geometry import Point, Polygon
+    from trimesh.creation import extrude_polygon
+
+    scene, pose = preprocess(scene, pose)
+    x_half, y_half, z_half = half_size
+    bottom_thickness = float(max(0.0, bottom_thickness))
+    top_thickness = float(top_thickness)
+    wall_thickness = float(wall_thickness)
+    bar_thickness = float(bar_thickness)
+    builder = scene.create_actor_builder()
+    builder.set_physx_body_type("static" if is_static else "dynamic")
+
+    if hole_rows is None and hole_cols is None:
+        if hole_count is None:
+            hole_rows = 3
+            hole_cols = 3
+        else:
+            hole_cols = int(np.ceil(np.sqrt(hole_count)))
+            hole_rows = int(np.ceil(hole_count / hole_cols))
+    elif hole_rows is None:
+        if hole_count is not None:
+            hole_rows = int(np.ceil(hole_count / hole_cols))
+        else:
+            raise ValueError("hole_rows is missing")
+    elif hole_cols is None:
+        if hole_count is not None:
+            hole_cols = int(np.ceil(hole_count / hole_rows))
+        else:
+            raise ValueError("hole_cols is missing")
+    elif hole_count is not None and hole_rows * hole_cols != hole_count:
+        raise ValueError("hole_count must equal hole_rows * hole_cols")
+
+    if hole_rows < 1 or hole_cols < 1:
+        raise ValueError("hole_rows and hole_cols must be >= 1")
+    if hole_size is None or float(hole_size) <= 0:
+        raise ValueError("hole_size (circular hole diameter) must be > 0")
+    hole_size = float(hole_size)
+    hole_radius = 0.5 * hole_size
+
+    total_x = 2.0 * x_half
+    total_y = 2.0 * y_half
+    if hole_size * hole_cols + bar_thickness * (hole_cols + 1) > total_x:
+        raise ValueError("Requested hole_size is too large for the board width")
+    if hole_size * hole_rows + bar_thickness * (hole_rows + 1) > total_y:
+        raise ValueError("Requested hole_size is too large for the board depth")
+
+    gap_x = (total_x - hole_cols * hole_size) / (hole_cols + 1)
+    gap_y = (total_y - hole_rows * hole_size) / (hole_rows + 1)
+    if gap_x < bar_thickness or gap_y < bar_thickness:
+        raise ValueError("Requested hole_size is too large for the board top")
+
+    x_centers = np.linspace(
+        -x_half + gap_x + hole_radius,
+        x_half - gap_x - hole_radius,
+        hole_cols,
+    )
+    y_centers = np.linspace(
+        -y_half + gap_y + hole_radius,
+        y_half - gap_y - hole_radius,
+        hole_rows,
+    )
+    n_holes = hole_rows * hole_cols if hole_count is None else int(hole_count)
+    hole_local = []
+    for r, dy in enumerate(y_centers):
+        for c, cx in enumerate(x_centers):
+            if len(hole_local) >= n_holes:
+                break
+            hole_local.append((float(cx), float(dy)))
+
+    # Side walls between optional floor and top deck.
+    side_height = 2.0 * z_half - top_thickness - bottom_thickness
+    if side_height <= 1e-6:
+        raise ValueError("top_thickness + bottom_thickness exceed board height")
+    side_z = -z_half + bottom_thickness + side_height / 2.0
+    side_y_half_x = x_half - wall_thickness
+    wall_specs = [
+        ([-x_half + wall_thickness / 2.0, 0.0, side_z],
+         [wall_thickness / 2.0, y_half, side_height / 2.0]),
+        ([x_half - wall_thickness / 2.0, 0.0, side_z],
+         [wall_thickness / 2.0, y_half, side_height / 2.0]),
+        ([0.0, -y_half + wall_thickness / 2.0, side_z],
+         [side_y_half_x, wall_thickness / 2.0, side_height / 2.0]),
+        ([0.0, y_half - wall_thickness / 2.0, side_z],
+         [side_y_half_x, wall_thickness / 2.0, side_height / 2.0]),
+    ]
+    for wall_p, wall_half in wall_specs:
+        builder.add_box_collision(
+            pose=sapien.Pose(wall_p),
+            half_size=wall_half,
+            material=scene.default_physical_material,
+        )
+
+    if bottom_thickness > 0.0:
+        bottom_pose = sapien.Pose([0.0, 0.0, -z_half + bottom_thickness / 2.0])
+        bottom_half = [x_half, y_half, bottom_thickness / 2.0]
+        builder.add_box_collision(
+            pose=bottom_pose,
+            half_size=bottom_half,
+            material=scene.default_physical_material,
+        )
+
+    # Flat top deck = rectangle minus circular buffers, extruded to a mesh.
+    # Collision uses a thick slab; RT demos render triangle-mesh albedo poorly when
+    # the same thick OBJ is also the visual (reads near-black). Match play_billiard:
+    # collision mesh + a separate thin felt-like visual plate.
+    resolution = max(24, int(hole_bands))
+    poly = Polygon([
+        (-x_half, -y_half), (x_half, -y_half), (x_half, y_half), (-x_half, y_half),
+    ])
+    for cx, cy in hole_local:
+        cut = Point(cx, cy).buffer(hole_radius, resolution=resolution)
+        poly = poly.difference(cut)
+    if poly.is_empty:
+        raise RuntimeError("circular hole cutouts removed the entire board top")
+    if poly.geom_type == "MultiPolygon":
+        poly = max(poly.geoms, key=lambda g: g.area)
+
+    coll_mesh = extrude_polygon(poly, height=top_thickness)
+    coll_mesh.apply_translation([0.0, 0.0, -0.5 * top_thickness])
+    try:
+        coll_mesh.fix_normals()
+    except Exception:
+        pass
+    coll_path = os.path.join(
+        tempfile.gettempdir(),
+        f"whack_board_circular_holes_coll_{hole_rows}x{hole_cols}_{name or 'board'}.obj",
+    )
+    coll_mesh.export(coll_path, include_color=False, include_normals=True)
+
+    # Thin visual plate flush with the deck top (billiard-style felt lid).
+    vis_thickness = float(min(0.004, max(0.002, 0.15 * top_thickness)))
+    vis_mesh = extrude_polygon(poly, height=vis_thickness)
+    vis_mesh.apply_translation([0.0, 0.0, -0.5 * vis_thickness])
+    try:
+        vis_mesh.fix_normals()
+    except Exception:
+        pass
+    vis_path = os.path.join(
+        tempfile.gettempdir(),
+        f"whack_board_circular_holes_vis_{hole_rows}x{hole_cols}_{name or 'board'}.obj",
+    )
+    vis_mesh.export(vis_path, include_color=False, include_normals=True)
+
+    board_color = list(color) if color is not None else [0.34, 0.62, 0.24]
+    if len(board_color) == 3:
+        board_rgba = [*board_color, 1.0]
+    else:
+        board_rgba = board_color[:4]
+    render_mat = sapien.render.RenderMaterial(base_color=board_rgba)
+    try:
+        render_mat.set_metallic(0.0)
+        render_mat.set_roughness(0.9)
+        # Slight emission so RT head-camera recordings keep grass readable
+        # (raster interactive already looks fine without it).
+        render_mat.set_emission([
+            0.25 * float(board_rgba[0]),
+            0.25 * float(board_rgba[1]),
+            0.25 * float(board_rgba[2]),
+        ])
+    except Exception:
+        pass
+
+    wall_color = list(body_color) if body_color is not None else list(board_color)
+    wall_rgb = wall_color[:3]
+
+    for wall_p, wall_half in wall_specs:
+        builder.add_box_visual(
+            pose=sapien.Pose(wall_p), half_size=wall_half, material=wall_rgb)
+    if bottom_thickness > 0.0:
+        builder.add_box_visual(
+            pose=sapien.Pose([0.0, 0.0, -z_half + bottom_thickness / 2.0]),
+            half_size=[x_half, y_half, bottom_thickness / 2.0],
+            material=wall_rgb,
+        )
+
+    top_z = z_half - top_thickness / 2.0
+    top_pose = sapien.Pose([0.0, 0.0, top_z])
+    builder.add_nonconvex_collision_from_file(filename=coll_path, pose=top_pose)
+    # Visual plate: top face flush with board top (z_half).
+    vis_pose = sapien.Pose([0.0, 0.0, z_half - 0.5 * vis_thickness])
+    builder.add_visual_from_file(
+        filename=vis_path, pose=vis_pose, material=render_mat)
+
+    # Black rim rings around each hole (visual only) so openings read clearly.
+    ring_width = float(max(0.0, hole_ring_width))
+    ring_height = float(max(0.0, hole_ring_height))
+    if ring_width > 1e-6 and ring_height > 1e-6 and hole_local:
+        import trimesh
+
+        ring_meshes = []
+        for cx, cy in hole_local:
+            outer = Point(cx, cy).buffer(
+                hole_radius + ring_width, resolution=resolution)
+            inner = Point(cx, cy).buffer(hole_radius, resolution=resolution)
+            annulus = outer.difference(inner)
+            if annulus.is_empty:
+                continue
+            geoms = list(annulus.geoms) if annulus.geom_type == "MultiPolygon" else [annulus]
+            for geom in geoms:
+                if geom.is_empty or geom.area <= 0:
+                    continue
+                rm = extrude_polygon(geom, height=ring_height)
+                rm.apply_translation([0.0, 0.0, -0.5 * ring_height])
+                ring_meshes.append(rm)
+        if ring_meshes:
+            ring_mesh = (
+                ring_meshes[0] if len(ring_meshes) == 1
+                else trimesh.util.concatenate(ring_meshes)
+            )
+            try:
+                ring_mesh.fix_normals()
+            except Exception:
+                pass
+            ring_path = os.path.join(
+                tempfile.gettempdir(),
+                f"whack_board_hole_rings_{hole_rows}x{hole_cols}_{name or 'board'}.obj",
+            )
+            ring_mesh.export(ring_path, include_color=False, include_normals=True)
+            ring_rgb = list(hole_ring_color) if hole_ring_color is not None else [0.04, 0.04, 0.04]
+            ring_rgba = [*ring_rgb[:3], 1.0]
+            ring_mat = sapien.render.RenderMaterial(base_color=ring_rgba)
+            try:
+                ring_mat.set_metallic(0.0)
+                ring_mat.set_roughness(0.95)
+            except Exception:
+                pass
+            # Sit the lip on the deck top so the rim reads from above.
+            ring_pose = sapien.Pose([0.0, 0.0, z_half + ring_height / 2.0])
+            builder.add_visual_from_file(
+                filename=ring_path, pose=ring_pose, material=ring_mat)
+
+    builder.set_initial_pose(pose)
+    entity = builder.build(name=name)
+
+    model_data = {
+        "center": [0, 0, 0],
+        "extents": half_size,
+        "scale": half_size,
+        "target_pose": [np.eye(4).tolist()],
+        "contact_points_pose": [],
+        "transform_matrix": np.eye(4).tolist(),
+        "functional_matrix": [],
+        "hole_centers_local": hole_local,
+        "hole_size": hole_size,
     }
     return Actor(entity, model_data)
 

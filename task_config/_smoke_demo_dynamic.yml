@@ -827,7 +827,7 @@ task_args:
     hover_clearance: 0.018
     touch_tol: 0.04
     hole_count: 9
-    hole_size: 0.0825
+    hole_size: 0.070
     hole_bar_thickness: 0.014
     cube_hole_scale: 1.2
     cube_grasp_drop_z: 0.05
@@ -838,9 +838,13 @@ task_args:
     table_height_bias: 0.05
     board_z_lift: 0.06
     board_color:
-    - 0.98
-    - 0.82
-    - 0.05
+    - 0.34
+    - 0.62
+    - 0.24
+    board_body_color:
+    - 0.18
+    - 0.09
+    - 0.04
   boil_milk:
     scene_id: 0
     stove_side: random
