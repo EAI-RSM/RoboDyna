@@ -50,15 +50,15 @@ class sort_apples_belt(Base_Task):
     # ---- class-default task params (override via task_args.sort_apples_belt) ----
     N_APPLES_MIN_DEFAULT = 4
     N_APPLES_MAX_DEFAULT = 4              # fixed episode size (all options)
-    # Upper = current (post-×2) belt speed; lower = 30% below upper. Sample U[lower, upper] per ep.
-    BELT_SPEED_MAX_DEFAULT = 0.0020    # m per advance tick; upper bound
-    BELT_SPEED_MIN_DEFAULT = BELT_SPEED_MAX_DEFAULT * 0.7  # 0.0014; 30% below upper
+    # Upper belt speed; lower = 30% below upper. Sample U[lower, upper] per ep.
+    BELT_SPEED_MAX_DEFAULT = 0.0016    # m per advance tick (−20% vs 0.0020)
+    BELT_SPEED_MIN_DEFAULT = BELT_SPEED_MAX_DEFAULT * 0.7  # 0.00112; 30% below upper
     ADVANCE_EVERY_DEFAULT = 4          # physics steps between belt advances
     GATE_DEFAULT_LEFT_DEFAULT = True   # gate direction before the first press
     OBSERVE_DIST = 0.10
     GATE_TILT = 0.425                  # blade yaw (rad); half of prior 0.85
     DUMP_OPEN_ANGLE = np.pi / 2        # each half yaws ±90° about its own center to open the middle
-    SPAWN_GAP = 0.30                   # larger spacing → more time for the robot to act
+    SPAWN_GAP = 0.36                   # (+20% vs 0.30); more time between successive apples
     ACCUM_SPACING = 0.045              # center-to-center gap when apples queue at the plank
     DECISION_DY = 0.15
     DUMP_DECISION_EXTRA = 0.32         # start dual press early; hatch opens only on contact
@@ -192,6 +192,7 @@ class sort_apples_belt(Base_Task):
         s_max = float(cfg.get("belt_speed_max", self.BELT_SPEED_MAX_DEFAULT))
         s_min = float(cfg.get("belt_speed_min", s_max * 0.7))
         self.belt_speed = float(np.random.uniform(s_min, s_max)) * float(cfg.get("belt_speed_scale", 1.0))
+        self.SPAWN_GAP = float(cfg.get("spawn_gap", self.SPAWN_GAP))
         self.advance_every = int(cfg.get("advance_every", self.ADVANCE_EVERY_DEFAULT))
         self.gate_default_left = bool(cfg.get("gate_default_left", self.GATE_DEFAULT_LEFT_DEFAULT))
         # Gate / divert-plank hinge center along belt Y (class default BELT_Y_FORK).

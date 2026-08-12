@@ -299,12 +299,14 @@ class place_block_belt(Base_Task):
             bowl_lane_low, bowl_lane_high = full_y_lo, full_y_hi
             bowl_y = float(np.random.uniform(bowl_lane_low, bowl_lane_high))
         self.bowl_id = int(np.random.choice([1, 2, 3, 4, 5, 6, 7]))
+        # Convex decomposition keeps a usable cavity and works for both static and
+        # kinematic Opt-1 bowls (triangle-mesh / nonconvex is static-only in PhysX).
         self.bowl = create_actor(
             self,
             pose=sapien.Pose([bowl_x, bowl_y, table_z], [0.5, 0.5, 0.5, 0.5]),
             modelname="002_bowl",
             model_id=self.bowl_id,
-            convex=False,
+            convex=True,
             is_static=not self.bowl_move_enabled,
         )
         self._bowl_dyn = None
@@ -315,6 +317,16 @@ class place_block_belt(Base_Task):
                     try:
                         c.set_disable_gravity(True)
                         c.set_kinematic(True)
+                    except Exception:
+                        pass
+            # Sticky bowl interior so the cube seats instead of skating through.
+            if hasattr(c, "get_collision_shapes"):
+                for sh in c.get_collision_shapes():
+                    try:
+                        m = sh.get_physical_material()
+                        m.set_static_friction(1.8)
+                        m.set_dynamic_friction(1.5)
+                        m.set_restitution(0.0)
                     except Exception:
                         pass
         self.bowl_start_z = float(self.bowl.get_pose().p[2])
@@ -385,6 +397,15 @@ class place_block_belt(Base_Task):
                     cm = c.get_cmass_local_pose()
                     com_z = self.block_com_frac * self.block_half_h
                     c.set_cmass_local_pose(sapien.Pose(p=[cm.p[0], cm.p[1], com_z], q=cm.q))
+                except Exception:
+                    pass
+                # Friction for belt ride + bowl catch; no bounce into/through the bowl.
+                try:
+                    for sh in c.get_collision_shapes():
+                        m = sh.get_physical_material()
+                        m.set_static_friction(1.6)
+                        m.set_dynamic_friction(1.4)
+                        m.set_restitution(0.0)
                 except Exception:
                     pass
 
@@ -607,7 +628,9 @@ class place_block_belt(Base_Task):
         if not getattr(self, "bowl_move_enabled", False) or getattr(self, "bowl", None) is None:
             return
         pose = self.bowl.get_pose()
-        next_y = float(pose.p[1] + self._bowl_move_dir * abs(self.bowl_move_speed) * self.scene.get_timestep())
+        prev_y = float(pose.p[1])
+        dt = float(self.scene.get_timestep())
+        next_y = float(prev_y + self._bowl_move_dir * abs(self.bowl_move_speed) * dt)
         low, high = self._bowl_lane_bounds()
         if high <= low:
             return
@@ -617,7 +640,41 @@ class place_block_belt(Base_Task):
         elif next_y < low:
             next_y = low
             self._bowl_move_dir = 1.0
-        self.bowl.actor.set_pose(sapien.Pose([self._bowl_base_x, next_y, pose.p[2]], pose.q))
+        dy = next_y - prev_y
+        new_pose = sapien.Pose([self._bowl_base_x, next_y, pose.p[2]], pose.q)
+        # Prefer kinematic_target so PhysX resolves cube↔bowl contacts; set_pose
+        # alone teleports through the cube and skips collision response.
+        try:
+            if self._bowl_dyn is not None:
+                self._bowl_dyn.set_kinematic_target(new_pose)
+            self.bowl.actor.set_pose(new_pose)
+        except Exception:
+            try:
+                self.bowl.actor.set_pose(new_pose)
+            except Exception:
+                pass
+        # Carry a settled cube with the moving bowl (set_pose would leave it behind).
+        if (
+            abs(dy) > 1e-9
+            and getattr(self, "block", None) is not None
+            and not getattr(self, "_block_kinematic", False)
+            and getattr(self, "_block_dropped", False)
+            and self._block_in_bowl()
+        ):
+            bp = self.block.get_pose()
+            carried = sapien.Pose(
+                [float(bp.p[0]), float(bp.p[1]) + dy, float(bp.p[2])],
+                list(bp.q),
+            )
+            try:
+                self.block.actor.set_pose(carried)
+                if self._block_dyn is not None:
+                    self._block_dyn.set_linear_velocity(
+                        np.array([0.0, dy / max(dt, 1e-6), 0.0])
+                    )
+                    self._block_dyn.set_angular_velocity(np.zeros(3))
+            except Exception:
+                pass
 
     def _predict_bowl_y(self, future_time: float) -> float:
         if getattr(self, "bowl", None) is None:

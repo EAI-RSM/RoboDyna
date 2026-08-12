@@ -53,6 +53,10 @@ class put_cup_belt(Base_Task):
     LIFT_OFF_ONLY_AFTER_PLACE_DEFAULT = False
     POST_PLACE_LIFT_Z_DEFAULT = 0.10
     RANDOM_MIRROR_DEFAULT = True        # randomly flip layout to left-arm side
+    # Cup |x| spawn band (m). Kept inward of the old 0.065–0.115 range so the cup
+    # stays framed in the head camera.
+    CUP_X_ABS_MIN = 0.070
+    CUP_X_ABS_MAX = 0.095
 
     REACH_STEPS_EST = 90                # est. physics steps for the forward reach to complete
     N_STRIPS = 3                        # curtain vertical strips
@@ -69,6 +73,11 @@ class put_cup_belt(Base_Task):
     STRIP_HALF_XY = (0.012, 0.004)
     STRIP_SPACING = 0.055
     LIFT_CLEARANCE = 0.06               # lift = cup_height + this so the cup clears cup-tall curtains
+    # Curtain hit uses geometric AABB (strips have robot collision off). Cup world-size
+    # overstates the solid, so require penetration before counting a hit.
+    CURTAIN_CONTACT_PENETRATION_X = 0.010   # m; must overlap this much in X
+    CURTAIN_CONTACT_PENETRATION_Y = 0.018   # m; approach axis — was the loose false-positive
+    CURTAIN_CONTACT_PENETRATION_Z = 0.008   # m
     BLUE_CUP_RGBA = [0.10, 0.35, 0.95, 1.0]
     CUP_UPRIGHT_QPOS = [0.707, 0.707, 0.0, 0.0]
 
@@ -182,9 +191,13 @@ class put_cup_belt(Base_Task):
 
         # ----- the cup: active side near zone (right +x / left −x when mirrored) -----
         self.cup_id = 0
-        # Slight pose jitter: keep |x| reachable for both arms; keep y clear of curtains at rest.
-        # Small yaw only (upright cup); roll/pitch stay fixed.
-        self.cup_x = float(self.side * np.random.uniform(0.065, 0.115))
+        # Slight pose jitter: keep |x| in the head-camera frame and reachable for both
+        # arms; keep y clear of curtains at rest. Small yaw only (upright cup).
+        x_lo = float(c.get("cup_x_abs_min", self.CUP_X_ABS_MIN))
+        x_hi = float(c.get("cup_x_abs_max", self.CUP_X_ABS_MAX))
+        if x_hi < x_lo:
+            x_lo, x_hi = x_hi, x_lo
+        self.cup_x = float(self.side * np.random.uniform(x_lo, x_hi))
         self.cup_y = float(np.random.uniform(-0.055, -0.028))
         cup_pose = rand_pose(
             xlim=[self.cup_x, self.cup_x], ylim=[self.cup_y, self.cup_y], zlim=[z0],
@@ -208,7 +221,7 @@ class put_cup_belt(Base_Task):
 
         # Corridor = cup column. Belt + curtains share it so the yellow gap and curtain opening
         # pass through a single reachable reach line.
-        self.corridor_x = float(self.side * np.clip(abs(self.cup_x), 0.07, 0.14))
+        self.corridor_x = float(self.side * np.clip(abs(self.cup_x), x_lo, x_hi))
         self.curtain_center_x = self.corridor_x
         self.belt_center_x = float(c.get("belt_center_x", self.corridor_x))
         # Fixed plate centered on the corridor (does not translate with the yellow sticks).
@@ -437,14 +450,21 @@ class put_cup_belt(Base_Task):
         if cup_bottom > strip_top - 0.005:
             return
         # Geometric AABB vs cup cylinder (strips have robot collision disabled).
+        # Require penetration so bbox-inflated near-misses do not count as contact.
         cup_r = 0.5 * float(self._actor_world_size(self.cup)[0])
         cup_hz = 0.5 * float(self.cup_height)
+        pen_x = float(self.CURTAIN_CONTACT_PENETRATION_X)
+        pen_y = float(self.CURTAIN_CONTACT_PENETRATION_Y)
+        pen_z = float(self.CURTAIN_CONTACT_PENETRATION_Z)
         for i, strip in enumerate(self.curtain_strips):
             sp = np.array(strip.get_pose().p, dtype=float)
             sh = np.array(self.strip_half, dtype=float)
-            if (abs(cup_p[0] - sp[0]) < cup_r + sh[0]
-                    and abs(cup_p[1] - sp[1]) < cup_r + sh[1]
-                    and abs(cup_p[2] - sp[2]) < cup_hz + sh[2]):
+            lim_x = max(0.003, cup_r + sh[0] - pen_x)
+            lim_y = max(0.002, cup_r + sh[1] - pen_y)
+            lim_z = max(0.003, cup_hz + sh[2] - pen_z)
+            if (abs(cup_p[0] - sp[0]) < lim_x
+                    and abs(cup_p[1] - sp[1]) < lim_y
+                    and abs(cup_p[2] - sp[2]) < lim_z):
                 self._curtain_hit = True
                 import os
                 if os.environ.get("CCS_DEBUG"):
