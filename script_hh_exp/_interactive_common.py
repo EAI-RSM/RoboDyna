@@ -125,13 +125,15 @@ class HouseholdController:
             self._close_grippers_at_start()
         elif task == "stop_ball" and robot:
             self._open_stop_ball_grippers_at_start()
-        elif task == "clean_table" and robot:
-            # clean_table only — do not open grippers for any other task.
-            # Space approaches the handle cube open, then closes on it.
+        elif task in ("clean_table", "make_soup") and robot:
+            # Start open so the WSG can close around the handle cube.
             self._open_clean_table_grippers_at_start()
-        # catch_cup: leave the pillow dynamic so gripper contact can shove it.
+        # catch_cup / make_soup: keep the prop dynamic so gripper contact is real.
         # Other keyboard tasks start kinematic so arrows can teleport the prop.
-        if not robot and self.actor is not None and task != "catch_cup":
+        if not robot and self.actor is not None and task not in (
+            "catch_cup",
+            "make_soup",
+        ):
             _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
         elif task == "catch_cup" and self.actor is not None:
             try:
@@ -166,8 +168,8 @@ class HouseholdController:
         self.env.plan_success = True
 
     def _open_clean_table_grippers_at_start(self):
-        """clean_table only: start robot mode with both grippers fully open."""
-        if self.task != "clean_table":
+        """Start robot mode with both grippers fully open (handle pinch tasks)."""
+        if self.task not in ("clean_table", "make_soup"):
             return
         try:
             self.env.plan_success = True
@@ -181,7 +183,7 @@ class HouseholdController:
                     self.env.plan_success = True
                     self.env.move(self.env.open_gripper(ArmTag(side), pos=1.0))
         except Exception as exc:
-            print(f"[clean_table] could not pre-open grippers: {exc}")
+            print(f"[{self.task}] could not pre-open grippers: {exc}")
         self.env.plan_success = True
 
     def _keyboard_action(self):
@@ -688,8 +690,22 @@ def _terminal_failure(env, task):
         except Exception:
             pass
     elif task == "make_soup":
+        if bool(getattr(env, "_arm_veg_contact", False)):
+            return getattr(env, "_fail_reason", None) or "arm contacted vegetables"
         if bool(getattr(env, "_veg_fallen", False)):
-            return "vegetables spilled outside the pot"
+            return getattr(env, "_fail_reason", None) or "vegetables dropped on the table"
+        # Live re-check so a mid-episode spill latches before the next success poll.
+        try:
+            if callable(getattr(env, "_check_veg_fallen", None)):
+                env._check_veg_fallen()
+            if callable(getattr(env, "_check_arm_veg_contact", None)):
+                env._check_arm_veg_contact()
+        except Exception:
+            pass
+        if bool(getattr(env, "_arm_veg_contact", False)):
+            return getattr(env, "_fail_reason", None) or "arm contacted vegetables"
+        if bool(getattr(env, "_veg_fallen", False)):
+            return getattr(env, "_fail_reason", None) or "vegetables dropped on the table"
     elif task == "catch_cup":
         if bool(getattr(env, "_fell_on_table", False)) or getattr(env, "_cup_state", "") == "fallen":
             return "cup fell on the table"
