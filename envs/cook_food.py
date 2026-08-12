@@ -2,9 +2,15 @@
 
 KitchenS scene (no sink/tap/microwave). The stove starts already on (knob turned,
 fire lit). Raw food starts on a chopping board; the robot puts it in the pan,
-waits for a food-specific doneness, then turns the knob back to zero.
-Success is adequate doneness after the stove is off (food stays in the pan). A
-decorative plate of raw meat sits to the right of the stove.
+then turns the knob back to zero at the target doneness.
+
+Cooking mechanism (shared with ``cook_food_timer``):
+  - Browning starts the moment food rests in the pan (stove lit, not held).
+  - Color / doneness keep advancing whenever the burner is on.
+  - They stop only when the knob extinguishes the stove — never freeze while lit.
+  - Success scores the doneness frozen at shutoff (food stays in the pan).
+
+A decorative plate of raw meat sits to the right of the stove.
 
 Food types (``task_args.cook_food.food_type`` or random):
   - meat    — 200_steak; red → brown → black; ideal ~medium (0.5)
@@ -148,7 +154,6 @@ class cook_food(KitchenS_base_task):
         self._ignore_knob = False
         self._expert_holding_knob = False
         self._cook_phase_done = False
-        self._cook_hold = False
         self._cooking_idle = False
         self._burner_shapes = []
         self._ring_shapes: list[Any] = []
@@ -229,12 +234,14 @@ class cook_food(KitchenS_base_task):
         self.pan_scale = float(cfg.get("pan_scale", self.PAN_SCALE_DEFAULT))
         self.plate_scale = float(cfg.get("plate_scale", self.PLATE_SCALE_DEFAULT))
         self.board_scale = float(cfg.get("board_scale_mult", self.BOARD_SCALE_DEFAULT))
-        self.shutoff_lead = float(cfg.get("shutoff_lead", 0.03))
+        # Expert starts the knob approach this far below target so the remaining
+        # approach+twist cook (live fire) lands inside the success band.
+        self.shutoff_lead = float(cfg.get("shutoff_lead", 0.58))
         self.cook_intensity = float(np.clip(cfg.get("cook_intensity", 0.75), 0.15, 1.0))
-        # place_actor release bias relative to bowl center (left arm undershoots −X).
-        # Onion: drop on center (0,0); meat/sausage keep the historical bias.
-        self.place_dx = float(cfg.get("place_dx", 0.05))
-        self.place_dy = float(cfg.get("place_dy", 0.05))
+        # Release above the skillet bowl center (functional point 0). Optional
+        # place_dx / place_dy nudge only when explicitly set in config.
+        self.place_dx = float(cfg.get("place_dx", 0.0))
+        self.place_dy = float(cfg.get("place_dy", 0.0))
 
         food_type = cfg.get("food_type", None)
         if food_type is None or str(food_type).lower() in ("random", "any", ""):
@@ -259,7 +266,6 @@ class cook_food(KitchenS_base_task):
             self.cook_steps = self._sample_cook_steps(onion_cfg)
         else:
             self.cook_steps = self._sample_cook_steps(cfg)
-        # place_dx bias is finalized after burner selection (right_front needs more +X).
 
         range_cfg = cfg.get("target_doneness_range")
         if range_cfg is not None:
@@ -335,14 +341,6 @@ class cook_food(KitchenS_base_task):
         bx, by = self.burner_positions[burner_name]
         self.burner_name = burner_name
         self.burner_xy = (float(bx), float(by))
-        # Left arm undershoots −X more when reaching the right-front bowl.
-        if (
-            burner_name == "right_front"
-            and self.food_type != "onion_half"
-            and "place_dx" not in cfg
-        ):
-            self.place_dx = float(max(self.place_dx, 0.10))
-            self.place_dy = float(cfg.get("place_dy", 0.02))
 
         # Hide the solid orange disc — it shows through the open pan onto the food.
         if getattr(self, "active_burner", None) is not None:
@@ -865,11 +863,9 @@ class cook_food(KitchenS_base_task):
         elif self._food_on_board() and not self._food_held():
             self._food_in_pan = False
 
-        if self._cook_phase_done or self._grasp_doneness is not None:
-            return
-        if getattr(self, "_cook_hold", False):
-            return
-        # Cook whenever the stove is lit and food rests in the pan bowl.
+        # Cook / timer advance only while the burner is lit and food rests in
+        # the pan. Never freeze browning while the stove is still on — score
+        # freezes solely when the knob kills the fire (_grasp_doneness).
         if (
             self.fire_intensity > 0.02
             and (self._food_in_pan or self._food_in_bowl(require_released=True))
@@ -933,28 +929,25 @@ class cook_food(KitchenS_base_task):
         except Exception:
             return False
 
-    def _set_knob_to(self, target_angle: float, approach: bool = True) -> None:
+    def _set_knob_to(
+        self, target_angle: float, approach: bool = True, *, park_food_arm: bool = True
+    ) -> None:
         """Contact-driven continuous knob turn (shared KitchenS helper)."""
-        # Food arm must be parked on the left before the knob arm enters.
-        self._park_food_arm(self.food_arm)
         end = float(np.clip(target_angle, -self.KNOB_MAX_ANGLE, 0.0))
         start = float(self.knob_angle)
 
-        # Hold doneness only during the long expert approach (planner path is
-        # far slower than interactive teleop). Fire stays lit; freeze ends as
-        # soon as the grasp turn commits shutoff via _set_knob_angle.
-        self._cook_hold = True
-        try:
-            reached = self._turn_stove_knob(
-                end,
-                approach=approach,
-                start_angle=start,
-                after_idle=6,
-                commit_stove=None,
-                retry_closer=True,
-            )
-        finally:
-            self._cook_hold = False
+        # Cooking stays live through any park + approach + twist; it only stops
+        # when the physical knob extinguishes the burner.
+        if park_food_arm:
+            self._park_food_arm(self.food_arm)
+        reached = self._turn_stove_knob(
+            end,
+            approach=approach,
+            start_angle=start,
+            after_idle=6,
+            commit_stove=None,
+            retry_closer=True,
+        )
         self._dbg(f"knob_grasp_near={self._tcp_near_knob()}")
         # Fire from contact angle only — no snap to the commanded target.
         self._set_knob_angle(reached)
@@ -1155,9 +1148,10 @@ class cook_food(KitchenS_base_task):
         ]
 
     def _pan_place_target(self) -> list[float]:
-        """Hover/release target above the bowl (physics drop only — no teleport)."""
+        """Hover/release target above the skillet bowl center (physics drop)."""
         bowl = np.asarray(self.skillet.get_functional_point(0), dtype=float)
         z_off = 0.010 if getattr(self, "food_type", "") == "onion_half" else 0.012
+        # Default place_dx/dy are 0 — drop on the bowl center.
         return [
             float(bowl[0]) + float(getattr(self, "place_dx", 0.0)),
             float(bowl[1]) + float(getattr(self, "place_dy", 0.0)),
@@ -1201,7 +1195,8 @@ class cook_food(KitchenS_base_task):
             return self._wait_food_dropped_in_bowl()
 
         food_xy = np.asarray(self.food.get_pose().p[:2], dtype=float)
-        if float(np.linalg.norm(food_xy - bowl_xy)) > 0.10:
+        # Require food near bowl center before opening (center drop, not rim).
+        if float(np.linalg.norm(food_xy - bowl_xy)) > 0.05:
             return False
 
         self.plan_success = True
@@ -1219,7 +1214,7 @@ class cook_food(KitchenS_base_task):
         target = self._pan_place_target()
         # Onion: hover low over bowl center, open, lift straight up (no shove).
         hover = 0.04 if self.food_type == "onion_half" else 0.06
-        rtol = 0.04 if self.food_type == "onion_half" else 0.07
+        rtol = 0.04 if self.food_type == "onion_half" else 0.05
         if self._carry_held_food_to(arm, target, hover_z=hover, release_tol=rtol):
             if self.food_type == "onion_half":
                 # Extra open + pure-Z retreat so the disc stays where it landed.
@@ -1610,30 +1605,23 @@ class cook_food(KitchenS_base_task):
                 self.plan_success = True
                 self.move(self.open_gripper(self.food_arm))
 
-        # 1) Board → pan (grasp, drop, retreat). Fire is already lit, but hold
-        # doneness until the food is seated so place time doesn't overcook it.
-        self._cook_hold = True
-        try:
-            self._place_food_in_pan()
-        finally:
-            self._cook_hold = False
+        # 1) Board → pan. Cooking starts as soon as food rests in the bowl
+        # (gated by fire + in-pan + not held — no scripted freeze).
+        self._place_food_in_pan()
         if not self._food_in_pan or self._food_held() or not self._food_in_bowl():
             raise UnStableError("cook_food: refuse to cook — food not seated in pan")
-        self._pause(2 if onion else 10)
+        # Minimal settle — cooking is already live; long pauses overshoot the band.
+        self._pause(2)
 
         # 2) Cook on the pre-lit burner, then twist the knob off.
-        # Cook + timer advance with live fire until shut_at. Do NOT mark
-        # _cook_phase_done here — that froze browning/timer while the burner
-        # was still lit. Expert approach uses _cook_hold inside _set_knob_to
-        # only (interactive teleop never hits this path).
-        lo, _hi = self.target_doneness_range
-        lead = max(0.0, float(getattr(self, "shutoff_lead", 0.22)))
-        shut_at = max(float(lo), float(self.target_doneness) - lead)
+        # Browns + timer keep advancing whenever the stove is lit — never freeze
+        # while the burner is on. Start the knob approach early (shutoff_lead)
+        # so live cook during approach+twist still lands in-band. Do not spend
+        # hundreds of park steps after shut_at; leave the food arm where it is.
+        lead = max(0.0, float(getattr(self, "shutoff_lead", 0.58)))
+        shut_at = max(0.01, float(self.target_doneness) - lead)
         self._idle_until_doneness(shut_at)
-        self._pause(2 if onion else 8)
-
-        # Full approach — arm has not touched the knob yet this episode.
-        self._set_knob_to(0.0, approach=True)
+        self._set_knob_to(0.0, approach=True, park_food_arm=False)
         self._dbg("stove_off")
         if (
             bool(self.stove_on)

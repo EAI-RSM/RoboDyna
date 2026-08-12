@@ -90,17 +90,17 @@ task_args:
 
     cook_steps: 3076            # 2× prior 1538 (50% slower / mean cook time ×2)
     cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
-    # Doneness freezes before shutoff; keep lead small so the latch stays in-band.
-    shutoff_lead: 0.04
+    # Cooking stays live until knob off; start approach early for the band.
+    shutoff_lead: 0.58
     cook_intensity: 0.70        # initial knob-on angle as fraction of 180°
     # Same cooktop scale as the other KitchenS stove tasks.
     range_scale_mult: 1.0
     pan_scale: 1.0
     skillet_id: 2
     skillet_handle_yaw: 1.5708   # +90° → handle on +X (right side of stove)
-    # Left-arm board→pan undershoots −X; bias release toward bowl +X.
-    place_dx: 0.05
-    place_dy: 0.05
+    # Drop on skillet bowl center (functional point 0).
+    place_dx: 0.0
+    place_dy: 0.0
     plate_scale: 0.715
     board_scale_mult: 0.0975
     knob_contact_radius: 0.06
@@ -117,14 +117,14 @@ task_args:
     plate_y: -0.12
     cook_steps: 3076
     cook_speed_jitter: 0.20
-    shutoff_lead: 0.04
+    shutoff_lead: 0.58
     cook_intensity: 0.70
     range_scale_mult: 1.0
     pan_scale: 1.0
     skillet_id: 2
     skillet_handle_yaw: 1.5708
-    place_dx: 0.05
-    place_dy: 0.05
+    place_dx: 0.0
+    place_dy: 0.0
     plate_scale: 0.715
     board_scale_mult: 0.0975
     knob_contact_radius: 0.06

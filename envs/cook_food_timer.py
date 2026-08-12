@@ -1,15 +1,15 @@
 """Cook-food task with an on-table pie timer that tracks cooking progress.
 
-Same board → pan → shut-off flow as ``cook_food`` (stove starts already on; no
-plating), plus a white circular disc that fills clockwise section-by-section
-with doneness:
+Identical cooking / shutoff mechanism as ``cook_food`` (inherits ``play_once``,
+stove-gated doneness, center pan drop, etc.). The only addition is a white
+circular disc that fills clockwise section-by-section with doneness:
 
   * green  — doneness 0 → lower success threshold (full pie = lower bound)
   * yellow — resets and fills until the upper success threshold
   * red    — stays full once overcooked
 
-The timer advances only while the stove is on (and food is cooking in the pan);
-it freezes when the stove is off.
+The timer tracks the same doneness signal: it advances only while the stove is
+on and food is cooking in the pan, and freezes when the stove is off.
 """
 
 from __future__ import annotations

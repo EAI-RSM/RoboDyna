@@ -43,9 +43,6 @@ class CookFoodKnobTests(unittest.TestCase):
         task = object.__new__(cook_food)
         task.food = object()
         task._skillet_home = None
-        task._cook_phase_done = False
-        task._grasp_doneness = None
-        task._cook_hold = False
         task.fire_intensity = 0.75
         task._food_in_pan = True
         task._food_held = lambda: False
@@ -59,6 +56,43 @@ class CookFoodKnobTests(unittest.TestCase):
 
         self.assertAlmostEqual(task.doneness, 0.0075)
         self.assertAlmostEqual(task.max_doneness, 0.0075)
+
+    def test_cooking_continues_while_stove_lit_even_if_phase_flags_set(self) -> None:
+        """Browning must not freeze while the burner is still on."""
+        task = object.__new__(cook_food)
+        task.food = object()
+        task._skillet_home = None
+        task._cook_phase_done = True
+        task._grasp_doneness = 0.4
+        task.fire_intensity = 0.75
+        task._food_in_pan = True
+        task._food_held = lambda: False
+        task.cook_steps = 100
+        task.doneness = 0.4
+        task.max_doneness = 0.4
+        task._set_food_color = lambda _value: None
+
+        with patch.object(KitchenS_base_task, "_update_kinematic_tasks"):
+            task._update_kinematic_tasks()
+
+        self.assertGreater(task.doneness, 0.4)
+
+    def test_cooking_stops_when_fire_off(self) -> None:
+        task = object.__new__(cook_food)
+        task.food = object()
+        task._skillet_home = None
+        task.fire_intensity = 0.0
+        task._food_in_pan = True
+        task._food_held = lambda: False
+        task.cook_steps = 100
+        task.doneness = 0.5
+        task.max_doneness = 0.5
+        task._set_food_color = lambda _value: None
+
+        with patch.object(KitchenS_base_task, "_update_kinematic_tasks"):
+            task._update_kinematic_tasks()
+
+        self.assertAlmostEqual(task.doneness, 0.5)
 
 
 if __name__ == "__main__":

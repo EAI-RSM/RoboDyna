@@ -890,14 +890,14 @@ task_args:
     plate_y: -0.12
     cook_steps: 3076
     cook_speed_jitter: 0.2
-    shutoff_lead: 0.22
+    shutoff_lead: 0.58
     cook_intensity: 0.7
     range_scale_mult: 1.0
     pan_scale: 1.0
     skillet_id: 2
     skillet_handle_yaw: 1.5708
-    place_dx: 0.05
-    place_dy: 0.05
+    place_dx: 0.0
+    place_dy: 0.0
     plate_scale: 0.715
     board_scale_mult: 0.0975
     knob_contact_radius: 0.06
@@ -917,14 +917,14 @@ task_args:
     plate_y: -0.12
     cook_steps: 3076
     cook_speed_jitter: 0.2
-    shutoff_lead: 0.22
+    shutoff_lead: 0.58
     cook_intensity: 0.7
     range_scale_mult: 1.0
     pan_scale: 1.0
     skillet_id: 2
     skillet_handle_yaw: 1.5708
-    place_dx: 0.05
-    place_dy: 0.05
+    place_dx: 0.0
+    place_dy: 0.0
     plate_scale: 0.715
     board_scale_mult: 0.0975
     knob_contact_radius: 0.06
