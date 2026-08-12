@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-GALLERY_HTML = Path("/home/xuan/Desktop/RoboReal/task_gallery/index.html")
+_GALLERY_ROOT = Path(
+    os.environ.get(
+        "TASK_GALLERY_ROOT",
+        "/home/aras/Desktop/workspace/task_gallery/final_task_demos",
+    )
+)
+GALLERY_HTML = _GALLERY_ROOT.parent / "index.html"
 README = ROOT / "README.md"
 HH_README = ROOT / "script_hh_exp/README.md"
 META = Path("/tmp/hh_gallery_meta.json")

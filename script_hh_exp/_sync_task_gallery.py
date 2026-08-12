@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT / "final_task_demos"
-GALLERY = Path("/home/xuan/Desktop/RoboReal/task_gallery/final_task_demos")
-GALLERY_HTML = Path("/home/xuan/Desktop/RoboReal/task_gallery/index.html")
+_GALLERY_ROOT = Path(
+    os.environ.get(
+        "TASK_GALLERY_ROOT",
+        "/home/aras/Desktop/workspace/task_gallery/final_task_demos",
+    )
+)
+GALLERY = _GALLERY_ROOT
+GALLERY_HTML = _GALLERY_ROOT.parent / "index.html"
 HH_JSON = Path("/tmp/hh_sweep_results.json")
 if not HH_JSON.is_file():
     HH_JSON = ROOT / "logs/hh_sweep_results.json"
