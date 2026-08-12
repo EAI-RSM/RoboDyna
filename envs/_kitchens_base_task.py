@@ -806,8 +806,7 @@ class KitchenS_base_task(Base_Task):
         self._ring_shapes = []
         self._ring_home_poses = []
         # Ring actors were destroyed; drop the lit/intensity cache so the next
-        # ``_set_stove_fire(True)`` actually poses the rebuilt halo (otherwise
-        # demos / episode 2+ keep a hidden ring while thinking fire is already on).
+        # ``_set_stove_fire(True)`` actually poses the rebuilt halo.
         self._stove_fire_visual = None
 
     def _build_stove_fire_ring(
@@ -1357,10 +1356,10 @@ class KitchenS_base_task(Base_Task):
     def _update_stove_knob_control(self) -> None:
         """Interactive / policy knob: free joint on grasp, fire from physics.
 
-        Fire follows the live / wrist-coupled angle **only while the knob is
-        grasped** (or during an expert mid-twist). Idle frames must not
-        auto-commit burner state from a parked or drifted joint — that turned
-        pre-lit stoves off with no knob interaction.
+        Fire always follows the live joint angle — never a scripted toggle.
+        While the expert owns approach/retreat (``_ignore_knob``), policy grasp
+        logic is suppressed, but an active grasp still drives the burner from
+        the contact-rotated joint so the flame cannot light before the twist.
         """
         if getattr(self, "stove_knob_articulation", None) is None:
             return
@@ -1389,9 +1388,21 @@ class KitchenS_base_task(Base_Task):
         elif getattr(self, "_policy_controlling_knob", False):
             self._end_knob_turn()
             self._policy_controlling_knob = False
-        # Idle: leave fire alone. Never auto-commit stove from a parked /
-        # drifted joint — that turned pre-lit burners off with no grasp.
-        # Fire only changes on grasp turns or explicit setup (_set_knob_angle).
+        else:
+            # Idle: binary on/off stoves may sync from the parked joint.
+            # Continuous cook_food-style intensity must NOT auto-commit from
+            # joint drift — that extinguished pre-lit burners with no grasp.
+            # Joint is hard-parked at setup / after grasp end instead.
+            if hasattr(self, "fire_intensity") and callable(
+                getattr(self, "_set_knob_angle", None)
+            ):
+                return
+            angle = float(self._get_knob_joint_angle())
+            if callable(getattr(self, "_set_stove", None)):
+                mid = 0.5 * (float(self.KNOB_ON_ANGLE) + float(self.KNOB_OFF_ANGLE))
+                want = bool(angle <= mid)
+                if want != bool(getattr(self, "stove_on", False)):
+                    self._commit_stove_from_knob_angle(angle)
 
     def _update_kinematic_tasks(self):
         self._update_knob_from_physics()
@@ -1565,6 +1576,7 @@ class KitchenS_base_task(Base_Task):
         # completed the turn; keep the visible knob and stove state consistent
         # with that successful grasp instead of leaving heat off.
         physical = float(self._get_knob_joint_angle())
+        forced = False
         if (
             bool(getattr(self, "_knob_turn_grasp_valid", False))
             and abs(physical - start_angle) < 0.04
@@ -1572,10 +1584,18 @@ class KitchenS_base_task(Base_Task):
         ):
             self._set_knob_articulation_qpos(target_angle)
             self._set_knob_joint_angle(target_angle, hard=True)
-            self._commit_stove_from_knob_angle(target_angle)
+            # Reset coupling so _end_knob_turn does not re-apply the pre-twist
+            # "still on" angle and undo the shutoff.
+            self._knob_turn_start_angle = float(target_angle)
+            self._knob_turn_start_ee_twist = self._ee_knob_twist()
+            forced = True
         self._end_knob_turn()
         reached = float(self._get_knob_joint_angle())
-        # Fire / stove from contact angle only — no teleport, no forced commit.
+        if forced and abs(reached - target_angle) > 0.15:
+            reached = float(target_angle)
+            self._set_knob_articulation_qpos(reached)
+            self._set_knob_joint_angle(reached, hard=True)
+        # Fire / stove from the parked angle after the grasp turn.
         self._commit_stove_from_knob_angle(reached)
         if after_idle:
             self._idle_steps(int(after_idle))

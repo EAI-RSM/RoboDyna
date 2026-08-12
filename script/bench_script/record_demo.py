@@ -240,12 +240,21 @@ def _parse_task_arg_value(raw: str):
         return raw
 
 
+def save_freq_for_fps(fps: float) -> int:
+    """Map target video Hz to sim ``save_freq`` (fps ≈ 250 / save_freq)."""
+    fps = float(fps)
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
+    return max(1, int(round(250.0 / fps)))
+
+
 def build_args(
     task_name: str,
     config_name: str,
     save_root: str,
     option: str | None,
     task_arg_overrides: list[str] | None = None,
+    fps: float | None = None,
 ) -> dict:
     with open(f"./task_config/{config_name}.yml", "r", encoding="utf-8") as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
@@ -260,6 +269,11 @@ def build_args(
     args["use_seed"] = False
     args["check_render_success"] = True
     args["export_lerobot"] = False
+    # Demo videos: 20–30 Hz. Default 25 Hz → save_freq=10 (was yml 15 ≈ 16.7 Hz).
+    if fps is not None:
+        args["save_freq"] = save_freq_for_fps(fps)
+    else:
+        args["save_freq"] = save_freq_for_fps(25.0)
 
     args.setdefault("camera", {})
     args["camera"]["collect_head_camera"] = True
@@ -343,6 +357,7 @@ def record_fail_demo(
     max_seconds: float | None = None,
     max_steps: int | None = None,
     dest_dir: str | None = None,
+    fps: float | None = None,
 ) -> dict:
     """Record a failure demo with a step (default) or wall-clock render cap.
 
@@ -362,7 +377,9 @@ def record_fail_demo(
     if not any(o.startswith("allow_fail=") for o in overrides):
         overrides.append("allow_fail=true")
 
-    args = build_args(task_name, config_name, save_root, None, overrides)
+    args = build_args(
+        task_name, config_name, save_root, None, overrides, fps=fps
+    )
     args["save_failed_cases"] = True
     args["check_render_success"] = False
     args["episode_num"] = 1
@@ -514,6 +531,7 @@ def record_demo(
     tag: str | None = None,
     max_seconds: float | None = None,
     max_steps: int | None = None,
+    fps: float | None = None,
 ) -> dict:
     save_root = os.path.abspath(f"./tmp/tmp_{task_name}")
     video_dir = os.path.join(save_root, "video")
@@ -525,7 +543,14 @@ def record_demo(
     _cleanup_scratch(save_root, task_name)
     os.makedirs(save_root, exist_ok=True)
 
-    args = build_args(task_name, config_name, save_root, option, task_arg_overrides)
+    args = build_args(
+        task_name, config_name, save_root, option, task_arg_overrides, fps=fps
+    )
+    print(
+        f"[record_demo] save_freq={args['save_freq']} "
+        f"(~{250.0 / float(args['save_freq']):.1f} Hz)",
+        flush=True,
+    )
     args.setdefault("data_type", {})["third_view"] = False  # head-only
     # Household demos: keep a partial render if the step cutoff fires.
     if task_name in HOUSEHOLD_TASKS:
@@ -644,6 +669,13 @@ def main():
              f"when set without --max-steps). Legacy; prefer --max-steps.",
     )
     parser.add_argument(
+        "--fps",
+        type=float,
+        default=25.0,
+        help="Target head-video frame rate in Hz (20–30). Sets save_freq via "
+             "250/fps. Default 25 → save_freq=10.",
+    )
+    parser.add_argument(
         "--dest",
         default=None,
         help="Optional copy destination dir (e.g. rand_demo/<task>/failure).",
@@ -670,6 +702,7 @@ def main():
             max_steps=max_steps,
             max_seconds=max_seconds,
             dest_dir=ns.dest,
+            fps=ns.fps,
         )
     else:
         record_demo(
@@ -680,6 +713,7 @@ def main():
             tag=ns.tag,
             max_steps=max_steps,
             max_seconds=max_seconds,
+            fps=ns.fps,
         )
 
 

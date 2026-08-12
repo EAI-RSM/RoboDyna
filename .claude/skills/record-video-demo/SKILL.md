@@ -20,11 +20,14 @@ python script/bench_script/record_demo.py <task>
 # optional:
 python script/bench_script/record_demo.py <task> --config demo_dynamic
 python script/bench_script/record_demo.py <task> --task-arg key=value
+python script/bench_script/record_demo.py <task> --fps 25   # default; use 20–30
 # catch_cuboid examples:
 #   --task-arg catch_two_cuboids=true     # option 1
 #   --task-arg opaque_surface=true     # option 2
 # legacy: --option 1 / --option 2
 ```
+
+Demo videos default to **25 Hz** (`save_freq=10`, via `fps ≈ 250/save_freq`). Do not wrap long household cooks in a short shell `timeout`.
 
 Local conda env on this machine: `conda activate robodyna`.
 

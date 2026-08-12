@@ -536,6 +536,11 @@ class cook_food(KitchenS_base_task):
         # Stove starts lit — expert only places food, then shuts the knob off.
         on_angle = -float(self.cook_intensity) * self.KNOB_MAX_ANGLE
         self._set_knob_angle(on_angle)
+        # Hard-park the revolute at the lit angle so idle joint drift cannot
+        # extinguish the burner before anyone touches the knob.
+        self._set_knob_joint_angle(on_angle, hard=True)
+        self._set_knob_articulation_qpos(on_angle)
+        self._last_committed_knob_angle = float(on_angle)
         if self.food_type == "onion_half":
             # Re-seat with the same jitter (don't snap back to board center).
             self._seat_food_on_board(dx=food_dx, dy=food_dy)
@@ -896,40 +901,20 @@ class cook_food(KitchenS_base_task):
         self._idle_steps(int(n_steps))
 
     def _idle_until_doneness(self, level: float, max_steps: int | None = None) -> None:
-        # Replay pass: path already holds the cook wait — ramp color smoothly
-        # instead of snapping to the target (looks like an instant flash-fry).
-        if not getattr(self, "need_plan", True):
-            target = max(float(level), float(self.doneness))
-            start = float(self.doneness)
-            if getattr(self, "food_type", "") == "onion_half":
-                # ~8–10 s of browning at save_freq=15 / fps≈16.7 (2× prior cook time).
-                n = int(np.clip(float(self.cook_steps), 1600, 2800))
-            else:
-                n = 20
-            save_freq = self.save_freq if self.save_freq is not None else 15
-            self._cook_hold = True
-            try:
-                for i in range(1, n + 1):
-                    t = i / float(n)
-                    te = t * t * (3.0 - 2.0 * t)
-                    self.doneness = start + (target - start) * te
-                    self.max_doneness = max(self.max_doneness, self.doneness)
-                    self._set_food_color(self.doneness)
-                    self._update_kinematic_tasks()
-                    self.scene.step()
-                    if self.save_freq is not None and i % max(1, int(save_freq)) == 0:
-                        self._take_picture()
-            finally:
-                self._cook_hold = False
-            self.doneness = target
-            self.max_doneness = max(self.max_doneness, self.doneness)
-            self._set_food_color(self.doneness)
-            return
+        """Cook with live fire until ``doneness`` reaches ``level``.
+
+        Plan and replay use the same path so demos brown gradually and the
+        pie timer keeps advancing — no flash color ramp, no early freeze.
+        """
         inten = max(0.05, float(self.fire_intensity))
         if max_steps is None:
             max_steps = int(round(float(level) * self.cook_steps / inten)) + 40
         if getattr(self, "food_type", "") == "onion_half":
             max_steps = min(int(max_steps), 2400)
+        else:
+            # Keep meat/sausage demos under a sane wall-clock while still
+            # visibly cooking for several seconds (save_freq≈15 → ~fps 16).
+            max_steps = min(int(max_steps), 2200)
         self._idle_steps(
             max_steps,
             until=lambda: self.doneness >= float(level) or self.doneness >= 0.99,
@@ -955,7 +940,9 @@ class cook_food(KitchenS_base_task):
         end = float(np.clip(target_angle, -self.KNOB_MAX_ANGLE, 0.0))
         start = float(self.knob_angle)
 
-        # Retreat runs many sim steps; freeze doneness until the cook wait.
+        # Hold doneness only during the long expert approach (planner path is
+        # far slower than interactive teleop). Fire stays lit; freeze ends as
+        # soon as the grasp turn commits shutoff via _set_knob_angle.
         self._cook_hold = True
         try:
             reached = self._turn_stove_knob(
@@ -1635,18 +1622,27 @@ class cook_food(KitchenS_base_task):
         self._pause(2 if onion else 10)
 
         # 2) Cook on the pre-lit burner, then twist the knob off.
-        # Small lead only — doneness freezes for the shutoff approach.
+        # Cook + timer advance with live fire until shut_at. Do NOT mark
+        # _cook_phase_done here — that froze browning/timer while the burner
+        # was still lit. Expert approach uses _cook_hold inside _set_knob_to
+        # only (interactive teleop never hits this path).
         lo, _hi = self.target_doneness_range
-        lead = min(0.06, float(getattr(self, "shutoff_lead", 0.0)))
+        lead = max(0.0, float(getattr(self, "shutoff_lead", 0.22)))
         shut_at = max(float(lo), float(self.target_doneness) - lead)
         self._idle_until_doneness(shut_at)
-        self._cook_phase_done = True
         self._pause(2 if onion else 8)
 
         # Full approach — arm has not touched the knob yet this episode.
         self._set_knob_to(0.0, approach=True)
-        self._grasp_doneness = float(self.doneness)
         self._dbg("stove_off")
+        if (
+            bool(self.stove_on)
+            or float(self.fire_intensity) > 0.02
+            or float(self.knob_angle) < -0.05
+            or self._grasp_doneness is None
+        ):
+            raise UnStableError("cook_food: stove not shut off by knob — skip")
+        self._cook_phase_done = True
         if not self._doneness_in_target_range(float(self._grasp_doneness)):
             raise UnStableError(
                 f"cook_food: doneness {self._grasp_doneness:.2f} outside "
