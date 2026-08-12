@@ -37,8 +37,8 @@ under `data_lerobot/`. (`data/`, `data_lerobot/`, `logs/` and most assets are gi
 
 ## 📋 Tasks
 
-Every task below has a head-camera expert demonstration for each condition. The clips are converted
-to GIFs for in-page playback; the condition shown below each GIF describes that column's setup.
+Every task below has a head-camera expert demonstration for each condition (policy-rate capture, ~30 Hz).
+The clips are converted to GIFs for in-page playback; the condition shown below each GIF describes that column's setup.
 
 | Task | Default demo | Opt 1 demo | Opt 2 demo | Opt 1+2 demo |
 |---|---|---|---|---|
