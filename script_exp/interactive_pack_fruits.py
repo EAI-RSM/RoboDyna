@@ -3,7 +3,8 @@
 
 Pack red apples into the left basket and green apples into the right
 (when both colors are present). Opt2 black distractors are never packed.
-Colored apples may appear on either belt in every scenario.
+Default / Opt 2: colored apples may appear on either belt. Opt 1 / 1+2:
+red rides the left belt, green the right; black distractors may use either.
 
 Physical grasp (same pattern as pick_ripe_apple — no teleport / no EE weld):
   Teleop over a belt apple → Space closes the gripper. The apple keeps riding

@@ -16,20 +16,22 @@ class pack_fruits(Base_Task):
     - **Default**: one color (red *or* green), one basket on the matching side,
       **3–5** apples, **one colored apple at a time**.
     - **Opt 1** (``two_colors_enabled``): **two baskets** and **both colors**
-      (red + green). Red apples go to the left basket, green to the right.
-      Each color independently has **2–3** apples (counts need not match).
-      Still only one colored apple at a time (no dual grasp).
+      (red + green). Red apples ride the **left** belt into the left basket,
+      green the **right** belt into the right basket — each arm stays on its
+      side. Each color independently has **2–3** apples (counts need not
+      match). Still only one colored apple at a time (no dual grasp).
     - **Opt 2** (``distractor_enabled``): same as default, plus ≥1 black
       distractor apple (never packed); 30% chance of a second black apple.
       Black fruit may ride with a colored apple (same belt behind it, or the
       other belt).
-    - **Opt 1+2**: two colors, two baskets (2–3 each color), ≥1 black
-      distractor; one colored apple at a time (black may co-appear).
+    - **Opt 1+2**: two colors, dedicated belts (2–3 each color), ≥1 black
+      distractor (either belt); one colored apple at a time (black may
+      co-appear).
 
     Success requires every colored apple to rest in its color-matched basket
-    (red → left basket, green → right). Colored apples may appear on either
-    belt in every scenario; the color-matched arm reaches them (left for red,
-    right for green) so the carry stays on the basket side.
+    (red → left basket, green → right). Default / Opt 2 still spawn the
+    single color on either belt; two-color scenarios pin each color to its
+    basket-side belt so the matching arm never reaches across.
 
     Belt speed is sampled each episode as nominal × U(1 ± belt_speed_jitter)
     (default ±20%), independently per belt.
@@ -399,16 +401,26 @@ class pack_fruits(Base_Task):
             flush=True,
         )
 
-        # Colored apples may appear on either belt (all scenarios). The arm that
-        # reaches a fruit is the color-matched arm (red→left, green→right) so the
-        # subsequent slide stays over the matching basket; belt side is only for
-        # stream geometry.
-        self.item_sides = [
-            str(np.random.choice(["left", "right"])) for _ in self.item_types
-        ]
+        # Two-color (Opt 1 / 1+2): each color rides the belt on its basket
+        # side (red→left, green→right) so that arm never reaches across.
+        # Single-color (default / Opt 2): apples may appear on either belt;
+        # the color-matched arm still does the pick. Black distractors are
+        # scheduled independently and may use either belt in every scenario.
+        if self.two_colors_enabled:
+            self.item_sides = [
+                self.TYPE_SIDE.get(t, "left") for t in self.item_types
+            ]
+        else:
+            self.item_sides = [
+                str(np.random.choice(["left", "right"])) for _ in self.item_types
+            ]
         self.item_arms = [
             self.TYPE_SIDE.get(t, s) for t, s in zip(self.item_types, self.item_sides)
         ]
+        print(
+            f"[pack_fruits] belts={self.item_sides} arms={self.item_arms}",
+            flush=True,
+        )
         self._pack_fail_counts = [0] * self.n_items
         self._pack_fail_limit = 3
 
@@ -1068,14 +1080,22 @@ class pack_fruits(Base_Task):
             rim = max(float(z) for z in self.basket_top_z.values())
         return max(home_z + 0.08, rim + 0.18, float(pose[2]) + 0.12)
 
-    def _reseat_on_belt(self, idx, side=None, y=None, x=None):
+    def _reseat_on_belt(self, idx, side=None, y=None, x=None, keep_grasping=False):
         """Put a free fruit back on the kinematic belt stream (same ride physics).
 
         Keeps the fruit's current lateral X when possible — not snapped to the
         belt centerline.
+
+        ``keep_grasping``: leave ``idx`` in ``_grasping_idxs`` (failed mid-pack
+        pinch) so orphan cleanup does not yoink the apple to the far end.
         """
         if side is None:
-            side = self._fruit_over_belt(idx) or self.item_sides[idx]
+            if self.two_colors_enabled:
+                side = self.TYPE_SIDE.get(
+                    self.item_types[idx], self.item_sides[idx]
+                )
+            else:
+                side = self._fruit_over_belt(idx) or self.item_sides[idx]
         side = str(side)
         if side not in self.belt_cx:
             side = "left"
@@ -1086,7 +1106,7 @@ class pack_fruits(Base_Task):
             x = float(p[0])
         x = self._clamp_fruit_belt_x(side, x)
         self.item_sides[idx] = side
-        self.item_arms[idx] = side
+        self.item_arms[idx] = self.TYPE_SIDE.get(self.item_types[idx], side)
         self._item_y[idx] = float(y)
         self._item_x[idx] = float(x)
         self._item_roll[idx] = 0.0
@@ -1095,7 +1115,8 @@ class pack_fruits(Base_Task):
         self._over_basket[idx] = False
         self._packed[idx] = False
         self._missed[idx] = False
-        self._grasping_idxs.discard(idx)
+        if not keep_grasping:
+            self._grasping_idxs.discard(idx)
         self._set_fruit_collision_enabled(idx, True)
         rigid = self._item_comps[idx]
         if rigid is not None:
@@ -1265,8 +1286,13 @@ class pack_fruits(Base_Task):
 
     def _plan_station_pre(self, idx, arm):
         side = self.item_sides[idx]
-        cx = self.belt_cx[side]
-        self._set_fruit_pose(idx, cx, self.pick_station_y, self._fruit_ride_z)
+        cx = self._item_x[idx]
+        if cx is None:
+            cx = self.belt_cx[side]
+        # Hover slightly upstream so the TCP meets the apple instead of sitting
+        # downstream of it (right-arm Y lag was ~3 cm with station at pick_y).
+        hover_y = float(self.pick_station_y) + 0.03
+        self._set_fruit_pose(idx, float(cx), hover_y, self._fruit_ride_z)
         try:
             # hover close enough that a short descend can reach the attach distance
             pre_pose, _ = self.choose_grasp_pose(
@@ -1276,12 +1302,26 @@ class pack_fruits(Base_Task):
             self._restore_fruit_stream_pose(idx)
         return pre_pose
 
+    def _intercept_lead_y(self, side, reach_steps=0, close_steps=16):
+        """How far upstream (−y) the fruit travels during approach + close.
+
+        Belt advances ``belt_speed`` every ``advance_every`` physics steps.
+        With the arm already at the ready hover, ``reach_steps`` should be ~0 —
+        oversized lead parked the TCP downstream and the pinch started late.
+        """
+        speed = max(float(self.belt_speed.get(side, self.BELT_SPEED_DEFAULT)), 1e-6)
+        every = max(1, int(self.advance_every))
+        travel = speed * float(int(reach_steps) + int(close_steps)) / float(every)
+        return float(np.clip(travel, 0.012, 0.05))
+
     def _wait_fruit_at_station(self, idx, side):
-        """Dwell until the fruit nears the pick station (belt keeps moving)."""
+        """Dwell until the fruit reaches the ready TCP — then jaws can shut."""
         import os
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         speed = max(self.belt_speed[side], 1e-6)
-        arrive_lead = 60.0 * speed  # small lead so the reach can still catch it
+        arrive_lead = self._intercept_lead_y(side, reach_steps=12, close_steps=16)
+        ftype = self.item_types[idx]
+        arm_name = self.TYPE_SIDE.get(ftype, side)
         max_wait = int((self.BELT_Y_FAR - self.BELT_Y_NEAR) / speed) + 80
         for _ in range(max_wait):
             y = self._item_y[idx]
@@ -1291,7 +1331,9 @@ class pack_fruits(Base_Task):
                 if dbg:
                     print(f"[pack_fruits]  fruit passed station y={y:.3f}", flush=True)
                 return False
-            if y <= self.pick_station_y + arrive_lead:
+            tcp_y = float(self._tcp_pos(arm_name)[1])
+            # Trigger off the real TCP, not the nominal station y.
+            if y <= tcp_y + arrive_lead:
                 return True
             self._belt_dwell(max(1, self.advance_every))
         return False
@@ -1307,7 +1349,9 @@ class pack_fruits(Base_Task):
         """
         speed = max(min(self.belt_speed.values()), 1e-6)
         stagger = self._pair_stagger_y if self.pair_stagger_enabled else 0.0
-        arrive_lead = 60.0 * speed + stagger
+        arrive_lead = self._intercept_lead_y(
+            "left" if self.belt_speed["left"] <= self.belt_speed["right"] else "right"
+        ) + stagger
         max_wait = int((self.BELT_Y_FAR - self.BELT_Y_NEAR) / speed) + 100
         for _ in range(max_wait):
             yl, yr = self._item_y[idx_l], self._item_y[idx_r]
@@ -1345,7 +1389,7 @@ class pack_fruits(Base_Task):
             self._restore_fruit_stream_pose(idx)
         return grasp_pose
 
-    def _tcp_near_fruit(self, idx, arm, xy_tol=None):
+    def _tcp_near_fruit(self, idx, arm, xy_tol=None, z_max=None):
         """True if the gripper has approached close enough to pinch."""
         arm_name = "left" if str(arm) == "left" else "right"
         tcp = self._tcp_pos(arm_name)
@@ -1353,7 +1397,8 @@ class pack_fruits(Base_Task):
         xy = float(np.linalg.norm(fp[:2] - tcp[:2]))
         dz = float(tcp[2] - fp[2])
         tol = float(self.ATTACH_XY if xy_tol is None else xy_tol)
-        return xy <= tol and 0.0 <= dz <= self.ATTACH_Z_MAX
+        z_hi = float(self.ATTACH_Z_MAX if z_max is None else z_max)
+        return xy <= tol and -0.02 <= dz <= z_hi
 
     def _fruit_gripper_dist(self, idx, arm):
         arm_name = "left" if str(arm) == "left" else "right"
@@ -1372,14 +1417,39 @@ class pack_fruits(Base_Task):
                 self._take_picture()
             self._pic_ctr += 1
 
-    def _close_gripper_tracking_fruit(self, idx, arm, target_pos=0.0, n_steps=50):
-        """Close the gripper while TCP tracks the still-moving belt apple.
+    def _set_gripper_fast(self, arm, target_pos, n_steps=12):
+        """Drive gripper joints over a few physics steps (no 200-step Action)."""
+        arm_name = "left" if str(arm) == "left" else "right"
+        now = float(
+            self.robot.get_left_gripper_val() if arm_name == "left"
+            else self.robot.get_right_gripper_val()
+        )
+        n = max(4, int(n_steps))
+        target = float(target_pos)
+        vals = np.linspace(now, target, n, dtype=float)
+        per_step = (target - now) / float(n)
+        for i in range(n):
+            self.robot.set_gripper(vals[i], arm_name, per_step)
+            self._update_kinematic_tasks()
+            self.scene.step()
+            if self.save_freq and (self._pic_ctr % max(1, self.save_freq) == 0):
+                self._take_picture()
+            self._pic_ctr += 1
+
+    def _close_gripper_tracking_fruit(self, idx, arm, target_pos=0.0, n_steps=16):
+        """Close the gripper while TCP tracks / centers on the still-moving apple.
 
         The apple stays on the kinematic stream the whole time (no pause).
-        Uses a short close trajectory so the fruit does not slide far through
-        the jaws while they shut (gripper timing only — no physics retune).
+        Close is short (default 16) so jaws shut before the fruit slides through —
+        the default Action close is 200 steps and was the main timing lag.
+
+        Targets the TCP (fingertips) with closed-loop XY/Z correction and a small
+        −y lead for remaining close steps.
         """
         arm_name = "left" if str(arm) == "left" else "right"
+        side = self.item_sides[idx]
+        speed = max(float(self.belt_speed.get(side, self.BELT_SPEED_DEFAULT)), 0.0)
+        every = max(1, int(self.advance_every))
         now = float(
             self.robot.get_left_gripper_val() if arm_name == "left"
             else self.robot.get_right_gripper_val()
@@ -1390,25 +1460,50 @@ class pack_fruits(Base_Task):
         per_step = (target - now) / float(n)
         grip = {"num_step": n, "per_step": per_step, "result": vals}
 
-        ee = np.array(
+        ee0 = np.array(
             self.robot.get_left_ee_pose() if arm_name == "left"
             else self.robot.get_right_ee_pose(),
             dtype=float,
         )
+        tcp0 = self._tcp_pos(arm_name)
         fp0 = np.array(self.items[idx].get_pose().p, dtype=float)
-        off_xy = ee[:2] - fp0[:2]
-        ee_z = float(ee[2])
-        ee_q = ee[3:7].copy()
-
+        z_off0 = float(tcp0[2] - fp0[2])
+        z_off1 = 0.018
+        ee_q = ee0[3:7].copy()
         joints = (self.robot.left_arm_joints if arm_name == "left"
                   else self.robot.right_arm_joints)
+
         for i in range(n):
-            if self._item_y[idx] is not None and self._item_y[idx] >= self.pick_y_end:
-                fp = np.array(self.items[idx].get_pose().p, dtype=float)
-                target_ee = np.concatenate([
-                    np.array([fp[0] + off_xy[0], fp[1] + off_xy[1], ee_z], dtype=float),
-                    ee_q,
-                ])
+            fp = np.array(self.items[idx].get_pose().p, dtype=float)
+            on_belt = (self._item_y[idx] is not None
+                       and self._item_y[idx] >= self.pick_y_end)
+            if on_belt or self._item_y[idx] is None:
+                ee = np.array(
+                    self.robot.get_left_ee_pose() if arm_name == "left"
+                    else self.robot.get_right_ee_pose(),
+                    dtype=float,
+                )
+                tcp = self._tcp_pos(arm_name)
+                ee_from_tcp = ee[:3] - tcp
+                t = float(i + 1) / float(n)
+                t_z = min(1.0, t * 1.8)
+                err_xy = tcp[:2] - fp[:2]
+                err_z = float(tcp[2] - fp[2])
+                z_off = float(z_off0 + t_z * (z_off1 - z_off0))
+                z_cmd = fp[2] + z_off - 0.5 * max(0.0, err_z - z_off)
+                lead_y = 0.0
+                if on_belt:
+                    remain = float(n - i)
+                    lead_y = speed * remain / float(every) + 0.018 * (1.0 - t)
+                tcp_target = np.array(
+                    [
+                        fp[0] - 0.7 * err_xy[0],
+                        fp[1] - 0.7 * err_xy[1] - lead_y,
+                        z_cmd,
+                    ],
+                    dtype=float,
+                )
+                target_ee = np.concatenate([tcp_target + ee_from_tcp, ee_q])
                 q_goal = self._ik_arm_joints_for_ee(arm, target_ee)
                 if q_goal is not None:
                     q_now = np.array(
@@ -1491,44 +1586,76 @@ class pack_fruits(Base_Task):
                 self._take_picture()
             self._pic_ctr += 1
 
-    def _pinch_fruit(self, idx, arm):
+    def _pinch_fruit(self, idx, arm, n_steps=16):
         """Pinch a still-moving belt apple; hold by jaw friction (no weld / no pause).
 
         The apple keeps riding the stream while the jaws close and the TCP
         tracks it. Only after a confirmed pinch does it leave the belt as a
         dynamic body — same idea as interactive_pack_fruits.
+
+        Sequence: brief TCP track with jaws still pre-shaped (meet the apple
+        using known belt speed), then a short snap close — avoids the planner's
+        200-step close lag.
         """
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
             return False
 
-        self._close_gripper_tracking_fruit(idx, arm, target_pos=0.0, n_steps=50)
+        arm_name = "left" if str(arm) == "left" else "right"
+        pre_pos = float(
+            self.robot.get_left_gripper_val() if arm_name == "left"
+            else self.robot.get_right_gripper_val()
+        )
+        # Meet the fruit first (no jaw motion), then snap shut.
+        self._close_gripper_tracking_fruit(
+            idx, arm, target_pos=pre_pos, n_steps=20
+        )
+        if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
+            return False
+        self._close_gripper_tracking_fruit(
+            idx, arm, target_pos=0.0, n_steps=int(n_steps)
+        )
 
         xy, dz = self._fruit_gripper_dist(idx, arm)
+        arm_name = "left" if str(arm) == "left" else "right"
+        tcp = self._tcp_pos(arm_name)
+        fp = np.array(self.items[idx].get_pose().p, dtype=float)
+        # Fruit still upstream of TCP → jaws closed early; keep on belt.
+        upstream = float(fp[1] - tcp[1])
         near = (self._item_y[idx] is not None
-                and xy <= 0.04 and -0.02 <= dz <= self.ATTACH_Z_MAX + 0.02)
+                and xy <= 0.025 and -0.02 <= dz <= 0.085
+                and upstream <= 0.015)
         contact = self._fruit_held_by_gripper(idx)
-        if not (contact or near):
+        if not (contact and near):
             if dbg:
                 print(f"[pack_fruits]  pinch miss (still on belt) "
-                      f"xy={xy:.3f} dz={dz:.3f}", flush=True)
+                      f"xy={xy:.3f} dz={dz:.3f} up={upstream:.3f} "
+                      f"contact={contact}", flush=True)
             return False
 
         # Leave the stream at the current pose; settle contacts, then gravity.
         self._free_fruit_for_physical_grasp(idx)
-        self._settle_grasp_contacts(15)
+        self._settle_grasp_contacts(20)
+        # Extra squeeze after freeing so jaw contacts form before gravity.
+        self._close_gripper_tracking_fruit(idx, arm, target_pos=0.0, n_steps=8)
         self._enable_fruit_gravity(idx)
-        self._settle_grasp_contacts(15)
-        held = self._fruit_held_by_gripper(idx) or self._fruit_near_gripper(idx, arm)
+        self._settle_grasp_contacts(20)
+        held = self._fruit_held_by_gripper(idx) and self._fruit_near_gripper(
+            idx, arm, xy_tol=0.035, z_lo=-0.02, z_hi=0.07
+        )
         if held:
             self._mark_fruit_held(idx, arm)
+        else:
+            # Do not leave a freed dynamic apple sitting off-stream for retries.
+            self._reseat_on_belt(idx, keep_grasping=True)
+            self._set_gripper_fast(arm, 0.35, n_steps=8)
         if dbg:
-            arm_name = "left" if str(arm) == "left" else "right"
             tcp = self._tcp_pos(arm_name)
             fp = np.array(self.items[idx].get_pose().p, dtype=float)
             print(f"[pack_fruits]  pinch {self.item_types[idx]}_{idx} at "
                   f"{arm_name} tcp={np.round(tcp, 3)} fruit={np.round(fp, 3)} "
-                  f"held={held} contact={self._fruit_held_by_gripper(idx)}",
+                  f"held={held} contact={self._fruit_held_by_gripper(idx)} "
+                  f"xy={xy:.3f} dz={dz:.3f}",
                   flush=True)
         return bool(held)
 
@@ -1550,7 +1677,7 @@ class pack_fruits(Base_Task):
 
         (arm_l, idx_l), (arm_r, idx_r) = pairs[0], pairs[1]
         self._close_grippers_tracking_pair(
-            idx_l, arm_l, idx_r, arm_r, target_pos=0.0, n_steps=50
+            idx_l, arm_l, idx_r, arm_r, target_pos=0.0, n_steps=20
         )
 
         to_free = []
@@ -1582,40 +1709,48 @@ class pack_fruits(Base_Task):
         return out
 
     def _reach_and_attach(self, idx, arm):
-        """Reach for the fruit; pinch once the gripper ends up close.
+        """From the ready hover: close immediately while tracking the apple.
 
-        A plain move-to-grasp-pose motion (like reaching for any static
-        object) — at most a few correction reaches if the fruit rolled a
-        little further while the arm was moving. No teleport / EE weld.
+        The arm is already at the station. A second ``move_to_pose`` before the
+        jaws move was the close delay (fruit slid ahead / TCP lagged). Lead is
+        only the known close duration from belt speed; tracked close recenters XY.
         """
         dbg = bool(os.environ.get("PACKING_DEBUG"))
-        for attempt in range(5):
+        side = self.item_sides[idx]
+        for attempt in range(3):
             if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
                 return False
-            # Increase lead on later attempts so a slow reach still intercepts.
-            lead = 0.015 + 0.01 * float(attempt)
-            grasp_pose = self._plan_final_grasp(idx, arm, lead_y=lead)
-            if grasp_pose is None:
-                if dbg:
-                    print("[pack_fruits]  no final grasp pose", flush=True)
+
+            # Only micro-correct if the ready hover is badly off; otherwise close now.
+            xy, dz = self._fruit_gripper_dist(idx, arm)
+            if xy > 0.045 or dz > 0.10 or dz < -0.02:
+                lead = self._intercept_lead_y(side, reach_steps=30, close_steps=16)
+                grasp_pose = self._plan_final_grasp(
+                    idx, arm, lead_y=lead * (1.0 + 0.2 * float(attempt))
+                )
+                if grasp_pose is None:
+                    if dbg:
+                        print("[pack_fruits]  no final grasp pose", flush=True)
+                    return False
+                self.plan_success = True
+                self.move(self.move_to_pose(arm, grasp_pose))
+                self.plan_success = True
+
+            if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
                 return False
-            self.plan_success = True
-            self.move(self.move_to_pose(arm, grasp_pose))
-            self.plan_success = True
-            # Slightly looser gate after a long cross-belt reach.
-            if self._item_y[idx] is not None and self._tcp_near_fruit(idx, arm, xy_tol=0.035):
-                if self._pinch_fruit(idx, arm):
-                    return True
-                if dbg:
-                    print("[pack_fruits]  pinch missed contact — retry reach",
-                          flush=True)
-                # reopen and try again while fruit is still near
-                self.plan_success = True
-                self.move(self.open_gripper(arm, pos=0.45))
-                self.plan_success = True
-                if self._item_y[idx] is None:
-                    # freed but not held — reseat for another attempt
-                    self._reseat_on_belt(idx)
+
+            # Close from here — tracked close lowers Z and centers XY.
+            if self._pinch_fruit(idx, arm, n_steps=16):
+                return True
+            if dbg:
+                xy, dz = self._fruit_gripper_dist(idx, arm)
+                print(f"[pack_fruits]  pinch missed — retry "
+                      f"xy={xy:.3f} dz={dz:.3f} y={self._item_y[idx]}", flush=True)
+            # Fast reopen (do not use Action close/open — 200 steps lets the
+            # apple ride past the station before the next attempt).
+            self._set_gripper_fast(arm, 0.35, n_steps=8)
+            if self._item_y[idx] is None:
+                self._reseat_on_belt(idx)
         if dbg:
             print("[pack_fruits]  reach finished but not close enough to pinch",
                   flush=True)
@@ -1731,9 +1866,7 @@ class pack_fruits(Base_Task):
         """
         dbg = bool(os.environ.get("PACKING_DEBUG"))
 
-        self.plan_success = True
-        self.move(self.open_gripper(arm))
-        self.plan_success = True
+        self._set_gripper_fast(arm, 1.0, n_steps=16)
 
         if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
             return False
@@ -1752,10 +1885,9 @@ class pack_fruits(Base_Task):
                 print("[pack_fruits]  failed to reach station hover", flush=True)
             return False
 
-        # Pre-shape while waiting so the tracked pinch close is short.
-        self.plan_success = True
-        self.move(self.close_gripper(arm, pos=0.45))
-        self.plan_success = True
+        # Pre-shape tightly while waiting so the final pinch is a short snap.
+        # Fast path — Action close is 200 steps and is only needed for demos.
+        self._set_gripper_fast(arm, 0.35, n_steps=12)
 
         if self._item_y[idx] is None or self._item_y[idx] < self.pick_y_end:
             if dbg:
@@ -1945,20 +2077,23 @@ class pack_fruits(Base_Task):
     def _raise_along_z(self, idx, arm, lift_z=None):
         """Raise the gripper (and friction-held fruit) straight up by ``lift_z`` meters.
 
-        Uses several small continuous displacements so jaw contacts are not
-        yanked apart (no physics retune).
+        Re-squeezes briefly, then uses many small continuous displacements so
+        jaw contacts are not yanked apart (no physics retune).
         """
         dbg = bool(os.environ.get("PACKING_DEBUG"))
         if lift_z is None:
             lift_z = self.pick_lift
         arm_name = "left" if str(arm) == "left" else "right"
+        # Firm the jaws before the lift (arm motion only).
+        self._close_gripper_tracking_fruit(idx, arm, target_pos=0.0, n_steps=6)
+        self._settle_grasp_contacts(8)
         ee0 = np.array(
             self.robot.get_left_ee_pose() if arm_name == "left"
             else self.robot.get_right_ee_pose(),
             dtype=float,
         )
         fp0 = np.array(self.items[idx].get_pose().p, dtype=float)
-        n_chunks = 4
+        n_chunks = 8
         chunk = float(lift_z) / float(n_chunks)
         for _ in range(n_chunks):
             self.plan_success = True
@@ -2212,8 +2347,8 @@ class pack_fruits(Base_Task):
         fruit = self.items[idx]
         ftype = self.item_types[idx]
         belt_side = self.item_sides[idx]
-        # Color-matched arm (red→left, green→right) so the slide lands over the
-        # matching basket. Belt-side arm cannot reach the opposite basket (~0.44 m).
+        # Color-matched arm (red→left, green→right). In two-color episodes the
+        # fruit already rides that arm's belt; default/opt2 may still cross.
         arm_side = self.TYPE_SIDE.get(ftype, belt_side)
         arm = ArmTag(arm_side)
         target_xy = self._basket_target_xy(idx)
@@ -2255,7 +2390,11 @@ class pack_fruits(Base_Task):
             self._end_spawn_hold()
 
     def _note_pack_failure(self, idx):
-        """Cap retries so a stuck cross-reach cannot spin forever."""
+        """Cap retries so a stuck cross-reach cannot spin forever.
+
+        On give-up, despawn/hide the fruit (same as riding off the belt end) so
+        a failed apple does not linger on the conveyor while the next wave runs.
+        """
         if idx < 0 or idx >= len(self._pack_fail_counts):
             return
         if self._packed[idx] or self._missed[idx]:
@@ -2263,13 +2402,13 @@ class pack_fruits(Base_Task):
         self._pack_fail_counts[idx] += 1
         if self._pack_fail_counts[idx] < int(self._pack_fail_limit):
             return
-        self._missed[idx] = True
-        if self._item_y[idx] is not None:
-            # park off-stream so _ready_by_side stops selecting it
-            self._item_y[idx] = None
         if bool(os.environ.get("PACKING_DEBUG")):
             print(f"[pack_fruits]  giving up on fruit_{idx} after "
-                  f"{self._pack_fail_counts[idx]} failed packs", flush=True)
+                  f"{self._pack_fail_counts[idx]} failed packs — despawn",
+                  flush=True)
+        # Force a full despawn even if already marked mid-failure elsewhere.
+        self._missed[idx] = False
+        self._despawn_off_belt(idx)
 
     def _pack_pair(self, idx_l, idx_r):
         """Pick left+right fruits simultaneously, then carry to baskets together."""
