@@ -9,6 +9,7 @@ Cooking mechanism (shared with ``cook_food_timer``):
   - Color / doneness keep advancing whenever the burner is on.
   - They stop only when the knob extinguishes the stove — never freeze while lit.
   - Success scores the doneness frozen at shutoff (food stays in the pan).
+  - The success band is a shared 4 s window around each food's target doneness.
 
 A decorative plate of raw meat sits to the right of the stove.
 
@@ -40,6 +41,8 @@ class cook_food(KitchenS_base_task):
     COOK_STEPS_DEFAULT: ClassVar[int] = 3076  # 2× prior 1538 (50% slower / mean cook time ×2)
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
     COOK_STEPS_ONION_DEFAULT: ClassVar[int] = 1692  # 2× prior 846
+    SUCCESS_WINDOW_SEC_DEFAULT: ClassVar[float] = 4.0
+    SIM_DT_DEFAULT: ClassVar[float] = 1.0 / 250.0
     KNOB_CONTACT_RADIUS_DEFAULT: ClassVar[float] = 0.06
     EE_TO_TCP: ClassVar[float] = 0.12
     # Lateral then overhead approach (shared KitchenS path — straight-down
@@ -79,7 +82,7 @@ class cook_food(KitchenS_base_task):
             "model_id": 0,
             "scale_mult": (0.85, 1.4, 0.85),
             "mass": 0.04,
-            "target_doneness_range": (0.45, 0.55),
+            "target_doneness": 0.50,
             "color_stops": [
                 (0.0, [1.00, 0.12, 0.09]),
                 (0.5, [0.66, 0.30, 0.14]),
@@ -91,7 +94,7 @@ class cook_food(KitchenS_base_task):
             "model_id": 0,
             "scale_mult": 1.0,
             "mass": 0.03,
-            "target_doneness_range": (0.58, 0.72),
+            "target_doneness": 0.65,
             "color_stops": [
                 (0.0, [0.95, 0.55, 0.58]),
                 (0.33, [0.85, 0.18, 0.16]),
@@ -105,7 +108,7 @@ class cook_food(KitchenS_base_task):
             # White cylinder: ~4.68 cm diameter, 1.2 cm height.
             "scale_mult": 1.0,
             "mass": 0.028,
-            "target_doneness_range": (0.78, 0.84),
+            "target_doneness": 0.81,
             # Evenly spaced stops so white → yellow → brown eases without jumps.
             "color_stops": [
                 (0.00, [245 / 255.0, 245 / 255.0, 245 / 255.0]),  # #F5F5F5 white
@@ -267,11 +270,22 @@ class cook_food(KitchenS_base_task):
         else:
             self.cook_steps = self._sample_cook_steps(cfg)
 
+        self.success_window_sec = float(
+            cfg.get("success_window_sec", self.SUCCESS_WINDOW_SEC_DEFAULT)
+        )
+        if self.success_window_sec <= 0.0:
+            raise ValueError("cook_food success_window_sec must be > 0")
+        center = float(
+            cfg.get(
+                "target_doneness",
+                self.food_spec.get("target_doneness", 0.5),
+            )
+        )
         range_cfg = cfg.get("target_doneness_range")
         if range_cfg is not None:
             lo, hi = float(range_cfg[0]), float(range_cfg[1])
         else:
-            lo, hi = map(float, self.food_spec["target_doneness_range"])
+            lo, hi = self._doneness_range_from_window(center, self.success_window_sec)
         if not 0.0 <= lo <= hi <= 1.0:
             raise ValueError("cook_food target doneness range must satisfy 0 <= min <= max <= 1")
         self.target_doneness_range = (lo, hi)
@@ -566,7 +580,11 @@ class cook_food(KitchenS_base_task):
             f"pose={getattr(self, '_stove_pose_choice', 'fixed')} "
             f"burner={self.burner_name} handle_yaw={self.skillet_handle_yaw:.2f} "
             f"board={np.round(self.board_xy, 3)} "
-            f"decor={np.round(getattr(self, 'decor_plate_xy', (0, 0)), 3)}",
+            f"decor={np.round(getattr(self, 'decor_plate_xy', (0, 0)), 3)} "
+            f"food={self.food_type} "
+            f"doneness=[{self.target_doneness_range[0]:.2f},"
+            f"{self.target_doneness_range[1]:.2f}] "
+            f"window={self.success_window_sec:.1f}s",
             flush=True,
         )
 
@@ -708,6 +726,41 @@ class cook_food(KitchenS_base_task):
             1,
             int(round(float(np.random.uniform(nom * (1 - jitter), nom * (1 + jitter))))),
         )
+
+    def _sim_dt(self) -> float:
+        scene = getattr(self, "scene", None)
+        if scene is not None:
+            try:
+                dt = float(scene.get_timestep())
+                if dt > 0.0:
+                    return dt
+            except Exception:
+                pass
+        return float(self.SIM_DT_DEFAULT)
+
+    def _success_window_width(self, window_sec: float) -> float:
+        """Doneness width equal to ``window_sec`` of cooking at current heat."""
+        inten = max(0.05, float(getattr(self, "cook_intensity", 0.70)))
+        steps = max(1.0, float(getattr(self, "cook_steps", self.COOK_STEPS_DEFAULT)))
+        return float(window_sec) * inten / (steps * self._sim_dt())
+
+    def _doneness_range_from_window(
+        self, center: float, window_sec: float
+    ) -> tuple[float, float]:
+        """Inclusive [lo, hi] spanning ``window_sec``, clipped/shifted into [0, 1]."""
+        width = float(self._success_window_width(window_sec))
+        if width >= 1.0:
+            return (0.0, 1.0)
+        half = 0.5 * width
+        lo = float(center) - half
+        hi = float(center) + half
+        if lo < 0.0:
+            hi = min(1.0, hi - lo)
+            lo = 0.0
+        if hi > 1.0:
+            lo = max(0.0, lo - (hi - 1.0))
+            hi = 1.0
+        return (lo, hi)
 
     # ----------------------------------------------------------- visuals / cook
     def _prime_food_surface(self) -> None:
@@ -1705,6 +1758,9 @@ class cook_food(KitchenS_base_task):
             "target_doneness": float(getattr(self, "target_doneness", 0.5)),
             "target_doneness_range": list(
                 getattr(self, "target_doneness_range", (0.45, 0.55))
+            ),
+            "success_window_sec": float(
+                getattr(self, "success_window_sec", self.SUCCESS_WINDOW_SEC_DEFAULT)
             ),
             "cook_steps": float(getattr(self, "cook_steps", self.COOK_STEPS_DEFAULT)),
             "knob_angle": float(getattr(self, "knob_angle", 0.0)),

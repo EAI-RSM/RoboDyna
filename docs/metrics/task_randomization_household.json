@@ -248,8 +248,8 @@
           "notes": "demo_dynamic shutoff_lead 0.22 vs demo_kitchens 0.04"
         },
         {
-          "param": "target_doneness_range",
-          "notes": "per-food defaults in FOOD_SPECS unless overridden"
+          "param": "success_window_sec / target_doneness",
+          "notes": "4s shutoff band around per-food target_doneness; width from cook_steps × cook_intensity"
         },
         {
           "param": "scene_id / range_scale_mult",

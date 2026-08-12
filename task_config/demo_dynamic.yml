@@ -1070,6 +1070,8 @@ task_args:
     plate_y: -0.12
     cook_steps: 3076            # 2× prior 1538 (50% slower / mean cook time ×2)
     cook_speed_jitter: 0.20     # per-ep cook_steps ~ U(nom×(1±0.20))
+    # Same shutoff window for every food (sim seconds at cook_intensity).
+    success_window_sec: 4.0
     # Start approach early — cooking stays live through knob turn.
     shutoff_lead: 0.58
     cook_intensity: 0.70
@@ -1097,6 +1099,7 @@ task_args:
     plate_y: -0.12
     cook_steps: 3076
     cook_speed_jitter: 0.20
+    success_window_sec: 4.0
     shutoff_lead: 0.58
     cook_intensity: 0.70
     range_scale_mult: 1.0

@@ -95,5 +95,30 @@ class CookFoodKnobTests(unittest.TestCase):
         self.assertAlmostEqual(task.doneness, 0.5)
 
 
+    def test_success_window_is_four_seconds_for_all_cook_speeds(self) -> None:
+        task = object.__new__(cook_food)
+        task.cook_intensity = 0.70
+        task.scene = None
+        dt = cook_food.SIM_DT_DEFAULT
+        for steps in (3076, 1692, 2461, 3691):
+            task.cook_steps = steps
+            width = task._success_window_width(4.0)
+            seconds = width * steps / 0.70 * dt
+            self.assertAlmostEqual(seconds, 4.0, places=5)
+            lo, hi = task._doneness_range_from_window(0.50, 4.0)
+            self.assertAlmostEqual(hi - lo, width, places=5)
+
+    def test_onion_window_shifts_instead_of_clipping_below_four_seconds(self) -> None:
+        task = object.__new__(cook_food)
+        task.cook_intensity = 0.70
+        task.cook_steps = 1692
+        task.scene = None
+        lo, hi = task._doneness_range_from_window(0.81, 4.0)
+        width = task._success_window_width(4.0)
+        self.assertAlmostEqual(hi, 1.0, places=5)
+        self.assertAlmostEqual(hi - lo, width, places=5)
+        self.assertLess(lo, 0.81)
+
+
 if __name__ == "__main__":
     unittest.main()

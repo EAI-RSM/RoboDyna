@@ -893,6 +893,7 @@ task_args:
     plate_y: -0.12
     cook_steps: 3076
     cook_speed_jitter: 0.2
+    success_window_sec: 4.0
     shutoff_lead: 0.58
     cook_intensity: 0.7
     range_scale_mult: 1.0
@@ -920,6 +921,7 @@ task_args:
     plate_y: -0.12
     cook_steps: 3076
     cook_speed_jitter: 0.2
+    success_window_sec: 4.0
     shutoff_lead: 0.58
     cook_intensity: 0.7
     range_scale_mult: 1.0
