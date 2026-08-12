@@ -269,17 +269,18 @@ def build_args(
     args["use_seed"] = False
     args["check_render_success"] = True
     args["export_lerobot"] = False
-    # Demo videos: 20–30 Hz. Default 25 Hz → save_freq=10 (was yml 15 ≈ 16.7 Hz).
+    # Match collect_data / policy rate: ~30 Hz → save_freq=8 (fps ≈ 250/save_freq).
+    # yaml demo_dynamic is 15 (~16.7 Hz); policy data is in the 30 fps range.
     if fps is not None:
         args["save_freq"] = save_freq_for_fps(fps)
     else:
-        args["save_freq"] = save_freq_for_fps(25.0)
+        args["save_freq"] = save_freq_for_fps(30.0)
 
     args.setdefault("camera", {})
     args["camera"]["collect_head_camera"] = True
     args["camera"]["collect_wrist_camera"] = False  # demos don't need wrists; faster render
-    # Sharper head view for demos (training default is 320x240 D435).
-    args["camera"]["head_camera_type"] = "Large_D435"
+    # Same head sensor as collect_data (demo_dynamic.yml).
+    args["camera"]["head_camera_type"] = "D435"
 
     args.setdefault("data_type", {})
     args["data_type"]["rgb"] = True
@@ -671,9 +672,9 @@ def main():
     parser.add_argument(
         "--fps",
         type=float,
-        default=25.0,
-        help="Target head-video frame rate in Hz (20–30). Sets save_freq via "
-             "250/fps. Default 25 → save_freq=10.",
+        default=30.0,
+        help="Target head-video frame rate in Hz. Sets save_freq via 250/fps. "
+             "Default 30 (collect_data / policy rate) → save_freq=8.",
     )
     parser.add_argument(
         "--dest",

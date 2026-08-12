@@ -116,10 +116,11 @@ def overrides_to_cli(overrides: dict) -> list[str]:
     return out
 
 
-def record_scenario(task: str, scenario: str, seed: int, save_freq: int = 15) -> Path | None:
+def record_scenario(task: str, scenario: str, seed: int, save_freq: int = 8) -> Path | None:
     """Record head-camera success demo for a fixed seed+scenario; return head mp4.
 
-    Two-pass (plan without save, then head-only render). Gallery filenames still
+    Two-pass like collect_data (plan without save, then head-only render) at the
+    policy ~30 Hz rate (save_freq=8, fps ≈ 250/8). Gallery filenames still
     publish under ``*_head`` stems for the gallery index.
     """
     save_root = os.path.abspath(f"./tmp/tmp_{task}")
