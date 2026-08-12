@@ -353,6 +353,9 @@ class sort_apples_belt(Base_Task):
             # Only engage once the tip is near the keycap (not ~5 cm above).
             force_engage_slack=0.012,
             trigger_depth_frac=0.45,
+            # WSG fingers sit ~16 cm below EE (AABB); default 0.12 lets Q
+            # drive fingertips through these short table buttons.
+            ee_to_tcp=0.16,
         )
         self._reactive_buttons.set_tops_z([self._button_top_z, self._button_top_z])
 
