@@ -298,11 +298,23 @@ def main():
                 report_task_result(env, "robot touched ball")
                 terminal_started_at = time.perf_counter()
                 continue
+            if getattr(env, "_cue_distractor_contact", False):
+                report_task_result(env, "cue touched non-target ball")
+                terminal_started_at = time.perf_counter()
+                continue
+            if getattr(env, "_distractor_pocketed", False):
+                report_task_result(env, "non-target ball pocketed")
+                terminal_started_at = time.perf_counter()
+                continue
             if env._strike_done or env._primary_pocketed:
                 if settle_after is None:
                     settle_after = time.perf_counter()
                     print("Ball in motion; settling…")
-                elif time.perf_counter() - settle_after >= 3.0:
+                elif (
+                    getattr(env, "_distractor_pocketed", False)
+                    or getattr(env, "_cue_distractor_contact", False)
+                    or time.perf_counter() - settle_after >= 3.0
+                ):
                     report_task_result(env)
                     terminal_started_at = time.perf_counter()
                     continue

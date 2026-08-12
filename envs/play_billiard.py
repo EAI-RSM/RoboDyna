@@ -18,9 +18,11 @@ class play_billiard(Base_Task):
 
     Table is centered at (x=0, y=0.1). The primary ball spawns on a random side; the
     matching arm (left/right) grasps a cue placed on that same side. Success = primary
-    ball falls through an allowed pocket into the hollow interior. Robot-link contact
-    with the primary ball fails. Only the blue cue tip may contact balls, and only for
-    a single hit (shaft/butt never collide with balls; tip collision disables after).
+    ball falls through an allowed pocket into the hollow interior. Automatic failure if:
+    robot-link contact with the primary ball, cue contact with any non-target ball, or
+    any non-target ball falls into a pocket. Only the blue cue tip may contact the
+    primary ball, and only for a single hit (shaft/butt never collide with balls;
+    tip collision disables after).
 
     Options (independent toggles; CLI via ``--task-arg`` or legacy ``--option``):
       Default — only the red target ball; success in any of the 6 pockets.
@@ -28,7 +30,8 @@ class play_billiard(Base_Task):
         and draws an arrow pointing at it; success only in that pocket.
         CLI: ``--task-arg specific_hole=true`` or ``--option 1``.
       Opt 2 — ``enable_distractors``: spawn up to 2 colored balls on the table;
-        robot may still pocket in any hole.
+        cue must not touch them and they must not be pocketed; primary may still
+        sink in any hole.
         CLI: ``--task-arg enable_distractors=true`` or ``--option 2``.
       Opt 1+2 — distractors block exactly one pocket; target is chosen at random
         among the remaining open top pockets (arrow marks the target).
@@ -151,6 +154,7 @@ class play_billiard(Base_Task):
         self._pocketed_extra_ids = set()
         self._pocketed_extra_entities = set()
         self._robot_ball_contact = False
+        self._cue_distractor_contact = False
         self._strike_armed = False
         self._strike_done = False
         self._cue_tip_hit_allowed = True
@@ -302,6 +306,7 @@ class play_billiard(Base_Task):
         self._primary_pocket_id = None
         self._distractor_pocketed = False
         self._robot_ball_contact = False
+        self._cue_distractor_contact = False
         self._cue_welded = False
         self._strike_armed = False
         self._strike_done = False
@@ -1235,8 +1240,22 @@ class play_billiard(Base_Task):
         self._update_welded_cue()
         self._dwell(8)
 
+    def _contact_is_touching(self, contact):
+        """True if a PhysX contact pair has near-zero separation or impulse."""
+        points = getattr(contact, "points", None) or []
+        if not points:
+            return True
+        for pt in points:
+            sep = float(getattr(pt, "separation", 0.0))
+            impulse = np.asarray(
+                getattr(pt, "impulse", [0, 0, 0]), dtype=np.float64
+            )
+            if sep <= 1e-3 or float(np.linalg.norm(impulse)) > 1e-8:
+                return True
+        return False
+
     def _cue_ball_contacting(self):
-        """True only when PhysX reports touching tip↔ball contact.
+        """True only when PhysX reports touching tip↔primary-ball contact.
 
         Shaft/butt shapes ignore balls via collision groups, so any cue↔ball
         contact here is from the blue tip sphere. Accepts a contact pair if any
@@ -1258,19 +1277,41 @@ class play_billiard(Base_Task):
                     or (n1 == cue_name and n0 == ball_name)
                 ):
                     continue
-                points = getattr(contact, "points", None) or []
-                if not points:
+                if self._contact_is_touching(contact):
                     return True
-                for pt in points:
-                    sep = float(getattr(pt, "separation", 0.0))
-                    impulse = np.asarray(
-                        getattr(pt, "impulse", [0, 0, 0]), dtype=np.float64
-                    )
-                    if sep <= 1e-3 or float(np.linalg.norm(impulse)) > 1e-8:
-                        return True
         except Exception:
             pass
         return False
+
+    def _check_cue_distractor_contact(self):
+        """Fail the episode if the cue touches any non-target ball."""
+        if (
+            getattr(self, "_cue_distractor_contact", False)
+            or not self._loaded
+            or self.cue is None
+            or not self.extra_balls
+        ):
+            return
+        cue_name = self.cue.get_name()
+        extra_names = {
+            b.get_name() for b in self.extra_balls if b is not None
+        }
+        if not extra_names:
+            return
+        try:
+            for contact in self.scene.get_contacts():
+                n0 = contact.bodies[0].entity.name
+                n1 = contact.bodies[1].entity.name
+                if not (
+                    (n0 == cue_name and n1 in extra_names)
+                    or (n1 == cue_name and n0 in extra_names)
+                ):
+                    continue
+                if self._contact_is_touching(contact):
+                    self._cue_distractor_contact = True
+                    return
+        except Exception:
+            pass
 
     def _cue_min_z(self, pose):
         """Lowest world-Z of the cue capsule (shaft + tip/butt spheres)."""
@@ -1572,6 +1613,7 @@ class play_billiard(Base_Task):
             return
         self._update_welded_cue()
         self._check_robot_ball_contact()
+        self._check_cue_distractor_contact()
         self._try_apply_strike_impulse()
         self._ensure_balls_dynamic()
         self._check_and_sink_pockets()
@@ -1597,7 +1639,11 @@ class play_billiard(Base_Task):
                 )
             if self.save_freq and i % self.save_freq == 0:
                 self._take_picture()
-            if self._robot_ball_contact or self._distractor_pocketed:
+            if (
+                self._robot_ball_contact
+                or self._distractor_pocketed
+                or getattr(self, "_cue_distractor_contact", False)
+            ):
                 break
             if self._primary_pocketed:
                 if post is None:
@@ -1890,13 +1936,18 @@ class play_billiard(Base_Task):
 
     # ------------------------------------------------------------------ success
     def check_success(self):
-        """Success = primary in an allowed pocket AND no distractor pocketed.
+        """Success = primary in an allowed pocket with no foul.
 
         Default / Opt 2: any of the 6 pockets is allowed.
         Opt 1 / Opt 1+2: only the nominated target pocket is allowed.
-        Any distractor ball falling into any pocket fails the episode.
+        Fouls (automatic failure):
+          - robot link touches the primary ball
+          - cue stick touches any non-target ball
+          - any non-target ball falls into any pocket
         """
         if self._robot_ball_contact:
+            return False
+        if getattr(self, "_cue_distractor_contact", False):
             return False
         if getattr(self, "_distractor_pocketed", False):
             return False
@@ -1954,6 +2005,9 @@ class play_billiard(Base_Task):
             "primary_pocketed": float(self._primary_pocketed),
             "distractor_pocketed": float(getattr(self, "_distractor_pocketed", False)),
             "robot_ball_contact": float(self._robot_ball_contact),
+            "cue_distractor_contact": float(
+                getattr(self, "_cue_distractor_contact", False)
+            ),
             "num_extra_balls": float(len(self.extra_balls)),
             "strike_done": float(self._strike_done),
         }
