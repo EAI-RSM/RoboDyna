@@ -111,7 +111,10 @@ def _set_cube_over_hole(env, arm_name, hole_xy, z=None):
     if cube is None:
         return
     if z is None:
-        z = float(env.board_top_z + env.mole_height + float(env.cube_half) + 0.02)
+        drop = float(env._mole_raise_drop()) if hasattr(env, "_mole_raise_drop") else 0.02
+        z = float(
+            env.board_top_z + env.mole_height - drop + float(env.cube_half) + 0.02
+        )
     pose = sapien.Pose([float(hole_xy[0]), float(hole_xy[1]), float(z)], cube.get_pose().q)
     cube.actor.set_pose(pose)
     rigid = env._cube_comps.get(arm_name)
@@ -150,7 +153,7 @@ class KeyboardMoleController:
         print(f"Selected mole {self.selected} ({arm} arm).")
 
     def update(self, window):
-        if self.env.distractor_hit:
+        if self.env.distractor_hit or getattr(self.env, "appearances_exhausted", False):
             return
         if self._q.poll(window.key_down("q")):
             self._select_next(-1)
@@ -171,7 +174,14 @@ class KeyboardMoleController:
             hole = self.env.holes[self.env.mole_holes[self.selected]]
             # Only re-seat when mole is rising so the player can time the jab.
             if self.env._mole_is_rising(self.selected) or self.env._mole_above_surface(self.selected):
-                hover_z = float(self.env.board_top_z + self.env.mole_height + float(self.env.cube_half) + 0.03)
+                drop = float(self.env._mole_raise_drop())
+                hover_z = float(
+                    self.env.board_top_z
+                    + self.env.mole_height
+                    - drop
+                    + float(self.env.cube_half)
+                    + 0.03
+                )
                 _set_cube_over_hole(self.env, str(arm), hole, z=hover_z)
 
 
@@ -221,7 +231,8 @@ class RobotMoleController:
         self.busy = False
 
     def update(self, window):
-        if self.busy or self.env.distractor_hit:
+        if self.busy or self.env.distractor_hit or getattr(
+                self.env, "appearances_exhausted", False):
             return
         # Do not fall back to a default arm — wait for 1 / 2 / 3.
         selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
@@ -275,7 +286,8 @@ def main():
     env = whack_moles()
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     print(
-        f"moles={env.num_moles}; distractors={env.num_distractors}; "
+        f"moles={env.num_moles}; appearances={env.num_appearances}; "
+        f"distractors={env.num_distractors}; "
         f"relocating={env.relocating_moles}; difficulty={env.difficulty}."
     )
     print_episode_condition(env)
@@ -328,6 +340,12 @@ def main():
 
             if env.distractor_hit:
                 report_task_result(env, "rabbit touched")
+                terminal_started_at = time.perf_counter()
+                continue
+            if getattr(env, "appearances_exhausted", False):
+                detail = getattr(env, "_last_fail_reason", None) or (
+                    f"missed after {getattr(env, 'num_appearances', 5)} appearances")
+                report_task_result(env, detail)
                 terminal_started_at = time.perf_counter()
                 continue
             if env.check_success():

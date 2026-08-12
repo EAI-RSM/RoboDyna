@@ -135,6 +135,7 @@ task_args:
     grasp_tol: 0.05
   whack_moles:
     num_moles: 2
+    num_appearances: 5          # max rise→fall cycles per unhit mole; missing all fails
     # Opt 1 — rabbit distractor. CLI: --task-arg distractor_enabled=true  or  --option 1
     distractor_enabled: false
     num_distractors: 1

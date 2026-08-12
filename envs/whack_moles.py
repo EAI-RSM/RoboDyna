@@ -70,6 +70,9 @@ class whack_moles(Base_Task):
     # Raise the play surface above the table; the solid base fills down to the tabletop.
     BOARD_Z_LIFT_DEFAULT = 0.06
     HIDE_DEPTH = 0.100
+    # At peak bob, this much of the mole body stays below the board top (m).
+    # Pose uses the real mesh bottom (origin ≠ geometric center).
+    MOLE_RAISE_DROP = 0.02
     MOLE_MODEL = "221_mole"       # Smackem Mole (original open-arm mesh)
     RABBIT_MODEL = "224_rabbit"    # compact loaf pose (replaces open-hand 222_rabbit)
     # Mesh is Y-up; rotate so height aligns with world Z.
@@ -463,9 +466,15 @@ class whack_moles(Base_Task):
         states,
         scale_mult=1.0,
         pop_speed=None,
+        raise_drop=0.0,
+        mesh_z_min=None,
+        mesh_z_max=None,
     ):
         """Spawn one bobbing critter (mole or rabbit) in a hole."""
-        pose_p = self._critter_pose_p(hole_idx, raised=False, height=height)
+        raise_drop = float(raise_drop)
+        pose_p = self._critter_pose_p(
+            hole_idx, raised=False, height=height,
+            raise_drop=raise_drop, mesh_z_min=mesh_z_min)
         actor = create_actor(
             self.scene,
             pose=sapien.Pose(p=pose_p.tolist(), q=self.MOLE_Q),
@@ -499,7 +508,9 @@ class whack_moles(Base_Task):
                 shapes = list(c.render_shapes)
         hidden_z = float(pose_p[2])
         raised_z = float(
-            self._critter_pose_p(hole_idx, raised=True, height=height)[2])
+            self._critter_pose_p(
+                hole_idx, raised=True, height=height,
+                raise_drop=raise_drop, mesh_z_min=mesh_z_min)[2])
         # Cosine bob phase: 0 = hidden, pi = crown, 2pi = hidden again.
         # Stagger by phase index so neighbors are not synced.
         bob_phase = float((int(phase) % 3) * (2.0 * np.pi / 3.0))
@@ -510,7 +521,7 @@ class whack_moles(Base_Task):
         actors.append(actor)
         rigids.append(rigid)
         shapes_out.append(shapes)
-        states.append({
+        state = {
             "hole": int(hole_idx),
             "raised": bool(raised0),
             "touched": False,
@@ -523,9 +534,15 @@ class whack_moles(Base_Task):
             "raised_z": raised_z,
             "hold_left": 0,
             "height": float(height),
+            "raise_drop": raise_drop,
             "pop_speed": speed,
             "bob_phase": bob_phase,
-        })
+        }
+        if mesh_z_min is not None:
+            state["mesh_z_min"] = float(mesh_z_min)
+        if mesh_z_max is not None:
+            state["mesh_z_max"] = float(mesh_z_max)
+        states.append(state)
         idx = len(actors) - 1
         self._set_critter_color(shapes, color)
         self._set_critter_pose(actors, rigids, states, idx, raised=raised0, z=z0)
@@ -542,6 +559,8 @@ class whack_moles(Base_Task):
     def _spawn_moles(self):
         scale_mult = float(
             self._cfg.get("mole_scale_mult", self.MOLE_SCALE_MULT))
+        raise_drop = float(self._cfg.get("mole_raise_drop", self.MOLE_RAISE_DROP))
+        mesh_z_min, mesh_z_max = self._mole_local_z_span(scale_mult)
         for i, hole_idx in enumerate(self.mole_holes):
             # Staggered cosine phase + per-mole randomized peak speed.
             self._spawn_poppable(
@@ -557,6 +576,9 @@ class whack_moles(Base_Task):
                 states=self._mole_state,
                 scale_mult=scale_mult,
                 pop_speed=self._random_mole_pop_speed(),
+                raise_drop=raise_drop,
+                mesh_z_min=mesh_z_min,
+                mesh_z_max=mesh_z_max,
             )
 
     def _spawn_rabbits(self):
@@ -657,16 +679,50 @@ class whack_moles(Base_Task):
         return list(options[int(np.random.randint(0, len(options)))])
 
     # ---------------------------------------------------------- mole / rabbit kinematics
-    def _critter_pose_p(self, hole_idx, raised, height):
+    def _mole_local_z_span(self, scale_mult=None):
+        """Mole mesh Z range in the actor frame after ``MOLE_Q`` (Y-up → Z-up).
+
+        ``create_actor`` does not recenter the GLB, so the origin is not the
+        geometric center — raised/hidden poses must use these offsets.
+        """
+        import json
+        from pathlib import Path
+
+        if scale_mult is None:
+            scale_mult = float(
+                self._cfg.get("mole_scale_mult", self.MOLE_SCALE_MULT))
+        path = Path("assets/objects") / self.MOLE_MODEL / "model_data0.json"
+        with open(path, "r") as f:
+            data = json.load(f)
+        # Authored Y-up; MOLE_Q maps model Y → world Z.
+        scale_y = float(data["scale"][1]) * float(scale_mult)
+        cy = float(data["center"][1]) * scale_y
+        half_h = 0.5 * float(data["extents"][1]) * scale_y
+        return float(cy - half_h), float(cy + half_h)
+
+    def _critter_pose_p(
+        self, hole_idx, raised, height, raise_drop=0.0, mesh_z_min=None,
+    ):
         h = self.holes[hole_idx]
         if raised:
-            z = self.board_top_z + height * 0.5 + 1e-3
+            if mesh_z_min is not None:
+                # Mesh bottom sits ``raise_drop`` below the deck (partially out).
+                z = self.board_top_z - float(raise_drop) - float(mesh_z_min)
+            else:
+                z = self.board_top_z + height * 0.5 + 1e-3 - float(raise_drop)
         else:
             z = self.board_top_z - self.HIDE_DEPTH
         return np.array([h[0], h[1], z], dtype=float)
 
     def _mole_pose_p(self, hole_idx, raised):
-        return self._critter_pose_p(hole_idx, raised, self.mole_height)
+        drop = self._mole_raise_drop()
+        z_min, _z_max = self._mole_local_z_span()
+        return self._critter_pose_p(
+            hole_idx, raised, self.mole_height,
+            raise_drop=drop, mesh_z_min=z_min)
+
+    def _mole_raise_drop(self):
+        return float(self._cfg.get("mole_raise_drop", self.MOLE_RAISE_DROP))
 
     def _occupied_holes(self, exclude_mole_idx=None):
         """Holes currently claimed by moles (except exclude) or rabbits."""
@@ -698,11 +754,17 @@ class whack_moles(Base_Task):
         if new_hole == old:
             return
         height = float(st.get("height", self.mole_height))
+        raise_drop = float(st.get("raise_drop", 0.0))
+        mesh_z_min = st.get("mesh_z_min", None)
         st["hole"] = new_hole
         if getattr(self, "mole_holes", None) is not None and idx < len(self.mole_holes):
             self.mole_holes[idx] = new_hole
-        hidden = self._critter_pose_p(new_hole, raised=False, height=height)
-        raised = self._critter_pose_p(new_hole, raised=True, height=height)
+        hidden = self._critter_pose_p(
+            new_hole, raised=False, height=height,
+            raise_drop=raise_drop, mesh_z_min=mesh_z_min)
+        raised = self._critter_pose_p(
+            new_hole, raised=True, height=height,
+            raise_drop=raise_drop, mesh_z_min=mesh_z_min)
         st["hidden_z"] = float(hidden[2])
         st["raised_z"] = float(raised[2])
         st["target_z"] = float(raised[2])
@@ -743,13 +805,18 @@ class whack_moles(Base_Task):
             getattr(self, "distractor_hit", False)
             or getattr(self, "appearances_exhausted", False)
         )
+
     def _set_critter_pose(self, actors, rigids, states, idx, raised=None, z=None):
         st = states[idx]
         hole = st["hole"]
         height = float(st.get("height", self.mole_height))
+        raise_drop = float(st.get("raise_drop", 0.0))
+        mesh_z_min = st.get("mesh_z_min", None)
         if raised is None:
             raised = st["raised"]
-        p = self._critter_pose_p(hole, raised, height)
+        p = self._critter_pose_p(
+            hole, raised, height,
+            raise_drop=raise_drop, mesh_z_min=mesh_z_min)
         if z is not None:
             p[2] = float(z)
         pose = sapien.Pose(p=p.tolist(), q=self.MOLE_Q)
@@ -1682,6 +1749,8 @@ class whack_moles(Base_Task):
             # Wrap past the bottom → finished a fall; Opt 2 may relocate.
             if on_gone_down is not None and prev_phase > phase + 1e-9:
                 on_gone_down(idx)
+                if st.get("touched") or st.get("exhausted"):
+                    continue
                 hidden = float(st["hidden_z"])
                 raised = float(st["raised_z"])
                 travel = max(raised - hidden, 1e-6)
@@ -1732,7 +1801,7 @@ class whack_moles(Base_Task):
         """Align listed unhit moles onto the same rising edge (for dual-arm presses)."""
         for idx in idxs:
             st = self._mole_state[idx]
-            if st["touched"]:
+            if st["touched"] or st.get("exhausted"):
                 continue
             # Start just after the bottom so the next crest is shared.
             st["bob_phase"] = 0.05
@@ -1764,7 +1833,7 @@ class whack_moles(Base_Task):
 
     def _mole_is_rising(self, idx):
         st = self._mole_state[idx]
-        if st.get("touched"):
+        if st.get("touched") or st.get("exhausted"):
             return False
         if "bob_phase" in st:
             phase = float(st["bob_phase"]) % (2.0 * np.pi)
@@ -1876,18 +1945,29 @@ class whack_moles(Base_Task):
 
     def _critter_above_surface(self, actors, states, idx):
         """True iff the critter is not completely below the board top."""
-        p = np.array(actors[idx].get_pose().p, dtype=float)
-        height = float(states[idx].get("height", self.mole_height))
-        top_z = float(p[2] + height * 0.5)
-        return top_z > self.board_top_z + 1e-4
+        return self._critter_top_z(actors, states, idx) > self.board_top_z + 1e-4
 
     def _mole_above_surface(self, idx):
         return self._critter_above_surface(self.moles, self._mole_state, idx)
 
     def _critter_top_z(self, actors, states, idx):
         p = np.array(actors[idx].get_pose().p, dtype=float)
-        height = float(states[idx].get("height", self.mole_height))
+        st = states[idx]
+        mesh_z_max = st.get("mesh_z_max", None)
+        if mesh_z_max is not None:
+            return float(p[2] + float(mesh_z_max))
+        height = float(st.get("height", self.mole_height))
         return float(p[2] + height * 0.5)
+
+    def _critter_mid_z(self, actors, states, idx):
+        """Geometric mid-height of the mesh (not always the actor origin)."""
+        p = np.array(actors[idx].get_pose().p, dtype=float)
+        st = states[idx]
+        z_min = st.get("mesh_z_min", None)
+        z_max = st.get("mesh_z_max", None)
+        if z_min is not None and z_max is not None:
+            return float(p[2] + 0.5 * (float(z_min) + float(z_max)))
+        return float(p[2])
 
     def _mallet_head_frame(self, mallet):
         """World head center and unit head-cylinder axis (authored along local X)."""
@@ -1987,9 +2067,8 @@ class whack_moles(Base_Task):
         if not getattr(self, "_cubes_ready", False):
             return False
         cp = np.array(actors[idx].get_pose().p, dtype=float)
-        height = float(states[idx].get("height", self.mole_height))
-        center_z = float(cp[2])
-        top_z = float(center_z + 0.5 * height)
+        center_z = self._critter_mid_z(actors, states, idx)
+        top_z = self._critter_top_z(actors, states, idx)
         sep_max = float(self._cfg.get("hit_separation_max", self.HIT_SEPARATION_MAX))
         geom_eps = float(self._cfg.get("hit_geom_eps", self.HIT_GEOM_EPS))
         actor_name = actors[idx].get_name()
@@ -2209,7 +2288,8 @@ class whack_moles(Base_Task):
         # cresting mole, which read as a freeze-then-hit).
         clearance = float(self._cfg.get(
             "hover_clearance", self.HOVER_CLEARANCE_DEFAULT))
-        target_bottom = float(self.board_top_z + self.mole_height + clearance)
+        target_bottom = float(
+            self.board_top_z + self.mole_height - self._mole_raise_drop() + clearance)
         return self._ee_z_for_cube_bottom(arm_tag, target_bottom)
 
     def _cube_xy_err(self, idx, arm_tag):
@@ -2264,7 +2344,13 @@ class whack_moles(Base_Task):
         clearance = float(self._cfg.get(
             "hover_clearance", self.HOVER_CLEARANCE_DEFAULT))
         # Clear the fully-raised crown while aligning.
-        head_bottom = float(self.board_top_z + self.mole_height + clearance + 0.025)
+        head_bottom = float(
+            self.board_top_z
+            + self.mole_height
+            - self._mole_raise_drop()
+            + clearance
+            + 0.025
+        )
         target = self._ee_pose_for_head(arm_tag, hole, head_bottom)
 
         self._suppress_board_hit = True
@@ -2317,7 +2403,7 @@ class whack_moles(Base_Task):
         """
         if depth is None:
             head_bottom = self._cube_bottom_z(arm_tag)
-            mole_top = self.board_top_z + self.mole_height
+            mole_top = self.board_top_z + self.mole_height - self._mole_raise_drop()
             if mole_idx is not None and getattr(self, "_mole_state", None):
                 if 0 <= int(mole_idx) < len(self._mole_state):
                     mole_top = self._critter_top_z(
@@ -2400,8 +2486,10 @@ class whack_moles(Base_Task):
             "approach_falling_frac", self.APPROACH_FALLING_FRAC))
 
         def blocked():
+            if self._episode_failed():
+                return False
             for i in idxs:
-                if self.touched[i]:
+                if self.touched[i] or self._mole_state[i].get("exhausted"):
                     continue
                 frac = self._mole_rise_frac(i)
                 if frac <= 0.12:
@@ -2415,8 +2503,11 @@ class whack_moles(Base_Task):
 
     def _wait_for_crest(self, idxs, max_steps=2500):
         """Kick a fresh rise if needed, then wait until the moles are near the top."""
-        live = [i for i in idxs if not self.touched[i]]
-        if not live:
+        live = [
+            i for i in idxs
+            if not self.touched[i] and not self._mole_state[i].get("exhausted")
+        ]
+        if not live or self._episode_failed():
             return True
         # Restarting from the bottom gives both arms one shared crest in hard
         # mode, and stops an Opt-2 mole relocating between approach and strike.
@@ -2426,8 +2517,12 @@ class whack_moles(Base_Task):
         commit = float(self._cfg.get("press_commit_frac", self.PRESS_COMMIT_FRAC))
 
         def not_ready():
+            if self._episode_failed():
+                return False
             return not all(
-                self.touched[i] or self._mole_rise_frac(i) >= commit
+                self.touched[i]
+                or self._mole_state[i].get("exhausted")
+                or self._mole_rise_frac(i) >= commit
                 for i in live)
 
         return self._wait_while(not_ready, max_steps)
@@ -2466,19 +2561,23 @@ class whack_moles(Base_Task):
         attempts = int(self._cfg.get("strike_attempts", self.STRIKE_ATTEMPTS))
         tol = float(self._cfg.get("strike_xy_tol", self.STRIKE_XY_TOL))
         for _attempt in range(attempts):
-            if self.touched[idx] or getattr(self, "distractor_hit", False):
+            if (
+                self.touched[idx]
+                or self._episode_failed()
+                or self._mole_state[idx].get("exhausted")
+            ):
                 return
             self.plan_success = True
             self._wait_until_approachable([idx])
-            if self.touched[idx]:
+            if self.touched[idx] or self._episode_failed():
                 return
             arm = self._arm_for_hole(self.mole_holes[idx])
             if self._cube_xy_err(idx, arm) > 0.015:
                 self._approach_hole(idx, arm, quick=True)
-            if self.touched[idx]:
+            if self.touched[idx] or self._episode_failed():
                 return
             self._wait_for_crest([idx])
-            if self.touched[idx]:
+            if self.touched[idx] or self._episode_failed():
                 return
             arm = self._arm_for_hole(self.mole_holes[idx])
             if self._cube_xy_err(idx, arm) > tol:
@@ -2492,9 +2591,12 @@ class whack_moles(Base_Task):
         attempts = int(self._cfg.get("strike_attempts", self.STRIKE_ATTEMPTS))
         tol = float(self._cfg.get("strike_xy_tol", self.STRIKE_XY_TOL))
         for _attempt in range(attempts):
-            if getattr(self, "distractor_hit", False):
+            if self._episode_failed():
                 return
-            live = [k for k in (i, j) if not self.touched[k]]
+            live = [
+                k for k in (i, j)
+                if not self.touched[k] and not self._mole_state[k].get("exhausted")
+            ]
             if not live:
                 return
             arms = {k: self._arm_for_hole(self.mole_holes[k]) for k in live}
@@ -2506,6 +2608,8 @@ class whack_moles(Base_Task):
 
             self.plan_success = True
             self._wait_until_approachable(live)
+            if self._episode_failed():
+                return
             for k in live:
                 if self.touched[k]:
                     continue
@@ -2513,10 +2617,15 @@ class whack_moles(Base_Task):
                 if self._cube_xy_err(k, arm) > 0.015:
                     self._approach_hole(k, arm, quick=True)
 
-            live = [k for k in live if not self.touched[k]]
-            if not live:
+            live = [
+                k for k in live
+                if not self.touched[k] and not self._mole_state[k].get("exhausted")
+            ]
+            if not live or self._episode_failed():
                 return
             self._wait_for_crest(live)
+            if self._episode_failed():
+                return
 
             pressers = []
             for k in live:
@@ -2533,8 +2642,8 @@ class whack_moles(Base_Task):
 
     # ------------------------------------------------------------- success
     def check_success(self):
-        """Success = all moles touched and no rabbit distractor hit."""
-        if getattr(self, "distractor_hit", False):
+        """Success = all moles touched; no rabbit hit; no appearance budget spent."""
+        if self._episode_failed():
             return False
         if not getattr(self, "touched", None):
             return False
@@ -2549,8 +2658,16 @@ class whack_moles(Base_Task):
             "relocating_moles": bool(getattr(self, "relocating_moles", False)),
             "num_moles": int(getattr(self, "num_moles", 0)),
             "num_distractors": int(getattr(self, "num_distractors", 0)),
+            "num_appearances": int(getattr(
+                self, "num_appearances", self.NUM_APPEARANCES_DEFAULT)),
+            "appearances": [
+                int(st.get("appearances", 0))
+                for st in getattr(self, "_mole_state", [])
+            ],
             "touched": [bool(t) for t in getattr(self, "touched", [])],
             "distractor_hit": bool(getattr(self, "distractor_hit", False)),
+            "appearances_exhausted": bool(
+                getattr(self, "appearances_exhausted", False)),
             "board_hit": bool(getattr(self, "board_hit", False)),
             "raised": [bool(st.get("raised", False)) for st in getattr(self, "_mole_state", [])],
             "rabbit_raised": [

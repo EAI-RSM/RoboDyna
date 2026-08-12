@@ -14,6 +14,7 @@ Conditions (5 episodes each):
 Success (expert / check_success):
   - every mole touched from above at least once
   - no rabbit distractor hit (distractor_hit must stay false)
+  - no mole exhausted its appearance budget (default 5 rise→fall cycles)
 
 Demos land in:
   final_task_demos/whack_moles/<tag>_sidebyside.mp4
