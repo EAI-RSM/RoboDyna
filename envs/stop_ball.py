@@ -18,8 +18,10 @@ class stop_ball(Office_base_task):
     angled path that may exit the front or a side edge; the matching arm reacts.
     Table décor is kept off the predicted roll corridor so only the arm can stop
     it. Success requires an arm hit that keeps the ball on the table — a touch
-    that then deflects off any edge fails. The ball is sized to the open WSG
-    finger gap plus 0.5 cm so an open gripper placed in front of it can catch it.
+    that then deflects off any edge or drops below the tabletop fails. Settling
+    under the shelf / at the back of the table is fine. The ball is sized to the
+    open WSG finger gap plus 0.5 cm so an open gripper placed in front of it can
+    catch it.
     """
 
     BALL_IDS = [0]  # orange table-tennis (id 1 is hard to see in head cam)
@@ -55,6 +57,8 @@ class stop_ball(Office_base_task):
 
     TABLE_EDGE_Y_DEFAULT = -0.30
     TABLE_X_EDGE = 0.52          # |x| past this = fallen off a side
+    # Table width 0.7 m, +Y toward the wall; under-shelf settles are still on-table.
+    TABLE_BACK_Y_DEFAULT = 0.35
     # Heading from −Y (toward robot): 0 = straight front; ± → angled / side exit.
     ROLL_ANGLE_MAX_DEFAULT = 0.70   # rad (~40°)
     SIDE_EXIT_ANGLE_MIN = 0.55      # rad; steeper headings tend to exit a side
@@ -565,6 +569,7 @@ class stop_ball(Office_base_task):
         ))
         self.table_edge_y = float(c.get("table_edge_y", self.TABLE_EDGE_Y_DEFAULT))
         self.table_x_edge = float(c.get("table_x_edge", self.TABLE_X_EDGE))
+        self.table_back_y = float(c.get("table_back_y", self.TABLE_BACK_Y_DEFAULT))
         self.roll_angle_max = float(c.get("roll_angle_max", self.ROLL_ANGLE_MAX_DEFAULT))
         self.intercept_frac = float(c.get("intercept_frac", self.INTERCEPT_FRAC_DEFAULT))
         self.catch_shelf_clearance = float(c.get(
@@ -1398,8 +1403,9 @@ class stop_ball(Office_base_task):
         """Success = arm stopped the ball and it stayed on the table.
 
         Merely touching the arm is not enough: a deflection that then falls off
-        any edge fails. Settling without arm contact (e.g. against décor) also
-        fails — only the robot may be the stopper.
+        any edge or drops below the tabletop fails. Settling under the shelf or
+        at the back of the table is success. Settling without arm contact
+        (e.g. against décor) still fails — only the robot may be the stopper.
         """
         if self._fell_off or self._ball_state == "fallen":
             return False
@@ -1414,7 +1420,7 @@ class stop_ball(Office_base_task):
         )
         in_xy = (
             abs(p[0]) <= self.table_x_edge - 0.01
-            and self.table_edge_y + 0.01 <= p[1] <= self.shelf_front_y - 0.02
+            and self.table_edge_y + 0.01 <= p[1] <= self.table_back_y + 0.02
         )
         # Settle-hold already happened (`_stopped`); residual crawl after an
         # angled deflection is fine so long as the ball stays on the table.

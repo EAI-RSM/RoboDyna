@@ -743,15 +743,15 @@
     <h3><code>stop_ball</code> — Stop Ball</h3>
     <span class="pill household">household</span>
   </header>
-  <p class="summary">Robot arm stopped the ball and it stayed on the table (in bounds).</p>
+  <p class="summary">Robot arm stopped the ball and it stayed on the table (under-shelf / back of table is OK).</p>
   <div class="cols">
     <div>
       <h4>Requires</h4>
-      <ul><li>_stopped settle-hold happened</li><li>Ball still on table and in XY bounds</li><li>Robot was the stopper (not décor alone)</li></ul>
+      <ul><li>_stopped settle-hold happened</li><li>Ball still on the tabletop (not off an edge, not dropped below)</li><li>Robot was the stopper (not décor alone)</li></ul>
     </div>
     <div>
       <h4>Fails if</h4>
-      <ul class="fail"><li>Fell off any edge after touch</li><li>Settled without arm contact</li></ul>
+      <ul class="fail"><li>Fell off any edge after touch</li><li>Dropped below the tabletop</li><li>Settled without arm contact</li></ul>
     </div>
   </div>
   <p class="src">Source: <code>envs/stop_ball.py</code> → <code>check_success()</code></p>
