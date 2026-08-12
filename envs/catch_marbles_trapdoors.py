@@ -796,22 +796,32 @@ class catch_marbles_trapdoors(Base_Task):
             self._door_locked_closed[i] = True
 
     def doors_open_budget_exhausted(self) -> bool:
-        """True when the shared open budget is spent and every door has fully closed.
+        """True when no remaining open can catch the marble and every door is idle.
 
-        Interactive episodes treat this as failure unless the marble was already caught.
+        Interactive episodes treat this as failure unless the marble already left
+        track mode (caught / wrong-door drop). Wait until mid-cycle slides finish
+        so the timed close (and a possible drop) can still complete.
+
+        - Shared budget (default / opt2): total opens >= ``door_open_max``.
+        - Once-only (opt1 / opt1+2): the matching/target door has used its one
+          open — further presses cannot reopen it, so the episode is unwinnable.
         """
-        if self.door_open_once:
-            return False
         if not self.door_tiles:
             return False
-        if self._total_door_opens() < int(self._door_open_limit):
-            return False
-        return not any(
+        any_in_cycle = any(
             bool(self._door_open[i])
             or float(self._door_slide[i]) > 1e-4
             or float(self._door_target_slide[i]) > 1e-4
             for i in range(len(self.door_tiles))
         )
+        if any_in_cycle:
+            return False
+        if self.door_open_once:
+            t = int(self.target_button_idx)
+            if t < 0 or t >= len(self._door_open_count):
+                return False
+            return int(self._door_open_count[t]) >= int(self._door_open_limit)
+        return self._total_door_opens() >= int(self._door_open_limit)
 
     def _advance_doors(self):
         dt = float(self.scene.get_timestep())
