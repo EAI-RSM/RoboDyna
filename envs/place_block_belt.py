@@ -641,9 +641,20 @@ class place_block_belt(Base_Task):
             next_y = low
             self._bowl_move_dir = 1.0
         dy = next_y - prev_y
+        # Latch *before* moving the bowl. Use XY-over-bowl (not full in_bowl):
+        # success height is only reached after ~0.03 m of fall, by which time a
+        # set_pose bowl has already walked out from under the cube.
+        ride = False
+        if (
+            abs(dy) > 1e-9
+            and getattr(self, "block", None) is not None
+            and not getattr(self, "_block_kinematic", False)
+            and getattr(self, "_block_dropped", False)
+        ):
+            bp = np.array(self.block.get_pose().p, dtype=np.float64)
+            xy = float(np.linalg.norm(bp[:2] - np.array([float(pose.p[0]), prev_y])))
+            ride = bool(xy <= float(self.bowl_inner_radius))
         new_pose = sapien.Pose([self._bowl_base_x, next_y, pose.p[2]], pose.q)
-        # Prefer kinematic_target so PhysX resolves cube↔bowl contacts; set_pose
-        # alone teleports through the cube and skips collision response.
         try:
             if self._bowl_dyn is not None:
                 self._bowl_dyn.set_kinematic_target(new_pose)
@@ -653,30 +664,30 @@ class place_block_belt(Base_Task):
                 self.bowl.actor.set_pose(new_pose)
             except Exception:
                 pass
-        # Carry a settled cube with the moving bowl (set_pose would leave it behind).
-        if (
-            abs(dy) > 1e-9
-            and getattr(self, "block", None) is not None
-            and not getattr(self, "_block_kinematic", False)
-            and getattr(self, "_block_dropped", False)
-            and self._block_in_bowl()
-        ):
+        if ride:
             bp = self.block.get_pose()
+            # Keep the cube on the bowl centerline in y while it falls in.
+            # Incremental +=dy still drifts under PhysX contact with a set_pose bowl.
             carried = sapien.Pose(
-                [float(bp.p[0]), float(bp.p[1]) + dy, float(bp.p[2])],
+                [float(bp.p[0]), next_y, float(bp.p[2])],
                 list(bp.q),
             )
             try:
                 self.block.actor.set_pose(carried)
                 if self._block_dyn is not None:
+                    v = np.array(self._block_dyn.get_linear_velocity(), dtype=np.float64)
                     self._block_dyn.set_linear_velocity(
-                        np.array([0.0, dy / max(dt, 1e-6), 0.0])
+                        np.array([float(v[0]), dy / max(dt, 1e-6), float(v[2])])
                     )
-                    self._block_dyn.set_angular_velocity(np.zeros(3))
             except Exception:
                 pass
 
+    def _belt_travel_time(self, release_x: float) -> float:
+        """Seconds for the cube to ride from ``release_x`` to the belt exit drop."""
+        return abs(float(self._belt_drop_x) - float(release_x)) / max(self.belt_speed, 1e-8)
+
     def _predict_bowl_y(self, future_time: float) -> float:
+        """Bowl y after ``future_time`` (same clamp/flip stepper as ``_advance_bowl_motion``)."""
         if getattr(self, "bowl", None) is None:
             return float(self.belt_y)
         pose = self.bowl.get_pose()
@@ -692,33 +703,31 @@ class place_block_belt(Base_Task):
         if high <= low:
             return float(np.clip(y_now, low, high))
 
+        dt = float(self.scene.get_timestep())
+        n_steps = int(max(0, round(float(future_time) / max(dt, 1e-8))))
         y = float(np.clip(y_now, low, high))
         direction = 1.0 if self._bowl_move_dir >= 0 else -1.0
-        remaining = float(future_time)
-
-        # Piecewise-linear reflection between the belt-lane endpoints.
-        for _ in range(32):
-            if remaining <= 0.0:
-                break
-            boundary = high if direction > 0 else low
-            dist = abs(boundary - y)
-            t_to_boundary = dist / speed if dist > 1e-9 else 0.0
-            if remaining <= t_to_boundary:
-                y += direction * speed * remaining
-                return float(np.clip(y, low, high))
-            y = boundary
-            remaining -= t_to_boundary
-            direction *= -1.0
-
+        for _ in range(n_steps):
+            next_y = float(y + direction * speed * dt)
+            if next_y > high:
+                next_y = high
+                direction = -1.0
+            elif next_y < low:
+                next_y = low
+                direction = 1.0
+            y = next_y
         return float(np.clip(y, low, high))
 
     def _estimate_drop_lane_y(self, release_x: float, release_time: float = 0.0) -> float:
+        """Predicted bowl y when the cube reaches the belt exit.
+
+        drop_time = release_time + belt_length_remaining / belt_speed
+        """
         if getattr(self, "bowl", None) is None:
             return float(self.belt_y)
         if not getattr(self, "bowl_move_enabled", False):
             return float(self.bowl.get_pose().p[1])
-        belt_travel_time = abs(float(self._belt_drop_x - release_x)) / max(self.belt_speed, 1e-8)
-        return self._predict_bowl_y(release_time + belt_travel_time)
+        return self._predict_bowl_y(release_time + self._belt_travel_time(release_x))
 
     def _past_belt_drop(self, x: float) -> bool:
         x = float(x)
@@ -745,30 +754,119 @@ class place_block_belt(Base_Task):
             if self.save_freq and (i % self.save_freq == 0):
                 self._take_picture()
 
+    def _bowl_align_tol(self) -> float:
+        # Tight: first-within-window was the *edge* of the bowl and still missed.
+        return float(min(self.bowl_inner_radius * 0.12, 0.008))
+
+    def _bowl_align_max_steps(self) -> int:
+        """Cover a bit more than two bowl oscillation periods."""
+        dt = float(self.scene.get_timestep())
+        low, high = self._bowl_lane_bounds()
+        span = max(float(high - low), 1e-3)
+        speed = max(abs(float(self.bowl_move_speed)), 1e-6)
+        period = 2.0 * span / speed
+        return int(np.ceil(2.2 * period / max(dt, 1e-8))) + 50
+
+    def _gripper_open_lead_time(self, arm_tag: ArmTag) -> float:
+        """Sim time the upcoming open_gripper action will take (plan only, no motion)."""
+        dt = float(self.scene.get_timestep())
+        try:
+            if arm_tag == "right":
+                res = self.set_gripper(right_pos=1.0, set_tag="right")
+            else:
+                res = self.set_gripper(left_pos=1.0, set_tag="left")
+            n = int(res.get("num_step", 50)) if res else 50
+        except Exception:
+            n = 50
+        return max(0, n) * dt
+
+    def _bowl_y_trajectory(self, n_steps: int) -> np.ndarray:
+        """Bowl y after 0..n_steps of the same clamp/flip driver as ``_advance_bowl_motion``."""
+        y = float(self.bowl.get_pose().p[1]) if getattr(self, "bowl", None) is not None else float(self.belt_y)
+        n_steps = max(0, int(n_steps))
+        if not getattr(self, "bowl_move_enabled", False) or n_steps == 0:
+            return np.full(n_steps + 1, y, dtype=np.float64)
+        speed = abs(float(self.bowl_move_speed))
+        dt = float(self.scene.get_timestep())
+        low, high = self._bowl_lane_bounds()
+        y = float(np.clip(y, low, high))
+        direction = 1.0 if self._bowl_move_dir >= 0 else -1.0
+        out = np.empty(n_steps + 1, dtype=np.float64)
+        for i in range(n_steps + 1):
+            out[i] = y
+            next_y = float(y + direction * speed * dt)
+            if next_y > high:
+                next_y = high
+                direction = -1.0
+            elif next_y < low:
+                next_y = low
+                direction = 1.0
+            y = next_y
+        return out
+
     def _steps_until_drop_alignment(
         self,
         release_x: float,
         release_y: float,
         lead_time: float = 0.0,
-        max_steps: int = 1500,
+        max_steps: int | None = None,
         tol: float | None = None,
     ) -> int:
         if not getattr(self, "bowl_move_enabled", False):
             return 0
 
         dt = float(self.scene.get_timestep())
-        tol = float(tol if tol is not None else min(self.bowl_inner_radius * 0.35, 0.02))
+        tol = float(tol if tol is not None else self._bowl_align_tol())
+        if max_steps is None:
+            max_steps = self._bowl_align_max_steps()
+        max_steps = max(0, int(max_steps))
+        lead_steps = int(round(float(lead_time) / max(dt, 1e-8)))
+        travel_steps = int(round(self._belt_travel_time(release_x) / max(dt, 1e-8)))
+        land_offset = max(0, lead_steps + travel_steps)
+        traj = self._bowl_y_trajectory(max_steps + land_offset)
+        target = float(release_y)
         best_steps = 0
         best_err = float("inf")
-        for step in range(max(0, int(max_steps)) + 1):
-            future_t = lead_time + step * dt
-            err = abs(self._estimate_drop_lane_y(release_x=release_x, release_time=future_t) - float(release_y))
+        for step in range(max_steps + 1):
+            err = abs(float(traj[step + land_offset]) - target)
             if err < best_err:
                 best_err = err
                 best_steps = step
             if err <= tol:
                 return step
         return best_steps
+
+    def _wait_for_bowl_alignment(
+        self,
+        release_x: float,
+        release_y: float,
+        lead_time: float = 0.0,
+    ):
+        """Hold still until the bowl will be in ``release_y`` when the cube lands.
+
+        Closed-loop: coarse wait from the trajectory search, then step until the
+        live bowl pose predicts an intercept (same pattern as ``load_train``).
+        """
+        if not getattr(self, "bowl_move_enabled", False):
+            return
+        tol = self._bowl_align_tol()
+        max_steps = self._bowl_align_max_steps()
+        wait = self._steps_until_drop_alignment(
+            release_x=release_x,
+            release_y=release_y,
+            lead_time=lead_time,
+            max_steps=max_steps,
+            tol=tol,
+        )
+        self._dwell(wait)
+        for _ in range(max_steps):
+            err = abs(
+                self._estimate_drop_lane_y(release_x=release_x, release_time=lead_time)
+                - float(release_y)
+            )
+            if err <= tol:
+                break
+            self._dwell(1)
 
     # ----------------------------------------------------------------- belt visuals
     def _init_belt_visual_motion(self):
@@ -935,17 +1033,12 @@ class place_block_belt(Base_Task):
         arm_tag = ArmTag("right" if self.block.get_pose().p[0] > 0 else "left")
         moving_bowl = bool(getattr(self, "bowl_move_enabled", False))
 
-        # 1) grasp the tall block in the near zone. Grasp near the UPPER body so the gripper
-        #    stays well above the belt surface during the lower / release steps (a low grasp
-        #    puts the fingers right at the belt and the open/lift plan collides with the slab).
+        # 1) grasp the tall block, then lift clear of the table.
         self.move(self.grasp_actor(self.block, arm_tag=arm_tag, pre_grasp_dis=0.1))
-        # 2) lift well clear of the table
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.14, move_axis="arm"))
 
         # Release at the load/start of the belt, always before the red placement line.
-        # With a blocker, the release y must lie in the unblocked lane.
         match_dist = max(0.02, self.belt_speed * 0.5)
-        # Keep the release center a small margin before the place line.
         max_match = max(
             0.01,
             abs(float(self.place_line_x) - float(self.belt_x_start)) - (self.block_half_w + 0.01),
@@ -953,6 +1046,11 @@ class place_block_belt(Base_Task):
         match_dist = float(min(match_dist, max_match))
         hover_x = self.belt_x_start
         release_x = hover_x + self.belt_dir * match_dist
+
+        # 2) Choose WHERE to drop (release y on the belt).
+        #    Opt1: fixed lane (belt center / clear lane). Do not chase the bowl —
+        #    wait until the bowl will be under that lane when the cube exits.
+        #    Static bowl: place in the bowl's current y.
         if moving_bowl:
             preferred_y = float(self.belt_y)
         else:
@@ -963,59 +1061,42 @@ class place_block_belt(Base_Task):
             )
         target_lane_y = self._choose_release_lane_y(preferred_y)
 
-        # carry it over above the chosen (clear) belt lane.
+        # Move over the chosen lane and lower onto the belt.
         dx = hover_x - float(self.block.get_pose().p[0])
         dy = target_lane_y - float(self.block.get_pose().p[1])
         self.move(self.move_by_displacement(arm_tag=arm_tag, x=dx, y=dy))
-        hover_clearance = 0.015 if moving_bowl else 0.005
-        self._move_block_to_belt_clearance(arm_tag=arm_tag, clearance=hover_clearance)
+        self._move_block_to_belt_clearance(arm_tag=arm_tag, clearance=0.005)
 
-        # 3) KEY MECHANIC: match the gripper's horizontal velocity to the belt before releasing.
-        #    A short, smooth move along the belt direction at (approximately) belt speed gives the
-        #    block forward momentum so it is not sheared/tipped by a velocity mismatch on grab.
-        if moving_bowl:
-            release_time = (
-                match_dist / max(self.belt_speed, 1e-8)
-                + self.belt_release_delay_steps * self.scene.get_timestep()
-            )
-            # Align to a bowl y that is still inside the clear lane (blocker-safe).
-            release_y_goal = self._choose_release_lane_y(
-                self._estimate_drop_lane_y(release_x=release_x, release_time=release_time)
-            )
-            wait_steps = self._steps_until_drop_alignment(
-                release_x=release_x,
-                release_y=release_y_goal,
-                lead_time=release_time,
-            )
-            self._dwell(wait_steps)
-            target_lane_y = self._choose_release_lane_y(
-                self._estimate_drop_lane_y(release_x=release_x, release_time=release_time)
-            )
-            dy = target_lane_y - float(self.block.get_pose().p[1])
-            if abs(dy) > 1e-3:
-                self.move(self.move_by_displacement(arm_tag=arm_tag, y=dy))
-            self._move_block_to_belt_clearance(arm_tag=arm_tag, clearance=0.005)
+        # 3) Match belt speed with a short +x stroke, then we are at the release pose.
         self.move(self.move_by_displacement(arm_tag=arm_tag, x=self.belt_dir * match_dist))
 
-        # 4) release. Open the gripper and let a few dynamic steps pass so the (top-heavy) block's
-        #    response to the release is what the tilt metric captures, THEN hand it to the belt's
-        #    kinematic drive. Tracking begins here (after the match stroke) so the metric reflects
-        #    only the release + ride, not the carry.
+        # 4) Opt1 timing: knowns are bowl_speed, belt_speed, and remaining belt length.
+        #    drop_time = now + open_gripper + settle + (drop_x - release_x) / belt_speed
+        #    Wait until predicted bowl_y(drop_time) ≈ release_y, then open.
+        if moving_bowl:
+            release_x = float(self.block.get_pose().p[0])
+            release_y = float(self.block.get_pose().p[1])
+            lead_time = (
+                self._gripper_open_lead_time(arm_tag)
+                + self.belt_release_delay_steps * self.scene.get_timestep()
+            )
+            self._wait_for_bowl_alignment(
+                release_x=release_x,
+                release_y=release_y,
+                lead_time=lead_time,
+            )
+
+        # 5) Release onto the belt; belt drive carries the cube to the exit / bowl.
         self._release_q = [1.0, 0.0, 0.0, 0.0]
         self._released = True
         self.move(self.open_gripper(arm_tag))
-        # Keep the belt paused briefly so the block clears the fingers and settles onto the belt
-        # before the kinematic conveyor hand-off begins.
         self._dwell(self.belt_release_delay_steps)
         self._belt_active = True
 
-        # let the belt carry the block to the end
         self._ride_belt()
 
-        # finalize the metric
         self.tilt_score = float(np.clip(1.0 - self.max_tilt_deg / self.theta_max_deg, 0.0, 1.0))
 
-        # If we rode past the blocker without a hit, mark the clear-lane placement as successful.
         if self.blocker_enabled and self.blocker is not None and not self.hit_blocker:
             contact_y = self._belt_contact_y
             if contact_y is None:
@@ -1028,7 +1109,6 @@ class place_block_belt(Base_Task):
             "{C}": "conveyor_belt",
             "{a}": str(arm_tag),
             "{flip}": "mirrored" if self.belt_mirrored else "default",
-            # Opt 1 = bowl_move_enabled; Opt 2 = blocker_enabled
             "{opt1}": "on" if self.bowl_move_enabled else "off",
             "{opt2}": "on" if self.blocker_enabled else "off",
         }
