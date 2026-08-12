@@ -38,7 +38,9 @@ class cook_meat(Base_Task):
     Options (``task_args.cook_meat``; independent toggles):
       Opt 1 — hold cook  →  ``cook_button_enabled`` (**default: false**)
           Hold the key to cook while the steak is on the pan (springs up on
-          release). CLI: ``--task-arg cook_button_enabled=true`` / ``--option 1``.
+          release). Success/failure is evaluated on the **first release** after
+          cooking started (not while the key is still held). CLI:
+          ``--task-arg cook_button_enabled=true`` / ``--option 1``.
       Opt 2 — dual setup  →  ``dual_setup_enabled`` (**default: false**)
           Mirror a second station with ≥10 cm clearance; both arms cook.
           CLI: ``--task-arg dual_setup_enabled=true`` or ``--option 2``.
@@ -57,6 +59,9 @@ class cook_meat(Base_Task):
     MAX_EPISODE_STEPS_DEFAULT: ClassVar[int] = 15000  # eval / collection episode cutoff
     COOK_BUTTON_ENABLED_DEFAULT: ClassVar[bool] = False  # false=latch; true=hold (Opt 1)
     DUAL_SETUP_ENABLED_DEFAULT: ClassVar[bool] = False  # Opt 2
+    # Opt 1: require this many consecutive unengaged steps before first-release
+    # shutoff. Prevents tip/spring flicker from ending the episode mid-press.
+    HOLD_RELEASE_CONFIRM_STEPS: ClassVar[int] = 12
     TARGET_DONENESS_RANGE_DEFAULT: ClassVar[tuple[float, float]] = (0.40, 0.60)
     TARGET_DONENESS_RANGE_JITTER_DEFAULT: ClassVar[float] = 0.0
     # Legacy fallback when target_doneness_range is absent.
@@ -849,6 +854,7 @@ class cook_meat(Base_Task):
             "cook_phase_done": False,
             "cook_on": False,  # latch mode: key latched ON
             "_hold_cooked": False,  # Opt 1: True after at least one hold-cook tick
+            "_hold_release_steps": 0,  # Opt 1: consecutive unengaged steps
             "_pending_off": False,
             "_touch_latched": False,
             "_ignore_key": False,  # expert sets latch explicitly
@@ -1130,7 +1136,12 @@ class cook_meat(Base_Task):
             return False
 
     def _button_is_pressed_station(self, station: dict[str, Any]) -> bool:
-        """True when this station's key is actively cooking (latched ON or held)."""
+        """True when this station's key is actively cooking (latched ON or held).
+
+        Hold mode (Opt 1) uses press-session hysteresis (``is_engaged``): once
+        the keycap crosses the trigger it stays engaged until it fully springs
+        back, so brief tip wobble above the trigger does not count as a release.
+        """
         if station.get("cook_key") is None:
             return False
         if bool(station.get("_expert_key_held")):
@@ -1139,8 +1150,18 @@ class cook_meat(Base_Task):
             bank = getattr(self, "_reactive_buttons", None)
             if bank is None:
                 return False
+            tag = str(station["tag"])
             try:
-                return bool(bank.is_held(str(station["tag"])))
+                if hasattr(bank, "is_engaged"):
+                    if bool(bank.is_engaged(tag)):
+                        return True
+                elif bool(bank.is_held(tag)):
+                    return True
+            except Exception:
+                pass
+            # Tip still driving the spring (pre-trigger or on the edge).
+            try:
+                return bool(self._key_tip_pressing(station))
             except Exception:
                 return False
         return bool(station.get("cook_on"))
@@ -1255,16 +1276,30 @@ class cook_meat(Base_Task):
                 if st.get("cook_phase_done"):
                     continue
                 pressed = self._button_is_pressed_station(st)
-                if pressed and on_pan:
-                    self._advance_station_cook(st)
-                    st["grasp_doneness"] = None
-                    st["_hold_cooked"] = True
-                elif not pressed:
-                    # Freeze score only after a real hold-cook cycle. Leaving
-                    # grasp_doneness=0.0 at episode start made interactive Opt 1
-                    # report FAILURE immediately (key up ⇒ "finished").
-                    if st.get("_hold_cooked") or float(st.get("max_doneness", 0.0)) > 0.0:
+                cooked = bool(st.get("_hold_cooked")) or float(
+                    st.get("max_doneness", 0.0)
+                ) > 0.0
+                if pressed:
+                    st["_hold_release_steps"] = 0
+                    if on_pan:
+                        self._advance_station_cook(st)
+                        st["grasp_doneness"] = None
+                        st["_hold_cooked"] = True
+                elif cooked:
+                    # Debounce unengaged frames so tip/spring flicker mid-press
+                    # cannot freeze the shutoff score early.
+                    steps = int(st.get("_hold_release_steps", 0)) + 1
+                    st["_hold_release_steps"] = steps
+                    need = int(
+                        getattr(
+                            self,
+                            "HOLD_RELEASE_CONFIRM_STEPS",
+                            self.HOLD_RELEASE_CONFIRM_STEPS,
+                        )
+                    )
+                    if steps >= max(1, need):
                         st["grasp_doneness"] = float(st["doneness"])
+                        st["cook_phase_done"] = True
             else:
                 # Latch: cook only while cook_on (OFF press clears it immediately).
                 if st.get("cook_on") and on_pan:
@@ -1747,15 +1782,19 @@ class cook_meat(Base_Task):
     def _station_success(self, station: dict[str, Any]) -> bool:
         """Return whether one steak was shut off inside the doneness range.
 
-        Cook quality uses ``grasp_doneness`` (value when cooking stopped). The
-        steak may remain on the pan — board return is not required. Dual
-        episodes call this once per steak, and both must pass.
+        Cook quality uses ``grasp_doneness`` (value when cooking stopped). Hold
+        mode (Opt 1): that freeze happens on the first key release after cooking
+        started — do not evaluate while the key is still held. The steak may
+        remain on the pan — board return is not required. Dual episodes call
+        this once per steak, and both must pass.
         """
         if station.get("grasp_doneness") is None:
             return False
         # Cooking must be stopped: latch OFF, or hold key released / phase done.
         if self.use_hold_cook:
             if self._button_is_pressed_station(station):
+                return False
+            if not bool(station.get("cook_phase_done")):
                 return False
         elif bool(station.get("cook_on")):
             return False
@@ -1764,8 +1803,9 @@ class cook_meat(Base_Task):
     def check_success(self) -> bool:
         """Return whether every steak was cooked into the target doneness range.
 
-        Key must be up (latch OFF or hold released) with ``grasp_doneness`` in
-        ``target_doneness_range``. Dual: both steaks must pass.
+        Key must be up (latch OFF, or hold mode's first release) with
+        ``grasp_doneness`` in ``target_doneness_range``. Dual: both steaks must
+        pass. Hold mode never succeeds or fails while the key is still held.
         """
         stations = getattr(self, "stations", None)
         if not stations:

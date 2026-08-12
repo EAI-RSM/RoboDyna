@@ -355,12 +355,88 @@ class CookMeatHelperTests(unittest.TestCase):
 
         st["doneness"] = 0.0
         st["_expert_key_held"] = False
+        confirm = int(cook_meat.HOLD_RELEASE_CONFIRM_STEPS)
         with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
             cook_meat, "_steak_on_pan_station", return_value=True
         ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
-            cook_meat._update_kinematic_tasks(task)
+            for _ in range(confirm):
+                cook_meat._update_kinematic_tasks(task)
         self.assertEqual(st["doneness"], 0.0)
         self.assertEqual(st["grasp_doneness"], 0.0)
+        self.assertTrue(st["cook_phase_done"])
+
+    def test_hold_mode_ignores_brief_mid_press_release_flicker(self) -> None:
+        """A 1-frame unengaged blip must not freeze Opt 1 shutoff mid-press."""
+        task = object.__new__(cook_meat)
+        task.cook_button_enabled = True
+        task.cook_steps = 100
+        task.doneness = 0.0
+        task.max_doneness = 0.0
+        task._grasp_doneness = None
+        st = {
+            "tag": "right",
+            "doneness": 0.2,
+            "max_doneness": 0.2,
+            "grasp_doneness": None,
+            "cook_on": False,
+            "cook_phase_done": False,
+            "cooking_active": False,
+            "cook_key": object(),
+            "_expert_key_held": False,
+            "_hold_cooked": True,
+            "_hold_release_steps": 0,
+            "steak_shapes": [],
+        }
+        task.stations = [st]
+        with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
+            cook_meat, "_button_is_pressed_station", return_value=False
+        ), patch.object(
+            cook_meat, "_steak_on_pan_station", return_value=True
+        ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
+            cook_meat._update_kinematic_tasks(task)
+        self.assertFalse(st["cook_phase_done"])
+        self.assertIsNone(st["grasp_doneness"])
+        self.assertEqual(st["_hold_release_steps"], 1)
+
+        # Resume holding — debounce resets and cooking continues.
+        with patch.object(cook_meat, "_update_reactive_cook_keys", return_value=None), patch.object(
+            cook_meat, "_button_is_pressed_station", return_value=True
+        ), patch.object(
+            cook_meat, "_steak_on_pan_station", return_value=True
+        ), patch("envs.cook_meat.Base_Task._update_kinematic_tasks", return_value=None):
+            cook_meat._update_kinematic_tasks(task)
+        self.assertEqual(st["_hold_release_steps"], 0)
+        self.assertFalse(st["cook_phase_done"])
+        self.assertAlmostEqual(st["doneness"], 0.21, places=5)
+
+    def test_hold_mode_success_only_after_first_release(self) -> None:
+        """Opt 1 check_success stays false while held; first release freezes score."""
+        task = object.__new__(cook_meat)
+        task.cook_button_enabled = True
+        task.dual_setup_enabled = False
+        task.target_doneness_range = (0.40, 0.60)
+        task.target_doneness = 0.5
+        st = {
+            "tag": "right",
+            "doneness": 0.5,
+            "max_doneness": 0.5,
+            "grasp_doneness": 0.5,
+            "cook_on": False,
+            "cook_phase_done": False,
+            "cook_key": object(),
+            "_expert_key_held": True,
+            "_hold_cooked": True,
+        }
+        task.stations = [st]
+        # Still holding — never success even with in-range frozen score.
+        self.assertFalse(task.check_success())
+        st["_expert_key_held"] = False
+        # Released but cook_phase_done not latched yet.
+        self.assertFalse(task.check_success())
+        st["cook_phase_done"] = True
+        self.assertTrue(task.check_success())
+        st["grasp_doneness"] = 0.2
+        self.assertFalse(task.check_success())
 
     def test_key_off_latch_is_per_station(self) -> None:
         """Turning one dual-station key OFF must not freeze the other station."""

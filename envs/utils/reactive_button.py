@@ -367,6 +367,18 @@ class ReactivePushButtons:
         idx = self.resolve_index(button_id)
         return bool(self.visual_depth[idx] >= self.trigger_depth)
 
+    def is_engaged(self, button_id) -> bool:
+        """True from press trigger until the key fully springs back.
+
+        Unlike ``is_held`` (depth ≥ trigger right now), this keeps the press
+        session alive through brief tip wobble above the trigger while the
+        keycap is still mid-travel — needed for hold-to-cook tasks.
+        """
+        idx = self.resolve_index(button_id)
+        if self._forced_depth[idx] is not None:
+            return True
+        return bool(self._latched[idx]) or float(self.visual_depth[idx]) >= self.trigger_depth
+
     def held_ids(self) -> list:
         return [self.ids[i] for i, on in enumerate(self.held_mask()) if on]
 

@@ -49,14 +49,14 @@ CONTROLS_KEYBOARD = """
 
   Key is green when up, red when down.
   Latch mode: press ON (stays down), press again OFF.
-  Hold mode (Opt 1): cooking/timer only while the key is depressed.
+  Hold mode (Opt 1): cook while depressed; result on first release.
   Pie timer (green→yellow→red) tracks doneness.
 """
 
 CONTROLS_ROBOT = """
   Select an arm, move over the cook key, lower with Q to press (E to raise).
   Key is green when up, red when down.
-  Latch: press ON/OFF. Hold (Opt 1): cook while pressed.
+  Latch: press ON/OFF. Hold (Opt 1): cook while pressed; result on first release.
   Pie timer advances with cooking.
   Teleop + Space to grasp/place steaks between board and pan.
 """
@@ -194,21 +194,27 @@ class KeyboardState:
 def _station_cook_finished(env, st):
     """True once this station has shut off after cooking (doneness frozen)."""
     if getattr(env, "use_hold_cook", False):
-        # Hold (Opt 1): key-up at doneness 0 is the start state, not a finish.
-        cooked = bool(st.get("_hold_cooked")) or float(st.get("max_doneness", 0.0)) > 0.0
-        if not cooked:
+        # Hold (Opt 1): evaluate only after a confirmed first release. Never end
+        # while the key press session is still engaged (gripper mid-press).
+        if not bool(st.get("cook_phase_done")):
             return False
         if env._button_is_pressed_station(st):
             return False
-        return st.get("grasp_doneness") is not None
+        if st.get("grasp_doneness") is None:
+            return False
+        return True
     return st.get("grasp_doneness") is not None and not bool(st.get("cook_on"))
 
 
 def _episode_done(env):
-    """Finish after all keys latch OFF, or immediately on definite overcooking."""
+    """Finish after all keys shut off (latch OFF, or hold's confirmed first release)."""
     stations = getattr(env, "stations", None) or []
     if not stations:
         return False, None
+    # Hold mode: never terminate while any cook key is still engaged.
+    if getattr(env, "use_hold_cook", False):
+        if any(env._button_is_pressed_station(st) for st in stations):
+            return False, None
     doneness = [round(float(st["doneness"]), 2) for st in stations]
     grasps = [
         None if st.get("grasp_doneness") is None else round(float(st["grasp_doneness"]), 2)
@@ -219,9 +225,6 @@ def _episode_done(env):
         f"target={float(env.target_doneness_range[0]):.2f}-"
         f"{float(env.target_doneness_range[1]):.2f}"
     )
-    target_max = float(env.target_doneness_range[1])
-    if any(float(st.get("doneness", 0.0)) > target_max for st in stations):
-        return True, f"overcooked; {detail}"
     if all(_station_cook_finished(env, st) for st in stations):
         return True, detail
     return False, None
