@@ -1,7 +1,7 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive sandbox for ``place_block_belt``.
 
-Keyboard+mouse: click the belt to teleport the cube (XY + belt-height Z).
+Keyboard+mouse: click the belt to drop the cube from 2 cm above the surface.
 Robot: grasp with Space, teleop over the belt, open to drop.
 
 Run from any directory:
@@ -45,15 +45,19 @@ def _block_held(env) -> bool:
         return False
 
 
+# Click spawn: cube bottom is this far above the belt, then gravity drops it.
+_KEYBOARD_DROP_HEIGHT = 0.02
+
+
 def _teleport_block_to_belt(env, x: float, y: float) -> None:
-    """Seat the cube on the belt surface at ``(x, y)`` and arm the conveyor."""
+    """Place the cube 2 cm above the belt at ``(x, y)`` and let it drop."""
     half_x = float(getattr(env, "_belt_half_len_x", 0.2))
     half_y = float(getattr(env, "_belt_half_w", getattr(env, "belt_half_w", 0.05)))
     cx = float(getattr(env, "_belt_cx", 0.0))
     by = float(env.belt_y)
     x = float(np.clip(x, cx - half_x, cx + half_x))
     y = float(np.clip(y, by - half_y, by + half_y))
-    z = float(env.belt_surface_z + env.block_half_h)
+    z = float(env.belt_surface_z + env.block_half_h + _KEYBOARD_DROP_HEIGHT)
     q = [1.0, 0.0, 0.0, 0.0]
     pose = sapien.Pose([x, y, z], q)
     try:
@@ -73,10 +77,13 @@ def _teleport_block_to_belt(env, x: float, y: float) -> None:
     env._released = True
     env._interactive_released = True
     env._interactive_holding = False
-    env._release_delay_left = int(getattr(env, "belt_release_delay_steps", 0))
-    if env._release_delay_left <= 0:
-        env._belt_active = True
-    print(f"Block teleported onto belt at ({x:.3f}, {y:.3f}, z={z:.3f}).")
+    env._belt_active = False
+    env._release_delay_left = 0
+    env._keyboard_await_drop = True
+    print(
+        f"Block dropping onto belt from {_KEYBOARD_DROP_HEIGHT * 100:.0f} cm "
+        f"at ({x:.3f}, {y:.3f})."
+    )
 
 
 class BlockClickController:
@@ -165,7 +172,7 @@ def main():
             "place_block_belt — keyboard+mouse",
             [
                 f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
-                "Click the belt to teleport the cube (Z seats on the belt surface).",
+                "Click the belt to drop the cube from 2 cm above the surface.",
             ],
         )
 
@@ -174,6 +181,7 @@ def main():
     env._released = False
     env._belt_active = False
     env._release_delay_left = 0
+    env._keyboard_await_drop = False
 
     clicker = None
     release_monitor = None
@@ -186,7 +194,7 @@ def main():
             raise SystemExit("Viewer was not created.")
         clicker = BlockClickController(env)
         viewer.register_click_handler(clicker.on_click)
-        print_instructions("Click once on the belt to place the cube.")
+        print_instructions("Click once on the belt to drop the cube from 2 cm above.")
 
     off_belt_since = None
     settle_steps = max(1, int(round(2.0 / float(env.scene.get_timestep()))))
@@ -198,6 +206,17 @@ def main():
             release_monitor.update()
 
         if env._interactive_released:
+            if getattr(env, "_keyboard_await_drop", False):
+                seated_z = float(env.belt_surface_z + env.block_half_h)
+                z = float(env.block.get_pose().p[2])
+                if z <= seated_z + 0.006:
+                    env._keyboard_await_drop = False
+                    env._release_delay_left = int(
+                        getattr(env, "belt_release_delay_steps", 0)
+                    )
+                    if env._release_delay_left <= 0:
+                        env._belt_active = True
+                        print("Belt drive engaged.")
             if env._release_delay_left > 0:
                 env._release_delay_left -= 1
                 if env._release_delay_left == 0:

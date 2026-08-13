@@ -69,7 +69,8 @@ def _move_arms_to_pre_grasp_orientation(env) -> None:
 
 
 def _hover_z(env) -> float:
-    return float(getattr(env, "basket_top_z", 0.8) + 0.05)
+    """Hold above the basket lip so in-basket success cannot fire until the drop."""
+    return float(getattr(env, "basket_top_z", 0.8) + 0.14)
 
 
 def _set_apple_hover(env, side: float) -> None:
@@ -144,7 +145,7 @@ class KeyboardAppleController:
         self.env._dampen_apple_for_basket_drop(rigid=rigid)
         self.env._enable_held_apple_gravity(rigid=rigid)
         self.held_side = None
-        print("Released apple into the basket.")
+        print("Released apple — dropping under gravity.")
         return True
 
     def on_click(self, viewer, pixel_x, pixel_y):
@@ -305,6 +306,9 @@ def main():
     in_basket_since = None
     on_table_since = None
 
+    def _keyboard_holding() -> bool:
+        return clicker is not None and clicker.held_side is not None
+
     def on_step(window, step):
         nonlocal in_basket_since, on_table_since
         if pinch is not None:
@@ -320,6 +324,12 @@ def main():
                 f"window={env.red_window:.3f}±{tol:.3f}  "
                 f"{'IN window' if in_window else 'outside window'}"
             )
+
+        # Keyboard hold is kinematic hover — score only after the physical drop.
+        if _keyboard_holding():
+            in_basket_since = None
+            on_table_since = None
+            return
 
         bp = np.array(env.basket.get_pose().p)
         basket_xy = np.array([bp[0], bp[1]], dtype=np.float64)
@@ -342,11 +352,13 @@ def main():
         if env._good_apple_dropped_on_table():
             if on_table_since is None:
                 on_table_since = step
-                print("Good apple on table (missed basket) — terminating…")
+                print("Good apple missed the basket (on table) — terminating…")
         else:
             on_table_since = None
 
     def is_done(step):
+        if _keyboard_holding():
+            return False
         settle = max(1, int(getattr(env, "DROP_SETTLE_STEPS", 80)))
         if on_table_since is not None and step - on_table_since >= settle:
             return True, "good apple dropped on table (missed basket)"
