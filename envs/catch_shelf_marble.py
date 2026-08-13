@@ -31,10 +31,12 @@ class catch_shelf_marble(Base_Task):
     the spot. The robot must hold the correct key long enough to place the bowl under the marble's
     predicted landing point on the belt before it arrives.
 
-    The full descent (kinematic slide along each shelf's fixed tilt, then a short parabolic
-    free-fall onto the next shelf or, from the bottom shelf, onto the belt) is precomputed
-    analytically in `load_actors` from the randomized geometry, so both collector passes replay the
-    identical marble path and the same `target_catch_x` the expert policy aims for.
+    The full descent (kinematic slide along each shelf following the instantaneous downhill
+    ``sign(phi)`` — so an oscillating shelf correctly reverses the marble when its tip reverses —
+    then a short parabolic free-fall onto the next shelf or, from the bottom shelf, onto the
+    belt) is precomputed analytically in `load_actors` from the randomized geometry, so both
+    collector passes replay the identical marble path and the same `target_catch_x` the expert
+    policy aims for.
 
     Options (independent toggles; CLI via ``--task-arg`` or legacy ``--option``):
       - Default — marble pauses on the top shelf until a bowl key press edge (gripper or
@@ -97,6 +99,12 @@ class catch_shelf_marble(Base_Task):
     # in non-reactive mode -- used only to pick a provisional `target_catch_x` for arm selection;
     # the true plan is recomputed at `_release_marble` against the live osc phase.
     OSC_KEY_APPROACH_LEAD_STEPS_DEFAULT = 280
+    # Flat-shelf deadband for scripted slide: |phi| below this → marble holds (no preferred downhill).
+    SLIDE_FLAT_PHI_EPS = 1e-4             # rad (~0.006 deg); osc tip passes through this near cos=0
+    # If the oscillating tip reverses after the marble has already passed this fraction of
+    # half-length toward an edge, commit to falling off that edge (momentum / lip) instead of
+    # reversing and rocking forever around centre.
+    SLIDE_LIP_COMMIT_FRAC = 0.45
 
     BALL_RADIUS_DEFAULT = 0.014
     ROLL_SPEED_DEFAULT = 0.175            # m/s, constant scripted speed for both slide and fall legs
@@ -514,6 +522,88 @@ class catch_shelf_marble(Base_Task):
         return cz - local_x * sphi + local_z * cphi
 
     # -------------------------------------------------- offline descent plan
+    def _downhill_sign_from_phi(self, phi):
+        """+1 when +local_x is downhill, -1 when -local_x is downhill, 0 when effectively flat.
+
+        Matches `_shelf_local_to_world`: positive `phi` tips the +local_x edge down."""
+        if abs(float(phi)) < self.SLIDE_FLAT_PHI_EPS:
+            return 0.0
+        return 1.0 if float(phi) > 0.0 else -1.0
+
+    def _simulate_slide_locals(self, shelf_idx, start_local, origin_osc_steps, cum_steps):
+        """Step `local_x` along shelf `shelf_idx` following the *instantaneous* downhill.
+
+        For static shelves this is a constant-speed slide to `sign(phi)*half_len`. For the
+        oscillating shelf, `phi` flips with `cos(ωt)`, so the marble waits when flat and
+        reverses when the tip reverses — instead of blindly chasing the load-time `shelf_dir`
+        edge (which looked like sliding uphill / a random direction).
+
+        Tip-reverse near a lip (`SLIDE_LIP_COMMIT_FRAC`): once the marble is past that fraction
+        of half-length toward an edge, a slope flip commits the exit on that edge rather than
+        rocking forever around centre (travel time to the lip can exceed a quarter osc period).
+
+        Returns one `local_x` per sim step (length >= 1). Clocking matches playback:
+        step `k` (1-based) uses `origin_osc_steps + cum_steps + k`, same as live `_osc_steps`
+        after `_update_kinematic_tasks` increments then calls `_advance_marble`."""
+        dt = float(self.scene.get_timestep())
+        step_dist = max(float(self.roll_speed), 1e-4) * dt
+        half = float(self.shelf_half_len)
+        local = float(np.clip(start_local, -half, half))
+        locals_out = []
+        prev_downhill = 0.0
+        lip = float(self.SLIDE_LIP_COMMIT_FRAC) * half
+
+        # Static shelves finish in ~half_len/roll_speed; osc shelves may reverse for a few periods.
+        one_way = int(round((2.0 * half / max(float(self.roll_speed), 1e-4)) / dt)) + 2
+        if self.osc_enabled and shelf_idx == self.osc_shelf_idx:
+            period_steps = max(1, int(round(float(self.osc_period) / max(dt, 1e-6))))
+            max_steps = max(one_way, 4 * period_steps)
+        else:
+            max_steps = max(1, one_way)
+
+        for k in range(1, max_steps + 1):
+            osc_at = int(origin_osc_steps) + int(cum_steps) + k
+            phi = self._shelf_phi(shelf_idx, osc_steps=osc_at)
+            downhill = self._downhill_sign_from_phi(phi)
+
+            # Lip commit: tip reversed after we were already heading toward / past mid-lip.
+            if (
+                prev_downhill != 0.0
+                and downhill != 0.0
+                and downhill != prev_downhill
+                and abs(local) >= lip
+                and (1.0 if local > 0.0 else -1.0) == prev_downhill
+            ):
+                local = float(prev_downhill * half)
+                locals_out.append(local)
+                break
+
+            if downhill != 0.0:
+                edge = downhill * half
+                delta = edge - local
+                if abs(delta) <= step_dist:
+                    local = edge
+                else:
+                    local = local + step_dist * (1.0 if delta > 0.0 else -1.0)
+                prev_downhill = downhill
+            # else: flat — hold position; keep prev_downhill so a flip after a flat still commits
+            local = float(np.clip(local, -half, half))
+            locals_out.append(local)
+            if abs(local) >= half - 1e-9:
+                break
+        else:
+            # Safety: still on the shelf after max_steps — exit toward the nearer / last downhill edge.
+            if abs(local) < 1e-9:
+                fallback = prev_downhill if prev_downhill != 0.0 else float(self.shelf_dir[shelf_idx])
+                local = float(fallback * half)
+            else:
+                local = float((1.0 if local > 0.0 else -1.0) * half)
+            locals_out.append(local)
+
+        if not locals_out:
+            locals_out = [local]
+        return locals_out
+
     def _compute_descent_plan(self, origin_osc_steps=0):
         """Analytically precompute the marble's entire path (a list of deterministic kinematic
         "legs": slide-along-a-shelf, then parabolic-free-fall-to-the-next-shelf-or-the-belt) from
@@ -523,7 +613,11 @@ class catch_shelf_marble(Base_Task):
         `origin_osc_steps` is the episode-absolute `_osc_steps` value at the instant of marble
         release; `cum_steps` then counts ticks since that release. Every `_shelf_*` lookup below
         therefore sees the oscillating shelf (if any) at precisely the angle it will actually be
-        at when the marble gets there -- matching live playback, which keys off `_osc_steps`."""
+        at when the marble gets there -- matching live playback, which keys off `_osc_steps`.
+
+        Slide direction follows `sign(phi)` at each tick (see `_simulate_slide_locals`), so an
+        oscillating shelf's tip reverse correctly sends the marble downhill instead of toward the
+        fixed load-time `shelf_dir` edge."""
         dt = float(self.scene.get_timestep())
         g = self.GRAVITY
         legs = []
@@ -532,15 +626,17 @@ class catch_shelf_marble(Base_Task):
         cum_steps = 0
         x = z = 0.0
         for _ in range(self.n_shelves + 2):
-            sign = self.shelf_dir[cur_shelf]
-            edge_local = sign * self.shelf_half_len
-            dist = abs(edge_local - cur_local)
-            slide_steps = max(1, int(round((dist / max(self.roll_speed, 1e-4)) / dt)))
+            locals_traj = self._simulate_slide_locals(
+                cur_shelf, cur_local, origin_osc_steps, cum_steps
+            )
+            slide_steps = len(locals_traj)
+            edge_local = float(locals_traj[-1])
             legs.append({
                 "type": "slide",
                 "shelf": cur_shelf,
                 "start_local": float(cur_local),
-                "end_local": float(edge_local),
+                "end_local": edge_local,
+                "locals": [float(v) for v in locals_traj],
                 "steps": int(slide_steps),
             })
             cum_steps += slide_steps
@@ -548,7 +644,17 @@ class catch_shelf_marble(Base_Task):
             edge_pos = self._shelf_local_to_world(
                 cur_shelf, edge_local, osc_steps=origin_osc_steps + cum_steps
             )
-            vx = sign * self.roll_speed
+            # Leave in the direction of the edge we exited (or live downhill if we timed out mid-shelf).
+            if abs(edge_local) >= self.shelf_half_len - 1e-6:
+                exit_sign = 1.0 if edge_local > 0.0 else -1.0
+            else:
+                phi_exit = self._shelf_phi(
+                    cur_shelf, osc_steps=origin_osc_steps + cum_steps
+                )
+                exit_sign = self._downhill_sign_from_phi(phi_exit)
+                if exit_sign == 0.0:
+                    exit_sign = float(self.shelf_dir[cur_shelf])
+            vx = exit_sign * self.roll_speed
             landed_shelf, landed_local = None, None
             k = 0
             for k in range(1, self.max_fall_steps + 1):
@@ -1016,10 +1122,16 @@ class catch_shelf_marble(Base_Task):
         steps_total = max(1, leg["steps"])
 
         if leg["type"] == "slide":
-            frac = min(1.0, step / steps_total)
-            local_x = leg["start_local"] + frac * (leg["end_local"] - leg["start_local"])
+            traj = leg.get("locals")
+            if traj:
+                local_x = float(traj[min(step, len(traj)) - 1])
+            else:
+                # Legacy lerp fallback (pre-trajectory plans).
+                frac = min(1.0, step / steps_total)
+                local_x = leg["start_local"] + frac * (leg["end_local"] - leg["start_local"])
             # Live `_osc_steps` matches `_compute_descent_plan(origin_osc_steps=...)`'s absolute
             # clock, so the oscillating shelf (if this is that shelf) is at the planned angle.
+            # `locals` already followed sign(phi) at each tick, so this stays downhill.
             pos = self._shelf_local_to_world(leg["shelf"], local_x, osc_steps=self._osc_steps)
         else:
             dt = float(self.scene.get_timestep())
