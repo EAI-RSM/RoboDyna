@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -583,10 +584,17 @@ def finish_interactive_data_recording(env) -> str | None:
         task_name = args.get("task_name") or getattr(env, "task_name", "")
         task_config = args.get("task_config") or folder_name_from_save_dir(save_dir)
         if task_name and task_config:
-            os.system(
-                f"cd description && bash gen_episode_instructions.sh "
-                f"{task_name} {task_config} {language_num}"
+            cmd = (
+                "cd description && bash gen_episode_instructions.sh "
+                f"{shlex.quote(str(task_name))} {shlex.quote(str(task_config))} "
+                f"{int(language_num)}"
             )
+            result = subprocess.run(cmd, shell=True, cwd=str(REPO_ROOT))
+            if result.returncode != 0:
+                print(
+                    "[record-data] instruction generation skipped "
+                    f"(exit {result.returncode})"
+                )
     except Exception as exc:
         print(f"[record-data] instruction generation skipped: {exc}")
     return hdf5

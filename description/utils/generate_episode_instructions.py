@@ -136,6 +136,27 @@ def load_task_instructions(task_name: str) -> Dict[str, Any]:
     return task_data
 
 
+def resolve_task_config_yaml(setting: str) -> str:
+    """Return ``task_config/<stem>.yml``.
+
+    Interactive record-data stores episodes under folders like
+    ``demo_dynamic_opt1`` / ``demo_dynamic_opt1+2``. Those names are data
+    directories, not yaml files — fall back to the base config yaml.
+    """
+    setting = str(setting or "").strip() or "demo_dynamic"
+    candidates = [setting]
+    stripped = re.sub(r"_opt(1\+2|1|2)$", "", setting)
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
+    if setting.startswith(".interactive_gui_") and "demo_dynamic" not in candidates:
+        candidates.append("demo_dynamic")
+    for stem in candidates:
+        path = os.path.join(parent_directory, f"../../task_config/{stem}.yml")
+        if os.path.isfile(path):
+            return path
+    return os.path.join(parent_directory, f"../../task_config/{setting}.yml")
+
+
 def load_scene_info(task_name: str, setting: str, scene_info_path: str) -> Dict[str, Dict]:
     """Load the scene info from the JSON file in the data directory."""
     file_path = os.path.join(parent_directory, f"../../{scene_info_path}/{task_name}/{setting}/scene_info.json")
@@ -258,11 +279,13 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    setting_file = os.path.join(
-        parent_directory, f"../../task_config/{args.setting}.yml"
-    )
-    with open(setting_file, "r", encoding="utf-8") as f:
-        args_dict = yaml.load(f.read(), Loader=yaml.FullLoader)
+    setting_file = resolve_task_config_yaml(args.setting)
+    try:
+        with open(setting_file, "r", encoding="utf-8") as f:
+            args_dict = yaml.load(f.read(), Loader=yaml.FullLoader)
+    except FileNotFoundError:
+        print(f"\033[1mERROR: Task config '{setting_file}' not found.\033[0m")
+        exit(1)
 
     # Load scene info and extract episode parameters
     scene_info = load_scene_info(args.task_name, args.setting, args_dict['save_path'])
