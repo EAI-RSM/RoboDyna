@@ -41,6 +41,20 @@ README_PATH = ROOT / "README.md"
 # Must match interactive._interactive_common.TASK_RESULT_ENV
 TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"
 
+
+def record_status_note(payload) -> str:
+    """Append-only note when the child wrote collect_data-format files."""
+    if not isinstance(payload, dict):
+        return ""
+    hdf5 = str(payload.get("record_hdf5") or "").strip()
+    if hdf5:
+        return f" Recorded {hdf5}."
+    path = str(payload.get("record_path") or "").strip()
+    ep = payload.get("record_episode")
+    if path and ep is not None:
+        return f" Recorded {path}/data/episode{ep}.hdf5."
+    return ""
+
 TASKS = (
     ("Catch Marbles Trapdoors", "catch_marbles_trapdoors"),
     ("Catch Ramp Ball", "catch_ramp_ball"),
@@ -71,7 +85,7 @@ TUTORIAL_PARTS = (
     ("Part 1", "tutorial_part1", "Select arms (1, 2, 3) then switch camera (V)."),
     ("Part 2", "tutorial_part2", "Move with arrows, E/Q, R/T, F/G, then Space."),
     ("Part 3", "tutorial_part3", "Grasp, hold-button, switch, then push a box."),
-    ("Part 4", "tutorial_part4", "Practice freely."),
+    ("Part 4", "tutorial_part4", "Ball, stove knob, mallet, then force key."),
 )
 
 SCENARIOS = ("default", "opt1", "opt2", "opt1+2")
@@ -464,8 +478,8 @@ class InteractiveTaskLauncher(tk.Tk):
         self._preview_width = self.IMAGE_SIZE[0]
         self._ui_scale = 1.0
         self._header_layout_key: tuple | None = None
-        self.tutorial_source: Image.Image | None = None
-        self.tutorial_photo: ImageTk.PhotoImage | None = None
+        self.tutorial_sources: list[Image.Image | None] = []
+        self.tutorial_photos: list[ImageTk.PhotoImage | None] = []
         self.tutorial_preview_labels: list[tk.Label] = []
         self.tutorial_buttons: list[RoundedButton] = []
         self._idle_status = (
@@ -651,7 +665,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.set("robot")
         self.control.pack(pady=(4, 0))
         self._style_control_menu(("Sans", 13, "bold"))
-        self._control_groups = (self.brief_group, self.record_group, self.seed_group, self.control_group)
+        self._control_groups = (self.brief_group, self.seed_group, self.control_group)
 
         self.status = tk.Label(
             self,
@@ -733,8 +747,6 @@ class InteractiveTaskLauncher(tk.Tk):
         self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
         self.brief_caption.configure(font=self._scaled_font(13, "bold", s))
         self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
-        self.record_caption.configure(font=self._scaled_font(13, "bold", s))
-        self.record_check.configure(font=self._scaled_font(14, "bold", s))
         self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
         self.control_caption.configure(font=self._scaled_font(13, "bold", s))
         self.seed_entry.configure(font=self._scaled_font(13, "bold", s))
@@ -866,14 +878,14 @@ class InteractiveTaskLauncher(tk.Tk):
             )
 
     def _controls_natural_width(self, scale: float) -> int:
-        pads = (self._px(16, scale), self._px(16, scale), self._px(18, scale), self._px(14, scale))
+        pads = (self._px(16, scale), self._px(18, scale), self._px(14, scale))
         return sum(
             group.winfo_reqwidth() + pad
             for group, pad in zip(self._control_groups, pads)
         )
 
     def _pack_control_groups(self, *, wrap: bool, scale: float) -> None:
-        pads = (self._px(16, scale), self._px(16, scale), self._px(18, scale), self._px(14, scale))
+        pads = (self._px(16, scale), self._px(18, scale), self._px(14, scale))
         for group in self._control_groups:
             group.pack_forget()
         if wrap:
@@ -983,18 +995,21 @@ class InteractiveTaskLauncher(tk.Tk):
         image = source.resize((width, height), Image.Resampling.LANCZOS)
         return ImageTk.PhotoImage(image)
 
-    def _tutorial_snapshot_path(self) -> Path | None:
-        candidates = (
-            TUTORIAL_DIR / "scene_snapshot.png",
-            DEMO_DIR / "tutorial_empty" / "scene_snapshot.png",
-        )
-        for path in candidates:
-            if path.exists():
-                return path
+    def _tutorial_snapshot_path(self, part_index: int | None = None) -> Path | None:
+        names: list[str] = []
+        if part_index is not None:
+            names.append(f"scene_snapshot_part{part_index + 1}.png")
+        names.append("scene_snapshot.png")
+        directories = (TUTORIAL_DIR, DEMO_DIR / "tutorial_empty")
+        for directory in directories:
+            for name in names:
+                path = directory / name
+                if path.exists():
+                    return path
         return None
 
-    def _load_tutorial_source(self) -> Image.Image | None:
-        path = self._tutorial_snapshot_path()
+    def _load_tutorial_source(self, part_index: int | None = None) -> Image.Image | None:
+        path = self._tutorial_snapshot_path(part_index)
         if path is None:
             return None
         try:
@@ -1006,9 +1021,13 @@ class InteractiveTaskLauncher(tk.Tk):
 
     def _refresh_tutorial_previews(self, width: int | None = None) -> None:
         cell_width = int(width if width is not None else self._cell_preview_width(self._preview_width))
-        photo = self._render_preview(self.tutorial_source, cell_width)
-        self.tutorial_photo = photo
-        for label in self.tutorial_preview_labels:
+        photos: list[ImageTk.PhotoImage | None] = []
+        for index, source in enumerate(self.tutorial_sources):
+            photo = self._render_preview(source, cell_width)
+            photos.append(photo)
+            if index >= len(self.tutorial_preview_labels):
+                continue
+            label = self.tutorial_preview_labels[index]
             if photo is None:
                 label.configure(
                     image="",
@@ -1018,6 +1037,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 )
             else:
                 label.configure(image=photo, text="", width=0, height=0)
+        self.tutorial_photos = photos
 
     def _add_tutorial_section(self):
         """Same four-column card as other base tasks; index 00."""
@@ -1064,15 +1084,18 @@ class InteractiveTaskLauncher(tk.Tk):
 
         grid = tk.Frame(card, bg=CARD_BG)
         grid.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(0, 16))
-        self.tutorial_source = self._load_tutorial_source()
+        self.tutorial_sources = [
+            self._load_tutorial_source(index) for index in range(len(TUTORIAL_PARTS))
+        ]
         cell_width = self._cell_preview_width(self._preview_width)
-        photo = self._render_preview(self.tutorial_source, cell_width)
-        self.tutorial_photo = photo
+        self.tutorial_photos = []
 
         for index, (label, _script, hint) in enumerate(TUTORIAL_PARTS):
             col = tk.Frame(grid, bg=CARD_BG)
             col.pack(side="left", expand=True, fill="both", padx=6)
 
+            photo = self._render_preview(self.tutorial_sources[index], cell_width)
+            self.tutorial_photos.append(photo)
             preview_label = tk.Label(
                 col,
                 image=photo,
@@ -1323,12 +1346,18 @@ class InteractiveTaskLauncher(tk.Tk):
                 )
             else:
                 summary = (
-                    "Empty table with both arms. No task objects yet — practice "
-                    "looking around and moving the robots."
+                    "Four advanced actions on the left side of the table, one at a time: "
+                    "catch a rolling ball, turn the stove knob on and off, pick up a mallet, "
+                    "then press a multi-stage key to a target force."
                 )
                 instruction = (
-                    "This is a tutorial sandbox: table, wall, and dual UR5 only. "
-                    "Later parts will add objects and goals. Close the viewer or press Esc when done."
+                    "The left arm starts selected. The overlay window is larger so the "
+                    "instructions stay on screen. (1) Catch the red ball as it rolls toward "
+                    "you — Space to close, E to lift. If it falls or you drop it, it respawns. "
+                    "(2) Grasp the stove knob, yaw left until fire appears, yaw back to turn "
+                    "it off. (3) Grasp the mallet handle and lift it. (4) Press Q on the blue "
+                    "key: the bar shows force. Hit the yellow target band, then release. "
+                    "Too light or too hard — try again."
                 )
             briefing = build_briefing_text(
                 label=f"Tutorial · {label}",
@@ -1368,7 +1397,6 @@ class InteractiveTaskLauncher(tk.Tk):
                 "--part",
                 str(index + 1),
             ]
-            self._apply_record_launch(child_env, command)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1383,7 +1411,6 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.briefing_check.configure(state="disabled")
-        self.record_check.configure(state="disabled")
         self.tutorial_buttons[index].configure(
             text="Stop", bg="#b06a20", activebackground="#d0842b"
         )
@@ -1391,8 +1418,6 @@ class InteractiveTaskLauncher(tk.Tk):
             f"Running Tutorial / {label} with seed {seed}. "
             "Close its viewer or press Stop."
         )
-        if bool(self.record_data.get()):
-            run_text = f"{run_text} Recording collect_data episode."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -1473,7 +1498,6 @@ class InteractiveTaskLauncher(tk.Tk):
             # understands it (pack_fruits); unknown flags are avoided below.
             if task == "pack_fruits":
                 command.extend(["--scenario", scenario])
-            self._apply_record_launch(child_env, command)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1489,7 +1513,6 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.briefing_check.configure(state="disabled")
-        self.record_check.configure(state="disabled")
         active_button = self.task_buttons[index][SCENARIOS.index(scenario)]
         active_button.configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
         desc = condition_description(task, scenario)
@@ -1499,8 +1522,6 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         if desc:
             run_text = f"{run_text}  ({desc})"
-        if bool(self.record_data.get()):
-            run_text = f"{run_text} Recording collect_data episode."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -1513,7 +1534,6 @@ class InteractiveTaskLauncher(tk.Tk):
                 self.active_selection = None
                 payload = self._read_result_payload()
                 reason = None
-                recorded = record_status_note(payload)
                 if isinstance(payload, dict):
                     detail = payload.get("detail")
                     if isinstance(detail, str) and detail.strip():
@@ -1526,7 +1546,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 # Match household_task_gui: 0=SUCCESS, 10=FAILURE, 2=closed early.
                 if code == 0:
                     self._set_status(
-                        f"Task result: SUCCESS.{recorded} Select another scenario below.",
+                        "Task result: SUCCESS. Select another scenario below.",
                         "#70d6a2",
                         sticky=True,
                     )
@@ -1535,19 +1555,19 @@ class InteractiveTaskLauncher(tk.Tk):
                     if reason:
                         msg = f"{msg} ({reason})"
                     self._set_status(
-                        f"{msg}.{recorded} Select another scenario below.",
+                        f"{msg}. Select another scenario below.",
                         "#e6a15c",
                         sticky=True,
                     )
                 elif code == 2:
                     self._set_status(
-                        f"Task closed before a result was reached.{recorded}",
+                        "Task closed before a result was reached.",
                         TEXT_SECONDARY,
                         sticky=True,
                     )
                 else:
                     self._set_status(
-                        f"Task result: ERROR (exit status {code}). Check the terminal.{recorded}",
+                        f"Task result: ERROR (exit status {code}). Check the terminal.",
                         "#e6a15c",
                         sticky=True,
                     )
@@ -1564,7 +1584,6 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="readonly")
         self.seed_entry.configure(state="normal")
         self.briefing_check.configure(state="normal")
-        self.record_check.configure(state="normal")
         for row in self.task_buttons:
             for scenario, button in zip(SCENARIOS, row):
                 button.configure(

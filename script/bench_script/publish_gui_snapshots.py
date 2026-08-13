@@ -19,7 +19,8 @@ Usage (repo root, robodyna env, headless Vulkan)::
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json; unset DISPLAY
     python script/bench_script/publish_gui_snapshots.py
     python script/bench_script/publish_gui_snapshots.py cook_meat catch_cuboid
-    python script/bench_script/publish_gui_snapshots.py --suite-only
+    python script/bench_script/publish_gui_snapshots.py --tutorial
+    python script/bench_script/publish_gui_snapshots.py tutorial_empty
 """
 from __future__ import annotations
 
@@ -46,6 +47,9 @@ from interactive.household_task_gui import TASKS as HOUSEHOLD_GUI_TASKS
 
 ROOT = os.path.abspath(".")
 FINAL = os.path.join(ROOT, "final_task_demos")
+TUTORIAL_DIR = os.path.join(ROOT, "interactive", "Tutorial")
+# Opening setup for each GUI card. Parts 1–2 are empty-table; 3 = cube; 4 = ball.
+TUTORIAL_PART_STAGES = {1: None, 2: None, 3: "grasp", 4: "ball"}
 # Upscale head stills for crisp GUI cards (native D435 is typically 640×480).
 SNAPSHOT_MAX_WIDTH = 1280
 SETTLE_STEPS = 8
@@ -108,6 +112,8 @@ def capture_snapshot(
     scenario: str | None = None,
     task_arg_overrides: list[str] | None = None,
     out_name: str = "scene_snapshot.png",
+    after_setup=None,
+    dest_dir: str | None = None,
 ) -> str:
     save_root = os.path.abspath(f"./tmp/tmp_{task_name}_snapshot")
     os.makedirs(save_root, exist_ok=True)
@@ -142,6 +148,8 @@ def capture_snapshot(
 
     task.setup_demo = _setup_demo
     task.setup_demo(now_ep_num=0, seed=int(seed), **args)
+    if after_setup is not None:
+        after_setup(task)
 
     # Let physics settle so floating/resting objects look natural.
     for _ in range(SETTLE_STEPS):
@@ -155,7 +163,7 @@ def capture_snapshot(
     obs = task.get_obs()
     head = _prepare_head_frame(obs["observation"]["head_camera"]["rgb"])
 
-    dest_dir = os.path.join(FINAL, task_name)
+    dest_dir = os.path.abspath(dest_dir or os.path.join(FINAL, task_name))
     os.makedirs(dest_dir, exist_ok=True)
     out_path = os.path.join(dest_dir, out_name)
     Image.fromarray(head).save(out_path, optimize=True)
@@ -195,6 +203,30 @@ def publish_household_task(task_name: str, seed: int = 0) -> None:
     capture_snapshot(task_name, seed=seed, out_name="scene_snapshot.png")
 
 
+def publish_tutorial_snapshots(seed: int = 0, parts: list[int] | None = None) -> None:
+    """Head-camera stills for Tutorial GUI cards (per-part filenames)."""
+    os.makedirs(TUTORIAL_DIR, exist_ok=True)
+    wanted = list(parts or TUTORIAL_PART_STAGES.keys())
+    for part in wanted:
+        stage = TUTORIAL_PART_STAGES.get(int(part))
+        out_name = f"scene_snapshot_part{int(part)}.png"
+
+        def _after(task, spawn_stage=stage):
+            if spawn_stage:
+                task.tutorial_set_stage(spawn_stage)
+
+        print(f"\n=== tutorial part {part} (stage={stage or 'empty'}) ===", flush=True)
+        path = capture_snapshot(
+            "tutorial_empty",
+            seed=seed,
+            after_setup=_after,
+            out_name=out_name,
+        )
+        tutorial_copy = os.path.join(TUTORIAL_DIR, out_name)
+        shutil.copy2(path, tutorial_copy)
+        print(f"  WROTE [tutorial] {tutorial_copy}", flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -212,13 +244,36 @@ def main() -> int:
         action="store_true",
         help="Only publish household single snapshots.",
     )
+    parser.add_argument(
+        "--tutorial",
+        action="store_true",
+        help="Publish Tutorial GUI stills (part 3 = cube, part 4 = rolling ball).",
+    )
+    parser.add_argument(
+        "--tutorial-part",
+        type=int,
+        nargs="*",
+        choices=(1, 2, 3, 4),
+        help="Tutorial part numbers to snapshot (default: all parts).",
+    )
     ns = parser.parse_args()
     only = set(ns.tasks) if ns.tasks else None
+    want_tutorial = (
+        bool(ns.tutorial)
+        or bool(ns.tutorial_part)
+        or (only is not None and "tutorial_empty" in only)
+    )
 
     suite = [] if ns.household_only else _suite_tasks()
     household = [] if ns.suite_only else _household_gui_tasks()
     # Avoid double-publishing tasks that appear in both lists.
     household = [t for t in household if t not in set(suite)]
+    if (ns.tutorial or ns.tutorial_part) and only is None:
+        suite = []
+        household = []
+    elif want_tutorial and only == {"tutorial_empty"}:
+        suite = []
+        household = []
 
     failed: list[str] = []
     for task in suite:
@@ -240,6 +295,15 @@ def main() -> int:
         except Exception as exc:
             print(f"FAILED {task}: {exc}", flush=True)
             failed.append(task)
+
+    if want_tutorial:
+        print("\n=== tutorial_empty (GUI parts) ===", flush=True)
+        try:
+            parts = list(ns.tutorial_part) if ns.tutorial_part else None
+            publish_tutorial_snapshots(seed=0, parts=parts)
+        except Exception as exc:
+            print(f"FAILED tutorial_empty: {exc}", flush=True)
+            failed.append("tutorial_empty")
 
     if failed:
         print("\nFailed tasks:", ", ".join(failed), flush=True)

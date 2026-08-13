@@ -25,10 +25,14 @@ TILT_SUBLABELS = ("left", "right")
 TILT_INSTRUCTION = "Tilt the gripper left or right"
 SPACE_INSTRUCTION = "Open and close the gripper"
 SPACE_BAR_W = KEY_SIZE * 2 + GAP
-GRASP_INSTRUCTION = "Arrows to the cube. Space closes; E lifts."
-HOLD_INSTRUCTION = "Q to press and hold; E to release"
-SWITCH_INSTRUCTION = "Press ON (red), press again OFF (green)"
+GRASP_INSTRUCTION = "Arrows move. E/Q raise and lower. Space closes."
+HOLD_INSTRUCTION = "Arrows to the button. Q to hold; E to release"
+SWITCH_INSTRUCTION = "Arrows to aim. Q turns it ON, Q again OFF"
 PUSH_INSTRUCTION = "Close the gripper, then push the box to the green line"
+BALL_INSTRUCTION = "The red ball rolls toward you. Close (Space), lift (E). Miss or drop: it comes back."
+STOVE_INSTRUCTION = "Grasp the knob (Space). Yaw left to light the fire, yaw back to turn it off."
+MALLET_INSTRUCTION = "Grasp the mallet handle (Space) and lift it (E)."
+FORCE_INSTRUCTION = "Press Q onto the key. Match the target force band, then lift off."
 
 _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -240,7 +244,7 @@ PLAY2_KEY = 72
 PLAY2_GAP = 8
 PLAY2_GROUP = 16
 PLAY2_PAD = 10
-PLAY2_CAPTION = "Practice — keys flash. Esc quits."
+PLAY2_CAPTION = "Practice — Esc quits."
 
 
 def _play2_arrow_block() -> tuple[int, int]:
@@ -575,35 +579,89 @@ def draw_space_plus_key(
     return canvas
 
 
-def draw_grasp_keys(pressed: set[str] | None = None) -> Image.Image:
-    pressed = pressed or set()
-    return draw_space_plus_key(
-        "E",
-        space_pressed="Space" in pressed,
-        letter_pressed="E" in pressed,
-        space_sub="close",
-        letter_sub="lift",
-        instruction=GRASP_INSTRUCTION,
+def _arrows_eq_size(*, extra_h: int = 0) -> tuple[int, int, int, int, int]:
+    k, g, pad = PLAY2_KEY, PLAY2_GAP, PLAY2_PAD
+    aw, ah = _play2_arrow_block()
+    width = pad + aw + PLAY2_GROUP + k + pad
+    height = pad + ah + pad + extra_h
+    return width, height, k, g, pad
+
+
+def _composite_arrows_eq(canvas: Image.Image, pressed: set[str], *, x0: int, y0: int, k: int, g: int) -> int:
+    """Draw arrow cluster + E (up) / Q (down). Returns the block height."""
+    aw, ah = _play2_arrow_block()
+    canvas.alpha_composite(
+        draw_arrow_keycap("up", pressed="up" in pressed, size=k),
+        (x0 + k + g, y0),
     )
+    by = y0 + k + g
+    canvas.alpha_composite(
+        draw_arrow_keycap("left", pressed="left" in pressed, size=k),
+        (x0, by),
+    )
+    canvas.alpha_composite(
+        draw_arrow_keycap("down", pressed="down" in pressed, size=k),
+        (x0 + k + g, by),
+    )
+    canvas.alpha_composite(
+        draw_arrow_keycap("right", pressed="right" in pressed, size=k),
+        (x0 + 2 * (k + g), by),
+    )
+    lx = x0 + aw + PLAY2_GROUP
+    canvas.alpha_composite(
+        draw_keycap("E", pressed="E" in pressed, size=k),
+        (lx, y0),
+    )
+    canvas.alpha_composite(
+        draw_keycap("Q", pressed="Q" in pressed, size=k),
+        (lx, by),
+    )
+    return ah
+
+
+def draw_arrows_eq_keys(instruction: str, pressed: set[str] | None = None) -> Image.Image:
+    """Arrows + E/Q with an instruction line (hold button / on-off switch)."""
+    pressed = pressed or set()
+    width, height, k, g, pad = _arrows_eq_size(extra_h=INSTRUCTION_H)
+    canvas = Image.new("RGBA", (width, height), _CANVAS)
+    d = ImageDraw.Draw(canvas)
+    x0 = y0 = pad
+    ah = _composite_arrows_eq(canvas, pressed, x0=x0, y0=y0, k=k, g=g)
+    inst_font = _font(22)
+    lines = _wrap_text(instruction, inst_font, d, width - pad * 2)
+    _draw_centered_lines(d, lines, inst_font, y0 + ah + 8, width, _INSTRUCTION)
+    return canvas
+
+
+def draw_grasp_keys(pressed: set[str] | None = None) -> Image.Image:
+    """Arrows + E/Q height + Space for the pick-up-cube stage."""
+    pressed = pressed or set()
+    k, g, pad = PLAY2_KEY, PLAY2_GAP, PLAY2_PAD
+    aw, ah = _play2_arrow_block()
+    width = pad + aw + PLAY2_GROUP + k + pad
+    height = pad + ah + g + k + pad + INSTRUCTION_H
+    canvas = Image.new("RGBA", (width, height), _CANVAS)
+    d = ImageDraw.Draw(canvas)
+    x0 = y0 = pad
+    _composite_arrows_eq(canvas, pressed, x0=x0, y0=y0, k=k, g=g)
+    sy = y0 + ah + g
+    space_w = aw + PLAY2_GROUP + k
+    canvas.alpha_composite(
+        draw_wide_keycap("Space", pressed="Space" in pressed, width=space_w, height=k),
+        (x0, sy),
+    )
+    inst_font = _font(22)
+    lines = _wrap_text(GRASP_INSTRUCTION, inst_font, d, width - pad * 2)
+    _draw_centered_lines(d, lines, inst_font, sy + k + 8, width, _INSTRUCTION)
+    return canvas
 
 
 def draw_hold_keys(pressed: set[str] | None = None) -> Image.Image:
-    pressed = pressed or set()
-    return draw_key_row(
-        ("Q", "E"),
-        pressed,
-        sublabels=("press", "release"),
-        instruction=HOLD_INSTRUCTION,
-    )
+    return draw_arrows_eq_keys(HOLD_INSTRUCTION, pressed)
 
 
 def draw_switch_keys(pressed: set[str] | None = None) -> Image.Image:
-    pressed = pressed or set()
-    return draw_key_row(
-        ("Q",),
-        pressed,
-        instruction=SWITCH_INSTRUCTION,
-    )
+    return draw_arrows_eq_keys(SWITCH_INSTRUCTION, pressed)
 
 
 def draw_push_keys(pressed: set[str] | None = None) -> Image.Image:
@@ -662,3 +720,209 @@ def draw_action_stage(stage: str, pressed: set[str] | None = None) -> Image.Imag
     if stage == "push":
         return draw_push_keys(pressed)
     raise ValueError(f"Unknown action stage: {stage}")
+
+
+ADV_INSTRUCTION_H = 120
+FORCE_BAR_H = 56
+
+
+def advanced_cluster_size() -> tuple[int, int]:
+    width, height = cluster_size()
+    extra = ADV_INSTRUCTION_H - INSTRUCTION_H
+    return width, height + max(0, extra)
+
+
+def draw_ball_keys(pressed: set[str] | None = None) -> Image.Image:
+    pressed = pressed or set()
+    arrow_w, _arrow_h = arrow_cluster_size()
+    width = arrow_w
+    height = (
+        CANVAS_PAD
+        + KEY_SIZE
+        + GAP
+        + KEY_SIZE * 2
+        + GAP
+        + ADV_INSTRUCTION_H
+        + CANVAS_PAD
+    )
+    canvas = Image.new("RGBA", (width, height), _CANVAS)
+    d = ImageDraw.Draw(canvas)
+    space = draw_wide_keycap("Space", pressed="Space" in pressed)
+    lift = draw_keycap("E", pressed="E" in pressed)
+    row_w = space.width + GAP + KEY_SIZE
+    x0 = (width - row_w) // 2
+    y0 = CANVAS_PAD
+    canvas.alpha_composite(space, (x0, y0))
+    canvas.alpha_composite(lift, (x0 + space.width + GAP, y0))
+    ay = y0 + KEY_SIZE + GAP
+    canvas.alpha_composite(
+        draw_arrow_keycap("up", pressed="up" in pressed),
+        (CANVAS_PAD + KEY_SIZE + GAP, ay),
+    )
+    canvas.alpha_composite(
+        draw_arrow_keycap("left", pressed="left" in pressed),
+        (CANVAS_PAD, ay + KEY_SIZE + GAP),
+    )
+    canvas.alpha_composite(
+        draw_arrow_keycap("down", pressed="down" in pressed),
+        (CANVAS_PAD + KEY_SIZE + GAP, ay + KEY_SIZE + GAP),
+    )
+    canvas.alpha_composite(
+        draw_arrow_keycap("right", pressed="right" in pressed),
+        (CANVAS_PAD + 2 * (KEY_SIZE + GAP), ay + KEY_SIZE + GAP),
+    )
+    inst_font = _font(26)
+    max_w = width - CANVAS_PAD * 2
+    lines = _wrap_text(BALL_INSTRUCTION, inst_font, d, max_w)
+    inst_y = ay + KEY_SIZE * 2 + GAP + 8
+    _draw_centered_lines(d, lines, inst_font, inst_y, width, _INSTRUCTION)
+    return canvas
+
+
+def draw_stove_keys(pressed: set[str] | None = None) -> Image.Image:
+    pressed = pressed or set()
+    width, _h = advanced_cluster_size()
+    height = CANVAS_PAD + KEY_SIZE + SUBLABEL_H + ADV_INSTRUCTION_H + CANVAS_PAD
+    canvas = Image.new("RGBA", (width, height), _CANVAS)
+    d = ImageDraw.Draw(canvas)
+    space = draw_wide_keycap("Space", pressed="Space" in pressed)
+    r_key = draw_keycap("R", pressed="R" in pressed)
+    t_key = draw_keycap("T", pressed="T" in pressed)
+    row_w = space.width + GAP + KEY_SIZE + GAP + KEY_SIZE
+    x0 = (width - row_w) // 2
+    y0 = CANVAS_PAD
+    canvas.alpha_composite(space, (x0, y0))
+    canvas.alpha_composite(r_key, (x0 + space.width + GAP, y0))
+    canvas.alpha_composite(t_key, (x0 + space.width + GAP + KEY_SIZE + GAP, y0))
+    sub_font = _font(26)
+    hints = (
+        (x0, space.width, "grasp"),
+        (x0 + space.width + GAP, KEY_SIZE, "yaw L"),
+        (x0 + space.width + GAP + KEY_SIZE + GAP, KEY_SIZE, "yaw R"),
+    )
+    for hx, hw, hint in hints:
+        bbox = d.textbbox((0, 0), hint, font=sub_font)
+        tw = bbox[2] - bbox[0]
+        tx = hx + (hw - tw) / 2 - bbox[0]
+        ty = y0 + KEY_SIZE + 4 - bbox[1]
+        d.text((tx, ty), hint, font=sub_font, fill=_SUBLABEL)
+    inst_font = _font(26)
+    lines = _wrap_text(STOVE_INSTRUCTION, inst_font, d, width - CANVAS_PAD * 2)
+    _draw_centered_lines(
+        d, lines, inst_font, y0 + KEY_SIZE + SUBLABEL_H + 6, width, _INSTRUCTION
+    )
+    return canvas
+
+
+def draw_mallet_keys(pressed: set[str] | None = None) -> Image.Image:
+    pressed = pressed or set()
+    return draw_space_plus_key(
+        "E",
+        space_pressed="Space" in pressed,
+        letter_pressed="E" in pressed,
+        space_sub="close",
+        letter_sub="lift",
+        instruction=MALLET_INSTRUCTION,
+    )
+
+
+def _force_bar_colors():
+    return (
+        (40, 90, 210, 255),
+        (40, 180, 80, 255),
+        (230, 190, 30, 255),
+        (230, 120, 30, 255),
+        (210, 40, 40, 255),
+    )
+
+
+def draw_force_key_stage(
+    pressed: set[str] | None = None,
+    *,
+    force_n: float = 0.0,
+    peak_n: float = 0.0,
+    target_level: int = 2,
+    thresholds: tuple[float, ...] = (3.0, 6.0, 10.0, 14.0),
+    feedback: str = "",
+) -> Image.Image:
+    pressed = pressed or set()
+    width, _base_h = advanced_cluster_size()
+    height = (
+        CANVAS_PAD
+        + KEY_SIZE
+        + SUBLABEL_H
+        + FORCE_BAR_H
+        + ADV_INSTRUCTION_H
+        + CANVAS_PAD
+    )
+    canvas = Image.new("RGBA", (width, height), _CANVAS)
+    d = ImageDraw.Draw(canvas)
+    row = draw_key_row(
+        ("Q", "E"),
+        pressed,
+        sublabels=("press", "release"),
+        instruction="",
+    )
+    canvas.alpha_composite(row, (0, 0))
+    y_bar = CANVAS_PAD + KEY_SIZE + SUBLABEL_H + 4
+    pad = CANVAS_PAD + 16
+    bar = [pad, y_bar, width - pad, y_bar + 28]
+    d.rounded_rectangle(bar, radius=8, fill=(32, 34, 40, 255), outline=(90, 94, 104, 255), width=2)
+    max_f = float(thresholds[-1]) if thresholds else 14.0
+    shown = max(float(force_n), float(peak_n) * 0.15)
+    frac = float(min(1.0, max(0.0, shown / max(max_f, 1e-6))))
+    fill_x = bar[0] + 3 + (bar[2] - bar[0] - 6) * frac
+    level = 0
+    for i, thr in enumerate(thresholds):
+        if shown >= float(thr):
+            level = i + 1
+    colors = _force_bar_colors()
+    fill = colors[min(level, len(colors) - 1)]
+    if fill_x > bar[0] + 4:
+        d.rounded_rectangle(
+            [bar[0] + 3, bar[1] + 3, fill_x, bar[3] - 3],
+            radius=6,
+            fill=fill,
+        )
+    target = max(1, min(int(target_level), len(thresholds)))
+    lo = float(thresholds[target - 1])
+    hi = float(thresholds[target]) if target < len(thresholds) else max_f
+    bw = bar[2] - bar[0]
+    x_lo = bar[0] + bw * (lo / max_f)
+    x_hi = bar[0] + bw * (hi / max_f)
+    d.rectangle([x_lo, bar[1] - 4, x_hi, bar[3] + 4], outline=(255, 230, 80, 220), width=3)
+    label_font = _font(22)
+    caption = f"Force {force_n:.1f} N   target {lo:.0f}–{hi:.0f} N"
+    if feedback:
+        caption = f"{caption}   {feedback}"
+    bbox = d.textbbox((0, 0), caption, font=label_font)
+    tw = bbox[2] - bbox[0]
+    d.text(
+        ((width - tw) / 2 - bbox[0], y_bar + 32 - bbox[1]),
+        caption,
+        font=label_font,
+        fill=_INSTRUCTION,
+    )
+    inst_font = _font(26)
+    lines = _wrap_text(FORCE_INSTRUCTION, inst_font, d, width - CANVAS_PAD * 2)
+    _draw_centered_lines(
+        d, lines, inst_font, y_bar + FORCE_BAR_H + 4, width, _INSTRUCTION
+    )
+    return canvas
+
+
+def draw_advanced_stage(
+    stage: str,
+    pressed: set[str] | None = None,
+    **kwargs,
+) -> Image.Image:
+    pressed = pressed or set()
+    if stage == "ball":
+        return draw_ball_keys(pressed)
+    if stage == "stove":
+        return draw_stove_keys(pressed)
+    if stage == "mallet":
+        return draw_mallet_keys(pressed)
+    if stage == "force_key":
+        return draw_force_key_stage(pressed, **kwargs)
+    raise ValueError(f"Unknown advanced stage: {stage}")

@@ -3,24 +3,35 @@ from __future__ import annotations
 
 from _interactive_common import print_instructions, run_viewer_loop, task_result_exit_code
 from _key_hud import TutorialKeyHud, build_part3_key_hud
-from _keycaps import draw_action_stage
+
+_MOVE_KEYS = (
+    ("q", "Q"),
+    ("e", "E"),
+    ("left", "left"),
+    ("right", "right"),
+    ("up", "up"),
+    ("down", "down"),
+)
 
 # (stage, window keys to highlight, prompt)
 _STAGES: tuple[tuple[str, tuple[tuple[str, str], ...], str], ...] = (
     (
         "grasp",
-        (("space", "Space"), ("e", "E")),
-        "Pick up the orange cube: move onto it, close the gripper (Space), then lift (E).",
+        (
+            ("space", "Space"),
+            *_MOVE_KEYS,
+        ),
+        "Pick up the orange cube: arrows to move, E/Q for height, Space to close, then lift.",
     ),
     (
         "hold",
-        (("q", "Q"), ("e", "E")),
-        "Hold-to-press: lower onto the green button with Q, hold, then lift off with E.",
+        _MOVE_KEYS,
+        "Hold-to-press: arrows onto the green button, Q to hold, E to lift off.",
     ),
     (
         "switch",
-        (("q", "Q"),),
-        "On/off switch: press Q to turn it ON (red, stays down), then press again to turn it OFF.",
+        _MOVE_KEYS,
+        "On/off switch: arrows onto it, Q to turn ON (red), Q again to turn OFF.",
     ),
     (
         "push",
@@ -41,7 +52,6 @@ class Part3Coach:
         self.env = env
         self.hud = hud
         self.stage_index = 0
-        self.pressed: set[str] = set()
         self._prev: dict[str, bool] = {}
         self.done = False
         self._armed = False
@@ -80,10 +90,8 @@ class Part3Coach:
         finished = _STAGES[self.stage_index][0]
         print_instructions(f"{finished} — done.")
         self.stage_index += 1
-        self.pressed = set()
         if self.stage_index >= len(_STAGES):
             self.done = True
-            self.env.tutorial_set_stage(None)
             self.env._tutorial_complete = True
             print_instructions("Basic actions — part 3 complete.")
             return
@@ -92,24 +100,27 @@ class Part3Coach:
         self.hud.set_stage(stage)
         print_instructions(prompt)
 
-    def update(self, window) -> None:
+    def update_keys(self, window) -> None:
+        """HUD flashes only — never spawn/despawn (runs during render)."""
         if self.done or window is None:
+            return
+        self._ensure_left_arm()
+        _stage, keys, _prompt = _STAGES[self.stage_index]
+        held: set[str] = set()
+        for window_key, label in keys:
+            if window.key_down(window_key):
+                held.add(label)
+            if self._edge(window, window_key):
+                self.hud.flash(label)
+        self.hud.set_held(held)
+
+    def update_stage(self, window, _step: int) -> None:
+        """Advance props on the physics tick, not during viewer.render()."""
+        if self.done:
             return
         self._ensure_left_arm()
         if self.env.tutorial_stage_complete():
             self._advance()
-            return
-        stage, keys, _prompt = _STAGES[self.stage_index]
-        changed = False
-        for window_key, label in keys:
-            if not self._edge(window, window_key):
-                continue
-            if label in self.pressed:
-                continue
-            self.pressed.add(label)
-            changed = True
-        if changed:
-            self.hud.update_texture(stage, draw_action_stage(stage, self.pressed))
 
     def is_done(self, _step: int):
         if self.done:
@@ -122,10 +133,10 @@ def run_part3(env) -> int:
     hud = build_part3_key_hud(env.scene)
     coach = Part3Coach(env, hud)
     coach.start()
-    hud.on_frame = coach.update
+    hud.on_frame = coach.update_keys
     run_viewer_loop(
         env,
-        on_step=lambda window, _step: coach.update(window),
+        on_step=coach.update_stage,
         is_done=coach.is_done,
         extra_plugins=[hud],
     )

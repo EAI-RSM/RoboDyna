@@ -13,6 +13,7 @@ from sapien.utils.viewer.plugin import Plugin
 from _keycaps import (
     cluster_size,
     draw_action_stage,
+    draw_advanced_stage,
     draw_arm_keys,
     draw_control_stage,
     draw_part2_play_keys,
@@ -79,7 +80,7 @@ def _add_hud_camera(scene, img: Image.Image, origin, name: str):
 class TutorialKeyHud(Plugin):
     """ImGui window in the top-right showing the current tutorial key overlay."""
 
-    def __init__(self, cameras, textures, materials, sizes=None):
+    def __init__(self, cameras, textures, materials, sizes=None, display_width=None, window_pad_h=None):
         self.cameras = cameras
         self.textures = textures
         self.materials = materials
@@ -97,19 +98,24 @@ class TutorialKeyHud(Plugin):
         self._flash_until: dict[str, float] = {}
         self._play_drawn: set[str] | None = None
         self.play_drawer = draw_play_keys
+        self.flash_drawer = None
+        self.flash_enabled = False
+        self.flash_kwargs: dict = {}
         canvas_w, canvas_h = cluster_size()
         if self.sizes:
             canvas_w, canvas_h = next(iter(self.sizes.values()))
-        self.pic_w = _DISPLAY_WIDTH
-        self.pic_h = max(1, int(round(_DISPLAY_WIDTH * canvas_h / canvas_w)))
+        self.pic_w = int(display_width or _DISPLAY_WIDTH)
+        self.pic_h = max(1, int(round(self.pic_w * canvas_h / canvas_w)))
+        self.window_pad_w = _WINDOW_PAD_W
+        self.window_pad_h = int(window_pad_h if window_pad_h is not None else _WINDOW_PAD_H)
 
     def before_render(self):
         if self.on_frame is not None:
             viewer = getattr(self, "viewer", None)
             window = getattr(viewer, "window", None) if viewer is not None else None
             self.on_frame(window)
-        if self.stage == "play":
-            self._tick_play()
+        if self.flash_enabled:
+            self._tick_flash()
 
     def _display_wh(self) -> tuple[int, int]:
         size = self.sizes.get(self.stage)
@@ -121,8 +127,8 @@ class TutorialKeyHud(Plugin):
         if size is None:
             return self.pic_w, self.pic_h
         width, height = size
-        pic_w = _DISPLAY_WIDTH
-        pic_h = max(1, int(round(_DISPLAY_WIDTH * height / float(width))))
+        pic_w = self.pic_w
+        pic_h = max(1, int(round(self.pic_w * height / float(width))))
         return pic_w, pic_h
 
     def update_texture(self, name: str, img: Image.Image) -> None:
@@ -153,7 +159,15 @@ class TutorialKeyHud(Plugin):
     def set_held(self, held: set[str]) -> None:
         self._held = set(held)
 
-    def _tick_play(self) -> None:
+    def _flash_image_drawer(self):
+        if self.stage == "play":
+            return self.play_drawer
+        return self.flash_drawer
+
+    def _tick_flash(self) -> None:
+        drawer = self._flash_image_drawer()
+        if drawer is None or self.stage not in self.textures:
+            return
         now = time.perf_counter()
         active = set(self._held)
         expired = [key for key, until in self._flash_until.items() if now >= until]
@@ -164,16 +178,17 @@ class TutorialKeyHud(Plugin):
                 active.add(key)
         if active != self._play_drawn:
             self._play_drawn = set(active)
-            self.update_texture("play", self.play_drawer(active))
+            self.update_texture(self.stage, drawer(active))
 
     def set_stage(self, stage: str) -> None:
         self.stage = stage
-        if stage == "play":
-            self._held = set()
-            self._flash_until = {}
+        self._held = set()
+        self._flash_until = {}
+        self._play_drawn = None
+        drawer = self._flash_image_drawer() if self.flash_enabled else None
+        if drawer is not None and stage in self.textures:
+            self.update_texture(stage, drawer())
             self._play_drawn = set()
-            if "play" in self.textures:
-                self.update_texture("play", self.play_drawer())
         elif stage == "done":
             self.v_pressed = True
             if "view" in self.textures:
@@ -196,7 +211,7 @@ class TutorialKeyHud(Plugin):
                 .append(self.ui_picture)
             )
         self.ui_picture.Size(pw, ph)
-        self.ui_window.Size(pw + _WINDOW_PAD_W, ph + _WINDOW_PAD_H)
+        self.ui_window.Size(pw + self.window_pad_w, ph + self.window_pad_h)
         if self._laid_out_stage != self.stage:
             self._laid_out_stage = self.stage
             ww = 1920
@@ -209,7 +224,14 @@ class TutorialKeyHud(Plugin):
         return [self.ui_window]
 
 
-def build_staged_hud(scene, images: dict[str, Image.Image], start_stage: str) -> TutorialKeyHud:
+def build_staged_hud(
+    scene,
+    images: dict[str, Image.Image],
+    start_stage: str,
+    *,
+    display_width: int | None = None,
+    window_pad_h: int | None = None,
+) -> TutorialKeyHud:
     """Off-stage UV quads + ortho cameras, one per named overlay stage."""
     cameras = {}
     textures = {}
@@ -222,7 +244,14 @@ def build_staged_hud(scene, images: dict[str, Image.Image], start_stage: str) ->
         textures[name] = tex
         materials[name] = mat
         sizes[name] = img.size
-    hud = TutorialKeyHud(cameras, textures, materials, sizes=sizes)
+    hud = TutorialKeyHud(
+        cameras,
+        textures,
+        materials,
+        sizes=sizes,
+        display_width=display_width,
+        window_pad_h=window_pad_h,
+    )
     hud.stage = start_stage
     return hud
 
@@ -256,4 +285,25 @@ def build_part3_key_hud(scene) -> TutorialKeyHud:
     """Overlays for grasp → hold button → on/off switch → push box."""
     stages = ("grasp", "hold", "switch", "push")
     images = {name: draw_action_stage(name) for name in stages}
-    return build_staged_hud(scene, images, start_stage="grasp")
+    hud = build_staged_hud(scene, images, start_stage="grasp")
+    hud.flash_drawer = lambda pressed=None, **kwargs: draw_action_stage(hud.stage, pressed)
+    hud.flash_enabled = True
+    return hud
+
+
+def build_part4_key_hud(scene) -> TutorialKeyHud:
+    """Larger overlays for ball → stove → mallet → force key."""
+    stages = ("ball", "stove", "mallet", "force_key")
+    images = {name: draw_advanced_stage(name) for name in stages}
+    hud = build_staged_hud(
+        scene,
+        images,
+        start_stage="ball",
+        display_width=640,
+        window_pad_h=120,
+    )
+    hud.flash_drawer = lambda pressed=None, **kwargs: draw_advanced_stage(
+        hud.stage, pressed, **hud.flash_kwargs
+    )
+    hud.flash_enabled = True
+    return hud
