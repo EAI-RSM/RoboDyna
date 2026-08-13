@@ -7,7 +7,7 @@ except ImportError:
 
 KEYBOARD = """
   Cup starts moving as soon as the viewer is ready.
-  Click the table to teleport the pillow onto the table surface.
+  Click the table once to place the pillow; later clicks do nothing.
 """
 ROBOT = """
   Space             open / close selected gripper(s) only

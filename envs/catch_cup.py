@@ -430,7 +430,6 @@ class catch_cup(Office_base_task):
             try:
                 if rigid.kinematic:
                     rigid.set_kinematic_target(pose)
-                    return
             except Exception:
                 pass
         obj = entity.actor if hasattr(entity, "actor") else entity

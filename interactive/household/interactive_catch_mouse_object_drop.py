@@ -7,7 +7,7 @@ except ImportError:
 
 KEYBOARD = """
   Object drop starts as soon as the viewer is ready.
-  Click the table to teleport the basket onto the table surface.
+  Click the table once to place the basket; later clicks do nothing.
 """
 ROBOT = """
   Space opens/closes the gripper only — no automatic basket grasp.

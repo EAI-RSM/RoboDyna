@@ -140,6 +140,7 @@ class HouseholdController:
         self._orig_button_press_signal = None
         self._click_via_handler = False
         self._prev_mouse = False
+        self._catcher_placed = False
         # catch_cup / make_soup robot: keep the prop dynamic so gripper contact is real.
         # Keyboard+mouse drives props via click / keys (arms are hidden).
         if robot and task == "catch_cup" and self.actor is not None:
@@ -467,27 +468,38 @@ class HouseholdController:
 
     def _click_teleport_pillow(self, viewer, pixel_x, pixel_y):
         e = self.env
+        if self._catcher_placed or getattr(e, "pillow", None) is None:
+            return False
         hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
         if hit is None:
             return False
+        z = float(e.table_top) + 0.5 * float(getattr(e, "pillow_height", 0.04))
+        q = getattr(e, "PILLOW_Q", None)
+        quat = q.tolist() if hasattr(q, "tolist") else list(e.pillow.get_pose().q)
+        pose = sapien.Pose([float(hit[0]), float(hit[1]), z], quat)
         e._push_active = False
-        e._slide_pillow_to(hit)
-        try:
-            e._freeze_pillow()
-        except Exception:
-            pass
+        e._pillow_placed = True
+        if callable(getattr(e, "_freeze_pillow", None)):
+            e._freeze_pillow(pose)
+        else:
+            _set_pose(e.pillow, pose.p, quat=quat, kinematic=True)
+        self._catcher_placed = True
         print(f"[catch_cup] pillow on table at ({hit[0]:.3f}, {hit[1]:.3f})")
         return True
 
     def _click_teleport_basket(self, viewer, pixel_x, pixel_y):
         e = self.env
+        if self._catcher_placed or getattr(e, "basket", None) is None:
+            return False
         hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
         if hit is None:
             return False
         hz = float(getattr(e, "basket_hz", 0.5 * float(getattr(e, "basket_height", 0.07))))
         q = list(e.basket.get_pose().q)
-        pose = sapien.Pose([float(hit[0]), float(hit[1]), float(e.table_top) + hz], q)
-        e._set_entity_pose(e.basket, pose)
+        xyz = [float(hit[0]), float(hit[1]), float(e.table_top) + hz]
+        _set_pose(e.basket, xyz, quat=q, kinematic=True)
+        e._basket_placed = True
+        self._catcher_placed = True
         print(f"[catch_mouse_object_drop] basket on table at ({hit[0]:.3f}, {hit[1]:.3f})")
         return True
 
