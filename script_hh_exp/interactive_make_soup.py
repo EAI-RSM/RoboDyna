@@ -7,11 +7,11 @@ except ImportError:
 
 KEYBOARD = """
   Prefer --control robot: Space only opens/closes the gripper.
-  Close on the board handle, carry over the pot, then tip with Z/X to pour.
+  Close on the board handle, carry over the pot, then tip with F/G to pour.
 """
 ROBOT = """
   Space opens/closes the gripper only — no automatic board grasp.
-  Close on the board handle to pick it up, carry over the pot, tip with Z/X to pour.
+  Close on the board handle to pick it up, carry over the pot, tip with F/G to pour.
 """
 
 if __name__ == "__main__":

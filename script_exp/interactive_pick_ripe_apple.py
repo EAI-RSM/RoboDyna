@@ -39,7 +39,7 @@ def _move_arms_to_pre_grasp_orientation(env) -> None:
 
     Keeps each arm at its original EE position — does not approach the tree or
     apples. Orientation matches ``_try_front_grasp`` (horizontal pinch, parallel
-    to the table) so teleop translates without tipping unless Z/X/R/T are used.
+    to the table) so teleop translates without tipping unless F/G/R/T are used.
     """
     from envs._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
     from envs.utils.action import ArmTag

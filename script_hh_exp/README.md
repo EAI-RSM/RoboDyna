@@ -55,10 +55,10 @@ the same controls as the interactive examples in `script_exp`:
 --control robot (default): 1/2/3 selects left/right/both arms
                            arrows move selected arm(s) in XY
                            Q/E move selected arm(s) in Z
-                           G opens/closes selected gripper(s)
+                           F/G tip selected gripper(s) left/right
+                           Space opens/closes selected gripper(s)
 --control keyboard:        Space and arrows move the task prop directly
 V                          cycle head_camera ↔ gripper / wrist view(s)
-G                          open / close selected gripper(s)
 Escape                     quit
 ```
 
@@ -76,7 +76,7 @@ Use `--smoke-test` to initialize a task, render three frames, and exit without
 waiting for viewer input.
 
 For `interactive_make_soup.py`, close the gripper on the board handle, carry it
-over the pot, then hold Z/X to tip and pour.
+over the pot, then hold F/G to tip and pour.
 Physics, task-specific kinematic updates, and `check_success()` remain in the
 original environment classes; the runner only supplies viewer controls and
 the small set of task actions shown in each script's banner.

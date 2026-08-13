@@ -3,7 +3,7 @@
 The household environments deliberately keep their normal physics and success
 checks.  This module only adds the same viewer/arm teleoperation used by
 ``script_exp``: arrows move the selected end-effector in XY, Q/E move it in Z,
-Z/X tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
+F/G tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
 Space opens/closes the selected gripper(s) only (shared ``ViewerViewToggle``);
 V cycles head_camera ↔ gripper views (default head framing matches base suite
 GUI snapshots — top-down is not available).  Space never auto-grasps, teleports,

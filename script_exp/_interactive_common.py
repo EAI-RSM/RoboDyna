@@ -1142,7 +1142,7 @@ class UniversalRobotControls:
     solution keeps the arm in one kinematic branch; Curobo's ``solve_ik`` is
     unseeded and returns elbow/wrist flips that are unusable for teleop.
 
-    Z / X tip the gripper about world +Y (left / right) for pour-style motions.
+    F / G tip the gripper about world +Y (left / right) for pour-style motions.
     R / T yaw about world +Z (counter-clockwise / clockwise) continuously via IK.
     O returns the selected arm(s) to the pose captured when teleop started
     (task ``original`` / start pose). Space opens/closes the selected gripper
@@ -1158,7 +1158,7 @@ class UniversalRobotControls:
     # rates; MAX_LEAD / MAX_JOINT_SPEED scale with them or the caps choke motion.
     XY_SPEED = 0.288
     Z_SPEED = 0.224
-    # World-Y tip rate for Z/X (rad/s) — enough to dump a board without feeling twitchy.
+    # World-Y tip rate for F/G (rad/s) — enough to dump a board without feeling twitchy.
     ROLL_SPEED = 1.28
     # World-Z yaw rate for R/T (rad/s).
     YAW_SPEED = 0.64
@@ -1476,7 +1476,7 @@ class UniversalRobotControls:
                 freeze_wrist = bool(freeze_fn(side))
             except Exception:
                 freeze_wrist = False
-        # World-Y tip (Z/X): rotate the commanded gripper orientation in place.
+        # World-Y tip (F/G): rotate the commanded gripper orientation in place.
         if (not freeze_wrist) and abs(float(roll)) > 1e-9:
             dq = axangle2quat([0.0, 1.0, 0.0], float(roll))
             pose[3:7] = np.asarray(qmult(dq, pose[3:7]), dtype=np.float64)
@@ -1578,8 +1578,8 @@ class UniversalRobotControls:
         x_dir = float(window.key_down("right")) - float(window.key_down("left"))
         y_dir = float(window.key_down("up")) - float(window.key_down("down"))
         z_dir = float(window.key_down("e")) - float(window.key_down("q"))
-        # Z tip left / X tip right about world +Y (pour axis for board tasks).
-        roll_dir = float(window.key_down("x")) - float(window.key_down("z"))
+        # F tip left / G tip right about world +Y (pour axis for board tasks).
+        roll_dir = float(window.key_down("g")) - float(window.key_down("f"))
         # R counter-clockwise / T clockwise about world +Z (table-plane yaw).
         yaw_dir = float(window.key_down("r")) - float(window.key_down("t"))
         if not (x_dir or y_dir or z_dir or roll_dir or yaw_dir):
@@ -1817,8 +1817,12 @@ _GRIPPER_TOGGLE_HELP = "Space             open / close selected gripper(s)"
 
 
 def _is_gripper_toggle_help_line(line: str) -> bool:
-    """True for F/G/Space lines that document open/close gripper."""
+    """True for leftover F/G or Space lines that document open/close gripper."""
     s = line.strip()
+    s_u = s.upper()
+    # F/G now tip the wrist; don't treat the shared tilt row as a gripper toggle.
+    if s_u.startswith("F / G") or s_u.startswith("F/G"):
+        return False
     if not (
         s.startswith("F ")
         or s.startswith("F:")
@@ -1859,6 +1863,10 @@ def _is_shared_robot_teleop_help_line(line: str) -> bool:
         "Z/X ",
         "Z/X\t",
         "Z/X:",
+        "F / G",
+        "F/G ",
+        "F/G\t",
+        "F/G:",
         "R / T",
         "R/T ",
         "R/T\t",
@@ -1892,7 +1900,7 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
         shared = (
             "  Arrow keys        move selected arm(s) in world XY\n"
             "  E / Q             raise / lower selected arm(s)\n"
-            "  Z / X             tip gripper left / right (world Y)\n"
+            "  F / G             tip gripper left / right (world Y)\n"
             "  R / T             yaw gripper CCW / CW (world Z)\n"
             "  1 / 2 / 3         select left / right / both arms\n"
             "  O                 return selected arm(s) to original position\n"

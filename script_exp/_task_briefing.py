@@ -191,7 +191,7 @@ CANCEL_FG = "#d7e0e8"
 _SHARED_ROBOT = """\
 Arrow keys — move selected arm(s) in world XY
 E / Q — raise / lower selected arm(s)
-Z / X — tip gripper left / right (world Y)
+F / G — tip gripper left / right (world Y)
 R / T — yaw gripper CCW / CW (world Z)
 1 / 2 / 3 — select left / right / both arms
 O — return selected arm(s) to original position
@@ -298,7 +298,7 @@ def _looks_like_key_binding(line: str) -> bool:
     return bool(
         re.match(
             r"^(?:Arrow keys|Arrows(?:\s*/\s*E\s*/\s*Q)?|Left\s*/\s*Right|"
-            r"Up\s*/\s*Down|E\s*/\s*Q|Z\s*/\s*X|R\s*/\s*T|1\s*/\s*2\s*/\s*3|"
+            r"Up\s*/\s*Down|E\s*/\s*Q|Z\s*/\s*X|F\s*/\s*G|R\s*/\s*T|1\s*/\s*2\s*/\s*3|"
             r"O|Space|F|G|V|Escape|Note|\(hit\)|"
             r"[A-Z0-9](?:\s*/\s*[A-Z0-9])*)"
             r"(?:\s{2,}|\s+[—–-]\s+|:\s+)\S",
@@ -358,8 +358,12 @@ def _line_documents_key(lines: list[str], key: str) -> bool:
 
 
 def _is_gripper_toggle_help_line(line: str) -> bool:
-    """True for F/G/Space lines that document open/close gripper."""
+    """True for leftover F/G or Space lines that document open/close gripper."""
     s = line.strip()
+    s_u = s.upper()
+    # F/G now tip the wrist; don't treat the shared tilt row as a gripper toggle.
+    if s_u.startswith("F / G") or s_u.startswith("F/G"):
+        return False
     if not (
         s.startswith("F ")
         or s.startswith("F:")
@@ -402,6 +406,10 @@ def _is_shared_robot_teleop_help_line(line: str) -> bool:
         "Z/X ",
         "Z/X\t",
         "Z/X:",
+        "F / G",
+        "F/G ",
+        "F/G\t",
+        "F/G:",
         "R / T",
         "R/T ",
         "R/T\t",
