@@ -221,8 +221,12 @@ class RoundedButton(tk.Canvas):
 
 
 class HouseholdTaskLauncher(tk.Tk):
-    # Head-camera stills are ~4:3; width is the card max, height follows aspect.
-    IMAGE_SIZE = (1280, 960)
+    # Head-camera stills are ~4:3. Width seeds the first layout; height follows
+    # each image's native aspect so previews are not letterboxed.
+    IMAGE_SIZE = (1400, 1050)
+    COLUMNS = 4
+    CARD_PAD = 8
+    PREVIEW_SIDE_PAD = 28
     DESIGN_SIZE = (1560, 980)
     UI_SCALE_MIN = 0.55
     UI_SCALE_MAX = 1.15
@@ -244,15 +248,20 @@ class HouseholdTaskLauncher(tk.Tk):
         self.child: subprocess.Popen | None = None
         self.active_index: int | None = None
         self.result_file: Path | None = None
+        self.preview_sources: list[Image.Image | None] = []
         self.preview_photos: list[ImageTk.PhotoImage | None] = []
+        self.preview_labels: list[tk.Label] = []
         self.task_buttons: list[RoundedButton] = []
         self.card_index_labels: list[tk.Label] = []
         self.card_title_labels: list[tk.Label] = []
-        self.card_badge_labels: list[tk.Label] = []
+        self._preview_resize_job: str | None = None
         self._ui_scale_job: str | None = None
+        self._preview_width = self.IMAGE_SIZE[0]
         self._ui_scale = 1.0
         self._header_narrow: bool | None = None
-        self._idle_status = f"{len(TASKS)} scenarios available  |  Select a task and press Play."
+        self._idle_status = (
+            f"{len(TASKS)} tasks available  |  Hover a task for its README description."
+        )
         self._idle_status_fg = HEADER_MUTED
 
         self._build_ui()
@@ -409,10 +418,9 @@ class HouseholdTaskLauncher(tk.Tk):
         )
         self.status.pack(fill="x", padx=34, pady=(2, 12))
 
-        # Scrollable table of task cards. The window stays fixed while the
-        # vertically extended page contains every large task preview.
+        # Scrollable 4-column task grid, matching the base suite layout.
         self.outer = tk.Frame(self, bg=PAGE_BG)
-        self.outer.pack(fill="both", expand=True, padx=22, pady=(0, 22))
+        self.outer.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self.canvas = tk.Canvas(self.outer, bg=PAGE_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.outer, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=scrollbar.set)
@@ -426,8 +434,8 @@ class HouseholdTaskLauncher(tk.Tk):
         self.canvas.bind_all("<Button-4>", lambda event: self.canvas.yview_scroll(-3, "units"))
         self.canvas.bind_all("<Button-5>", lambda event: self.canvas.yview_scroll(3, "units"))
 
-        for index, (label, task, script_name) in enumerate(TASKS):
-            self._add_task_card(index, label, task, script_name)
+        for row_start in range(0, len(TASKS), self.COLUMNS):
+            self._add_task_row(row_start)
 
     @staticmethod
     def _scaled_font(size: float, weight: str = "", scale: float = 1.0) -> tuple:
@@ -513,7 +521,7 @@ class HouseholdTaskLauncher(tk.Tk):
             wraplength=max(360, self.winfo_width() - self._px(68, s)),
         )
         self.status.pack_configure(padx=self._px(34, s), pady=(self._px(2, s), self._px(12, s)))
-        self.outer.pack_configure(padx=self._px(22, s), pady=(0, self._px(22, s)))
+        self.outer.pack_configure(padx=self._px(12, s), pady=(0, self._px(12, s)))
 
         idx_padx = self._px(13, s)
         idx_pady = self._px(6, s)
@@ -524,19 +532,13 @@ class HouseholdTaskLauncher(tk.Tk):
                 pady=idx_pady,
             )
         for label in self.card_title_labels:
-            label.configure(font=self._scaled_font(27, "bold", s))
-        for label in self.card_badge_labels:
-            label.configure(font=self._scaled_font(12, "bold", s))
+            label.configure(font=self._scaled_font(15, "bold", s))
 
-        # Match base suite Play button scale (was oversized and crowded the cards).
+        btn_h = self._px(70, s)
+        btn_radius = self._px(26, s)
         btn_font = self._scaled_font(16, "bold", s)
         for button in self.task_buttons:
-            button.configure(
-                font=btn_font,
-                width=self._px(220, s),
-                height=self._px(70, s),
-                radius=self._px(26, s),
-            )
+            button.configure(font=btn_font, height=btn_h, radius=btn_radius)
 
         self._header_narrow = narrow
         self._relayout_header(s)
@@ -567,7 +569,47 @@ class HouseholdTaskLauncher(tk.Tk):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _resize_page(self, event):
-        self.canvas.itemconfigure(self.page_window, width=max(event.width, 720))
+        page_width = max(event.width, 720)
+        self.canvas.itemconfigure(self.page_window, width=page_width)
+        preview_width = max(
+            480, page_width - 2 * (self.CARD_PAD + self.PREVIEW_SIDE_PAD)
+        )
+        if abs(preview_width - self._preview_width) < 8:
+            return
+        if self._preview_resize_job is not None:
+            self.after_cancel(self._preview_resize_job)
+        self._preview_resize_job = self.after(
+            80, lambda width=preview_width: self._apply_preview_width(width)
+        )
+
+    def _cell_preview_width(self, total_width: int) -> int:
+        """Width of one of the four task preview columns."""
+        gap = 6 * 2 * self.COLUMNS  # padx=6 on each side of each column
+        return max(160, (total_width - gap) // self.COLUMNS)
+
+    def _apply_preview_width(self, width: int):
+        self._preview_resize_job = None
+        self._preview_width = width
+        cell_width = self._cell_preview_width(width)
+        photos: list[ImageTk.PhotoImage | None] = []
+        for index, source in enumerate(self.preview_sources):
+            photo = self._render_preview(source, cell_width)
+            photos.append(photo)
+            label = self.preview_labels[index]
+            if photo is None:
+                label.configure(
+                    image="",
+                    text="No preview",
+                    width=max(8, cell_width // 10),
+                    height=max(4, (cell_width * 3) // (8 * 16)),
+                )
+            else:
+                label.configure(image=photo, text="", width=0, height=0)
+            if index < len(self.card_title_labels):
+                self.card_title_labels[index].configure(
+                    wraplength=max(80, cell_width - self._px(56, self._ui_scale))
+                )
+        self.preview_photos = photos
 
     def _mousewheel(self, event):
         if event.delta:
@@ -587,39 +629,48 @@ class HouseholdTaskLauncher(tk.Tk):
                     return match
         return None
 
-    def _load_preview(self, task):
+    def _load_preview_source(self, task) -> Image.Image | None:
         path = self._preview_path(task)
         if path is None:
             return None
         try:
             with Image.open(path) as source:
                 source.seek(0)
-                image = source.convert("RGB")
-            max_w, max_h = self.IMAGE_SIZE
-            aspect = image.width / max(image.height, 1)
-            width = max_w
-            height = max(1, int(round(width / aspect)))
-            if height > max_h:
-                height = max_h
-                width = max(1, int(round(height * aspect)))
-            image = image.resize((width, height), Image.Resampling.LANCZOS)
-            return ImageTk.PhotoImage(image)
+                return source.convert("RGB")
         except Exception:
             return None
 
-    def _add_task_card(self, index, label, task, script_name):
+    def _render_preview(self, source: Image.Image | None, width: int) -> ImageTk.PhotoImage | None:
+        if source is None:
+            return None
+        aspect = source.width / max(source.height, 1)
+        height = max(1, int(round(width / aspect)))
+        image = source.resize((width, height), Image.Resampling.LANCZOS)
+        return ImageTk.PhotoImage(image)
+
+    def _add_task_row(self, row_start: int):
+        """One card holding up to four household tasks, matching the base GUI grid."""
         card = tk.Frame(
             self.page,
             bg=CARD_BG,
             highlightbackground=CARD_BORDER,
             highlightthickness=2,
         )
-        card.pack(fill="x", padx=14, pady=16)
+        card.pack(fill="x", padx=self.CARD_PAD, pady=12)
+        grid = tk.Frame(card, bg=CARD_BG)
+        grid.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(14, 16))
+        for index in range(row_start, min(row_start + self.COLUMNS, len(TASKS))):
+            label, task, _script_name = TASKS[index]
+            self._add_task_cell(grid, index, label, task)
 
-        card_header = tk.Frame(card, bg=CARD_BG)
-        card_header.pack(fill="x", padx=20, pady=(16, 10))
+    def _add_task_cell(self, grid, index, label, task):
+        col = tk.Frame(grid, bg=CARD_BG)
+        col.pack(side="left", expand=True, fill="both", padx=6)
+
+        cell_header = tk.Frame(col, bg=CARD_BG)
+        cell_header.pack(fill="x", pady=(0, 8))
         index_label = tk.Label(
-            card_header,
+            cell_header,
             text=f"{index + 1:02d}",
             bg=PLAY_BLUE,
             fg="white",
@@ -627,53 +678,54 @@ class HouseholdTaskLauncher(tk.Tk):
             padx=13,
             pady=6,
         )
-        index_label.pack(side="left", padx=(0, 14))
+        index_label.pack(side="left", padx=(0, 8))
         title = tk.Label(
-            card_header,
+            cell_header,
             text=label,
             bg=CARD_BG,
             fg=TEXT_PRIMARY,
             anchor="w",
-            font=("Sans", 27, "bold"),
+            justify="left",
+            font=("Sans", 15, "bold"),
         )
         title.pack(side="left", fill="x", expand=True)
-        badge = tk.Label(
-            card_header,
-            text="ROBOT SCENARIO",
-            bg=CARD_BG,
-            fg="#7fb6dc",
-            font=("Sans", 12, "bold"),
-        )
-        badge.pack(side="right")
+        for widget in (index_label, title):
+            widget.bind("<Enter>", lambda _e, t=task, l=label: self._show_task_hint(t, l))
+            widget.bind("<Leave>", lambda _e: self._clear_task_hint())
         self.card_index_labels.append(index_label)
         self.card_title_labels.append(title)
-        self.card_badge_labels.append(badge)
 
-        preview_holder = tk.Frame(card, bg="#080a0d")
-        preview_holder.pack(padx=20, pady=(0, 20))
-        photo = self._load_preview(task)
+        cell_width = self._cell_preview_width(self._preview_width)
+        source = self._load_preview_source(task)
+        photo = self._render_preview(source, cell_width)
+        self.preview_sources.append(source)
         self.preview_photos.append(photo)
-        image_label = tk.Label(
-            preview_holder,
+        preview_label = tk.Label(
+            col,
             image=photo,
-            text="No preview available" if photo is None else "",
-            bg="#080a0d",
-            fg="#aab2bd",
+            text="No preview" if photo is None else "",
+            bg=CARD_BG,
+            fg=TEXT_SECONDARY,
+            font=("Sans", 12),
+            bd=0,
+            highlightthickness=0,
             cursor="hand2",
         )
         if photo is None:
-            image_label.configure(width=self.IMAGE_SIZE[0], height=self.IMAGE_SIZE[1])
-        image_label.pack()
-        image_label.bind(
+            preview_label.configure(
+                width=max(8, cell_width // 10),
+                height=max(4, (cell_width * 3) // (8 * 16)),
+            )
+        preview_label.pack(fill="x", pady=(0, 8))
+        preview_label.bind(
             "<Enter>",
             lambda _e, t=task, l=label: self._show_task_hint(t, l),
         )
-        image_label.bind("<Leave>", lambda _e: self._clear_task_hint())
+        preview_label.bind("<Leave>", lambda _e: self._clear_task_hint())
+        self.preview_labels.append(preview_label)
 
-        # The action is deliberately over the lower edge of the screenshot,
-        # so every task has its own obvious launch control in front of it.
         button = RoundedButton(
-            preview_holder,
+            col,
             text="Play",
             command=lambda i=index: self.play_or_stop(i),
             bg=PLAY_BLUE,
@@ -685,7 +737,7 @@ class HouseholdTaskLauncher(tk.Tk):
             on_enter=lambda t=task, l=label: self._show_task_hint(t, l),
             on_leave=self._clear_task_hint,
         )
-        button.place(relx=0.5, rely=0.98, anchor="s")
+        button.pack(fill="x")
         self.task_buttons.append(button)
 
     def _set_status(self, text: str, fg: str, *, sticky: bool = False):
