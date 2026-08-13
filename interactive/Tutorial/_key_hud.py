@@ -71,19 +71,29 @@ def _add_hud_camera(scene, img: Image.Image, origin, name: str):
     tex = _texture_from_image(img)
     ent, mat = _textured_quad(scene, tex, half_w, half_h, f"tutorial_hud_{name}")
     ent.set_pose(sapien.Pose(p=list(origin)))
-    cam = scene.add_camera(name, img.width, img.height, 1.0, 0.05, 5.0)
+    cam = scene.add_camera(f"tutorial_hud_cam_{name}", img.width, img.height, 1.0, 0.05, 5.0)
     cam.set_orthographic_parameters(0.05, 5.0, -half_w, half_w, -half_h, half_h)
     cam.entity.set_pose(sapien.Pose(p=[origin[0] - 0.8, origin[1], origin[2]]))
-    return cam, tex, mat
+    return cam, tex, mat, ent
 
 
 class TutorialKeyHud(Plugin):
     """ImGui window in the top-right showing the current tutorial key overlay."""
 
-    def __init__(self, cameras, textures, materials, sizes=None, display_width=None, window_pad_h=None):
+    def __init__(
+        self,
+        cameras,
+        textures,
+        materials,
+        sizes=None,
+        display_width=None,
+        window_pad_h=None,
+        entities=None,
+    ):
         self.cameras = cameras
         self.textures = textures
         self.materials = materials
+        self.entities = dict(entities or {})
         self.sizes = dict(sizes or {})
         self.stage = next(iter(cameras), "arms")
         self.pressed_arms: set[str] = set()
@@ -104,6 +114,9 @@ class TutorialKeyHud(Plugin):
         self.lesson_drawer = None
         self.lesson_pressed: set[str] = set()
         self._lesson_key = None
+        self._lesson_img = None
+        self._rebuild_picture = False
+        self._nudge_sign = 1.0
         canvas_w, canvas_h = cluster_size()
         if self.sizes:
             canvas_w, canvas_h = next(iter(self.sizes.values()))
@@ -138,7 +151,7 @@ class TutorialKeyHud(Plugin):
 
     def update_texture(self, name: str, img: Image.Image) -> None:
         tex = self.textures.get(name)
-        if tex is None:
+        if tex is None or img is None:
             return
         try:
             target = (int(tex.width), int(tex.height))
@@ -151,6 +164,29 @@ class TutorialKeyHud(Plugin):
             tex.upload(arr)
         except Exception:
             return
+        self._nudge_quad(name)
+        cam = self.cameras.get(name)
+        if cam is None:
+            return
+        try:
+            cam.take_picture()
+        except Exception:
+            pass
+
+    def _nudge_quad(self, name: str) -> None:
+        """Dirty the HUD quad so the camera re-samples the uploaded texture."""
+        ent = self.entities.get(name)
+        if ent is None:
+            return
+        try:
+            pose = ent.get_pose()
+            delta = 1e-5 * float(self._nudge_sign)
+            self._nudge_sign = -self._nudge_sign
+            p = list(pose.p)
+            p[0] += delta
+            ent.set_pose(sapien.Pose(p, list(pose.q)))
+        except Exception:
+            pass
 
     def mark_arm_pressed(self, key: str) -> None:
         self.pressed_arms.add(key)
@@ -164,29 +200,37 @@ class TutorialKeyHud(Plugin):
     def set_held(self, held: set[str]) -> None:
         self._held = set(held)
 
+    def _lesson_image(self, key, factory) -> Image.Image:
+        if key != self._lesson_key or self._lesson_img is None:
+            self._lesson_key = key
+            self._lesson_img = factory()
+        return self._lesson_img
+
     def _sync_lesson(self) -> None:
-        """Upload persist-green keys in before_render, same path as flash."""
+        """Upload persist-green keys every frame, immediately before take_picture.
+
+        A one-shot upload is easy to miss: viewer.render() calls
+        window.update_render() *before* before_render, and skipping later
+        frames leaves the HUD camera on the unpressed bake.
+        """
         if self.stage == "arms":
             key = ("arms", frozenset(self.pressed_arms))
-            if key == self._lesson_key:
-                return
-            self._lesson_key = key
-            self.update_texture("arms", draw_arm_keys(self.pressed_arms))
+            img = self._lesson_image(key, lambda: draw_arm_keys(self.pressed_arms))
+            self.update_texture("arms", img)
             return
         if self.stage == "view":
             key = ("view", bool(self.v_pressed))
-            if key == self._lesson_key:
-                return
-            self._lesson_key = key
-            self.update_texture("view", draw_view_key(pressed=self.v_pressed))
+            img = self._lesson_image(
+                key, lambda: draw_view_key(pressed=self.v_pressed)
+            )
+            self.update_texture("view", img)
             return
         if self.lesson_drawer is None or self.stage not in self.textures:
             return
         key = (self.stage, frozenset(self.lesson_pressed))
-        if key == self._lesson_key:
-            return
-        self._lesson_key = key
-        self.update_texture(self.stage, self.lesson_drawer(self.lesson_pressed))
+        drawer = self.lesson_drawer
+        img = self._lesson_image(key, lambda: drawer(self.lesson_pressed))
+        self.update_texture(self.stage, img)
 
     def _flash_image_drawer(self):
         if self.stage == "play":
@@ -205,9 +249,12 @@ class TutorialKeyHud(Plugin):
         for key, until in self._flash_until.items():
             if now < until:
                 active.add(key)
-        if active != self._play_drawn:
+        key = (self.stage, frozenset(active))
+        if key != self._lesson_key or self._lesson_img is None:
+            self._lesson_key = key
+            self._lesson_img = drawer(active)
             self._play_drawn = set(active)
-            self.update_texture(self.stage, drawer(active))
+        self.update_texture(self.stage, self._lesson_img)
 
     def set_stage(self, stage: str) -> None:
         self.stage = stage
@@ -216,6 +263,8 @@ class TutorialKeyHud(Plugin):
         self._play_drawn = None
         self.lesson_pressed = set()
         self._lesson_key = None
+        self._lesson_img = None
+        self._rebuild_picture = True
         drawer = self._flash_image_drawer() if self.flash_enabled else None
         if drawer is not None and stage in self.textures:
             self.update_texture(stage, drawer())
@@ -234,13 +283,15 @@ class TutorialKeyHud(Plugin):
         except Exception:
             pass
         pw, ph = self._display_wh()
-        if self.ui_window is None:
+        if self.ui_window is None or self._rebuild_picture:
+            self._rebuild_picture = False
             self.ui_picture = R.UIPicture().Size(pw, ph)
             self.ui_window = (
                 R.UIWindow()
                 .Label("Keys")
                 .append(self.ui_picture)
             )
+            self._laid_out_stage = None
         self.ui_picture.Size(pw, ph)
         self.ui_window.Size(pw + self.window_pad_w, ph + self.window_pad_h)
         if self._laid_out_stage != self.stage:
@@ -267,13 +318,15 @@ def build_staged_hud(
     cameras = {}
     textures = {}
     materials = {}
+    entities = {}
     sizes = {}
     for index, (name, img) in enumerate(images.items()):
-        origin = (80.0, index * _STAGE_ORIGIN_STEP, 80.0)
-        cam, tex, mat = _add_hud_camera(scene, img, origin, name)
+        origin = (80.0, (index + 1) * _STAGE_ORIGIN_STEP, 80.0)
+        cam, tex, mat, ent = _add_hud_camera(scene, img, origin, name)
         cameras[name] = cam
         textures[name] = tex
         materials[name] = mat
+        entities[name] = ent
         sizes[name] = img.size
     hud = TutorialKeyHud(
         cameras,
@@ -282,6 +335,7 @@ def build_staged_hud(
         sizes=sizes,
         display_width=display_width,
         window_pad_h=window_pad_h,
+        entities=entities,
     )
     hud.stage = start_stage
     return hud

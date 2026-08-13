@@ -83,18 +83,21 @@ class tutorial_empty(Base_Task):
     PUSH_CONFIRM_STEPS = 20
     SETTLE_STEPS = 45  # ignore success for a beat after a new prop appears
 
-    # Part 4 — rolling ball (toward the robot, −Y).
+    # Part 4 — rolling ball (toward the robot, −Y). Pack-fruits style: keep
+    # sliding until grasped; only respawn if it falls off the table.
     BALL_RADIUS = 0.024
     BALL_COLOR = (0.92, 0.18, 0.16)
-    BALL_MASS = 0.04
+    BALL_MASS = 0.12
     BALL_X = -0.16
     BALL_Y0 = 0.16
-    BALL_VY = -0.12
+    BALL_Y_END = -0.28
+    BALL_SPEED = 0.10  # m/s along −Y
     BALL_LIFT = 0.030
-    BALL_TABLE_X_LIM = 0.42
-    BALL_TABLE_Y_MIN = -0.32
-    BALL_TABLE_Y_MAX = 0.34
-    BALL_RESPAWN_SETTLE = 20
+    BALL_TABLE_X_LIM = 0.45
+    BALL_TABLE_Y_MIN = -0.38
+    BALL_TABLE_Y_MAX = 0.38
+    BALL_RESPAWN_SETTLE = 15
+    BALL_OFF_Z = 0.10  # below rest before counting as fallen
 
     # Part 4 — KitchenS cooktop (knob on the left workspace).
     STOVE_XY = (-0.28, 0.10)
@@ -117,9 +120,9 @@ class tutorial_empty(Base_Task):
     MALLET_MASS = 0.06
     MALLET_LIFT = 0.040
 
-    # Part 4 — fill_coffee force key (four thresholds, target = level 2).
+    # Part 4 — force key: clear levels 1→2→3→4 (yellow band advances).
     FORCE_THRESHOLDS = (3.0, 6.0, 10.0, 14.0)
-    FORCE_TARGET_LEVEL = 2
+    FORCE_TARGET_LEVEL = 1
     FORCE_KEY_COLOR = (0.08, 0.36, 0.95)
     FORCE_LEVEL_COLORS = (
         (0.08, 0.36, 0.95),
@@ -128,7 +131,8 @@ class tutorial_empty(Base_Task):
         (0.95, 0.50, 0.10),
         (0.85, 0.10, 0.10),
     )
-    DISPENSE_Z_DOWN_SCALE = 0.22
+    # Mild slowdown over the key so bands are readable (fill_coffee uses 0.22).
+    DISPENSE_Z_DOWN_SCALE = 0.70
     # Park unused props off-table. Never scene.remove_entity at runtime —
     # deleting a body still in gripper contact segfaults PhysX (exit -11).
     HIDE_XY = (1.85, 1.85)
@@ -167,12 +171,15 @@ class tutorial_empty(Base_Task):
         self._push_complete = False
         self._stage_settle = 0
         self._defer_hide_key = False
+        self._defer_hide_ball = False
         self._ball = None
         self._ball_rigid = None
         self._ball_start = None
         self._ball_rest_z = None
         self._ball_complete = False
         self._ball_ever_lifted = False
+        self._ball_grasp_armed = False
+        self._ball_grip_mat = None
         self._mallet = None
         self._mallet_rests = []
         self._mallet_table_pose = None
@@ -203,10 +210,18 @@ class tutorial_empty(Base_Task):
         self._last_committed_knob_angle = None
         self._force_complete = False
         self._force_target_level = int(self.FORCE_TARGET_LEVEL)
+        self._force_cleared = 0
         self._key_force_n = 0.0
         self._press_peak_force = 0.0
         self._press_active = False
         self._force_feedback = ""
+        self._prop_side = -1.0
+        self._cube_reset_pose = None
+        self._push_reset_pose = None
+        self._mallet_reset_pose = None
+        self._mallet_grasp_armed = False
+        self._ball_lane_x = float(self.BALL_X)
+        self._burner_xy_home = None
         super()._init_task_env_(**kwags)
 
     def load_actors(self):
@@ -221,6 +236,7 @@ class tutorial_empty(Base_Task):
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()
         self._maybe_park_key()
+        self._maybe_park_ball()
         stage = getattr(self, "_tutorial_stage", None)
         if not stage:
             return
@@ -241,7 +257,12 @@ class tutorial_empty(Base_Task):
 
     # ---------------------------------------------------------- stage props
     def tutorial_set_stage(self, stage: str | None) -> None:
-        """Show the next prop. Hold → switch keeps the same key in place."""
+        """Show the next prop on the side opposite the gripper.
+
+        First stage of a part stays on the left slot. Later stages flip so
+        the new prop does not spawn under the current EE. Hold → switch
+        keeps the same key in place.
+        """
         prev = self._tutorial_stage
         self._reactive_buttons = None
         self._hold_was_pressed = False
@@ -272,12 +293,17 @@ class tutorial_empty(Base_Task):
         self._knob_grasp_arm = None
         self._last_committed_knob_angle = None
         self._force_complete = False
+        self._force_target_level = 1
+        self._force_cleared = 0
         self._key_force_n = 0.0
         self._press_peak_force = 0.0
         self._press_active = False
         self._force_feedback = ""
         self._stage_settle = int(self.SETTLE_STEPS) if stage else 0
         self._tutorial_stage = stage
+        keep_side = stage == "switch" and prev == "hold"
+        if not keep_side:
+            self._prop_side = -1.0 if prev is None else self._side_sign()
         if stage in ("grasp", "hold", "switch", "push"):
             self._ensure_props()
         # Do not teleport the key out from under the gripper — that PhysX
@@ -290,6 +316,11 @@ class tutorial_empty(Base_Task):
             self._show_push_box()
             self._defer_hide_key = True
             return
+        # Do not teleport the ball out of a closed gripper — same PhysX SIGSEGV.
+        leaving_ball = prev == "ball" and stage not in (None, "ball")
+        self._defer_hide_ball = bool(
+            leaving_ball and self._ball is not None and self._ball_gripper_contact()
+        )
         self._defer_hide_key = False
         self._hide_all_props()
         if stage == "grasp":
@@ -301,10 +332,23 @@ class tutorial_empty(Base_Task):
         elif stage == "push":
             self._show_push_box()
         elif stage == "ball":
+            self._defer_hide_ball = False
+            # Preload later stages while the table is empty — never build a
+            # cooktop / mallet / key mid-episode under a held gripper.
             self._ensure_ball()
+            self._ensure_stove()
+            self._hide_stove()
+            self._ensure_mallet()
+            self._hide_obj(self._mallet, 11)
+            self._hide_obj(getattr(self, "_mallet_rests", None), 12)
+            self._ensure_force_key()
+            self._hide_obj(getattr(self, "_force_key_actor", None), 16)
+            self._hide_obj(getattr(self, "_force_key_bezel", None), 17)
             self._respawn_ball()
         elif stage == "stove":
-            self._ensure_stove()
+            # Stove must already be loaded (from ball stage). Only unhide.
+            if not self._stove_loaded:
+                self._ensure_stove()
             self._show_stove()
         elif stage == "mallet":
             self._ensure_mallet()
@@ -393,13 +437,97 @@ class tutorial_empty(Base_Task):
             return
         self._zero_velocity(ent)
 
+    def _gripper_xy(self):
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return None
+        sides = tuple(getattr(self, "_interactive_selected_arms", ()) or ())
+        if not sides:
+            sides = ("left",)
+        pts = []
+        for side in sides:
+            getter = getattr(robot, f"get_{side}_ee_pose", None)
+            if getter is None:
+                continue
+            try:
+                xyz = np.asarray(getter(), dtype=float)[:3]
+            except Exception:
+                continue
+            pts.append(xyz[:2])
+        if not pts:
+            return None
+        return np.mean(np.stack(pts, axis=0), axis=0)
+
+    def _side_sign(self) -> float:
+        """+1 = right table slot, −1 = left. Opposite the current gripper."""
+        xy = self._gripper_xy()
+        if xy is None:
+            return -1.0
+        return 1.0 if float(xy[0]) < 0.0 else -1.0
+
+    def _dx_for(self, home_x: float) -> float:
+        side = float(getattr(self, "_prop_side", -1.0))
+        target = abs(float(home_x)) * side
+        return target - float(home_x)
+
+    def _offset_x(self, pose: sapien.Pose | None, dx: float) -> sapien.Pose | None:
+        if pose is None:
+            return None
+        p = list(pose.p)
+        p[0] = float(p[0]) + float(dx)
+        return sapien.Pose(p, list(pose.q))
+
+    def _actor_xyz(self, obj):
+        ent = next(self._iter_entities(obj), None) if obj is not None else None
+        if ent is None:
+            return None
+        try:
+            return np.asarray(ent.get_pose().p, dtype=float)
+        except Exception:
+            return None
+
+    def _off_workspace(self, p) -> bool:
+        if p is None:
+            return True
+        if abs(float(p[0])) > float(self.BALL_TABLE_X_LIM):
+            return True
+        if float(p[1]) < float(self.BALL_TABLE_Y_MIN) or float(p[1]) > float(
+            self.BALL_TABLE_Y_MAX
+        ):
+            return True
+        table_z = float(self.TABLE_Z) + float(getattr(self, "table_z_bias", 0.0))
+        if float(p[2]) < table_z - 0.05:
+            return True
+        return False
+
+    def _gripper_touching(self, obj) -> bool:
+        name = self._object_name(obj)
+        if not name:
+            return False
+        try:
+            return len(self.get_gripper_actor_contact_position(name)) > 0
+        except Exception:
+            return False
+
+    def _reset_if_lost(self, obj, pose: sapien.Pose | None, *, in_hand: bool) -> None:
+        """Put a thrown / fallen primary object back on its current slot."""
+        if in_hand or obj is None or pose is None:
+            return
+        if self._gripper_touching(obj):
+            return
+        p = self._actor_xyz(obj)
+        if p is not None and not self._off_workspace(p):
+            return
+        self._apply_pose(obj, pose)
+
     def _hide_all_props(self) -> None:
         self._hide_obj(self._cube, 0)
         self._hide_obj(self._key_actor, 1)
         self._hide_obj(self._key_bezel, 2)
         self._hide_obj(self._push_box, 8)
         self._hide_obj(self._push_goal, 9)
-        self._hide_obj(self._ball, 10)
+        if not getattr(self, "_defer_hide_ball", False):
+            self._park_ball_safe()
         self._hide_obj(self._mallet, 11)
         self._hide_obj(getattr(self, "_mallet_rests", None), 12)
         self._hide_obj(getattr(self, "_force_key_actor", None), 16)
@@ -409,9 +537,13 @@ class tutorial_empty(Base_Task):
             hide_stove()
 
     def _gripper_near_key(self) -> bool:
-        if self._key_table_pose is None:
+        ent = next(self._iter_entities(self._key_actor), None)
+        if ent is None:
             return False
-        home = np.asarray(self._key_table_pose.p[:2], dtype=float)
+        try:
+            home = np.asarray(ent.get_pose().p[:2], dtype=float)
+        except Exception:
+            return False
         robot = getattr(self, "robot", None)
         if robot is None:
             return False
@@ -439,19 +571,49 @@ class tutorial_empty(Base_Task):
         self._hide_obj(self._key_bezel, 2)
         self._defer_hide_key = False
 
+    def _park_ball_safe(self) -> None:
+        """Make the ball kinematic, then park it off-table (safe under a gripper)."""
+        ball = self._ball
+        rigid = self._ball_rigid
+        if ball is None:
+            return
+        if rigid is not None:
+            try:
+                rigid.set_kinematic(True)
+                rigid.set_disable_gravity(True)
+                rigid.set_linear_velocity([0.0, 0.0, 0.0])
+                rigid.set_angular_velocity([0.0, 0.0, 0.0])
+            except Exception:
+                pass
+        self._ball_grasp_armed = False
+        self._hide_obj(ball, 10)
+
+    def _maybe_park_ball(self) -> None:
+        if not getattr(self, "_defer_hide_ball", False):
+            return
+        # Wait until jaws no longer contact the ball, then park kinematically.
+        if self._ball_gripper_contact():
+            return
+        self._park_ball_safe()
+        self._defer_hide_ball = False
+
     def _show_cube(self) -> None:
-        self._apply_pose(self._cube, self._cube_table_pose)
+        dx = self._dx_for(self.PROP_X)
+        pose = self._offset_x(self._cube_table_pose, dx)
+        self._apply_pose(self._cube, pose)
+        self._cube_reset_pose = pose
         if self._cube is not None:
             self._cube_rest_z = float(self._cube.get_pose().p[2])
 
     def _show_key(self, button_id: str) -> None:
-        self._apply_pose(self._key_actor, self._key_table_pose)
+        dx = self._dx_for(self.PROP_X)
+        self._apply_pose(self._key_actor, self._offset_x(self._key_table_pose, dx))
         if self._key_bezel is not None and self._bezel_table_poses:
             for ent, pose in zip(
                 self._iter_entities(self._key_bezel), self._bezel_table_poses
             ):
                 try:
-                    ent.set_pose(pose)
+                    ent.set_pose(self._offset_x(pose, dx))
                 except Exception:
                     pass
         self._init_key_bank(button_id)
@@ -459,8 +621,13 @@ class tutorial_empty(Base_Task):
         self._set_key_color(False)
 
     def _show_push_box(self) -> None:
-        self._apply_pose(self._push_box, self._push_table_pose)
-        self._apply_pose(self._push_goal, self._push_goal_table_pose)
+        dx = self._dx_for(self.PROP_X)
+        pose = self._offset_x(self._push_table_pose, dx)
+        self._apply_pose(self._push_box, pose)
+        self._apply_pose(self._push_goal, self._offset_x(self._push_goal_table_pose, dx))
+        self._push_reset_pose = pose
+        if self._push_goal_y is not None and self._push_table_pose is not None:
+            self._push_goal_y = float(self._push_table_pose.p[1]) + float(self.PUSH_GOAL_DY)
 
     def _init_key_bank(self, button_id: str) -> None:
         key = self._key_actor
@@ -579,6 +746,9 @@ class tutorial_empty(Base_Task):
         if self._stage_settle > 0:
             self._stage_settle -= 1
             return
+        self._reset_if_lost(
+            self._cube, self._cube_reset_pose, in_hand=self._cube_picked_up()
+        )
         if self._cube_picked_up():
             self._grasp_hold_steps += 1
             if self._grasp_hold_steps >= int(self.GRASP_CONFIRM_STEPS):
@@ -623,6 +793,7 @@ class tutorial_empty(Base_Task):
         goal = self._push_goal_y
         if box is None or goal is None:
             return
+        self._reset_if_lost(box, self._push_reset_pose, in_hand=False)
         if float(box.get_pose().p[1]) >= float(goal) - 0.01:
             self._push_hold_steps += 1
             if self._push_hold_steps >= int(self.PUSH_CONFIRM_STEPS):
@@ -828,30 +999,163 @@ class tutorial_empty(Base_Task):
                 rigid.mass = float(self.BALL_MASS)
             except Exception:
                 pass
+            self._configure_ball_collision(rigid)
+            # Pack-fruits style: kinematic slide until the user grasps it.
+            try:
+                rigid.set_disable_gravity(True)
+                rigid.set_kinematic(True)
+            except Exception:
+                pass
+
+    def _configure_ball_collision(self, rigid) -> None:
+        """High-friction, no-bounce material so closed jaws can hold the ball."""
+        if rigid is None:
+            return
+        try:
+            if self._ball_grip_mat is None:
+                self._ball_grip_mat = self.scene.create_physical_material(
+                    2.8, 2.4, 0.0
+                )
+            mat = self._ball_grip_mat
+            for shape in rigid.get_collision_shapes():
+                shape.set_physical_material(mat)
+        except Exception:
+            pass
+        try:
+            rigid.set_linear_damping(0.8)
+            rigid.set_angular_damping(4.0)
+        except Exception:
+            pass
+
+    def _ball_kinematic(self) -> bool:
+        rigid = self._ball_rigid
+        if rigid is None:
+            return False
+        try:
+            return bool(rigid.kinematic)
+        except Exception:
+            try:
+                return bool(rigid.is_kinematic)
+            except Exception:
+                return False
+
+    def _calm_ball(self, damping=(1.0, 5.0)) -> None:
+        rigid = self._ball_rigid
+        if rigid is None:
+            return
+        try:
+            rigid.set_linear_velocity([0.0, 0.0, 0.0])
+            rigid.set_angular_velocity([0.0, 0.0, 0.0])
+            rigid.set_linear_damping(float(damping[0]))
+            rigid.set_angular_damping(float(damping[1]))
+        except Exception:
+            pass
+
+    def _release_ball_physics(self) -> None:
+        """Hand the ball to PhysX for a contact grasp (pack_fruits pattern).
+
+        Keep gravity off until the jaws finish closing and lift — otherwise the
+        ball drops through the fingers the frame it goes dynamic.
+        """
+        ball = self._ball
+        rigid = self._ball_rigid
+        if rigid is None or ball is None:
+            return
+        try:
+            pose = ball.get_pose()
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(True)
+            ball.set_pose(pose)
+            self._configure_ball_collision(rigid)
+            self._calm_ball(damping=(1.2, 6.0))
+            self._ball_grasp_armed = True
+        except Exception:
+            pass
+
+    def _enable_ball_gravity(self) -> None:
+        rigid = self._ball_rigid
+        if rigid is None:
+            return
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+            self._calm_ball(damping=(0.6, 3.0))
+        except Exception:
+            pass
+
+    def _drive_ball_step(self) -> None:
+        """Advance the kinematic ball toward the robot along −Y."""
+        ball = self._ball
+        rigid = self._ball_rigid
+        if ball is None or rigid is None or not self._ball_kinematic():
+            return
+        try:
+            pose = ball.get_pose()
+            p = np.asarray(pose.p, dtype=float)
+        except Exception:
+            return
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            dt = 1.0 / 250.0
+        y = float(p[1]) - float(self.BALL_SPEED) * dt
+        y_end = float(self.BALL_Y_END)
+        lane_x = float(getattr(self, "_ball_lane_x", self.BALL_X))
+        if y <= y_end:
+            # Slide off the near edge still ungripped → fall and respawn.
+            try:
+                fall = sapien.Pose(
+                    [lane_x, y_end - 0.04, float(p[2])],
+                    list(pose.q),
+                )
+                ball.set_pose(fall)
+                rigid.set_kinematic_target(fall)
+                rigid.set_kinematic(False)
+                rigid.set_disable_gravity(False)
+                rigid.set_linear_velocity([0.0, -float(self.BALL_SPEED), -0.05])
+            except Exception:
+                pass
+            return
+        new_pose = sapien.Pose(
+            [lane_x, y, float(self._ball_rest_z)], list(pose.q)
+        )
+        try:
+            ball.set_pose(new_pose)
+            rigid.set_kinematic_target(new_pose)
+        except Exception:
+            try:
+                ball.set_pose(new_pose)
+            except Exception:
+                pass
 
     def _launch_ball(self) -> None:
         ball = self._ball
         start = self._ball_start
+        rigid = self._ball_rigid
         if ball is None or start is None:
             return
+        dx = self._dx_for(self.BALL_X)
+        start = self._offset_x(start, dx)
+        self._ball_lane_x = float(self.BALL_X) + dx
+        self._ball_grasp_armed = False
         try:
             ball.set_pose(start)
         except Exception:
             return
-        self._zero_velocity(ball)
-        rigid = self._ball_rigid
         if rigid is None:
             return
-        vy = float(self.BALL_VY)
-        r = max(float(self.BALL_RADIUS), 1e-4)
         try:
-            rigid.set_linear_velocity([0.0, vy, 0.0])
-            rigid.set_angular_velocity([vy / r, 0.0, 0.0])
+            rigid.set_disable_gravity(True)
+            rigid.set_kinematic(True)
+            rigid.set_kinematic_target(start)
+            rigid.set_linear_velocity([0.0, 0.0, 0.0])
+            rigid.set_angular_velocity([0.0, 0.0, 0.0])
         except Exception:
             pass
 
     def _respawn_ball(self) -> None:
         self._ball_ever_lifted = False
+        self._ball_grasp_armed = False
         self._grasp_hold_steps = 0
         self._stage_settle = int(self.BALL_RESPAWN_SETTLE)
         self._launch_ball()
@@ -862,7 +1166,7 @@ class tutorial_empty(Base_Task):
             return False
         p = np.asarray(ball.get_pose().p, dtype=float)
         table_z = float(self._ball_rest_z or (self.TABLE_Z + self.BALL_RADIUS))
-        if float(p[2]) < table_z - 0.06:
+        if float(p[2]) < table_z - float(self.BALL_OFF_Z):
             return True
         if abs(float(p[0])) > float(self.BALL_TABLE_X_LIM):
             return True
@@ -872,46 +1176,81 @@ class tutorial_empty(Base_Task):
             return True
         return False
 
-    def _ball_stopped(self) -> bool:
-        rigid = self._ball_rigid
+    def _ball_gripper_contact(self) -> bool:
+        """Closed jaws physically touching the ball (grasp start, before lift)."""
         ball = self._ball
-        if rigid is None or ball is None or self._ball_rest_z is None:
+        if ball is None:
+            return False
+        closing = False
+        try:
+            robot = self.robot
+            closing = (
+                float(robot.left_gripper_val) < 0.55
+                or float(robot.right_gripper_val) < 0.55
+            )
+        except Exception:
+            try:
+                closing = bool(
+                    self.is_left_gripper_close() or self.is_right_gripper_close()
+                )
+            except Exception:
+                return False
+        if not closing:
+            return False
+        name = self._object_name(ball)
+        if not name:
             return False
         try:
-            speed = float(np.linalg.norm(rigid.get_linear_velocity()))
-            z = float(ball.get_pose().p[2])
+            return len(self.get_gripper_actor_contact_position(name)) > 0
         except Exception:
             return False
-        on_table = z < float(self._ball_rest_z) + 0.012
-        return on_table and speed < 0.025
 
     def _tick_ball(self) -> None:
         if self._stage_settle > 0:
             self._stage_settle -= 1
             return
-        if self._gripper_holding(self._ball, self._ball_rest_z, self.BALL_LIFT):
+        # Pack-fruits: free the stream object once jaws close on it (gravity off).
+        if self._ball_kinematic() and self._ball_gripper_contact():
+            self._release_ball_physics()
+        holding = self._gripper_holding(
+            self._ball, self._ball_rest_z, self.BALL_LIFT
+        )
+        if holding:
+            if self._ball_grasp_armed:
+                self._enable_ball_gravity()
+                self._ball_grasp_armed = False
             self._ball_ever_lifted = True
             self._grasp_hold_steps += 1
             if self._grasp_hold_steps >= int(self.GRASP_CONFIRM_STEPS):
                 self._ball_complete = True
             return
+        # Closed on the ball but not lifted yet — keep gravity off so it stays
+        # pinched between the pads.
+        if self._ball_grasp_armed and self._ball_gripper_contact():
+            return
+        if self._ball_grasp_armed and not self._ball_gripper_contact():
+            # Missed grasp: restore kinematic slide from current XY.
+            self._ball_grasp_armed = False
+            rigid = self._ball_rigid
+            ball = self._ball
+            if rigid is not None and ball is not None:
+                try:
+                    pose = ball.get_pose()
+                    rigid.set_disable_gravity(True)
+                    rigid.set_kinematic(True)
+                    rigid.set_kinematic_target(pose)
+                    self._calm_ball()
+                except Exception:
+                    pass
         self._grasp_hold_steps = 0
-        dropped = bool(self._ball_ever_lifted)
-        if dropped or self._ball_off_table() or self._ball_missed():
+        # Touch / nudge must not despawn — only a fall off the table does.
+        if self._ball_off_table():
             self._respawn_ball()
-
-    def _ball_missed(self) -> bool:
-        """True when the ball rolled past the workspace without being picked up."""
-        ball = self._ball
-        if ball is None or self._ball_ever_lifted:
-            return False
-        try:
-            y = float(ball.get_pose().p[1])
-        except Exception:
-            return False
-        if y < float(self.PROP_Y) - 0.05:
-            return True
-        return bool(self._ball_stopped() and y < float(self.BALL_Y0) - 0.08)
+            return
+        if self._ball_kinematic():
+            self._drive_ball_step()
+            if self._ball_off_table():
+                self._respawn_ball()
 
     # ------------------------------------------------------- part 4: stove
     def _ensure_stove(self) -> None:
@@ -955,6 +1294,11 @@ class tutorial_empty(Base_Task):
                 except Exception:
                     self._stove_knob_home = None
         self._stove_cover_homes = dict(getattr(self, "_burner_cover_home_poses", {}) or {})
+        self._burner_xy_home = tuple(self.burner_xy)
+        self._ring_home_poses_base = list(getattr(self, "_ring_home_poses", []) or [])
+        self._disc_home_poses_base = list(getattr(self, "_disc_home_poses", []) or [])
+        self._cover_homes_base = dict(self._stove_cover_homes)
+        self._burner_positions_base = dict(getattr(self, "burner_positions", {}) or {})
         self._set_knob_joint_angle(float(self.KNOB_OFF_ANGLE), hard=True)
         self._stove_loaded = True
 
@@ -995,25 +1339,90 @@ class tutorial_empty(Base_Task):
     def _show_stove(self) -> None:
         if not self._stove_loaded:
             return
+        dx = self._dx_for(self.STOVE_XY[0])
         if self._stove_range_home is not None and getattr(self, "range_body", None):
             try:
-                self.range_body.actor.set_pose(self._stove_range_home)
+                self.range_body.actor.set_pose(
+                    self._offset_x(self._stove_range_home, dx)
+                )
             except Exception:
                 pass
         art = getattr(self, "stove_knob_articulation", None)
         if art is not None and self._stove_knob_home is not None:
+            posed = self._offset_x(self._stove_knob_home, dx)
             try:
-                art.set_pose(self._stove_knob_home)
+                art.set_root_pose(posed)
             except Exception:
                 try:
-                    art.set_root_pose(self._stove_knob_home)
+                    art.set_pose(posed)
                 except Exception:
                     pass
-        self._set_knob_joint_angle(float(self.KNOB_OFF_ANGLE), hard=True)
+        home_xy = getattr(self, "_burner_xy_home", None) or getattr(
+            self, "burner_xy", (float(self.STOVE_XY[0]), float(self.STOVE_XY[1]))
+        )
+        self.burner_xy = (float(home_xy[0]) + dx, float(home_xy[1]))
+        try:
+            z = float(self.range_top_z) + 0.002
+        except Exception:
+            z = float(self.TABLE_Z) + 0.002
+        self._burner_home_pose = sapien.Pose(
+            p=[float(self.burner_xy[0]), float(self.burner_xy[1]), z]
+        )
+        ring_base = getattr(self, "_ring_home_poses_base", None)
+        if ring_base:
+            self._ring_home_poses = [self._offset_x(p, dx) for p in ring_base]
+        disc_base = getattr(self, "_disc_home_poses_base", None)
+        if disc_base:
+            self._disc_home_poses = [self._offset_x(p, dx) for p in disc_base]
+        cover_base = getattr(self, "_cover_homes_base", None)
+        if cover_base:
+            covers = {k: self._offset_x(p, dx) for k, p in cover_base.items()}
+            self._burner_cover_home_poses = covers
+            self._stove_cover_homes = covers
+        pos_base = getattr(self, "_burner_positions_base", None)
+        if pos_base:
+            self.burner_positions = {
+                k: (float(v[0]) + dx, float(v[1])) for k, v in pos_base.items()
+            }
+        for cover in getattr(self, "_burner_covers", []) or []:
+            # Covers stay buried until fire turns on.
+            try:
+                cover.set_pose(self._fire_hidden_pose())
+            except Exception:
+                pass
+        try:
+            self._set_knob_joint_angle(float(self.KNOB_OFF_ANGLE), hard=True)
+        except Exception:
+            pass
         self.knob_angle = float(self.KNOB_OFF_ANGLE)
         self.fire_intensity = 0.0
         self.stove_on = False
-        self._set_stove_fire(False, intensity=0.0)
+        # Avoid fire flush nesting a render; just mark off and bump bodies.
+        try:
+            self._stove_fire_visual = None
+            self._set_stove_fire(False, intensity=0.0)
+        except Exception:
+            pass
+
+    def tutorial_ball_released(self) -> bool:
+        """True when the ball is no longer pinched (safe to spawn the next prop)."""
+        if self._ball is None:
+            return True
+        return not self._ball_gripper_contact()
+
+    def tutorial_force_open_grippers(self) -> None:
+        """Open selected grippers so a held ball can be parked safely."""
+        robot = getattr(self, "robot", None)
+        if robot is None or not hasattr(robot, "set_gripper"):
+            return
+        sides = tuple(getattr(self, "_interactive_selected_arms", ()) or ())
+        if not sides:
+            sides = ("left", "right")
+        for side in sides:
+            try:
+                robot.set_gripper(1.0, str(side), gripper_eps=0.0)
+            except Exception:
+                pass
 
     def _set_knob_angle(self, angle: float, *, drive_fire: bool = True) -> None:
         """cook_food mapping: 0 = off, −π/2 = full fire (tick left)."""
@@ -1054,10 +1463,11 @@ class tutorial_empty(Base_Task):
         rails = []
         rest_poses = []
         for post_idx, y_offset in enumerate(self.MALLET_REST_POST_Y):
+            # Same two-post cradle as whack_moles (table_z includes bias).
             rail = create_box(
                 self,
                 sapien.Pose(
-                    [x, y + float(y_offset), self.TABLE_Z + 0.5 * rest_h]
+                    [x, y + float(y_offset), table_z + 0.5 * rest_h]
                 ),
                 half_size=[0.016, 0.010, 0.5 * rest_h],
                 color=[0.32, 0.30, 0.28],
@@ -1078,6 +1488,9 @@ class tutorial_empty(Base_Task):
         self._mallet_table_pose = self._pose_copy(mallet.actor)
         self._mallet_rest_poses = rest_poses
         self._mallet_rest_z = float(self._mallet_table_pose.p[2])
+        self._mallet_grasp_armed = False
+        # whack_moles: staged mallets stay kinematic on the cradle until pickup.
+        self._seat_mallet(self._mallet_table_pose)
 
     def _build_mallet(self, pose, name: str):
         """T mallet: handle along Y, cylindrical head across X (whack_moles)."""
@@ -1140,30 +1553,111 @@ class tutorial_empty(Base_Task):
         }
         return Actor(entity, data, mass=float(self.MALLET_MASS))
 
+    def _seat_mallet(self, pose: sapien.Pose | None = None) -> None:
+        """Park level on the cradle — kinematic, no gravity (whack_moles staging)."""
+        mallet = self._mallet
+        if mallet is None:
+            return
+        if pose is None:
+            pose = self._mallet_reset_pose or self._mallet_table_pose
+        if pose is not None:
+            self._apply_pose(mallet, pose)
+        rigid = self._get_rigid(mallet)
+        if rigid is not None:
+            try:
+                rigid.set_kinematic(True)
+                rigid.set_disable_gravity(True)
+                rigid.set_linear_velocity([0.0, 0.0, 0.0])
+                rigid.set_angular_velocity([0.0, 0.0, 0.0])
+            except Exception:
+                pass
+        self._mallet_grasp_armed = False
+
+    def _release_mallet_for_grasp(self) -> None:
+        """Free the staged mallet so jaw friction can lift it."""
+        rigid = self._get_rigid(self._mallet)
+        if rigid is None:
+            return
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+            rigid.set_linear_damping(20.0)
+            rigid.set_angular_damping(20.0)
+        except Exception:
+            pass
+        self._mallet_grasp_armed = True
+
     def _show_mallet(self) -> None:
-        self._apply_pose(self._mallet, self._mallet_table_pose)
+        dx = self._dx_for(self.PROP_X)
+        pose = self._offset_x(self._mallet_table_pose, dx)
+        self._mallet_reset_pose = pose
         if self._mallet_rests and self._mallet_rest_poses:
-            for ent, pose in zip(
+            for ent, rest in zip(
                 self._iter_entities(self._mallet_rests), self._mallet_rest_poses
             ):
                 try:
-                    ent.set_pose(pose)
+                    ent.set_pose(self._offset_x(rest, dx))
                 except Exception:
                     pass
+        self._seat_mallet(pose)
         if self._mallet is not None:
             self._mallet_rest_z = float(self._mallet.get_pose().p[2])
 
     def _tick_mallet(self) -> None:
         if self._stage_settle > 0:
             self._stage_settle -= 1
+            # Keep it seated while the stage settles after arm reset.
+            if self._mallet_reset_pose is not None:
+                self._seat_mallet(self._mallet_reset_pose)
             return
-        if self._gripper_holding(self._mallet, self._mallet_rest_z, self.MALLET_LIFT):
+        mallet = self._mallet
+        if mallet is None:
+            return
+        closing = False
+        try:
+            robot = self.robot
+            closing = (
+                float(robot.left_gripper_val) < 0.55
+                or float(robot.right_gripper_val) < 0.55
+            )
+        except Exception:
+            try:
+                closing = bool(
+                    self.is_left_gripper_close() or self.is_right_gripper_close()
+                )
+            except Exception:
+                closing = False
+        touching = self._gripper_touching(mallet)
+        rigid = self._get_rigid(mallet)
+        # Stay kinematic on the cradle until the jaws close on the handle.
+        if (
+            rigid is not None
+            and bool(getattr(rigid, "kinematic", False))
+            and touching
+            and closing
+        ):
+            self._release_mallet_for_grasp()
+        holding = self._gripper_holding(
+            mallet, self._mallet_rest_z, self.MALLET_LIFT
+        )
+        if not holding and not touching:
+            p = self._actor_xyz(mallet)
+            tipped = False
+            try:
+                z = float(mallet.get_pose().p[2])
+                rest_z = float(self._mallet_rest_z or z)
+                tipped = z < rest_z - 0.015
+            except Exception:
+                tipped = False
+            if tipped or self._off_workspace(p):
+                self._seat_mallet(self._mallet_reset_pose)
+                return
+        if holding:
             self._grasp_hold_steps += 1
             if self._grasp_hold_steps >= int(self.GRASP_CONFIRM_STEPS):
                 self._mallet_complete = True
         else:
             self._grasp_hold_steps = 0
-
     # ------------------------------------------------------- part 4: force key
     def _ensure_force_key(self) -> None:
         if self._force_key_actor is not None:
@@ -1199,14 +1693,17 @@ class tutorial_empty(Base_Task):
         self._hide_obj(bezel, 17)
 
     def _show_force_key(self) -> None:
-        self._apply_pose(self._force_key_actor, self._force_key_table_pose)
+        dx = self._dx_for(self.PROP_X)
+        self._apply_pose(
+            self._force_key_actor, self._offset_x(self._force_key_table_pose, dx)
+        )
         if self._force_key_bezel is not None and self._force_key_bezel_poses:
             for ent, pose in zip(
                 self._iter_entities(self._force_key_bezel),
                 self._force_key_bezel_poses,
             ):
                 try:
-                    ent.set_pose(pose)
+                    ent.set_pose(self._offset_x(pose, dx))
                 except Exception:
                     pass
         key = self._force_key_actor
@@ -1269,25 +1766,37 @@ class tutorial_empty(Base_Task):
             return
         if not self._press_active:
             return
+        # Released: score this press against the current yellow band, then advance.
         peak = float(self._press_peak_force)
         level = self._force_level(peak)
         target = int(self._force_target_level)
         self._press_active = False
         self._press_peak_force = 0.0
+        n_levels = len(self.FORCE_THRESHOLDS)
         lo = float(self.FORCE_THRESHOLDS[target - 1])
         hi = (
             float(self.FORCE_THRESHOLDS[target])
-            if target < len(self.FORCE_THRESHOLDS)
+            if target < n_levels
             else 1e9
         )
         if level == target:
-            self._force_complete = True
-            self._force_feedback = f"correct ({peak:.1f} N)"
+            self._force_cleared = int(target)
+            if target >= n_levels:
+                self._force_complete = True
+                self._force_feedback = f"full force ({peak:.1f} N) — done"
+            else:
+                self._force_target_level = target + 1
+                self._force_feedback = (
+                    f"level {target} ok ({peak:.1f} N) — next yellow band"
+                )
         elif level < target:
-            self._force_feedback = f"too light ({peak:.1f} N, need {lo:.0f}–{hi:.0f} N)"
+            self._force_feedback = (
+                f"too light ({peak:.1f} N, need {lo:.0f}–{hi:.0f} N)"
+            )
         else:
-            self._force_feedback = f"too hard ({peak:.1f} N, need {lo:.0f}–{hi:.0f} N)"
-
+            self._force_feedback = (
+                f"too hard ({peak:.1f} N, need {lo:.0f}–{hi:.0f} N)"
+            )
     def interactive_ee_z_floor(self, side, pose):
         if getattr(self, "_tutorial_stage", None) != "force_key":
             return None
@@ -1334,12 +1843,11 @@ _KS_ATTRS = (
 )
 _KS_METHODS = (
     "_load_cooking_range",
-    "_dim_cooktop_burner_materials",
     "_fire_hidden_pose",
     "_clear_stove_fire_ring",
     "_build_stove_fire_ring",
-    "_bump_render_bodies",
-    "_flush_stove_fire_viewer",
+    # Do NOT mix in ``_flush_stove_fire_viewer`` — its viewer.render() nests
+    # inside the interactive on_step and SIGSEGVs when the stove appears.
     "_set_stove_fire",
     "_get_knob_joint_angle",
     "_set_knob_articulation_qpos",
@@ -1359,8 +1867,31 @@ _KS_METHODS = (
     "_commit_stove_from_knob_angle",
     "_update_stove_knob_control",
 )
+# Keep @staticmethod — a bare copy becomes a bound method and breaks
+# ``self._dim_cooktop_burner_materials(entity)`` (extra self → TypeError crash
+# the moment the cooktop loads on ball→stove).
+_KS_STATICMETHODS = (
+    "_dim_cooktop_burner_materials",
+    "_bump_render_bodies",
+)
 for _name in _KS_ATTRS:
     setattr(tutorial_empty, _name, getattr(KitchenS_base_task, _name))
 for _name in _KS_METHODS:
     setattr(tutorial_empty, _name, getattr(KitchenS_base_task, _name))
+for _name in _KS_STATICMETHODS:
+    setattr(
+        tutorial_empty,
+        _name,
+        staticmethod(getattr(KitchenS_base_task, _name)),
+    )
 
+
+def _flush_stove_fire_viewer(self) -> None:
+    """Dirty the scene only — never nest ``viewer.render()`` during on_step."""
+    try:
+        self.scene.update_render()
+    except Exception:
+        pass
+
+
+tutorial_empty._flush_stove_fire_viewer = _flush_stove_fire_viewer
