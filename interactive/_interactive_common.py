@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -132,8 +131,9 @@ def add_record_data_arg(parser):
         "--record-data",
         action="store_true",
         help=(
-            "Record this episode in the same format as collect_data.py "
-            "(HDF5 + preview mp4 + live viewer mp4 + LeRobot under data/<task>/<config>/)"
+            "Record this episode in collect_data format. Cameras render after "
+            "the viewer closes so play stays real-time "
+            "(HDF5 + preview mp4 + LeRobot under data/<task>/<config>/)"
         ),
     )
     return parser
@@ -202,157 +202,167 @@ def _cli_seed_for_record(env) -> int:
     return 0
 
 
-def _ffmpeg_bin() -> str | None:
-    beside_python = Path(sys.executable).with_name("ffmpeg")
-    if beside_python.exists():
-        return str(beside_python)
-    return shutil.which("ffmpeg")
-
-
-def _interactive_record_capture(env):
-    env._interactive_record_now = True
-    try:
-        env._take_picture()
-    except Exception as extra:
-        from envs.utils.household_view import EpisodeTimeLimit
-
-        if isinstance(extra, EpisodeTimeLimit):
-            env._interactive_record_cutoff = True
-            print(f"[record-data] episode cutoff while recording: {extra}")
-            return
-        print(f"[record-data] frame save failed: {extra}")
-    finally:
-        env._interactive_record_now = False
-
-
-def _viewer_rgb_frame(viewer):
-    rgba = viewer.window.get_picture("Color")
-    return np.flipud((np.asarray(rgba)[..., :3] * 255).clip(0, 255).astype(np.uint8))
-
-
-def _close_viewer_recorder(env) -> str | None:
-    proc = getattr(env, "_interactive_record_ffmpeg", None)
-    path = getattr(env, "_interactive_record_viewer_mp4", None)
-    env._interactive_record_ffmpeg = None
-    if proc is None:
-        return path if path and os.path.exists(str(path)) else None
-    try:
-        if proc.stdin is not None:
-            proc.stdin.close()
-        rc = proc.wait(timeout=30)
-    except Exception as extra:
-        print(f"[record-data] viewer ffmpeg finalize failed: {extra}")
-        rc = -1
-    if rc not in (0, None) and getattr(proc, "stderr", None) is not None:
-        try:
-            err = proc.stderr.read().decode("utf-8", errors="replace").strip()
-        except Exception:
-            err = ""
-        if err:
-            print(f"[record-data] viewer ffmpeg: {err}")
-    return path if path and os.path.exists(str(path)) else None
-
-
-def _ensure_viewer_render_hook(env) -> None:
-    """Wrap ``viewer.render`` once so live GUI frames go into ``episodeN_viewer.mp4``.
-
-    Tasks that later wrap ``viewer.render`` should chain the previous function;
-    wrapping twice would duplicate frames.
-    """
-    if not getattr(env, "_interactive_record_active", False):
-        return
-    if getattr(env, "_interactive_record_finished", False):
-        return
-    if getattr(env, "_interactive_record_hooked", False):
-        return
-    viewer = getattr(env, "viewer", None)
-    if viewer is None:
-        return
-    orig = viewer.render
-
-    def _render_and_record(*args, **kwargs):
-        result = orig(*args, **kwargs)
-        _interactive_record_viewer_frame(env)
-        return result
-
-    viewer.render = _render_and_record
-    env._interactive_record_hooked = True
-    env._interactive_record_render_wrapper = _render_and_record
-    env._interactive_record_render_orig = orig
-
-
-def _interactive_record_viewer_frame(env):
-    if getattr(env, "_interactive_record_finished", False):
-        return
-    viewer = getattr(env, "viewer", None)
-    if viewer is None or getattr(viewer, "closed", False):
-        return
-    now = time.perf_counter()
-    last = float(getattr(env, "_interactive_record_viewer_t", 0.0) or 0.0)
-    if last and (now - last) < (1.0 / 30.0):
+def _interactive_record_log_state(env) -> None:
+    """Cheap per-frame snapshot: robot qpos + actor/articulation poses. No cameras."""
+    robot = getattr(env, "robot", None)
+    scene = getattr(env, "scene", None)
+    if robot is None or scene is None:
         return
     try:
-        frame = _viewer_rgb_frame(viewer)
+        left_q = np.asarray(robot.left_entity.get_qpos(), dtype=np.float32).copy()
+        right_q = np.asarray(robot.right_entity.get_qpos(), dtype=np.float32).copy()
+        left_cmd = np.asarray(robot.get_left_arm_jointState(), dtype=np.float32)
+        right_cmd = np.asarray(robot.get_right_arm_jointState(), dtype=np.float32)
     except Exception:
         return
-    proc = getattr(env, "_interactive_record_ffmpeg", None)
-    if proc is not None and proc.poll() is not None:
-        env._interactive_record_ffmpeg = None
-        proc = None
-    if proc is None:
-        ffmpeg = _ffmpeg_bin()
-        if not ffmpeg:
-            if not getattr(env, "_interactive_record_ffmpeg_missing", False):
-                print("[record-data] ffmpeg not found; skipping live viewer mp4")
-                env._interactive_record_ffmpeg_missing = True
-            return
-        height, width = frame.shape[:2]
-        out_path = getattr(env, "_interactive_record_viewer_mp4", None)
-        if not out_path:
-            return
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        proc = subprocess.Popen(
-            [
-                ffmpeg, "-y", "-loglevel", "error",
-                "-f", "rawvideo", "-pixel_format", "rgb24",
-                "-video_size", f"{width}x{height}", "-framerate", "30",
-                "-i", "-",
-                "-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2,hflip,vflip",
-                "-pix_fmt", "yuv420p", "-vcodec", "libx264", "-crf", "20",
-                str(out_path),
-            ],
-            stdin=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        env._interactive_record_ffmpeg = proc
-        print(f"[record-data] recording viewer → {out_path}")
+    actors = []
+    for actor in scene.get_all_actors():
+        try:
+            pose = actor.get_pose()
+            actors.append(
+                (np.asarray(pose.p, dtype=np.float32), np.asarray(pose.q, dtype=np.float32))
+            )
+        except Exception:
+            actors.append(None)
+    arts = []
+    robot_ids = {id(robot.left_entity), id(robot.right_entity)}
+    getter = getattr(scene, "get_all_articulations", None)
+    if callable(getter):
+        try:
+            articulations = list(getter())
+        except Exception:
+            articulations = []
+        for art in articulations:
+            if id(art) in robot_ids:
+                continue
+            try:
+                pose = art.get_root_pose() if hasattr(art, "get_root_pose") else art.get_pose()
+                qpos = np.asarray(art.get_qpos(), dtype=np.float32).copy()
+                arts.append(
+                    (
+                        np.asarray(pose.p, dtype=np.float32),
+                        np.asarray(pose.q, dtype=np.float32),
+                        qpos,
+                    )
+                )
+            except Exception:
+                arts.append(None)
+    log = getattr(env, "_interactive_record_log", None)
+    if log is None:
+        env._interactive_record_log = []
+        log = env._interactive_record_log
+    log.append(
+        {
+            "lq": left_q,
+            "rq": right_q,
+            "lc": left_cmd,
+            "rc": right_cmd,
+            "lg": float(robot.get_left_gripper_val()),
+            "rg": float(robot.get_right_gripper_val()),
+            "actors": actors,
+            "arts": arts,
+        }
+    )
+
+
+def _interactive_record_restore_state(env, snap: dict) -> None:
+    """Apply a logged snapshot so offscreen cameras see the live episode."""
+    import sapien
+
+    robot = env.robot
+    scene = env.scene
+    left_q = np.asarray(snap["lq"], dtype=np.float64)
+    right_q = np.asarray(snap["rq"], dtype=np.float64)
     try:
-        proc.stdin.write(frame.tobytes())
-        env._interactive_record_viewer_t = now
-    except Exception as extra:
-        print(f"[record-data] viewer frame write failed: {extra}")
-        env._interactive_record_ffmpeg = None
+        robot.left_entity.set_qpos(left_q)
+        robot.left_entity.set_qvel(np.zeros_like(left_q))
+        robot.right_entity.set_qpos(right_q)
+        robot.right_entity.set_qvel(np.zeros_like(right_q))
+    except Exception:
+        pass
+    try:
+        left_active = robot.left_entity.get_active_joints()
+        for joint in robot.left_arm_joints:
+            idx = left_active.index(joint)
+            joint.set_drive_target(float(left_q[idx]))
+            joint.set_drive_velocity_target(0.0)
+        right_active = robot.right_entity.get_active_joints()
+        for joint in robot.right_arm_joints:
+            idx = right_active.index(joint)
+            joint.set_drive_target(float(right_q[idx]))
+            joint.set_drive_velocity_target(0.0)
+    except Exception:
+        pass
+    try:
+        robot.left_gripper_val = float(snap["lg"])
+        robot.right_gripper_val = float(snap["rg"])
+        left_cmd = np.asarray(snap["lc"], dtype=np.float64)
+        right_cmd = np.asarray(snap["rc"], dtype=np.float64)
+        if left_cmd.size:
+            robot.set_gripper(float(left_cmd[-1]), "left", gripper_eps=0)
+        if right_cmd.size:
+            robot.set_gripper(float(right_cmd[-1]), "right", gripper_eps=0)
+        if left_cmd.size > 1:
+            robot.set_arm_joints(left_cmd[:-1], np.zeros(left_cmd.size - 1), "left")
+        if right_cmd.size > 1:
+            robot.set_arm_joints(right_cmd[:-1], np.zeros(right_cmd.size - 1), "right")
+    except Exception:
+        pass
+
+    actors = list(scene.get_all_actors())
+    for actor, pose in zip(actors, snap.get("actors") or []):
+        if pose is None:
+            continue
+        try:
+            actor.set_pose(sapien.Pose(pose[0], pose[1]))
+        except Exception:
+            continue
+
+    getter = getattr(scene, "get_all_articulations", None)
+    if not callable(getter):
+        return
+    robot_ids = {id(robot.left_entity), id(robot.right_entity)}
+    try:
+        articulations = [art for art in getter() if id(art) not in robot_ids]
+    except Exception:
+        return
+    for art, pose in zip(articulations, snap.get("arts") or []):
+        if pose is None:
+            continue
+        p, q, qpos = pose
+        try:
+            if hasattr(art, "set_root_pose"):
+                art.set_root_pose(sapien.Pose(p, q))
+            else:
+                art.set_pose(sapien.Pose(p, q))
+            art.set_qpos(np.asarray(qpos, dtype=np.float64))
+            try:
+                art.set_qvel(np.zeros_like(qpos, dtype=np.float64))
+            except Exception:
+                pass
+        except Exception:
+            continue
 
 
 def _interactive_record_after_step(env):
-    _ensure_viewer_render_hook(env)
     if getattr(env, "_interactive_record_cutoff", False):
+        return
+    if getattr(env, "_interactive_record_finished", False):
         return
     env._interactive_record_steps = int(getattr(env, "_interactive_record_steps", 0)) + 1
     freq = int(getattr(env, "save_freq", None) or 15)
     if freq <= 0:
         freq = 15
     if env._interactive_record_steps % freq == 0:
-        _interactive_record_capture(env)
+        _interactive_record_log_state(env)
 
 
 def maybe_attach_interactive_data_recorder(env) -> bool:
-    """Start live recording in collect_data format after ``setup_demo``.
+    """Log cheap state during play; render collect_data cameras after the viewer closes.
 
     Idempotent. No-ops unless ``--record-data`` / ``ROBODYNA_RECORD_DATA`` is set.
     """
     if getattr(env, "_interactive_record_active", False):
-        _ensure_viewer_render_hook(env)
         return True
     if not interactive_record_data_requested():
         return False
@@ -363,7 +373,6 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
     task_name = str(getattr(env, "task_name", None) or type(env).__name__)
     folder = _record_config_folder(env)
     save_root = str(getattr(env, "save_dir", None) or "./data")
-    # setup_demo leaves yaml save_path (./data); nest like collect_data.py.
     expected = os.path.join(task_name, folder)
     if not os.path.abspath(save_root).replace("\\", "/").endswith(expected.replace("\\", "/")):
         save_root = os.path.join(save_root, task_name, folder)
@@ -372,7 +381,7 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
     os.makedirs(os.path.join(save_root, "video"), exist_ok=True)
 
     env.save_dir = save_root
-    env.save_data = True
+    env.save_data = False
     env.task_config = folder
     env.ep_num = _next_hdf5_episode_index(save_root)
     env.FRAME_IDX = 0
@@ -391,18 +400,25 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
     if not getattr(env, "save_freq", None):
         env.save_freq = 15
 
+    control = (
+        os.environ.get("ROBODYNA_CONTROL", "").strip()
+        or _argv_value("--control")
+        or "robot"
+    )
     env._interactive_record_active = True
-    env._interactive_record_via_step = True
-    env._interactive_record_now = False
+    env._interactive_record_via_step = False
     env._interactive_record_cutoff = False
     env._interactive_record_steps = 0
     env._interactive_record_finished = False
-    env._interactive_record_ffmpeg = None
-    env._interactive_record_viewer_t = 0.0
-    env._interactive_record_viewer_mp4 = os.path.join(
-        save_root, "video", f"episode{env.ep_num}_viewer.mp4"
-    )
+    env._interactive_record_log = []
     env._interactive_record_seed = _cli_seed_for_record(env)
+    env._interactive_record_config_name = (
+        _argv_value("--config")
+        or os.environ.get("ROBODYNA_RECORD_CONFIG")
+        or "demo_dynamic"
+    )
+    env._interactive_record_use_robot = str(control).strip().lower() == "robot"
+    env._interactive_record_task_cls = type(env)
     env._interactive_record_args = {
         "task_name": task_name,
         "task_config": folder,
@@ -413,6 +429,7 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
         "lerobot_chunks_size": 1000,
         "lerobot_task_state_dim": 32,
         "language_num": 100,
+        "data_type": dict(env.data_type),
     }
 
     orig_step = scene.step
@@ -428,33 +445,95 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
     orig_close = env.close_env
 
     def _close_and_finalize(*args, **kwargs):
+        env.close_env = orig_close
         try:
-            finish_interactive_data_recording(env)
+            finish_interactive_data_recording(env, live_close=(orig_close, args, kwargs))
         except Exception as exc:
             print(f"[record-data] finalize failed: {exc}")
-        env.close_env = orig_close
-        return orig_close(*args, **kwargs)
+            try:
+                orig_close(*args, **kwargs)
+            except Exception:
+                pass
 
     env.close_env = _close_and_finalize
-    _ensure_viewer_render_hook(env)
-    _interactive_record_capture(env)
+    _interactive_record_log_state(env)
     hdf5 = os.path.join(save_root, "data", f"episode{env.ep_num}.hdf5")
     preview = os.path.join(save_root, "video", f"episode{env.ep_num}.mp4")
     print(
-        f"[record-data] recording episode {env.ep_num} → {hdf5} "
-        f"+ {preview} (+ live viewer mp4)"
+        f"[record-data] logging robot/object state for episode {env.ep_num}; "
+        f"cameras render after the viewer closes → {hdf5} + {preview}"
     )
     return True
 
 
-def finish_interactive_data_recording(env) -> str | None:
-    """Merge pkl cache to HDF5/mp4, optional LeRobot export, seed.txt, scene_info."""
+def _replay_interactive_cameras(meta: dict):
+    """Headless setup_demo + pose restore + _take_picture for logged snapshots."""
+    snapshots = meta.get("snapshots") or []
+    if not snapshots:
+        print("[record-data] no state logged; nothing to save")
+        return None
+    task_cls = meta["task_cls"]
+    task_name = meta["task_name"]
+    seed = int(meta["seed"])
+    save_root = meta["save_root"]
+    ep_num = int(meta["ep_num"])
+    folder = meta["folder"]
+    save_freq = int(meta.get("save_freq") or 15)
+    data_type = meta.get("data_type") or {}
+    config_name = str(meta.get("config_name") or "demo_dynamic")
+    use_robot = bool(meta.get("use_robot", True))
+    print(f"[record-data] rendering {len(snapshots)} camera frames offscreen...")
+    config = configure_task(task_name, config_name, seed, use_robot)
+    config["render_freq"] = 0
+    config["save_data"] = True
+    config["save_path"] = save_root
+    config["now_ep_num"] = ep_num
+    config["save_freq"] = save_freq
+    config["task_config"] = folder
+    if data_type:
+        config["data_type"] = data_type
+    replay = task_cls()
+    replay.setup_demo(**config)
+    replay.save_dir = save_root
+    replay.save_data = True
+    replay.ep_num = ep_num
+    replay.FRAME_IDX = 0
+    replay.task_config = folder
+    if data_type:
+        replay.data_type = data_type
+    try:
+        for i, snap in enumerate(snapshots):
+            _interactive_record_restore_state(replay, snap)
+            replay._take_picture()
+            if (i + 1) % 20 == 0 or i + 1 == len(snapshots):
+                print(
+                    f"[record-data] offscreen {i + 1}/{len(snapshots)}",
+                    end="\r",
+                    flush=True,
+                )
+        print()
+        return replay
+    except Exception:
+        try:
+            replay.close_env()
+        except Exception:
+            pass
+        raise
+
+
+def finish_interactive_data_recording(env, live_close=None) -> str | None:
+    """Close the live viewer, then render cameras from logged poses."""
     if not getattr(env, "_interactive_record_active", False):
+        if live_close is not None:
+            fn, args, kwargs = live_close
+            fn(*args, **kwargs)
         return None
     if getattr(env, "_interactive_record_finished", False):
+        if live_close is not None:
+            fn, args, kwargs = live_close
+            fn(*args, **kwargs)
         return getattr(env, "_interactive_record_hdf5", None)
     env._interactive_record_finished = True
-    env._interactive_record_via_step = False
     orig_step = getattr(env, "_interactive_record_orig_step", None)
     scene = getattr(env, "scene", None)
     if orig_step is not None and scene is not None:
@@ -463,68 +542,82 @@ def finish_interactive_data_recording(env) -> str | None:
         except Exception:
             pass
 
-    wrapper = getattr(env, "_interactive_record_render_wrapper", None)
-    orig_render = getattr(env, "_interactive_record_render_orig", None)
-    viewer = getattr(env, "viewer", None)
-    if (
-        viewer is not None
-        and wrapper is not None
-        and orig_render is not None
-        and getattr(viewer, "render", None) is wrapper
-    ):
-        viewer.render = orig_render
-    env._interactive_record_render_wrapper = None
-
-    n_frames = int(getattr(env, "FRAME_IDX", 0) or 0)
+    snapshots = list(getattr(env, "_interactive_record_log", None) or [])
     save_dir = str(getattr(env, "save_dir", "") or "")
     ep_num = int(getattr(env, "ep_num", 0) or 0)
-    viewer_mp4 = _close_viewer_recorder(env)
-    if n_frames <= 0 or not save_dir:
-        print("[record-data] no frames captured; nothing to save")
-        if viewer_mp4:
-            _persist_task_result(
-                _LAST_TASK_RESULT,
-                _LAST_TASK_DETAIL,
-                extra={"record_viewer": viewer_mp4},
-            )
-            print(f"[record-data] viewer video {viewer_mp4}")
-        return None
-
     success = _LAST_TASK_RESULT
     if success is None:
         try:
             success = bool(env.check_success())
         except Exception:
             success = False
+    meta = {
+        "snapshots": snapshots,
+        "task_cls": getattr(env, "_interactive_record_task_cls", None) or type(env),
+        "task_name": str(getattr(env, "task_name", None) or type(env).__name__),
+        "seed": int(getattr(env, "_interactive_record_seed", 0) or 0),
+        "save_root": save_dir,
+        "ep_num": ep_num,
+        "folder": str(getattr(env, "task_config", None) or folder_name_from_save_dir(save_dir)),
+        "save_freq": int(getattr(env, "save_freq", None) or 15),
+        "data_type": dict(getattr(env, "_interactive_record_args", {}) or {}).get("data_type")
+        or dict(getattr(env, "data_type", None) or {}),
+        "config_name": str(getattr(env, "_interactive_record_config_name", None) or "demo_dynamic"),
+        "use_robot": bool(getattr(env, "_interactive_record_use_robot", True)),
+        "args": dict(getattr(env, "_interactive_record_args", None) or {}),
+        "success": bool(success),
+    }
 
-    try:
-        env.merge_pkl_to_hdf5_video()
-    except Exception as exc:
-        print(f"[record-data] HDF5 merge failed: {exc}")
-        if viewer_mp4:
-            _persist_task_result(
-                _LAST_TASK_RESULT,
-                _LAST_TASK_DETAIL,
-                extra={"record_viewer": viewer_mp4},
-            )
-            print(f"[record-data] viewer video {viewer_mp4}")
+    if live_close is not None:
+        fn, args, kwargs = live_close
+        try:
+            fn(*args, **kwargs)
+        except Exception as exc:
+            print(f"[record-data] live env close: {exc}")
+
+    if not snapshots or not save_dir:
+        print("[record-data] no frames captured; nothing to save")
         return None
 
-    args = dict(getattr(env, "_interactive_record_args", None) or {})
+    replay = None
+    try:
+        replay = _replay_interactive_cameras(meta)
+    except Exception as exc:
+        print(f"[record-data] camera replay failed: {exc}")
+        return None
+    if replay is None:
+        return None
+
+    n_frames = int(getattr(replay, "FRAME_IDX", 0) or 0)
+    try:
+        replay.merge_pkl_to_hdf5_video()
+    except Exception as exc:
+        print(f"[record-data] HDF5 merge failed: {exc}")
+        try:
+            replay.close_env()
+        except Exception:
+            pass
+        return None
+
+    args = dict(meta.get("args") or {})
     if args.get("export_lerobot", True):
         try:
             from envs.utils.lerobot_export import LeRobotEpisodeExporter
 
-            LeRobotEpisodeExporter(args).export(env, bool(success))
+            LeRobotEpisodeExporter(args).export(replay, bool(success))
         except Exception as exc:
             print(f"[record-data] LeRobot export failed: {exc}")
 
     try:
-        env.remove_data_cache()
+        replay.remove_data_cache()
+    except Exception:
+        pass
+    try:
+        replay.close_env()
     except Exception:
         pass
 
-    seed = int(getattr(env, "_interactive_record_seed", 0) or 0)
+    seed = int(meta["seed"])
     seed_path = os.path.join(save_dir, "seed.txt")
     try:
         existing = []
@@ -546,7 +639,6 @@ def finish_interactive_data_recording(env) -> str | None:
             "source": "interactive",
             "scenario": (
                 os.environ.get("ROBODYNA_SCENARIO")
-                or getattr(env, "interactive_scenario", None)
                 or "default"
             ),
             "frames": n_frames,
@@ -570,19 +662,15 @@ def finish_interactive_data_recording(env) -> str | None:
     }
     if preview:
         extra["record_video"] = preview
-    if viewer_mp4:
-        extra["record_viewer"] = viewer_mp4
     _persist_task_result(_LAST_TASK_RESULT, _LAST_TASK_DETAIL, extra=extra)
     print(f"[record-data] saved {hdf5} ({n_frames} frames, success={bool(success)})")
     if preview:
         print(f"[record-data] preview video {preview}")
-    if viewer_mp4:
-        print(f"[record-data] viewer video {viewer_mp4}")
 
     try:
         language_num = int(args.get("language_num", 100) or 100)
-        task_name = args.get("task_name") or getattr(env, "task_name", "")
-        task_config = args.get("task_config") or folder_name_from_save_dir(save_dir)
+        task_name = args.get("task_name") or meta["task_name"]
+        task_config = args.get("task_config") or meta["folder"]
         if task_name and task_config:
             cmd = (
                 "cd description && bash gen_episode_instructions.sh "
@@ -599,9 +687,9 @@ def finish_interactive_data_recording(env) -> str | None:
         print(f"[record-data] instruction generation skipped: {exc}")
     return hdf5
 
-
 def folder_name_from_save_dir(save_dir: str) -> str:
     return os.path.basename(os.path.abspath(save_dir))
+
 
 _VIEW_HELP_V = "V — cycle view: head_camera ↔ gripper(s)"
 
@@ -770,6 +858,164 @@ def _normalize_result_detail(detail: str | None) -> str | None:
     return text or None
 
 
+def _json_safe(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return str(value)
+
+
+def experiment_session_enabled() -> bool:
+    flag = os.environ.get("ROBODYNA_EXPERIMENT", "").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
+def maybe_attach_experiment_metrics(env) -> None:
+    """Count sim steps / wall time and attach EvalMetricsTracker in experiment mode."""
+    if not experiment_session_enabled():
+        return
+    if getattr(env, "_exp_timing_installed", False):
+        return
+    scene = getattr(env, "scene", None)
+    if scene is None or not hasattr(scene, "step"):
+        return
+    env._exp_timing_installed = True
+    env._exp_wall_start = None
+    env._exp_sim_steps = 0
+    orig_step = scene.step
+
+    def _step_and_count():
+        if getattr(env, "_exp_wall_start", None) is None:
+            env._exp_wall_start = time.perf_counter()
+        orig_step()
+        env._exp_sim_steps = int(getattr(env, "_exp_sim_steps", 0) or 0) + 1
+        tracker = getattr(env, "_metrics_tracker", None)
+        if tracker is not None and int(env._exp_sim_steps) % 10 == 0:
+            try:
+                tracker.on_step()
+            except Exception:
+                pass
+
+    try:
+        scene.step = _step_and_count
+    except Exception:
+        env._exp_timing_installed = False
+        return
+
+    if getattr(env, "_metrics_tracker", None) is not None:
+        return
+    try:
+        script_dir = str(REPO_ROOT / "script")
+        if script_dir not in sys.path:
+            sys.path.insert(0, script_dir)
+        from eval_metrics import EvalMetricsTracker
+
+        args = {
+            "use_dynamic": bool(getattr(env, "use_dynamic", False)),
+        }
+        tracker = EvalMetricsTracker(env, args)
+        tracker.on_episode_start()
+        env._metrics_tracker = tracker
+    except Exception:
+        pass
+
+
+def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
+    metrics: dict = {
+        "success": None if ok is None else bool(ok),
+        "fail_reason": detail or "",
+        "condition": _LAST_EPISODE_CONDITION or "",
+        "task": _resolve_task_name(env),
+    }
+    seed_raw = os.environ.get("ROBODYNA_SEED", "").strip()
+    if seed_raw:
+        try:
+            metrics["seed"] = int(seed_raw)
+        except ValueError:
+            metrics["seed"] = seed_raw
+    scenario = os.environ.get("ROBODYNA_SCENARIO", "").strip()
+    if scenario:
+        metrics["option_label"] = scenario
+    tracker = getattr(env, "_metrics_tracker", None)
+    if tracker is not None:
+        try:
+            episode = tracker.get_episode_metrics(
+                bool(ok),
+                fail_reason=detail,
+                seed=metrics.get("seed"),
+            )
+            metrics.update(
+                {
+                    "manipulation_score": float(episode.manipulation_score),
+                    "route_completion": float(episode.route_completion),
+                    "total_penalty_factor": float(episode.total_penalty_factor),
+                    "steps_taken": int(episode.steps_taken),
+                    "max_steps": int(episode.max_steps),
+                    "penalty_events": [
+                        {
+                            "event_type": p.event_type,
+                            "timestep": int(p.timestep),
+                            "penalty_factor": float(p.penalty_factor),
+                            "details": p.details,
+                        }
+                        for p in (episode.penalty_events or [])
+                    ],
+                }
+            )
+        except Exception:
+            pass
+    compute = getattr(env, "_compute_metrics", None)
+    if callable(compute):
+        try:
+            extra = compute()
+            if isinstance(extra, dict):
+                metrics["task_metrics"] = extra
+        except Exception:
+            pass
+    return metrics
+
+
+def _interactive_result_extras(env, ok: bool | None, detail: str | None) -> dict:
+    extras: dict = {}
+    control = os.environ.get("ROBODYNA_CONTROL", "").strip()
+    if control:
+        extras["controller"] = control
+    elif getattr(env, "_interactive_robot_mode", None) is not None:
+        extras["controller"] = "robot" if env._interactive_robot_mode else "keyboard"
+    seed_raw = os.environ.get("ROBODYNA_SEED", "").strip()
+    if seed_raw:
+        try:
+            extras["seed"] = int(seed_raw)
+        except ValueError:
+            extras["seed"] = seed_raw
+    scenario = os.environ.get("ROBODYNA_SCENARIO", "").strip()
+    if scenario:
+        extras["scenario"] = scenario
+
+    steps = int(getattr(env, "_exp_sim_steps", 0) or 0)
+    dt = None
+    try:
+        dt = float(env.scene.get_timestep())
+    except Exception:
+        dt = None
+    wall_start = getattr(env, "_exp_wall_start", None)
+    wall_s = (time.perf_counter() - wall_start) if wall_start else None
+    extras["time"] = {
+        "wall_clock_s": None if wall_s is None else round(float(wall_s), 4),
+        "simulation_s": None if dt is None else round(steps * dt, 6),
+        "simulation_steps": steps,
+    }
+    extras["metrics"] = _collect_episode_metrics(env, ok, detail)
+    return extras
+
+
 def _persist_task_result(
     ok: bool | None,
     detail: str | None,
@@ -807,7 +1053,7 @@ def _persist_task_result(
         payload.update(extra)
     try:
         Path(path).write_text(
-            json.dumps(payload, ensure_ascii=False),
+            json.dumps(payload, ensure_ascii=False, default=_json_safe),
             encoding="utf-8",
         )
     except OSError:
@@ -963,6 +1209,7 @@ def print_episode_condition(env, task: str | None = None) -> str:
     """
     global _LAST_EPISODE_CONDITION
     maybe_attach_interactive_data_recorder(env)
+    maybe_attach_experiment_metrics(env)
     if bool(getattr(env, "_episode_condition_printed", False)):
         return str(getattr(env, "_episode_condition_text", "") or "")
     text = format_episode_condition(env, task)
@@ -991,7 +1238,7 @@ def report_task_result(env, detail: str | None = None) -> bool:
         print_failure(f"Task complete: FAILURE ({detail})")
         _LAST_TASK_RESULT = False
         _LAST_TASK_DETAIL = detail
-        _persist_task_result(False, detail)
+        _persist_task_result(False, detail, extra=_interactive_result_extras(env, False, detail))
         return False
     detail = _normalize_result_detail(detail)
     if detail is None and not ok:
@@ -1004,7 +1251,11 @@ def report_task_result(env, detail: str | None = None) -> bool:
         print_failure(msg)
     _LAST_TASK_RESULT = bool(ok)
     _LAST_TASK_DETAIL = detail
-    _persist_task_result(_LAST_TASK_RESULT, detail)
+    _persist_task_result(
+        _LAST_TASK_RESULT,
+        detail,
+        extra=_interactive_result_extras(env, _LAST_TASK_RESULT, detail),
+    )
     return ok
 
 
@@ -1750,9 +2001,38 @@ class UniversalRobotControls:
 
     def _return_selected_to_origin(self):
         """O: snap currently selected arm(s) back to the captured start pose."""
+        restored = self.return_arms_to_origin(self.selected, open_grippers=False)
+        if restored:
+            print("Returned arm(s) to original position: " + " + ".join(restored))
+        else:
+            print("No original arm pose available to restore.")
+
+    def return_arms_to_origin(self, sides=None, *, open_grippers: bool = True):
+        """Snap arm(s) to the teleop start pose (both arms if ``sides`` is None).
+
+        Used by the O key (selected only) and by tutorial stage switches (both
+        arms, grippers opened) before the next prop appears.
+        """
+        if sides is None:
+            sides = ("left", "right")
+        sides = tuple(sides)
+        robot = getattr(self.env, "robot", None)
+        if open_grippers and robot is not None and hasattr(robot, "set_gripper"):
+            for side in sides:
+                try:
+                    robot.set_gripper(1.0, str(side), gripper_eps=0.0)
+                except Exception:
+                    pass
         restored = []
-        for side in self.selected:
+        for side in sides:
             joints = self._origin_joints.get(side)
+            if joints is None and robot is not None:
+                home = (
+                    robot.left_homestate if side == "left" else robot.right_homestate
+                )
+                if home is not None:
+                    joints = np.asarray(home, dtype=np.float64).copy()
+                    self._origin_joints[side] = joints
             if joints is None:
                 continue
             self._snap_arm_to_joints(side, joints)
@@ -1761,20 +2041,17 @@ class UniversalRobotControls:
             if pose is None:
                 try:
                     pose = self._ee_pose(side).copy()
+                    self._origin_pose[side] = pose
                 except Exception:
                     pose = None
             if pose is not None:
-                self._origin_pose[side] = pose
                 cmd = getattr(self.env, "_interactive_cmd_pose", None)
                 if not isinstance(cmd, dict):
                     cmd = {}
                     self.env._interactive_cmd_pose = cmd
                 cmd[side] = pose.copy()
             restored.append(side)
-        if restored:
-            print("Returned arm(s) to original position: " + " + ".join(restored))
-        else:
-            print("No original arm pose available to restore.")
+        return restored
 
     def _highlight_selected(self):
         # A new selection cancels any failure tint so the highlight is readable.
@@ -2176,7 +2453,8 @@ def terminal_hold_should_close(terminal_started_at: float | None) -> bool:
 
 
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
-                    overhead: bool = True, is_done=None, extra_plugins=None):
+                    overhead: bool = True, is_done=None, extra_plugins=None,
+                    report_result: bool = True):
     """Standard interactive loop: input → physics catch-up → render.
 
     Physics uses a fixed timestep catch-up so wall-clock motion speed stays
@@ -2184,7 +2462,8 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     display frame (first substep) so key/mouse edges are not multi-fired.
 
     ``is_done(step)`` may return ``True`` / ``False``, or ``(done, detail)``.
-    When done, prints SUCCESS/FAILURE via ``report_task_result``, then continues
+    When done, prints SUCCESS/FAILURE via ``report_task_result`` (unless
+    ``report_result`` is false, e.g. tutorials), then continues
     stepping/rendering for ``TERMINAL_RESULT_HOLD_SECONDS`` wall-clock before
     closing. Returns that bool (or ``None`` if the viewer closed without a
     result). ``should_stop`` remains a raw break (no auto print / no hold) for
@@ -2249,7 +2528,8 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
                     else:
                         done, detail = bool(result), None
                     if done:
-                        report_task_result(env, detail)
+                        if report_result:
+                            report_task_result(env, detail)
                         terminal_started_at = time.perf_counter()
                 if should_stop is not None and should_stop(step):
                     env.scene.update_render()
@@ -2257,7 +2537,8 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
                     return _LAST_TASK_RESULT
                 if max_steps is not None and step >= max_steps:
                     print(f"Reached max_steps={max_steps}; evaluating.")
-                    report_task_result(env, f"max_steps={max_steps}")
+                    if report_result:
+                        report_task_result(env, f"max_steps={max_steps}")
                     terminal_started_at = time.perf_counter()
 
             env.scene.update_render()
