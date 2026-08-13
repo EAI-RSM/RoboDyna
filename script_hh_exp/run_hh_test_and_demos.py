@@ -103,33 +103,33 @@ def pick_demo_seeds(result: dict) -> list[tuple[str, int]]:
     return []
 
 
-def publish_clip(task: str, label: str, side_mp4: Path, caption: str) -> dict:
-    """Copy sidebyside mp4 + gif into household_demos, repo final, and gallery."""
+def publish_clip(task: str, label: str, head_mp4: Path, caption: str) -> dict:
+    """Copy head-camera mp4 + gif into household_demos, repo final, and gallery."""
     stem = {
-        "success": "success_sidebyside",
-        "failure": "failure_sidebyside",
-        "failure2": "failure2_sidebyside",
-        "success1": "success1_sidebyside",
-        "success2": "success2_sidebyside",
-    }.get(label, f"{label}_sidebyside")
+        "success": "success_head",
+        "failure": "failure_head",
+        "failure2": "failure2_head",
+        "success1": "success1_head",
+        "success2": "success2_head",
+    }.get(label, f"{label}_head")
 
     # household_demos layout
     sub = "failure" if label.startswith("fail") else "success"
     hh_dir = HOUSEHOLD_DEMOS / task / sub
     hh_dir.mkdir(parents=True, exist_ok=True)
     hh_mp4 = hh_dir / f"{stem}.mp4"
-    shutil.copy2(side_mp4, hh_mp4)
+    shutil.copy2(head_mp4, hh_mp4)
 
     # Also keep named seed copy under household_demos root-style for inspection
-    seed_name = side_mp4.name
-    shutil.copy2(side_mp4, HOUSEHOLD_DEMOS / task / seed_name)
+    seed_name = head_mp4.name
+    shutil.copy2(head_mp4, HOUSEHOLD_DEMOS / task / seed_name)
 
     for dest_root in (REPO_FINAL / task, GALLERY / task):
         dest_root.mkdir(parents=True, exist_ok=True)
         dst_mp4 = dest_root / f"{stem}.mp4"
         dst_gif = dest_root / f"{stem}.gif"
-        shutil.copy2(side_mp4, dst_mp4)
-        gif_from_mp4(side_mp4, dst_gif)
+        shutil.copy2(head_mp4, dst_mp4)
+        gif_from_mp4(head_mp4, dst_gif)
         print(f"  PUBLISH {dst_gif}", flush=True)
 
     display_label = "Failure case" if label.startswith("fail") else "Success"
@@ -225,7 +225,7 @@ def main() -> int:
             # Rename files to success1/success2 if needed
             renamed = []
             for i, m in enumerate(ordered):
-                want = f"success{i+1}_sidebyside.gif"
+                want = f"success{i+1}_head.gif"
                 if m["file"] != want:
                     for root in (GALLERY / task, REPO_FINAL / task):
                         src = root / m["file"]

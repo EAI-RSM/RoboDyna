@@ -77,14 +77,14 @@ def update_gallery_html(meta: list[dict]) -> None:
 
 
 def readme_cell(task: str, m: dict) -> str:
-    """Two-GIF cell for README household table."""
+    """Two-GIF cell for README household table (head-camera demos)."""
     files = m["files"]
     captions = m["captions"]
     parts = []
     for f, cap in zip(files, captions):
         parts.append(
             f'<div align="center"><img src="final_task_demos/{task}/{f}" '
-            f'width="240" height="90"/><br><sub>{cap}</sub></div>'
+            f'width="160" height="120"/><br><sub>{cap}</sub></div>'
         )
     return " ".join(parts) if parts else "—"
 
@@ -127,11 +127,16 @@ def update_main_readme(meta: list[dict]) -> None:
         rows.append(f"| **`{task}`**<br><sub>{blurb}</sub> | {cell} |")
     new_table = "\n".join(rows) + "\n"
     new_text = text[:t0] + new_table + text[t1:]
-    # Fix lead-in sentence if still single-demo wording
-    new_text = new_text.replace(
+    # Normalize lead-in to head-camera wording (any prior side-by-side phrasing).
+    for old in (
         "Each row shows the latest side-by-side expert demo (head camera + top-down).",
         "Each row shows success and failure (or two successes) side-by-side expert demos (head camera + top-down).",
-    )
+        "Each row shows success and failure (or two successes) head-camera expert demos.",
+    ):
+        new_text = new_text.replace(
+            old,
+            "Each row shows success and failure (or two successes) head-camera expert demos.",
+        )
     README.write_text(new_text)
     print(f"Updated {README}")
 

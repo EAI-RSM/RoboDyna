@@ -14,24 +14,25 @@ that the viewer was closed before a result, so another task can be launched.
 
 ## Demos
 
-Each interactive scenario has a side-by-side expert demo (head camera + top-down)
+Each interactive scenario has a head-camera expert demo
 under `final_task_demos/<task>/`. The GUI prefers the head-camera `scene_snapshot.png`
 for the card preview, falling back to `default_sidebyside.gif`.
 
 | Task | Demo |
 |---|---|
-| **`trap_bug`** | <img src="../final_task_demos/trap_bug/default_sidebyside.gif" width="320"/> |
-| **`boil_milk`** | <img src="../final_task_demos/boil_milk/default_sidebyside.gif" width="320"/> |
-| **`fill_coffee_jar`** | <img src="../final_task_demos/fill_coffee_jar/default_sidebyside.gif" width="320"/> |
-| **`pour_beer`** | <img src="../final_task_demos/pour_beer/default_sidebyside.gif" width="320"/> |
-| **`cook_food`** | <img src="../final_task_demos/cook_food/default_sidebyside.gif" width="320"/> |
-| **`cook_food_timer`** | <img src="../final_task_demos/cook_food_timer/default_sidebyside.gif" width="320"/> |
-| **`measure_ingredient`** | <img src="../final_task_demos/measure_ingredient/default_sidebyside.gif" width="320"/> |
-| **`make_soup`** | <img src="../final_task_demos/make_soup/default_sidebyside.gif" width="320"/> |
-| **`catch_cup`** | <img src="../final_task_demos/catch_cup/default_sidebyside.gif" width="320"/> |
-| **`catch_mouse_object_drop`** | <img src="../final_task_demos/catch_mouse_object_drop/default_sidebyside.gif" width="320"/> |
-| **`stop_ball`** | <img src="../final_task_demos/stop_ball/default_sidebyside.gif" width="320"/> |
-| **`clean_table`** | <img src="../final_task_demos/clean_table/default_sidebyside.gif" width="320"/> |
+| **`trap_bug`** | <img src="../final_task_demos/trap_bug/success1_head.gif" width="200"/> <img src="../final_task_demos/trap_bug/success2_head.gif" width="200"/> |
+| **`catch_cup`** | <img src="../final_task_demos/catch_cup/success1_head.gif" width="200"/> <img src="../final_task_demos/catch_cup/success2_head.gif" width="200"/> |
+| **`catch_mouse_object_drop`** | <img src="../final_task_demos/catch_mouse_object_drop/success_head.gif" width="200"/> <img src="../final_task_demos/catch_mouse_object_drop/success2_head.gif" width="200"/> |
+| **`stop_ball`** | <img src="../final_task_demos/stop_ball/success_head.gif" width="200"/> <img src="../final_task_demos/stop_ball/failure_head.gif" width="200"/> |
+| **`clean_table`** | <img src="../final_task_demos/clean_table/success1_head.gif" width="200"/> <img src="../final_task_demos/clean_table/success2_head.gif" width="200"/> |
+| **`fill_coffee_jar`** | <img src="../final_task_demos/fill_coffee_jar/success1_head.gif" width="200"/> <img src="../final_task_demos/fill_coffee_jar/success2_head.gif" width="200"/> |
+| **`pour_beer`** | <img src="../final_task_demos/pour_beer/success_head.gif" width="200"/> <img src="../final_task_demos/pour_beer/failure_head.gif" width="200"/> |
+| **`boil_milk`** | <img src="../final_task_demos/boil_milk/success_head.gif" width="200"/> <img src="../final_task_demos/boil_milk/failure_head.gif" width="200"/> |
+| **`cook_food`** | <img src="../final_task_demos/cook_food/success_head.gif" width="200"/> <img src="../final_task_demos/cook_food/success2_head.gif" width="200"/> |
+| **`cook_food_timer`** | <img src="../final_task_demos/cook_food_timer/success_head.gif" width="200"/> <img src="../final_task_demos/cook_food_timer/success2_head.gif" width="200"/> |
+| **`make_soup`** | <img src="../final_task_demos/make_soup/success_head.gif" width="200"/> <img src="../final_task_demos/make_soup/success2_head.gif" width="200"/> |
+| **`measure_ingredient`** | <img src="../final_task_demos/measure_ingredient/success1_head.gif" width="200"/> <img src="../final_task_demos/measure_ingredient/success2_head.gif" width="200"/> |
+
 
 Refresh GUI head-camera card snapshots:
 
