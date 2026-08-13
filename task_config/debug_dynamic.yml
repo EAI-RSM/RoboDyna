@@ -305,7 +305,7 @@ task_args:
     # Default: single good apple + static basket.
     # Opt 1 — two_apples_enabled: spoiled yellow→black apple (do not pick)
     # Opt 2 — basket_move_enabled: oscillating basket
-    ripen_steps: 2500   # slow ripening: apple stays ~red through the grasp
+    ripen_steps: 3600   # +20% vs 3000; slower ripen (matches demo_dynamic)
     red_window_min: 0.78   # per-episode red target band (mean ~0.8)
     red_window_max: 0.82
     red_tolerance: 0.12
@@ -349,7 +349,7 @@ task_args:
     block_y_jitter: 0.05
     random_belt_flip: true
   drop_ball_hole:
-    spin_speed: 0.9
+    spin_speed: 0.72            # −20% vs 0.9; matches env SPIN_SPEED_DEFAULT
     spin_speed_jitter: 0.20     # sample ~ U(0.8, 1.2) × spin_speed
     r_tol: 0.06
     align_window: 0.18
@@ -415,8 +415,9 @@ task_args:
   sort_apples_belt:
     n_apples_min: 4
     n_apples_max: 4
-    belt_speed_min: 0.0014      # 30% below max; per-ep U[min, max]
-    belt_speed_max: 0.0020      # upper = current (post-×2) speed
+    belt_speed_min: 0.00112     # 30% below max (−20% vs 0.0014)
+    belt_speed_max: 0.0016      # upper (−20% vs 0.0020)
+    spawn_gap: 0.36             # +20% vs 0.30; matches demo_dynamic
     belt_speed_scale: 1.0
     advance_every: 4
     gate_center_y: -0.03        # divert plank hinge center along belt Y (m)

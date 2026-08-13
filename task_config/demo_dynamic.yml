@@ -810,7 +810,7 @@ task_args:
     # Default: single good apple (green→red→black) + static basket.
     # Opt 1 — two_apples_enabled / spoiled_apple_enabled: second yellow→black apple (do not pick)
     # Opt 2 — basket_move_enabled: basket oscillates between branch-tip X bounds
-    ripen_steps: 2500           # sim steps for ripeness 0→1 while apple hangs on the tree
+    ripen_steps: 3600           # sim steps for ripeness 0→1 (+20% vs 3000; slower ripen)
     red_window_min: 0.78        # per-ep red target band low (mean ~0.8)
     red_window_max: 0.82        # high; ~0.8 = vivid red
     red_tolerance: 0.12         # success: |r_grasp - red_window| must be ≤ this
@@ -901,7 +901,7 @@ task_args:
     container_radius_jitter: 0.15     # ±15%
     cylinder_hole_inset: 0.025 # cylinder only: keep the hole clear of the plate rim
     cylinder_hole_edge_clearance: 0.008  # keep the full hole disk inside the rim
-    spin_speed: 1.52            # angular speed baseline; dir random ± (−20% from 1.9)
+    spin_speed: 1.216           # angular speed baseline; dir random ± (−20% from 1.52)
     spin_speed_jitter: 0.20     # sample speed ~ U(spin_speed×0.8, spin_speed×1.2)
     # spin_speed_min / spin_speed_max: optional absolute range (overrides jitter when both set)
     hole_align_tol: 0.015       # m; release XY vs predicted hole center
@@ -934,8 +934,9 @@ task_args:
   sort_apples_belt:
     n_apples_min: 4             # fixed episode size (all options)
     n_apples_max: 4
-    belt_speed_min: 0.0014      # 30% below max; per-ep U[min, max]
-    belt_speed_max: 0.0020      # upper = current (post-×2) speed; ~0.12 m/s surface w/ advance_every
+    belt_speed_min: 0.00112     # 30% below max; per-ep U[min, max] (−20% vs 0.0014)
+    belt_speed_max: 0.0016      # upper (−20% vs 0.0020); ~0.096 m/s surface w/ advance_every
+    spawn_gap: 0.36             # m; spacing between successive apples (+20% vs 0.30)
     belt_speed_scale: 1.0       # multiplier on sampled belt_speed
     advance_every: 4            # physics steps between belt ticks
     gate_center_y: -0.03        # divert plank hinge center along belt Y (m); was -0.06
