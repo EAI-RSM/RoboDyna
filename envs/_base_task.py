@@ -1065,7 +1065,16 @@ class Base_Task(gym.Env):
         # preview video at the REAL collection rate (250/save_freq = 16.67 fps with save_freq=15),
         # so it aligns with the HDF5/LeRobot data instead of the upstream 30 fps (which plays 1.8x fast)
         _rt_fps = 250.0 / float(self.save_freq) if self.save_freq else 30.0
-        process_folder_to_hdf5_video(cache_path, target_file_path, target_video_path, fps=_rt_fps)
+        video_cameras = None
+        if getattr(self, "_record_preview_head_only", False):
+            video_cameras = ["head_camera"]
+        process_folder_to_hdf5_video(
+            cache_path,
+            target_file_path,
+            target_video_path,
+            fps=_rt_fps,
+            video_cameras=video_cameras,
+        )
 
     def remove_data_cache(self):
         folder_path = f"{self.save_dir}/.cache/episode{self.ep_num}/"

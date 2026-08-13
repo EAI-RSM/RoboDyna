@@ -139,16 +139,21 @@ def _stack_camera_streams(obs, cam_names):
     return arr
 
 
-def pkl_files_to_hdf5_and_video(pkl_files, hdf5_path, video_path, fps=30.0):
+def pkl_files_to_hdf5_and_video(pkl_files, hdf5_path, video_path, fps=30.0, video_cameras=None):
     data_list = parse_dict_structure(load_pkl_file(pkl_files[0]))
     for pkl_file_path in pkl_files:
         pkl_file = load_pkl_file(pkl_file_path)
         append_data_to_structure(data_list, pkl_file)
 
-    # Prefer third-person demo_camera (visualize_task_scene view) when present; else
-    # head + countertop side-by-side; else any single static camera.
     obs = data_list["observation"]
-    if "demo_camera" in obs and "rgb" in obs["demo_camera"]:
+    if video_cameras:
+        vid = _stack_camera_streams(obs, list(video_cameras))
+        if vid is None:
+            missing = ", ".join(video_cameras)
+            raise RuntimeError(f"No RGB frames for video cameras: {missing}")
+    elif "demo_camera" in obs and "rgb" in obs["demo_camera"]:
+        # Prefer third-person demo_camera (visualize_task_scene view) when present; else
+        # head + countertop side-by-side; else any single static camera.
         vid = np.array(obs["demo_camera"]["rgb"])
     else:
         vid = _stack_camera_streams(obs, ["head_camera", "countertop_camera"])
@@ -164,7 +169,7 @@ def pkl_files_to_hdf5_and_video(pkl_files, hdf5_path, video_path, fps=30.0):
         create_hdf5_from_dict(f, data_list)
 
 
-def process_folder_to_hdf5_video(folder_path, hdf5_path, video_path, fps=30.0):
+def process_folder_to_hdf5_video(folder_path, hdf5_path, video_path, fps=30.0, video_cameras=None):
     pkl_files = []
     for fname in os.listdir(folder_path):
         if fname.endswith(".pkl") and fname[:-4].isdigit():
@@ -183,4 +188,6 @@ def process_folder_to_hdf5_video(folder_path, hdf5_path, video_path, fps=30.0):
             raise ValueError(f"Missing file {expected}.pkl")
         expected += 1
 
-    pkl_files_to_hdf5_and_video(pkl_files, hdf5_path, video_path, fps=fps)
+    pkl_files_to_hdf5_and_video(
+        pkl_files, hdf5_path, video_path, fps=fps, video_cameras=video_cameras
+    )

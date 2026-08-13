@@ -461,7 +461,7 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
     preview = os.path.join(save_root, "video", f"episode{env.ep_num}.mp4")
     print(
         f"[record-data] logging robot/object state for episode {env.ep_num}; "
-        f"cameras render after the viewer closes → {hdf5} + {preview}"
+        f"head_camera renders after the viewer closes → {hdf5} + {preview}"
     )
     return True
 
@@ -482,7 +482,7 @@ def _replay_interactive_cameras(meta: dict):
     data_type = meta.get("data_type") or {}
     config_name = str(meta.get("config_name") or "demo_dynamic")
     use_robot = bool(meta.get("use_robot", True))
-    print(f"[record-data] rendering {len(snapshots)} camera frames offscreen...")
+    print(f"[record-data] rendering {len(snapshots)} head_camera frames offscreen...")
     config = configure_task(task_name, config_name, seed, use_robot)
     config["render_freq"] = 0
     config["save_data"] = True
@@ -492,6 +492,14 @@ def _replay_interactive_cameras(meta: dict):
     config["task_config"] = folder
     if data_type:
         config["data_type"] = data_type
+    cam = config.setdefault("camera", {})
+    cam["collect_head_camera"] = True
+    cam["collect_wrist_camera"] = False
+    cam["collect_static_cameras"] = ["head_camera"]
+    if isinstance(data_type, dict):
+        data_type = dict(data_type)
+        data_type["third_view"] = False
+        config["data_type"] = data_type
     replay = task_cls()
     replay.setup_demo(**config)
     replay.save_dir = save_root
@@ -499,6 +507,7 @@ def _replay_interactive_cameras(meta: dict):
     replay.ep_num = ep_num
     replay.FRAME_IDX = 0
     replay.task_config = folder
+    replay._record_preview_head_only = True
     if data_type:
         replay.data_type = data_type
     try:

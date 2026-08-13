@@ -57,6 +57,10 @@ class Camera:
 
         self.collect_head_camera = kwags["camera"].get("collect_head_camera", True)
         self.collect_wrist_camera = kwags["camera"].get("collect_wrist_camera", True)
+        static_only = kwags["camera"].get("collect_static_cameras")
+        self.collect_static_cameras = (
+            {str(name) for name in static_only} if static_only else None
+        )
 
         # embodiment = kwags.get('embodiment')
         # embodiment_config_path = os.path.join(CONFIGS_PATH, '_embodiment_config.yml')
@@ -72,6 +76,14 @@ class Camera:
         # TODO
         self.static_camera_info_list = kwags["left_embodiment_config"]["static_camera_list"]
         self.static_camera_num = len(self.static_camera_info_list)
+
+    def _want_static_camera(self, camera_name: str) -> bool:
+        if camera_name == "head_camera":
+            return bool(self.collect_head_camera)
+        names = getattr(self, "collect_static_cameras", None)
+        if not names:
+            return True
+        return camera_name in names
 
     def load_camera(self, scene):
         """
@@ -276,8 +288,9 @@ class Camera:
             self.left_camera.take_picture()
             self.right_camera.take_picture()
 
-        for camera in self.static_camera_list:
-            camera.take_picture()
+        for camera, camera_name in zip(self.static_camera_list, self.static_camera_name):
+            if self._want_static_camera(camera_name):
+                camera.take_picture()
 
         # ================================= sensor camera =================================
         # self.head_sensor.take_picture()
@@ -310,10 +323,7 @@ class Camera:
             res["right_camera"] = _get_config(self.right_camera)
 
         for camera, camera_name in zip(self.static_camera_list, self.static_camera_name):
-            if camera_name == "head_camera":
-                if self.collect_head_camera:
-                    res[camera_name] = _get_config(camera)
-            else:
+            if self._want_static_camera(camera_name):
                 res[camera_name] = _get_config(camera)
         # ================================= sensor camera =================================
         # res['head_sensor'] = res['head_camera']
@@ -351,11 +361,7 @@ class Camera:
             res["right_camera"]["rgba"] = _get_rgba(self.right_camera)
 
         for camera, camera_name in zip(self.static_camera_list, self.static_camera_name):
-            if camera_name == "head_camera":
-                if self.collect_head_camera:
-                    res[camera_name] = {}
-                    res[camera_name]["rgba"] = _get_rgba(camera)
-            else:
+            if self._want_static_camera(camera_name):
                 res[camera_name] = {}
                 res[camera_name]["rgba"] = _get_rgba(camera)
         # ================================= sensor camera =================================
