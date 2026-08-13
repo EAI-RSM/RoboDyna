@@ -18,7 +18,7 @@ ARM_INSTRUCTION = "Select gripper"
 VIEW_INSTRUCTION = "Switch view,\nhead camera and gripper"
 ARROW_INSTRUCTION = "Move the arm left, right, forward, and back"
 HEIGHT_SUBLABELS = ("up", "down")
-HEIGHT_INSTRUCTION = "Raise and lower the arm"
+HEIGHT_INSTRUCTION = "Raise and lower the arm.\nZ min and max is capped."
 YAW_SUBLABELS = ("left", "right")
 YAW_INSTRUCTION = "Rotate the gripper left or right"
 TILT_SUBLABELS = ("left", "right")
@@ -236,6 +236,74 @@ def draw_play_keys(pressed: set[str] | None = None) -> Image.Image:
     return canvas
 
 
+PLAY2_KEY = 72
+PLAY2_GAP = 8
+PLAY2_GROUP = 16
+PLAY2_PAD = 10
+PLAY2_CAPTION = "Practice — keys flash. Esc quits."
+
+
+def _play2_arrow_block() -> tuple[int, int]:
+    k, g = PLAY2_KEY, PLAY2_GAP
+    return (3 * k + 2 * g, 2 * k + g)
+
+
+def part2_play_cluster_size() -> tuple[int, int]:
+    aw, ah = _play2_arrow_block()
+    letters_w = 6 * PLAY2_KEY + 3 * PLAY2_GAP + 2 * PLAY2_GROUP
+    width = PLAY2_PAD + aw + PLAY2_GROUP + letters_w + PLAY2_PAD
+    height = PLAY2_PAD + ah + PLAY2_GAP + PLAY2_KEY + PLAY2_PAD + PLAY_SUB_H
+    return width, height
+
+
+def draw_part2_play_keys(pressed: set[str] | None = None) -> Image.Image:
+    """Compact arrows + E/Q + R/T + F/G + Space + Esc for Part 2 practice."""
+    pressed = pressed or set()
+    width, height = part2_play_cluster_size()
+    canvas = Image.new("RGBA", (width, height), _CANVAS)
+    d = ImageDraw.Draw(canvas)
+    k, g = PLAY2_KEY, PLAY2_GAP
+    x0 = y0 = PLAY2_PAD
+    aw, ah = _play2_arrow_block()
+    canvas.alpha_composite(
+        draw_arrow_keycap("up", pressed="up" in pressed, size=k),
+        (x0 + k + g, y0),
+    )
+    by = y0 + k + g
+    canvas.alpha_composite(
+        draw_arrow_keycap("left", pressed="left" in pressed, size=k),
+        (x0, by),
+    )
+    canvas.alpha_composite(
+        draw_arrow_keycap("down", pressed="down" in pressed, size=k),
+        (x0 + k + g, by),
+    )
+    canvas.alpha_composite(
+        draw_arrow_keycap("right", pressed="right" in pressed, size=k),
+        (x0 + 2 * (k + g), by),
+    )
+    lx = x0 + aw + PLAY2_GROUP
+    groups = (("E", "Q"), ("R", "T"), ("F", "G"))
+    for gi, pair in enumerate(groups):
+        gx = lx + gi * (2 * k + PLAY2_GAP + PLAY2_GROUP)
+        for j, label in enumerate(pair):
+            cap = draw_keycap(label, pressed=label in pressed, size=k)
+            canvas.alpha_composite(cap, (gx + j * (k + g), by))
+    sy = y0 + ah + PLAY2_GAP
+    canvas.alpha_composite(
+        draw_wide_keycap("Space", pressed="Space" in pressed, width=aw, height=k),
+        (x0, sy),
+    )
+    canvas.alpha_composite(
+        draw_keycap("Esc", pressed="Esc" in pressed, size=k),
+        (lx, sy),
+    )
+    inst_font = _font(22)
+    lines = _wrap_text(PLAY2_CAPTION, inst_font, d, width - PLAY2_PAD * 2)
+    _draw_centered_lines(d, lines, inst_font, sy + k + 6, width, _INSTRUCTION)
+    return canvas
+
+
 def _arrow_pts(cx, cy, direction, length=46, width=38):
     if direction == "up":
         return [
@@ -278,8 +346,11 @@ def _arrow_pts(cx, cy, direction, length=46, width=38):
     ]
 
 
-def draw_arrow_keycap(direction: str, *, pressed: bool = False) -> Image.Image:
-    img = Image.new("RGBA", (KEY_SIZE, KEY_SIZE), (0, 0, 0, 0))
+def draw_arrow_keycap(direction: str, *, pressed: bool = False, size: int = KEY_SIZE) -> Image.Image:
+    scale = size / float(KEY_SIZE)
+    pad = max(6, int(round(PAD * scale)))
+    radius = max(8, int(round(RADIUS * scale)))
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     fill = _FILL_DONE if pressed else _FILL
     inner = _FILL_INNER_DONE if pressed else _FILL_INNER
@@ -288,28 +359,32 @@ def draw_arrow_keycap(direction: str, *, pressed: bool = False) -> Image.Image:
     glyph = _GLYPH_DONE if pressed else _GLYPH
     _rounded_rect(
         d,
-        [PAD + 4, PAD + 8, KEY_SIZE - PAD + 4, KEY_SIZE - PAD + 8],
-        RADIUS,
+        [pad + 3, pad + 6, size - pad + 3, size - pad + 6],
+        radius,
         fill=(0, 0, 0, 90),
     )
     _rounded_rect(
         d,
-        [PAD, PAD, KEY_SIZE - PAD, KEY_SIZE - PAD],
-        RADIUS,
+        [pad, pad, size - pad, size - pad],
+        radius,
         fill=fill,
         outline=outline,
-        width=4,
+        width=max(2, int(round(4 * scale))),
     )
+    inset = max(5, int(round(8 * scale)))
     _rounded_rect(
         d,
-        [PAD + 8, PAD + 8, KEY_SIZE - PAD - 8, KEY_SIZE - PAD - 8],
-        RADIUS - 8,
+        [pad + inset, pad + inset, size - pad - inset, size - pad - inset],
+        max(4, radius - inset),
         fill=inner,
         outline=inner_outline,
-        width=2,
+        width=max(1, int(round(2 * scale))),
     )
-    cx = cy = KEY_SIZE / 2
-    d.polygon(_arrow_pts(cx, cy - 2, direction), fill=glyph)
+    cx = cy = size / 2
+    d.polygon(
+        _arrow_pts(cx, cy - 2 * scale, direction, length=46 * scale, width=38 * scale),
+        fill=glyph,
+    )
     return img
 
 
@@ -377,8 +452,17 @@ def draw_tilt_keys(pressed: set[str] | None = None) -> Image.Image:
     )
 
 
-def draw_wide_keycap(label: str, *, pressed: bool = False, width: int = SPACE_BAR_W) -> Image.Image:
-    img = Image.new("RGBA", (width, KEY_SIZE), (0, 0, 0, 0))
+def draw_wide_keycap(
+    label: str,
+    *,
+    pressed: bool = False,
+    width: int = SPACE_BAR_W,
+    height: int = KEY_SIZE,
+) -> Image.Image:
+    scale = height / float(KEY_SIZE)
+    pad = max(6, int(round(PAD * scale)))
+    radius = max(8, int(round(RADIUS * scale)))
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     fill = _FILL_DONE if pressed else _FILL
     inner = _FILL_INNER_DONE if pressed else _FILL_INNER
@@ -387,31 +471,32 @@ def draw_wide_keycap(label: str, *, pressed: bool = False, width: int = SPACE_BA
     glyph = _GLYPH_DONE if pressed else _GLYPH
     _rounded_rect(
         d,
-        [PAD + 4, PAD + 8, width - PAD + 4, KEY_SIZE - PAD + 8],
-        RADIUS,
+        [pad + 3, pad + 6, width - pad + 3, height - pad + 6],
+        radius,
         fill=(0, 0, 0, 90),
     )
     _rounded_rect(
         d,
-        [PAD, PAD, width - PAD, KEY_SIZE - PAD],
-        RADIUS,
+        [pad, pad, width - pad, height - pad],
+        radius,
         fill=fill,
         outline=outline,
-        width=4,
+        width=max(2, int(round(4 * scale))),
     )
+    inset = max(5, int(round(8 * scale)))
     _rounded_rect(
         d,
-        [PAD + 8, PAD + 8, width - PAD - 8, KEY_SIZE - PAD - 8],
-        RADIUS - 8,
+        [pad + inset, pad + inset, width - pad - inset, height - pad - inset],
+        max(4, radius - inset),
         fill=inner,
         outline=inner_outline,
-        width=2,
+        width=max(1, int(round(2 * scale))),
     )
-    font = _font(56)
+    font = _font(max(16, int(round(56 * scale))))
     bbox = d.textbbox((0, 0), label, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (width - tw) / 2 - bbox[0]
-    y = (KEY_SIZE - th) / 2 - bbox[1] - 4
+    y = (height - th) / 2 - bbox[1] - 2
     d.text((x, y), label, font=font, fill=glyph)
     return img
 

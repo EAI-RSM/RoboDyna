@@ -15,6 +15,7 @@ from _keycaps import (
     draw_action_stage,
     draw_arm_keys,
     draw_control_stage,
+    draw_part2_play_keys,
     draw_play_keys,
     draw_view_key,
 )
@@ -95,6 +96,7 @@ class TutorialKeyHud(Plugin):
         self._held: set[str] = set()
         self._flash_until: dict[str, float] = {}
         self._play_drawn: set[str] | None = None
+        self.play_drawer = draw_play_keys
         canvas_w, canvas_h = cluster_size()
         if self.sizes:
             canvas_w, canvas_h = next(iter(self.sizes.values()))
@@ -162,7 +164,7 @@ class TutorialKeyHud(Plugin):
                 active.add(key)
         if active != self._play_drawn:
             self._play_drawn = set(active)
-            self.update_texture("play", draw_play_keys(active))
+            self.update_texture("play", self.play_drawer(active))
 
     def set_stage(self, stage: str) -> None:
         self.stage = stage
@@ -170,7 +172,8 @@ class TutorialKeyHud(Plugin):
             self._held = set()
             self._flash_until = {}
             self._play_drawn = set()
-            self.update_texture("play", draw_play_keys())
+            if "play" in self.textures:
+                self.update_texture("play", self.play_drawer())
         elif stage == "done":
             self.v_pressed = True
             if "view" in self.textures:
@@ -240,10 +243,13 @@ def build_key_hud(scene) -> TutorialKeyHud:
 
 
 def build_part2_key_hud(scene) -> TutorialKeyHud:
-    """Overlays for arrows → E/Q → R/T → F/G → Space."""
+    """Overlays for arrows → E/Q → R/T → F/G → Space, then a compact play strip."""
     stages = ("arrows", "height", "yaw", "tilt", "space")
     images = {name: draw_control_stage(name) for name in stages}
-    return build_staged_hud(scene, images, start_stage="arrows")
+    images["play"] = draw_part2_play_keys()
+    hud = build_staged_hud(scene, images, start_stage="arrows")
+    hud.play_drawer = draw_part2_play_keys
+    return hud
 
 
 def build_part3_key_hud(scene) -> TutorialKeyHud:

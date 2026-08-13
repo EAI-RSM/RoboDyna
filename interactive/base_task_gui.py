@@ -1191,9 +1191,10 @@ class InteractiveTaskLauncher(tk.Tk):
                 )
                 instruction = (
                     "The left arm starts selected. Key figures at the top right "
-                    "walk through: arrow keys (move), E/Q (height), R/T (rotate), "
-                    "F/G (tilt), then Space twice (open and close the gripper). "
-                    "Each key turns green after you press it."
+                    "walk through: arrow keys (move), E/Q (height — Z min/max is capped), "
+                    "R/T (rotate), F/G (tilt), then Space twice (open and close). "
+                    "Each lesson key turns green. After that a smaller overlay stays up "
+                    "to practice — keys flash while you press them. Esc quits."
                 )
             elif index == 2:
                 summary = (

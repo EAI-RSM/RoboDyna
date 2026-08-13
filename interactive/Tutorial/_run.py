@@ -36,7 +36,7 @@ CONTROLS_KEYBOARD = """
 
 CONTROLS_ROBOT = """
   Arrow keys        move selected arm(s) in world XY
-  E / Q             raise / lower selected arm(s)
+  E / Q             raise / lower selected arm(s) (Z min/max capped)
   F / G             tip gripper left / right (world Y)
   R / T             yaw gripper CCW / CW (world Z)
   1 / 2 / 3         select left / right / both arms (selected gripper turns green)
@@ -97,8 +97,8 @@ def main(part: int | None = None) -> int:
             [
                 f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
                 "Left arm starts selected (green). 1 / 2 / 3 still switch arms.",
-                "Top-right overlay: arrows, then E/Q, R/T, F/G, then Space.",
-                "Esc — close the viewer window to quit",
+                "Top-right overlay: arrows, then E/Q (Z min/max capped), R/T, F/G, then Space.",
+                "After that, a smaller overlay stays up to practice. Esc quits.",
             ],
         )
         print_instructions(
