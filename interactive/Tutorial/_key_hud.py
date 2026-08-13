@@ -101,6 +101,9 @@ class TutorialKeyHud(Plugin):
         self.flash_drawer = None
         self.flash_enabled = False
         self.flash_kwargs: dict = {}
+        self.lesson_drawer = None
+        self.lesson_pressed: set[str] = set()
+        self._lesson_key = None
         canvas_w, canvas_h = cluster_size()
         if self.sizes:
             canvas_w, canvas_h = next(iter(self.sizes.values()))
@@ -116,6 +119,8 @@ class TutorialKeyHud(Plugin):
             self.on_frame(window)
         if self.flash_enabled:
             self._tick_flash()
+        else:
+            self._sync_lesson()
 
     def _display_wh(self) -> tuple[int, int]:
         size = self.sizes.get(self.stage)
@@ -135,29 +140,53 @@ class TutorialKeyHud(Plugin):
         tex = self.textures.get(name)
         if tex is None:
             return
-        self.sizes[name] = img.size
+        try:
+            target = (int(tex.width), int(tex.height))
+        except Exception:
+            target = self.sizes.get(name) or img.size
+        if img.size != target:
+            img = img.resize(target, Image.BILINEAR)
         arr = np.ascontiguousarray(np.array(img.convert("RGBA"), dtype=np.uint8))
         try:
             tex.upload(arr)
         except Exception:
-            new_tex = _texture_from_image(img)
-            mat = self.materials.get(name)
-            if mat is not None:
-                mat.set_base_color_texture(new_tex)
-                mat.set_emission_texture(new_tex)
-            self.textures[name] = new_tex
+            return
 
     def mark_arm_pressed(self, key: str) -> None:
-        if key in self.pressed_arms:
-            return
         self.pressed_arms.add(key)
-        self.update_texture("arms", draw_arm_keys(self.pressed_arms))
+
+    def mark_v_pressed(self) -> None:
+        self.v_pressed = True
 
     def flash(self, label: str) -> None:
         self._flash_until[label] = time.perf_counter() + _FLASH_SECONDS
 
     def set_held(self, held: set[str]) -> None:
         self._held = set(held)
+
+    def _sync_lesson(self) -> None:
+        """Upload persist-green keys in before_render, same path as flash."""
+        if self.stage == "arms":
+            key = ("arms", frozenset(self.pressed_arms))
+            if key == self._lesson_key:
+                return
+            self._lesson_key = key
+            self.update_texture("arms", draw_arm_keys(self.pressed_arms))
+            return
+        if self.stage == "view":
+            key = ("view", bool(self.v_pressed))
+            if key == self._lesson_key:
+                return
+            self._lesson_key = key
+            self.update_texture("view", draw_view_key(pressed=self.v_pressed))
+            return
+        if self.lesson_drawer is None or self.stage not in self.textures:
+            return
+        key = (self.stage, frozenset(self.lesson_pressed))
+        if key == self._lesson_key:
+            return
+        self._lesson_key = key
+        self.update_texture(self.stage, self.lesson_drawer(self.lesson_pressed))
 
     def _flash_image_drawer(self):
         if self.stage == "play":
@@ -185,6 +214,8 @@ class TutorialKeyHud(Plugin):
         self._held = set()
         self._flash_until = {}
         self._play_drawn = None
+        self.lesson_pressed = set()
+        self._lesson_key = None
         drawer = self._flash_image_drawer() if self.flash_enabled else None
         if drawer is not None and stage in self.textures:
             self.update_texture(stage, drawer())
@@ -292,16 +323,10 @@ def build_part3_key_hud(scene) -> TutorialKeyHud:
 
 
 def build_part4_key_hud(scene) -> TutorialKeyHud:
-    """Larger overlays for ball → stove → mallet → force key."""
+    """Overlays for ball → stove → mallet → force key (same size as parts 2–3)."""
     stages = ("ball", "stove", "mallet", "force_key")
     images = {name: draw_advanced_stage(name) for name in stages}
-    hud = build_staged_hud(
-        scene,
-        images,
-        start_stage="ball",
-        display_width=640,
-        window_pad_h=120,
-    )
+    hud = build_staged_hud(scene, images, start_stage="ball")
     hud.flash_drawer = lambda pressed=None, **kwargs: draw_advanced_stage(
         hud.stage, pressed, **hud.flash_kwargs
     )

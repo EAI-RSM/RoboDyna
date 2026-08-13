@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tutorial part 4 — empty scene (placeholder)."""
+"""Tutorial part 4 — rolling ball, stove knob, mallet, multi-stage force key."""
 from __future__ import annotations
 
 import sys

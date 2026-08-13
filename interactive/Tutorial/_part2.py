@@ -1,6 +1,8 @@
 """Part 2 coach: arrows, E/Q height, R/T yaw, F/G tilt, Space, then free practice."""
 from __future__ import annotations
 
+import time
+
 from _interactive_common import print_instructions, run_viewer_loop, task_result_exit_code
 from _key_hud import TutorialKeyHud, build_part2_key_hud
 from _keycaps import draw_control_stage
@@ -48,6 +50,8 @@ _PLAY_KEYS = (
     ("space", "Space"),
     ("escape", "Esc"),
 )
+# Pause so the tested green keycaps are visible before the overlay changes.
+_TESTED_HOLD = 0.45
 
 
 class Part2Coach:
@@ -60,6 +64,8 @@ class Part2Coach:
         self.space_toggles = 0
         self.play = False
         self._armed = False
+        self._hold_until = 0.0
+        self._after_hold = False
         for _stage, keys, _prompt in _STAGES:
             for window_key, _label in keys:
                 self._prev[window_key] = False
@@ -87,12 +93,17 @@ class Part2Coach:
         except Exception:
             pass
 
+    def _bind_lesson(self, stage: str) -> None:
+        self.hud.lesson_pressed = set(self.pressed)
+        self.hud.lesson_drawer = lambda p, s=stage: draw_control_stage(s, p)
+
     def _enter_play(self) -> None:
         self.play = True
+        self.hud.lesson_drawer = None
+        self.hud.flash_enabled = True
         self.hud.set_stage("play")
         print_instructions(
-            "Keep experimenting with the controls. Keys flash while you press them. "
-            "Esc quits."
+            "Keep experimenting with the controls. Keys flash when pressed. Esc quits."
         )
 
     def _advance(self) -> None:
@@ -103,10 +114,11 @@ class Part2Coach:
             return
         stage, _keys, prompt = _STAGES[self.stage_index]
         self.hud.set_stage(stage)
+        self._bind_lesson(stage)
         print_instructions(prompt)
 
     def _update_play(self, window) -> None:
-        held = set()
+        held: set[str] = set()
         for sapien_key, label in _PLAY_KEYS:
             if window.key_down(sapien_key):
                 held.add(label)
@@ -122,30 +134,43 @@ class Part2Coach:
             self._update_play(window)
             return
         stage, keys, _prompt = _STAGES[self.stage_index]
+        if self._after_hold:
+            self._bind_lesson(stage)
+            if time.perf_counter() >= self._hold_until:
+                self._after_hold = False
+                self._advance()
+            return
         for window_key, label in keys:
             if not self._edge(window, window_key):
                 continue
             if stage == "space":
                 self.space_toggles += 1
+                self.pressed.add(label)
                 if self.space_toggles < 2:
                     print_instructions("Gripper toggled — press Space once more.")
                     continue
             elif label in self.pressed:
                 continue
-            self.pressed.add(label)
+            else:
+                self.pressed.add(label)
+                remaining = [lbl for _wk, lbl in keys if lbl not in self.pressed]
+                if remaining:
+                    print_instructions(
+                        f"{label} — still need " + ", ".join(remaining)
+                    )
             remaining = [lbl for _wk, lbl in keys if lbl not in self.pressed]
-            if remaining:
-                print_instructions(
-                    f"{label} — still need " + ", ".join(remaining)
-                )
-            self.hud.update_texture(stage, draw_control_stage(stage, self.pressed))
             if not remaining:
-                self._advance()
+                self._bind_lesson(stage)
+                self._hold_until = time.perf_counter() + _TESTED_HOLD
+                self._after_hold = True
+                return
+        self._bind_lesson(stage)
 
 
 def run_part2(env) -> int:
     env._tutorial_complete = False
     hud = build_part2_key_hud(env.scene)
+    hud.lesson_drawer = lambda p: draw_control_stage("arrows", p)
     coach = Part2Coach(env, hud)
     hud.on_frame = coach.update
     print_instructions(_STAGES[0][2])

@@ -16,8 +16,6 @@ from _interactive_common import (  # noqa: E402
     print_banner,
     print_instructions,
     print_mode_controls,
-    run_viewer_loop,
-    task_result_exit_code,
 )
 
 bootstrap_repo()
@@ -26,7 +24,7 @@ PART_TITLES = {
     1: "Part 1 — Arm selection and camera",
     2: "Part 2 — Base controls",
     3: "Part 3 — Basic actions",
-    4: "Part 4 — Practice",
+    4: "Part 4 — Advanced actions",
 }
 
 CONTROLS_KEYBOARD = """
@@ -76,16 +74,14 @@ def main(part: int | None = None) -> int:
             f"Tutorial {title}",
             [
                 f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
-                "Top-right: press 1, 2, and 3 to select left / right / both arms.",
-                "The selected gripper turns green.",
-                "Then press V to cycle head_camera ↔ gripper views.",
+                "Top-right: press 1, 2, and 3 — each key stays green once tested.",
+                "Then press V; it stays green. After that all keys are shown and flash.",
                 "Esc — close the viewer window to quit",
             ],
         )
         print_instructions(
             "Press keys 1, 2, and 3 (figures at the top right). "
-            "The selected gripper turns green. "
-            "When those are done, the overlay switches to V."
+            "Each tested key stays green. Then press V."
         )
         from _part1 import run_part1
 
@@ -98,7 +94,8 @@ def main(part: int | None = None) -> int:
                 f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
                 "Left arm starts selected (green). 1 / 2 / 3 still switch arms.",
                 "Top-right overlay: arrows, then E/Q (Z min/max capped), R/T, F/G, then Space.",
-                "After that, a smaller overlay stays up to practice. Esc quits.",
+                "Lesson keys stay green once tested. Then all keys are shown and flash.",
+                "Esc — close the viewer window to quit",
             ],
         )
         print_instructions(
@@ -116,7 +113,7 @@ def main(part: int | None = None) -> int:
                 f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
                 "Left arm starts selected (green). 1 / 2 / 3 still switch arms.",
                 "Top-right overlay: grasp cube, hold button, on/off switch, then push box.",
-                "Esc — close the viewer window to quit",
+                "Keys flash green while pressed. Esc — close the viewer to quit",
             ],
         )
         print_instructions(
@@ -131,15 +128,15 @@ def main(part: int | None = None) -> int:
         f"Tutorial {title}",
         [
             f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
-            "Empty table — no task objects yet.",
-            "V — cycle view: head_camera ↔ gripper(s)",
-            "Esc — close the viewer window to quit",
+            "Left arm starts selected (green). 1 / 2 / 3 still switch arms.",
+            "Top-right overlay: catch a rolling ball, stove knob, mallet, then force key.",
+            "Keys flash green while pressed. Esc — close the viewer to quit",
         ],
     )
     print_instructions(
-        "Practice looking around (V) and moving the arms. "
-        "Close the viewer or press Esc when finished."
+        "Key figures at the top right show which keys to use for each action. "
+        "Finish one object to spawn the next."
     )
+    from _part4 import run_part4
 
-    run_viewer_loop(env, on_step=None, is_done=None)
-    return task_result_exit_code()
+    return run_part4(env)

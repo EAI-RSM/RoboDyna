@@ -1,6 +1,8 @@
 """Part 1 coach: test arm-select keys 1/2/3, then camera-view key V."""
 from __future__ import annotations
 
+import time
+
 from _interactive_common import print_instructions, run_viewer_loop, task_result_exit_code
 from _key_hud import TutorialKeyHud, build_key_hud
 
@@ -11,6 +13,8 @@ _PLAY_KEYS = (
     ("v", "V"),
     ("escape", "Esc"),
 )
+# Pause so the tested green keycaps are visible before the overlay changes.
+_TESTED_HOLD = 0.45
 
 
 class Part1Coach:
@@ -20,6 +24,8 @@ class Part1Coach:
         self.pressed = {"1": False, "2": False, "3": False}
         self._prev = {"1": False, "2": False, "3": False, "v": False, "escape": False}
         self.stage = "arms"
+        self._hold_until = 0.0
+        self._after_hold = None
 
     def _edge(self, window, key: str) -> bool:
         down = bool(window.key_down(key))
@@ -27,8 +33,31 @@ class Part1Coach:
         self._prev[key] = down
         return edge
 
+    def _enter_play(self) -> None:
+        self.stage = "play"
+        self.hud.flash_enabled = True
+        self.hud.set_stage("play")
+        print_instructions(
+            "Keep experimenting with 1 / 2 / 3 and V. Keys flash when pressed. Esc quits."
+        )
+
+    def _finish_hold(self) -> None:
+        nxt = self._after_hold
+        self._after_hold = None
+        self._hold_until = 0.0
+        if nxt == "view":
+            self.stage = "view"
+            self.hud.set_stage("view")
+            print_instructions("Now press V to switch between camera views.")
+        elif nxt == "play":
+            self._enter_play()
+
     def update(self, window) -> None:
         if window is None:
+            return
+        if self._after_hold:
+            if time.perf_counter() >= self._hold_until:
+                self._finish_hold()
             return
         if self.stage == "arms":
             for key in ("1", "2", "3"):
@@ -44,18 +73,15 @@ class Part1Coach:
                         )
                     )
             if all(self.pressed.values()):
-                self.stage = "view"
-                self.hud.set_stage("view")
-                print_instructions("Now press V to switch between camera views.")
+                self._hold_until = time.perf_counter() + _TESTED_HOLD
+                self._after_hold = "view"
         elif self.stage == "view":
             if self._edge(window, "v"):
-                self.stage = "play"
-                self.hud.set_stage("play")
-                print_instructions(
-                    "Keep experimenting with 1 / 2 / 3 and V. Esc quits."
-                )
+                self.hud.mark_v_pressed()
+                self._hold_until = time.perf_counter() + _TESTED_HOLD
+                self._after_hold = "play"
         elif self.stage == "play":
-            held = set()
+            held: set[str] = set()
             for sapien_key, label in _PLAY_KEYS:
                 if window.key_down(sapien_key):
                     held.add(label)
