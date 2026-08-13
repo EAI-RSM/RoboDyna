@@ -1290,10 +1290,6 @@ class UniversalRobotControls:
             except Exception:
                 pass
         self._highlight_materials.clear()
-        colors = {
-            "left": [1.0, 0.85, 0.10, 1.0],
-            "right": [0.15, 0.75, 1.0, 1.0],
-        }
         for side in self.selected:
             articulation = (self.env.robot.left_entity if side == "left"
                             else self.env.robot.right_entity)
@@ -1314,8 +1310,8 @@ class UniversalRobotControls:
                                 material, list(material.base_color))
                         try:
                             material.set_base_color_texture(None)
-                            material.set_base_color(colors[side])
-                            material.base_color = colors[side]
+                            material.set_base_color(GRIPPER_SELECT_GREEN)
+                            material.base_color = GRIPPER_SELECT_GREEN
                         except Exception:
                             pass
 
@@ -1972,6 +1968,7 @@ GRIPPER_LINK_NAMES = frozenset({
     "wsg_50_base_link", "gripper_left", "gripper_right",
     "finger_left", "finger_right",
 })
+GRIPPER_SELECT_GREEN = [0.15, 0.82, 0.22, 1.0]
 GRIPPER_FAILURE_RED = [0.92, 0.04, 0.03, 1.0]
 GRIPPER_FAILURE_SECONDS = 2.0
 
