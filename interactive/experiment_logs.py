@@ -1,5 +1,8 @@
 """Per-user human-experiment logs under ``data/exp_logs/<user>/``.
 
+Robot and keyboard sessions are separate files in that folder:
+``user_robot.json`` and ``user_keyboard.json``.
+
 Used by ``experiment_gui.py`` and by the base / household task GUIs when they
 run in experiment mode (``ROBODYNA_EXPERIMENT=1``).
 """
@@ -18,6 +21,16 @@ EXP_LOGS_DIR = REPO_ROOT / "data" / "exp_logs"
 EXPERIMENT_ENV = "ROBODYNA_EXPERIMENT"
 EXPERIMENT_USER_ENV = "ROBODYNA_EXPERIMENT_USER"
 EXPERIMENT_LOG_ENV = "ROBODYNA_EXPERIMENT_LOG"
+
+LOG_CONTROLLER_TAGS = ("robot", "keyboard")
+_KEYBOARD_ALIASES = {
+    "keyboard",
+    "keyboard+mouse",
+    "keyboardmouse",
+    "key+mouse",
+    "keymouse",
+    "km",
+}
 
 EXPERIENCE_QUESTIONS = (
     ("video_games", "Do you have experience playing video games?"),
@@ -49,8 +62,48 @@ def user_dir(name_or_slug: str) -> Path:
     return EXP_LOGS_DIR / slugify_user_name(name_or_slug)
 
 
-def user_log_path(name_or_slug: str) -> Path:
-    return user_dir(name_or_slug) / "user.json"
+def log_controller_tag(value) -> str:
+    """Folder filename tag: ``robot`` or ``keyboard`` (covers keyboard+mouse)."""
+    text = str(value or "robot").strip().lower().replace("_", "+").replace(" ", "")
+    if text in _KEYBOARD_ALIASES:
+        return "keyboard"
+    return "robot"
+
+
+def current_controller() -> str:
+    env = os.environ.get("ROBODYNA_CONTROL", "").strip()
+    if env:
+        return log_controller_tag(env)
+    try:
+        from experiment_config import load_experiment_config
+    except ImportError:
+        from interactive.experiment_config import load_experiment_config
+    try:
+        return log_controller_tag(load_experiment_config().controller)
+    except Exception:
+        return "robot"
+
+
+def user_log_filename(controller: str | None = None) -> str:
+    return f"user_{log_controller_tag(controller if controller is not None else current_controller())}.json"
+
+
+def user_log_path(name_or_slug: str, controller: str | None = None) -> Path:
+    """``data/exp_logs/<user>/user_robot.json`` or ``user_keyboard.json``."""
+    return user_dir(name_or_slug) / user_log_filename(controller)
+
+
+def _iter_user_log_files(folder: Path):
+    """Yield ``(tag, path)`` for tagged logs, then legacy ``user.json``."""
+    if not folder.is_dir():
+        return
+    for tag in LOG_CONTROLLER_TAGS:
+        path = folder / f"user_{tag}.json"
+        if path.is_file():
+            yield tag, path
+    legacy = folder / "user.json"
+    if legacy.is_file():
+        yield "legacy", legacy
 
 
 def iso_now() -> str:
@@ -85,50 +138,130 @@ def save_user_log(path: Path, data: dict[str, Any]) -> None:
 def find_user(name: str) -> dict[str, Any] | None:
     """Return an existing user log if this name (or its slug) already exists."""
     slug = slugify_user_name(name)
-    path = user_log_path(slug)
-    data = load_user_log(path)
-    if data:
-        return data
-    # Also match display-name equality against other folders (legacy / renamed).
+    folder = user_dir(slug)
+    for _tag, path in _iter_user_log_files(folder):
+        data = load_user_log(path)
+        if data:
+            return data
     if not EXP_LOGS_DIR.is_dir():
         return None
     needle = str(name or "").strip().casefold()
     for folder in EXP_LOGS_DIR.iterdir():
-        candidate = folder / "user.json"
-        if not candidate.is_file():
+        if not folder.is_dir():
             continue
-        other = load_user_log(candidate)
-        if not other:
-            continue
-        if str(other.get("user_name", "")).strip().casefold() == needle:
-            return other
-        if str(other.get("user_id", "")).strip() == slug:
-            return other
+        for _tag, candidate in _iter_user_log_files(folder):
+            other = load_user_log(candidate)
+            if not other:
+                continue
+            if str(other.get("user_name", "")).strip().casefold() == needle:
+                return other
+            if str(other.get("user_id", "")).strip() == slug:
+                return other
     return None
 
 
-def create_user(name: str, experience: dict[str, str]) -> dict[str, Any]:
-    display = str(name or "").strip()
-    slug = slugify_user_name(display)
-    path = user_log_path(slug)
+def _empty_user_log(
+    *,
+    slug: str,
+    display: str,
+    controller: str,
+    path: Path,
+    experience: dict[str, Any] | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
     now = iso_now()
-    data: dict[str, Any] = {
+    return {
         "user_id": slug,
         "user_name": display,
-        "created_at": now,
+        "controller": controller,
+        "created_at": created_at or now,
         "updated_at": now,
-        "experience": {
-            key: str(experience.get(key, "")).strip().lower()
-            for key, _label in EXPERIENCE_QUESTIONS
-        },
+        "experience": dict(experience or {}),
         "completed_keys": [],
         "play_counts": {},
         "success_counts": {},
         "plays": [],
         "log_path": str(path),
     }
+
+
+def ensure_controller_log(
+    name_or_slug: str,
+    *,
+    display: str | None = None,
+    experience: dict[str, Any] | None = None,
+    controller: str | None = None,
+    template: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Load or create the robot/keyboard log inside this user's folder.
+
+    Progress is per controller: ``user_robot.json`` and ``user_keyboard.json``
+    do not share plays. Experience is copied from any existing file for the user.
+    A legacy ``user.json`` is migrated into ``user_robot.json`` when that tagged
+    file does not exist yet.
+    """
+    tag = log_controller_tag(controller if controller is not None else current_controller())
+    slug = slugify_user_name(name_or_slug)
+    folder = user_dir(slug)
+    path = folder / f"user_{tag}.json"
+    existing = load_user_log(path)
+    if existing:
+        existing["controller"] = tag
+        existing["log_path"] = str(path)
+        return existing
+
+    legacy = folder / "user.json"
+    if legacy.is_file():
+        data = load_user_log(legacy)
+        if data:
+            file_tag = log_controller_tag(data.get("controller") or "robot")
+            if file_tag == tag:
+                data["controller"] = tag
+                data["log_path"] = str(path)
+                save_user_log(path, data)
+                return data
+
+    source = template
+    if source is None:
+        for _other_tag, other_path in _iter_user_log_files(folder):
+            source = load_user_log(other_path)
+            if source:
+                break
+    display_name = (
+        display
+        or (source or {}).get("user_name")
+        or str(name_or_slug or "").strip()
+        or slug
+    )
+    exp = experience if experience is not None else (source or {}).get("experience") or {}
+    data = _empty_user_log(
+        slug=slug,
+        display=str(display_name),
+        controller=tag,
+        path=path,
+        experience=exp,
+        created_at=(source or {}).get("created_at"),
+    )
     save_user_log(path, data)
     return data
+
+
+def create_user(
+    name: str,
+    experience: dict[str, str],
+    controller: str | None = None,
+) -> dict[str, Any]:
+    display = str(name or "").strip()
+    answers = {
+        key: str(experience.get(key, "")).strip().lower()
+        for key, _label in EXPERIENCE_QUESTIONS
+    }
+    return ensure_controller_log(
+        display,
+        display=display,
+        experience=answers,
+        controller=controller,
+    )
 
 
 def play_key(suite: str, task: str, scenario: str | None = None) -> str:
@@ -362,9 +495,10 @@ def append_play(
     if path is None:
         user = os.environ.get(EXPERIMENT_USER_ENV, "").strip()
         if user:
-            path = user_log_path(user)
+            path = user_log_path(user, controller or current_controller())
     if path is None:
         return None
+    payload = dict(payload or {})
     data = load_user_log(path) or {
         "user_id": slugify_user_name(os.environ.get(EXPERIMENT_USER_ENV, "user")),
         "user_name": os.environ.get(EXPERIMENT_USER_ENV, "user"),
@@ -376,7 +510,11 @@ def append_play(
         "plays": [],
         "log_path": str(path),
     }
-    payload = dict(payload or {})
+    tag = log_controller_tag(
+        controller or payload.get("controller") or data.get("controller") or current_controller()
+    )
+    data["controller"] = tag
+    data["log_path"] = str(path)
     result = result_from_exit_code(exit_code, stopped=stopped)
     if result in ("unknown", "error") and payload.get("ok") is True:
         result = "SUCCESS"

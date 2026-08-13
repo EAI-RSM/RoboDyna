@@ -7,6 +7,8 @@
 #
 # Override path with ROBODYNA_EXPERIMENT_CONFIG=/path/to/file.yml if needed.
 
+# Logs live in data/exp_logs/<user>/user_robot.json or user_keyboard.json
+# (separate progress for robot vs keyboard / keyboard+mouse).
 controller: robot           # robot | keyboard+mouse  (keyboard is an alias)
 
 # Seed for each play (0–500).

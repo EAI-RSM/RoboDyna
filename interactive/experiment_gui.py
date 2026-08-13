@@ -36,11 +36,12 @@ from experiment_logs import (  # noqa: E402
     EXPERIMENT_USER_ENV,
     child_experiment_env,
     create_user,
+    ensure_controller_log,
     find_user,
     load_user_log,
+    log_controller_tag,
     progress_counts,
     slugify_user_name,
-    user_log_path,
 )
 from household_task_gui import TASKS as HOUSEHOLD_TASKS  # noqa: E402
 
@@ -429,19 +430,43 @@ class ExperimentLauncher(tk.Tk):
         self._activate_user(data)
         self._show_screen("suite")
 
-    def _activate_user(self, data: dict):
-        self.user_data = data
-        display = str(data.get("user_name") or data.get("user_id") or "user")
-        slug = str(data.get("user_id") or slugify_user_name(display))
+    def _session_controller(self) -> str:
+        cfg = load_experiment_config()
+        return log_controller_tag(cfg.controller)
+
+    def _bind_session_log(self, data: dict | None = None) -> dict:
+        """Point this session at ``user_robot.json`` or ``user_keyboard.json``."""
+        source = data if data is not None else self.user_data or {}
+        display = str(source.get("user_name") or source.get("user_id") or "user")
+        slug = str(source.get("user_id") or slugify_user_name(display))
+        cfg = load_experiment_config()
+        tag = log_controller_tag(cfg.controller)
+        log = ensure_controller_log(
+            slug,
+            display=display,
+            experience=source.get("experience"),
+            controller=tag,
+            template=source,
+        )
         os.environ[EXPERIMENT_ENV] = "1"
         os.environ[EXPERIMENT_USER_ENV] = display
-        os.environ[EXPERIMENT_LOG_ENV] = str(user_log_path(slug))
-        remaining = self._remaining_summary(data)
-        self.suite_title.configure(text=f"Welcome back, {display}" if data.get("plays") else f"Hello, {display}")
+        os.environ["ROBODYNA_CONTROL"] = str(cfg.controller)
+        os.environ[EXPERIMENT_LOG_ENV] = str(log.get("log_path") or "")
+        self.user_data = log
+        return log
+
+    def _activate_user(self, data: dict):
+        log = self._bind_session_log(data)
+        display = str(log.get("user_name") or log.get("user_id") or "user")
+        tag = str(log.get("controller") or self._session_controller())
+        control_label = "Robot" if tag == "robot" else "Keyboard"
+        remaining = self._remaining_summary(log)
+        self.suite_title.configure(text=f"Welcome back, {display}" if log.get("plays") else f"Hello, {display}")
         self.suite_subtitle.configure(
             text=(
-                "Open a suite to play remaining tasks. Finished items stay gray "
-                f"after you close this window.  {remaining}"
+                f"{control_label} session — progress is stored in user_{tag}.json. "
+                "Finished items stay gray after you close this window.  "
+                f"{remaining}"
             )
         )
 
@@ -471,6 +496,8 @@ class ExperimentLauncher(tk.Tk):
         )
 
     def _refresh_suite_progress(self):
+        if self.user_data:
+            self._bind_session_log(self.user_data)
         log = load_user_log()
         if log:
             self.user_data = log
@@ -506,11 +533,14 @@ class ExperimentLauncher(tk.Tk):
         remaining = self._remaining_summary(log)
         if display:
             plays = bool((log or {}).get("plays"))
+            tag = str((log or {}).get("controller") or self._session_controller())
+            control_label = "Robot" if tag == "robot" else "Keyboard"
             self.suite_title.configure(text=f"Welcome back, {display}" if plays else f"Hello, {display}")
             self.suite_subtitle.configure(
                 text=(
-                    "Open a suite to play remaining tasks. Finished items stay gray "
-                    f"after you close this window.  {remaining}"
+                    f"{control_label} session — progress is stored in user_{tag}.json. "
+                    "Finished items stay gray after you close this window.  "
+                    f"{remaining}"
                 )
             )
         if counts["base_done"] >= base_total > 0:
@@ -529,6 +559,7 @@ class ExperimentLauncher(tk.Tk):
         if self.user_data is None:
             self._show_screen("name")
             return
+        self._bind_session_log(self.user_data)
         script = ROOT / "interactive" / (
             "base_task_gui.py" if suite == "base" else "household_task_gui.py"
         )
@@ -573,6 +604,7 @@ class ExperimentLauncher(tk.Tk):
         self.user_data = None
         os.environ.pop(EXPERIMENT_USER_ENV, None)
         os.environ.pop(EXPERIMENT_LOG_ENV, None)
+        os.environ.pop("ROBODYNA_CONTROL", None)
         self.name_entry.delete(0, "end")
         self.name_status.configure(text="")
         self._show_screen("name")
