@@ -26,8 +26,8 @@ TILT_INSTRUCTION = "Tilt the gripper left or right"
 SPACE_INSTRUCTION = "Open and close the gripper"
 SPACE_BAR_W = KEY_SIZE * 2 + GAP
 GRASP_INSTRUCTION = "Arrows move. E/Q raise and lower. Space closes."
-HOLD_INSTRUCTION = "Arrows to the button. Q to hold; E to release"
-SWITCH_INSTRUCTION = "Arrows to aim. Q turns it ON, Q again OFF"
+HOLD_INSTRUCTION = "Arrows to the button. Space closes. Q to hold; E to release."
+SWITCH_INSTRUCTION = "Arrows to aim. Space closes. Q turns it ON, Q again OFF."
 PUSH_INSTRUCTION = "Close the gripper, then push the box to the green line"
 BALL_INSTRUCTION = "Ball rolls toward you. Space closes; E lifts. Falls off → respawns."
 STOVE_INSTRUCTION = "Space on knob. R/T yaw: left lights fire, back turns it off."
@@ -633,8 +633,11 @@ def draw_arrows_eq_keys(instruction: str, pressed: set[str] | None = None) -> Im
     return canvas
 
 
-def draw_grasp_keys(pressed: set[str] | None = None) -> Image.Image:
-    """Arrows + E/Q height + Space for the pick-up-cube stage."""
+def draw_grasp_keys(
+    pressed: set[str] | None = None,
+    instruction: str = GRASP_INSTRUCTION,
+) -> Image.Image:
+    """Arrows + E/Q height + Space (grasp, hold button, on/off switch)."""
     pressed = pressed or set()
     k, g, pad = PLAY2_KEY, PLAY2_GAP, PLAY2_PAD
     aw, ah = _play2_arrow_block()
@@ -651,17 +654,17 @@ def draw_grasp_keys(pressed: set[str] | None = None) -> Image.Image:
         (x0, sy),
     )
     inst_font = _font(22)
-    lines = _wrap_text(GRASP_INSTRUCTION, inst_font, d, width - pad * 2)
+    lines = _wrap_text(instruction, inst_font, d, width - pad * 2)
     _draw_centered_lines(d, lines, inst_font, sy + k + 8, width, _INSTRUCTION)
     return canvas
 
 
 def draw_hold_keys(pressed: set[str] | None = None) -> Image.Image:
-    return draw_arrows_eq_keys(HOLD_INSTRUCTION, pressed)
+    return draw_grasp_keys(pressed, HOLD_INSTRUCTION)
 
 
 def draw_switch_keys(pressed: set[str] | None = None) -> Image.Image:
-    return draw_arrows_eq_keys(SWITCH_INSTRUCTION, pressed)
+    return draw_grasp_keys(pressed, SWITCH_INSTRUCTION)
 
 
 def draw_push_keys(pressed: set[str] | None = None) -> Image.Image:

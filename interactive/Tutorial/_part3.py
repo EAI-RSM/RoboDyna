@@ -1,7 +1,7 @@
 """Part 3 coach: grasp a cube, hold a button, toggle a switch, push a box."""
 from __future__ import annotations
 
-from _interactive_common import print_instructions, run_viewer_loop, task_result_exit_code
+from _interactive_common import print_instructions, run_viewer_loop
 from _key_hud import TutorialKeyHud, build_part3_key_hud
 
 _MOVE_KEYS = (
@@ -12,26 +12,24 @@ _MOVE_KEYS = (
     ("up", "up"),
     ("down", "down"),
 )
+_PRESS_KEYS = (("space", "Space"), *_MOVE_KEYS)
 
 # (stage, window keys to highlight, prompt)
 _STAGES: tuple[tuple[str, tuple[tuple[str, str], ...], str], ...] = (
     (
         "grasp",
-        (
-            ("space", "Space"),
-            *_MOVE_KEYS,
-        ),
+        _PRESS_KEYS,
         "Pick up the orange cube: arrows to move, E/Q for height, Space to close, then lift.",
     ),
     (
         "hold",
-        _MOVE_KEYS,
-        "Hold-to-press: arrows onto the green button, Q to hold, E to lift off.",
+        _PRESS_KEYS,
+        "Hold-to-press: arrows onto the green button, Space to close, Q to hold, E to lift off.",
     ),
     (
         "switch",
-        _MOVE_KEYS,
-        "On/off switch: arrows onto it, Q to turn ON (red), Q again to turn OFF.",
+        _PRESS_KEYS,
+        "On/off switch: arrows onto it, Space to close, Q to turn ON (red), Q again to turn OFF.",
     ),
     (
         "push",
@@ -86,6 +84,33 @@ class Part3Coach:
         self.hud.set_stage(stage)
         print_instructions(prompt)
 
+    def _reset_arms(self) -> None:
+        """Home both arms (open grippers) before the next stage props appear."""
+        controls = getattr(self.env, "_interactive_robot_controls", None)
+        if controls is None:
+            return
+        restored = []
+        try:
+            restored = list(
+                controls.return_arms_to_origin(("left", "right"), open_grippers=True)
+                or []
+            )
+        except Exception as exc:
+            print(f"[tutorial] arm reset failed: {exc}")
+            return
+        try:
+            controls._command.clear()
+        except Exception:
+            pass
+        try:
+            controls.selected = ("left",)
+            self.env._interactive_selected_arms = ("left",)
+            controls._highlight_selected()
+        except Exception:
+            pass
+        if restored:
+            print("Arms reset for next stage: " + " + ".join(restored))
+
     def _advance(self) -> None:
         finished = _STAGES[self.stage_index][0]
         print_instructions(f"{finished} — done.")
@@ -95,6 +120,7 @@ class Part3Coach:
             self.env._tutorial_complete = True
             print_instructions("Basic actions — part 3 complete.")
             return
+        self._reset_arms()
         stage, _keys, prompt = _STAGES[self.stage_index]
         self.env.tutorial_set_stage(stage)
         self.hud.set_stage(stage)
@@ -139,5 +165,6 @@ def run_part3(env) -> int:
         on_step=coach.update_stage,
         is_done=coach.is_done,
         extra_plugins=[hud],
+        report_result=False,
     )
-    return task_result_exit_code()
+    return 0

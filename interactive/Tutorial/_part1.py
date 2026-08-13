@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from _interactive_common import print_instructions, run_viewer_loop, task_result_exit_code
+from _interactive_common import print_instructions, run_viewer_loop
 from _key_hud import TutorialKeyHud, build_key_hud
 
 _PLAY_KEYS = (
@@ -100,5 +100,6 @@ def run_part1(env) -> int:
         on_step=lambda window, _step: coach.update(window),
         is_done=None,
         extra_plugins=[hud],
+        report_result=False,
     )
-    return task_result_exit_code()
+    return 0

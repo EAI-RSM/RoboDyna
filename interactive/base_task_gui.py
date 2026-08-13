@@ -1349,11 +1349,12 @@ class InteractiveTaskLauncher(tk.Tk):
                 )
                 instruction = (
                     "The left arm starts selected. Key figures at the top right show "
-                    "which keys to use. (1) Grasp the orange cube — Space to close, "
-                    "E to lift. (2) Hold Q on the green button until it goes red, then "
-                    "lift off with E. (3) Press the switch ON (stays down, red) then "
-                    "press again to turn it OFF. (4) Close the gripper and push the "
-                    "blue box onto the green line."
+                    "which keys to use. Keys flash green while you press them. "
+                    "(1) Grasp the orange cube — Space to close, "
+                    "E to lift. (2) Close with Space, then hold Q on the green button "
+                    "until it goes red, then lift off with E. (3) Close with Space, "
+                    "press the switch ON (stays down, red) then press again to turn it "
+                    "OFF. (4) Close the gripper and push the blue box onto the green line."
                 )
             else:
                 summary = (
@@ -1557,6 +1558,11 @@ class InteractiveTaskLauncher(tk.Tk):
         if self.child is not None:
             code = self.child.poll()
             if code is not None:
+                was_tutorial = (
+                    isinstance(self.active_selection, tuple)
+                    and bool(self.active_selection)
+                    and self.active_selection[0] == "tutorial"
+                )
                 self.child = None
                 self.active_selection = None
                 payload = self._read_result_payload()
@@ -1571,8 +1577,16 @@ class InteractiveTaskLauncher(tk.Tk):
                 self._remove_temporary_config()
                 self._remove_result_file()
                 self._reset_task_buttons()
+                # Tutorials are practice — no SUCCESS/FAILURE, including viewer
+                # close crashes (often exit -11 / SIGSEGV).
+                if was_tutorial:
+                    self._set_status(
+                        "Tutorial completed. Select another part or task below.",
+                        TEXT_SECONDARY,
+                        sticky=True,
+                    )
                 # Match household_task_gui: 0=SUCCESS, 10=FAILURE, 2=closed early.
-                if code == 0:
+                elif code == 0:
                     self._set_status(
                         f"Task result: SUCCESS.{recorded} Select another scenario below.",
                         "#70d6a2",
