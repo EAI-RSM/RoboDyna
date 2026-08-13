@@ -211,6 +211,7 @@ class tutorial_empty(Base_Task):
         self._force_complete = False
         self._force_target_level = int(self.FORCE_TARGET_LEVEL)
         self._force_cleared = 0
+        self._force_step_armed = True  # must release after a hit before next counts
         self._key_force_n = 0.0
         self._press_peak_force = 0.0
         self._press_active = False
@@ -295,6 +296,7 @@ class tutorial_empty(Base_Task):
         self._force_complete = False
         self._force_target_level = 1
         self._force_cleared = 0
+        self._force_step_armed = True
         self._key_force_n = 0.0
         self._press_peak_force = 0.0
         self._press_active = False
@@ -1747,6 +1749,37 @@ class tutorial_empty(Base_Task):
             except Exception:
                 pass
 
+    def _force_yellow_band(self, target: int) -> tuple[float, float]:
+        """Inclusive force band for the current yellow target (N)."""
+        thr = self.FORCE_THRESHOLDS
+        n = len(thr)
+        t = max(1, min(int(target), n))
+        lo = float(thr[t - 1])
+        hi = float(thr[t]) if t < n else float(thr[-1]) * 1.15
+        return lo, hi
+
+    def _force_in_yellow(self, force_n: float, target: int) -> bool:
+        lo, hi = self._force_yellow_band(target)
+        f = float(force_n)
+        if int(target) >= len(self.FORCE_THRESHOLDS):
+            return f >= lo
+        return lo <= f <= hi
+
+    def _advance_force_step(self, force_n: float) -> None:
+        """Yellow reached — clear this step and move the band (or finish)."""
+        target = int(self._force_target_level)
+        n_levels = len(self.FORCE_THRESHOLDS)
+        self._force_cleared = int(target)
+        self._force_step_armed = False  # lift off before the next yellow counts
+        if target >= n_levels:
+            self._force_complete = True
+            self._force_feedback = f"full force ({force_n:.1f} N) — done"
+            return
+        self._force_target_level = target + 1
+        self._force_feedback = (
+            f"yellow hit ({force_n:.1f} N) — release, then press the next band"
+        )
+
     def _tick_force_key(self) -> None:
         bank = self._reactive_buttons
         if bank is None or not isinstance(bank, _ForceKeyBank):
@@ -1763,40 +1796,22 @@ class tutorial_empty(Base_Task):
         if engaged:
             self._press_active = True
             self._press_peak_force = max(float(self._press_peak_force), force)
+            # Success as soon as the live bar enters the yellow region.
+            if (
+                not self._force_complete
+                and bool(getattr(self, "_force_step_armed", True))
+                and self._force_in_yellow(force, int(self._force_target_level))
+            ):
+                self._advance_force_step(force)
             return
-        if not self._press_active:
+        # Off the key: re-arm so the next press can clear the new yellow.
+        if self._press_active or not getattr(self, "_force_step_armed", True):
+            self._press_active = False
+            self._press_peak_force = 0.0
+            if not self._force_complete:
+                self._force_step_armed = True
             return
-        # Released: score this press against the current yellow band, then advance.
-        peak = float(self._press_peak_force)
-        level = self._force_level(peak)
-        target = int(self._force_target_level)
-        self._press_active = False
-        self._press_peak_force = 0.0
-        n_levels = len(self.FORCE_THRESHOLDS)
-        lo = float(self.FORCE_THRESHOLDS[target - 1])
-        hi = (
-            float(self.FORCE_THRESHOLDS[target])
-            if target < n_levels
-            else 1e9
-        )
-        if level == target:
-            self._force_cleared = int(target)
-            if target >= n_levels:
-                self._force_complete = True
-                self._force_feedback = f"full force ({peak:.1f} N) — done"
-            else:
-                self._force_target_level = target + 1
-                self._force_feedback = (
-                    f"level {target} ok ({peak:.1f} N) — next yellow band"
-                )
-        elif level < target:
-            self._force_feedback = (
-                f"too light ({peak:.1f} N, need {lo:.0f}–{hi:.0f} N)"
-            )
-        else:
-            self._force_feedback = (
-                f"too hard ({peak:.1f} N, need {lo:.0f}–{hi:.0f} N)"
-            )
+
     def interactive_ee_z_floor(self, side, pose):
         if getattr(self, "_tutorial_stage", None) != "force_key":
             return None

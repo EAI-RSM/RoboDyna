@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -18,6 +19,7 @@ from PIL import Image, ImageTk
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent / "household"
+TUTORIAL_DIR = Path(__file__).resolve().parent / "Tutorial"
 DEMO_DIR = ROOT / "final_task_demos"
 README_PATH = ROOT / "README.md"
 # Must match interactive._interactive_common.TASK_RESULT_ENV
@@ -59,6 +61,12 @@ from _task_briefing import (  # noqa: E402
     setup_gui_app_icon,
     show_task_briefing,
 )
+from experiment_logs import (  # noqa: E402
+    append_play,
+    experiment_mode,
+    is_completed,
+    stamp_child_env,
+)
 
 TASKS = (
     ("Trap Bug", "trap_bug", "interactive_trap_bug.py"),
@@ -74,6 +82,14 @@ TASKS = (
     ("Stop Ball", "stop_ball", "interactive_stop_ball.py"),
     ("Clean Table", "clean_table", "interactive_clean_table.py"),
 )
+
+TUTORIAL_PARTS = (
+    ("Part 1", "tutorial_part1", "Select arms (1, 2, 3) then switch camera (V)."),
+    ("Part 2", "tutorial_part2", "Move with arrows, E/Q, R/T, F/G, then Space."),
+    ("Part 3", "tutorial_part3", "Grasp, hold-button, switch, then push a box."),
+    ("Part 4", "tutorial_part4", "Stove knob on/off, then multi-stage force key."),
+)
+
 PLAY_BLUE = "#3182bd"
 PLAY_BLUE_ACTIVE = "#4295d0"
 PAGE_BG = GUI_PAGE_BG
@@ -270,11 +286,17 @@ class HouseholdTaskLauncher(tk.Tk):
 
         self.child: subprocess.Popen | None = None
         self.active_index: int | None = None
+        self.active_tutorial: int | None = None
         self.result_file: Path | None = None
+        self._run_meta: dict | None = None
         self.preview_sources: list[Image.Image | None] = []
         self.preview_photos: list[ImageTk.PhotoImage | None] = []
         self.preview_labels: list[tk.Label] = []
         self.task_buttons: list[RoundedButton] = []
+        self.tutorial_sources: list[Image.Image | None] = []
+        self.tutorial_photos: list[ImageTk.PhotoImage | None] = []
+        self.tutorial_preview_labels: list[tk.Label] = []
+        self.tutorial_buttons: list[RoundedButton] = []
         self.card_index_labels: list[tk.Label] = []
         self.card_title_labels: list[tk.Label] = []
         self._preview_resize_job: str | None = None
@@ -283,11 +305,31 @@ class HouseholdTaskLauncher(tk.Tk):
         self._ui_scale = 1.0
         self._header_layout_key: tuple | None = None
         self._idle_status = (
-            f"{len(TASKS)} tasks available  |  Hover a task for its README description."
+            f"Tutorial (4 parts)  ·  {len(TASKS)} tasks  |  "
+            "Hover a task for its README description."
         )
         self._idle_status_fg = HEADER_MUTED
 
         self._build_ui()
+        if experiment_mode():
+            user = os.environ.get("ROBODYNA_EXPERIMENT_USER", "").strip()
+            title = f"Household Tasks  ·  {user}" if user else "Household Tasks  ·  Experiment"
+            self.title(title)
+            self.title_label.configure(text=title)
+            self.subtitle_label.configure(
+                text=(
+                    "Play each task once. Finished tasks stay gray and cannot be replayed. "
+                    "Tutorial is always available."
+                )
+            )
+            self.exit_button.configure(text="Back")
+            self._idle_status = (
+                f"Experiment  ·  {user or 'participant'}  |  "
+                "Completed tasks are gray. Tutorial is always available."
+            )
+            self._idle_status_fg = HEADER_MUTED
+            self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
+            self._apply_completed_locks()
         self.bind("<Configure>", self._on_root_configure)
         self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
@@ -352,7 +394,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.title_label.pack(anchor="w")
         self.subtitle_label = tk.Label(
             self.heading,
-            text="Select one of the household tasks",
+            text="Tutorial first, then select a household task",
             bg=HEADER_BG,
             fg=HEADER_MUTED,
             anchor="w",
@@ -494,6 +536,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.canvas.bind_all("<Button-4>", lambda event: self.canvas.yview_scroll(-3, "units"))
         self.canvas.bind_all("<Button-5>", lambda event: self.canvas.yview_scroll(3, "units"))
 
+        self._add_tutorial_section()
         for row_start in range(0, len(TASKS), self.COLUMNS):
             self._add_task_row(row_start)
 
@@ -590,11 +633,23 @@ class HouseholdTaskLauncher(tk.Tk):
             )
         for label in self.card_title_labels:
             label.configure(font=self._scaled_font(15, "bold", s))
+        if getattr(self, "tutorial_index_label", None) is not None:
+            self.tutorial_index_label.configure(
+                font=self._scaled_font(17, "bold", s),
+                padx=idx_padx,
+                pady=idx_pady,
+            )
+        if getattr(self, "tutorial_title_label", None) is not None:
+            self.tutorial_title_label.configure(font=self._scaled_font(27, "bold", s))
+        if getattr(self, "tutorial_badge_label", None) is not None:
+            self.tutorial_badge_label.configure(font=self._scaled_font(12, "bold", s))
 
         btn_h = self._px(70, s)
         btn_radius = self._px(26, s)
         btn_font = self._scaled_font(16, "bold", s)
         for button in self.task_buttons:
+            button.configure(font=btn_font, height=btn_h, radius=btn_radius)
+        for button in self.tutorial_buttons:
             button.configure(font=btn_font, height=btn_h, radius=btn_radius)
 
         self._relayout_header(s)
@@ -734,10 +789,154 @@ class HouseholdTaskLauncher(tk.Tk):
                     wraplength=max(80, cell_width - self._px(56, self._ui_scale))
                 )
         self.preview_photos = photos
+        self._refresh_tutorial_previews(cell_width)
 
     def _mousewheel(self, event):
         if event.delta:
             self.canvas.yview_scroll(-int(event.delta / 120), "units")
+
+    def _tutorial_snapshot_path(self, part_index: int | None = None) -> Path | None:
+        names: list[str] = []
+        if part_index is not None:
+            part_n = part_index + 1
+            # Household Part 4 opens on the stove; prefer a dedicated still.
+            if part_n == 4:
+                names.append("scene_snapshot_part4_household.png")
+            names.append(f"scene_snapshot_part{part_n}.png")
+        names.append("scene_snapshot.png")
+        directories = (TUTORIAL_DIR, DEMO_DIR / "tutorial_empty")
+        for directory in directories:
+            for name in names:
+                path = directory / name
+                if path.exists():
+                    return path
+        return None
+
+    def _load_tutorial_source(self, part_index: int | None = None) -> Image.Image | None:
+        path = self._tutorial_snapshot_path(part_index)
+        if path is None:
+            return None
+        try:
+            with Image.open(path) as source:
+                source.seek(0)
+                return source.convert("RGB")
+        except Exception:
+            return None
+
+    def _refresh_tutorial_previews(self, width: int | None = None) -> None:
+        cell_width = int(
+            width if width is not None else self._cell_preview_width(self._preview_width)
+        )
+        photos: list[ImageTk.PhotoImage | None] = []
+        for index, source in enumerate(self.tutorial_sources):
+            photo = self._render_preview(source, cell_width)
+            photos.append(photo)
+            if index >= len(self.tutorial_preview_labels):
+                continue
+            label = self.tutorial_preview_labels[index]
+            if photo is None:
+                label.configure(
+                    image="",
+                    text="No preview",
+                    width=max(8, cell_width // 10),
+                    height=max(4, (cell_width * 3) // (8 * 16)),
+                )
+            else:
+                label.configure(image=photo, text="", width=0, height=0)
+        self.tutorial_photos = photos
+
+    def _add_tutorial_section(self):
+        """Same four-column tutorial card as the base GUI."""
+        card = tk.Frame(
+            self.page,
+            bg=CARD_BG,
+            highlightbackground=CARD_BORDER,
+            highlightthickness=2,
+        )
+        card.pack(fill="x", padx=self.CARD_PAD, pady=12)
+
+        card_header = tk.Frame(card, bg=CARD_BG)
+        card_header.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(14, 8))
+        self.tutorial_index_label = tk.Label(
+            card_header,
+            text="00",
+            bg=PLAY_BLUE,
+            fg="white",
+            font=("Sans", 17, "bold"),
+            padx=13,
+            pady=6,
+        )
+        self.tutorial_index_label.pack(side="left", padx=(0, 14))
+        self.tutorial_title_label = tk.Label(
+            card_header,
+            text="Tutorial",
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+            anchor="w",
+            font=("Sans", 27, "bold"),
+        )
+        self.tutorial_title_label.pack(side="left", fill="x", expand=True)
+        self.tutorial_badge_label = tk.Label(
+            card_header,
+            text="4 PARTS",
+            bg=CARD_BG,
+            fg="#7fb6dc",
+            font=("Sans", 12, "bold"),
+        )
+        self.tutorial_badge_label.pack(side="right")
+
+        grid = tk.Frame(card, bg=CARD_BG)
+        grid.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(0, 16))
+        self.tutorial_sources = [
+            self._load_tutorial_source(index) for index in range(len(TUTORIAL_PARTS))
+        ]
+        cell_width = self._cell_preview_width(self._preview_width)
+        self.tutorial_photos = []
+
+        for index, (label, _script, hint) in enumerate(TUTORIAL_PARTS):
+            col = tk.Frame(grid, bg=CARD_BG)
+            col.pack(side="left", expand=True, fill="both", padx=6)
+
+            photo = self._render_preview(self.tutorial_sources[index], cell_width)
+            self.tutorial_photos.append(photo)
+            preview_label = tk.Label(
+                col,
+                image=photo,
+                text="No preview" if photo is None else "",
+                bg=CARD_BG,
+                fg=TEXT_SECONDARY,
+                font=("Sans", 12),
+                bd=0,
+                highlightthickness=0,
+            )
+            if photo is None:
+                preview_label.configure(
+                    width=max(8, cell_width // 10),
+                    height=max(4, (cell_width * 3) // (8 * 16)),
+                )
+            preview_label.pack(fill="x", pady=(0, 8))
+            self.tutorial_preview_labels.append(preview_label)
+
+            button = RoundedButton(
+                col,
+                text=label,
+                command=lambda i=index: self.play_or_stop_tutorial(i),
+                bg=PLAY_BLUE,
+                activebackground=PLAY_BLUE_ACTIVE,
+                font=("Sans", 16, "bold"),
+                width=80,
+                height=70,
+                radius=26,
+                on_enter=lambda h=hint, l=label: self._show_tutorial_hint(l, h),
+                on_leave=self._clear_task_hint,
+            )
+            button.pack(fill="x")
+            self.tutorial_buttons.append(button)
+
+    def _show_tutorial_hint(self, label: str, hint: str):
+        if self.child is not None:
+            return
+        self.status.configure(text=f"Tutorial · {label}: {hint}", fg=HINT_FG)
 
     @staticmethod
     def _preview_path(task):
@@ -885,17 +1084,198 @@ class HouseholdTaskLauncher(tk.Tk):
         self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
 
     def play_or_stop(self, index):
+        if experiment_mode() and is_completed("household", TASKS[index][1]):
+            self._set_status(
+                "Already played. Choose another remaining task.",
+                "#e6a15c",
+                sticky=True,
+            )
+            return
         if self.child is not None:
-            if self.active_index == index:
+            if self.active_index == index and self.active_tutorial is None:
                 self._stop_task("Task stopped. Select another task when ready.")
             else:
                 self._set_status(
-                    "Stop the running task before starting another.",
+                    "Stop the running session before starting another.",
                     "#e6a15c",
                     sticky=True,
                 )
             return
         self._start_task(index)
+
+    def play_or_stop_tutorial(self, index: int):
+        if self.child is not None:
+            if self.active_tutorial == index:
+                self._stop_task("Tutorial stopped. Select a part or task when ready.")
+            else:
+                self._set_status(
+                    "Stop the running session before starting another.",
+                    "#e6a15c",
+                    sticky=True,
+                )
+            return
+        self._start_tutorial(index)
+
+    def _mark_running_buttons(self):
+        """Disable every Play control except the active Stop button."""
+        for i, button in enumerate(self.task_buttons):
+            is_active = self.active_index == i and self.active_tutorial is None
+            button.configure(state="normal" if is_active else "disabled")
+        for part_index, button in enumerate(self.tutorial_buttons):
+            is_active = self.active_tutorial == part_index
+            button.configure(state="normal" if is_active else "disabled")
+
+    def _start_tutorial(self, index: int):
+        label, script_stem, hint = TUTORIAL_PARTS[index]
+        script = TUTORIAL_DIR / f"{script_stem}.py"
+        if not script.exists():
+            messagebox.showerror("Tutorial unavailable", f"Missing launcher:\n{script}")
+            return
+        try:
+            seed = resolve_seed(self.seed_entry.get())
+        except ValueError as exc:
+            messagebox.showerror("Invalid seed", str(exc))
+            self.seed_entry.focus_set()
+            return
+
+        control_mode = str(self.control.get() or "robot")
+        if bool(self.show_briefing.get()):
+            if index == 0:
+                summary = (
+                    "Empty table with both arms. Test arm selection (1 / 2 / 3), "
+                    "then press V to switch camera views."
+                )
+                instruction = (
+                    "Key figures appear at the top right of the viewer. "
+                    "Press 1, 2, and 3 to select left / right / both arms — each key "
+                    "turns green and stays green once tested. Then press V; it also "
+                    "stays green. After that a smaller strip of all keys stays up: "
+                    "a key only flashes green while you press it. Esc quits."
+                )
+            elif index == 1:
+                summary = (
+                    "Empty table with both arms. Practice the base teleop keys "
+                    "on the selected (green) arm."
+                )
+                instruction = (
+                    "The left arm starts selected. Key figures at the top right "
+                    "walk through: arrow keys (move), E/Q (height — Z min/max is capped), "
+                    "R/T (rotate), F/G (tilt), then Space twice (open and close). "
+                    "Each lesson key turns green and stays green after you press it. "
+                    "After that a smaller strip of all keys stays up: a key only flashes "
+                    "green while you press it. Esc quits."
+                )
+            elif index == 2:
+                summary = (
+                    "Four basic actions on the left side of the table, one at a time: "
+                    "pick up a cube, hold a spring button, toggle an on/off switch, "
+                    "then push a box to a green line."
+                )
+                instruction = (
+                    "The left arm starts selected. Key figures at the top right show "
+                    "which keys to use. Keys flash green while you press them. "
+                    "(1) Grasp the orange cube — Space to close, "
+                    "E to lift. (2) Close with Space, then hold Q on the green button "
+                    "until it goes red, then lift off with E. (3) Close with Space, "
+                    "press the switch ON (stays down, red) then press again to turn it "
+                    "OFF. (4) Close the gripper and push the blue box onto the green line."
+                )
+            else:
+                summary = (
+                    "Two advanced household actions on the left side of the table, "
+                    "one at a time: twist a stove knob, then press a multi-stage "
+                    "force key."
+                )
+                instruction = (
+                    "The left arm starts selected. Key figures at the top right show "
+                    "which keys to use. (1) Grasp the stove knob and yaw left (R) to "
+                    "light the fire, yaw back (T) to turn it off. "
+                    "(2) Press Q until the bar enters the yellow band (success); "
+                    "yellow advances — release with E, then press again through "
+                    "bands 1→2→3→4. Arms reset between steps."
+                )
+            briefing = build_briefing_text(
+                label=f"Tutorial · {label}",
+                task="tutorial_empty",
+                scenario_label=label,
+                scenario_desc=hint,
+                summary=summary,
+                control_mode=control_mode,
+                script_path=TUTORIAL_DIR / "_run.py",
+            )
+            briefing["instruction"] = instruction
+            if not show_task_briefing(self, briefing):
+                self._set_status(
+                    "Briefing cancelled. Select a tutorial part when ready.",
+                    TEXT_SECONDARY,
+                    sticky=True,
+                )
+                return
+
+        try:
+            child_env = os.environ.copy()
+            child_env.setdefault(
+                "PYTHONWARNINGS",
+                "ignore::UserWarning,ignore::FutureWarning,ignore::DeprecationWarning",
+            )
+            self._prepare_result_file()
+            child_env[TASK_RESULT_ENV] = str(self.result_file)
+            stamp_child_env(child_env, controller=control_mode, seed=seed)
+            self._run_meta = {
+                "suite": "tutorial",
+                "task": script_stem,
+                "task_label": f"Tutorial · {label}",
+                "scenario": None,
+                "controller": control_mode,
+                "seed": seed,
+                "started_at": time.perf_counter(),
+            }
+            command = [
+                sys.executable,
+                str(script),
+                "--config",
+                "demo_dynamic",
+                "--seed",
+                str(seed),
+                "--control",
+                control_mode,
+                "--part",
+                str(index + 1),
+                "--suite",
+                "household",
+            ]
+            if bool(self.record_data.get()):
+                child_env["ROBODYNA_RECORD_DATA"] = "1"
+                child_env["ROBODYNA_RECORD_CONFIG"] = "demo_dynamic"
+                command.append("--record-data")
+            self.child = subprocess.Popen(
+                command, cwd=ROOT, start_new_session=True, env=child_env
+            )
+        except Exception as exc:
+            self._remove_result_file()
+            messagebox.showerror("Could not start tutorial", str(exc))
+            self.child = None
+            return
+
+        self.active_index = None
+        self.active_tutorial = index
+        self._mark_running_buttons()
+        self.control.configure(state="disabled")
+        self.seed_entry.configure(state="disabled")
+        self.briefing_check.configure(state="disabled")
+        self.record_check.configure(state="disabled")
+        self.tutorial_buttons[index].configure(
+            text="Stop", bg="#b06a20", activebackground="#d0842b"
+        )
+        run_text = (
+            f"Running Tutorial / {label} with seed {seed}. "
+            "Close its viewer or press Stop."
+        )
+        if bool(self.record_data.get()):
+            run_text = f"{run_text} Recording data (cameras render after the viewer closes)."
+        self._run_status_base = run_text
+        self._shown_episode_condition = None
+        self._set_status(run_text, "#70d6a2", sticky=True)
 
     def _start_task(self, index):
         label, task, script_name = TASKS[index]
@@ -939,6 +1319,16 @@ class HouseholdTaskLauncher(tk.Tk):
             self._prepare_result_file()
             child_env = os.environ.copy()
             child_env[TASK_RESULT_ENV] = str(self.result_file)
+            stamp_child_env(child_env, controller=control_mode, seed=seed)
+            self._run_meta = {
+                "suite": "household",
+                "task": task,
+                "task_label": label,
+                "scenario": None,
+                "controller": control_mode,
+                "seed": seed,
+                "started_at": time.perf_counter(),
+            }
             if bool(self.record_data.get()):
                 child_env["ROBODYNA_RECORD_DATA"] = "1"
                 child_env["ROBODYNA_RECORD_CONFIG"] = "demo_dynamic"
@@ -952,8 +1342,9 @@ class HouseholdTaskLauncher(tk.Tk):
             self.child = None
             return
         self.active_index = index
-        for i, button in enumerate(self.task_buttons):
-            button.configure(state="normal" if i == index else "disabled")
+        self.active_tutorial = None
+        self._mark_running_buttons()
+        self._apply_completed_locks(keep_active=True)
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.briefing_check.configure(state="disabled")
@@ -963,7 +1354,7 @@ class HouseholdTaskLauncher(tk.Tk):
             f"Running {label} with seed {seed}. Close its viewer or press Stop to return."
         )
         if bool(self.record_data.get()):
-            run_text = f"{run_text} Recording collect_data episode + video."
+            run_text = f"{run_text} Recording data (cameras render after the viewer closes)."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -972,8 +1363,10 @@ class HouseholdTaskLauncher(tk.Tk):
         if self.child is not None:
             code = self.child.poll()
             if code is not None:
+                run_meta = self._run_meta
                 self.child = None
                 self.active_index = None
+                self.active_tutorial = None
                 payload = self._read_result_payload()
                 reason = None
                 recorded = record_status_note(payload)
@@ -983,9 +1376,19 @@ class HouseholdTaskLauncher(tk.Tk):
                         reason = detail.strip()
                 self._run_status_base = None
                 self._shown_episode_condition = None
+                self._record_experiment_play(run_meta, payload, exit_code=code)
+                self._run_meta = None
                 self._remove_result_file()
                 self._reset_task_buttons()
-                if code == 0:
+                # Tutorials are practice — no SUCCESS/FAILURE, including viewer
+                # close crashes (often exit -11 / SIGSEGV).
+                if isinstance(run_meta, dict) and run_meta.get("suite") == "tutorial":
+                    self._set_status(
+                        "Tutorial completed. Select another part or task below.",
+                        TEXT_SECONDARY,
+                        sticky=True,
+                    )
+                elif code == 0:
                     self._set_status(
                         f"Task result: SUCCESS.{recorded} Select another task below.",
                         "#70d6a2",
@@ -1027,6 +1430,53 @@ class HouseholdTaskLauncher(tk.Tk):
         self.record_check.configure(state="normal")
         for button in self.task_buttons:
             button.configure(state="normal", text="Play", bg=PLAY_BLUE, activebackground=PLAY_BLUE_ACTIVE)
+        for index, button in enumerate(self.tutorial_buttons):
+            button.configure(
+                state="normal",
+                text=TUTORIAL_PARTS[index][0],
+                bg=PLAY_BLUE,
+                activebackground=PLAY_BLUE_ACTIVE,
+            )
+        self._apply_completed_locks()
+
+    def _apply_completed_locks(self, *, keep_active: bool = False):
+        """Gray out tasks already finished by this experiment user."""
+        if not experiment_mode():
+            return
+        for index, button in enumerate(self.task_buttons):
+            if keep_active and self.active_index == index:
+                continue
+            task = TASKS[index][1]
+            if not is_completed("household", task):
+                continue
+            button.configure(
+                state="disabled",
+                text="Done",
+                bg="#59616b",
+                activebackground="#59616b",
+            )
+
+    def _record_experiment_play(self, run_meta, payload, *, exit_code=None, stopped=False):
+        if not experiment_mode() or not isinstance(run_meta, dict):
+            return
+        if run_meta.get("suite") != "household":
+            return
+        started = run_meta.get("started_at")
+        wall_fallback = None
+        if isinstance(started, (int, float)):
+            wall_fallback = time.perf_counter() - float(started)
+        append_play(
+            suite="household",
+            task=str(run_meta.get("task") or ""),
+            task_label=run_meta.get("task_label"),
+            scenario=None,
+            controller=run_meta.get("controller"),
+            seed=run_meta.get("seed"),
+            exit_code=exit_code,
+            payload=payload if isinstance(payload, dict) else None,
+            stopped=stopped,
+            wall_fallback_s=wall_fallback,
+        )
 
     def _prepare_result_file(self):
         self._remove_result_file()
@@ -1080,6 +1530,8 @@ class HouseholdTaskLauncher(tk.Tk):
 
     def _stop_task(self, status=None):
         child = self.child
+        run_meta = self._run_meta
+        payload = self._read_result_payload()
         if child is None:
             self._remove_result_file()
             return
@@ -1094,6 +1546,9 @@ class HouseholdTaskLauncher(tk.Tk):
         finally:
             self.child = None
             self.active_index = None
+            self.active_tutorial = None
+            self._record_experiment_play(run_meta, payload, stopped=True)
+            self._run_meta = None
             self._remove_result_file()
             self._reset_task_buttons()
         if status:

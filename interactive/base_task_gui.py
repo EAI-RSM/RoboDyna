@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -29,6 +30,12 @@ from _task_briefing import (  # noqa: E402
     build_briefing_text,
     setup_gui_app_icon,
     show_task_briefing,
+)
+from experiment_logs import (  # noqa: E402
+    append_play,
+    experiment_mode,
+    is_completed,
+    stamp_child_env,
 )
 
 
@@ -94,7 +101,7 @@ TUTORIAL_PARTS = (
     ("Part 1", "tutorial_part1", "Select arms (1, 2, 3) then switch camera (V)."),
     ("Part 2", "tutorial_part2", "Move with arrows, E/Q, R/T, F/G, then Space."),
     ("Part 3", "tutorial_part3", "Grasp, hold-button, switch, then push a box."),
-    ("Part 4", "tutorial_part4", "Ball, stove knob, mallet, then force key."),
+    ("Part 4", "tutorial_part4", "Catch a rolling ball, then pick up a mallet."),
 )
 
 SCENARIOS = ("default", "opt1", "opt2", "opt1+2")
@@ -474,6 +481,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.active_selection: tuple | None = None
         self.temporary_config: Path | None = None
         self.result_file: Path | None = None
+        self._run_meta: dict | None = None
         # Per task: one source/photo/label per scenario (Default / Opt1 / Opt2 / Opt1+2).
         self.preview_sources: list[list[Image.Image | None]] = []
         self.preview_photos: list[list[ImageTk.PhotoImage | None]] = []
@@ -498,6 +506,22 @@ class InteractiveTaskLauncher(tk.Tk):
         self._idle_status_fg = HEADER_MUTED
 
         self._build_ui()
+        if experiment_mode():
+            user = os.environ.get("ROBODYNA_EXPERIMENT_USER", "").strip()
+            title = f"Base Tasks  ·  {user}" if user else "Base Tasks  ·  Experiment"
+            self.title(title)
+            self.title_label.configure(text=title)
+            self.subtitle_label.configure(
+                text="Play each scenario once. Finished scenarios stay gray and cannot be replayed."
+            )
+            self.exit_button.configure(text="Back")
+            self._idle_status = (
+                f"Experiment  ·  {user or 'participant'}  |  "
+                "Completed scenarios are gray. Tutorial is always available."
+            )
+            self._idle_status_fg = HEADER_MUTED
+            self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
+            self._apply_completed_locks()
         self.bind("<Configure>", self._on_root_configure)
         self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
@@ -1325,9 +1349,10 @@ class InteractiveTaskLauncher(tk.Tk):
                 )
                 instruction = (
                     "Key figures appear at the top right of the viewer. "
-                    "Press 1, 2, and 3 to select left / right / both arms. "
-                    "When those are tested, the overlay switches to V — press V to cycle "
-                    "head and gripper views."
+                    "Press 1, 2, and 3 to select left / right / both arms — each key "
+                    "turns green and stays green once tested. Then press V; it also "
+                    "stays green. After that a smaller strip of all keys stays up: "
+                    "a key only flashes green while you press it. Esc quits."
                 )
             elif index == 1:
                 summary = (
@@ -1338,8 +1363,9 @@ class InteractiveTaskLauncher(tk.Tk):
                     "The left arm starts selected. Key figures at the top right "
                     "walk through: arrow keys (move), E/Q (height — Z min/max is capped), "
                     "R/T (rotate), F/G (tilt), then Space twice (open and close). "
-                    "Each lesson key turns green. After that a smaller overlay stays up "
-                    "to practice — keys flash while you press them. Esc quits."
+                    "Each lesson key turns green and stays green after you press it. "
+                    "After that a smaller strip of all keys stays up: a key only flashes "
+                    "green while you press it. Esc quits."
                 )
             elif index == 2:
                 summary = (
@@ -1358,18 +1384,15 @@ class InteractiveTaskLauncher(tk.Tk):
                 )
             else:
                 summary = (
-                    "Four advanced actions on the left side of the table, one at a time: "
-                    "catch a rolling ball, turn the stove knob on and off, pick up a mallet, "
-                    "then press a multi-stage key to a target force."
+                    "Two advanced actions on the left side of the table, one at a time: "
+                    "catch a rolling ball, then pick up a mallet."
                 )
                 instruction = (
-                    "The left arm starts selected. The overlay window is larger so the "
-                    "instructions stay on screen. (1) Catch the red ball as it rolls toward "
-                    "you — Space to close, E to lift. If it falls or you drop it, it respawns. "
-                    "(2) Grasp the stove knob, yaw left until fire appears, yaw back to turn "
-                    "it off. (3) Grasp the mallet handle and lift it. (4) Press Q on the blue "
-                    "key: the bar shows force. Hit the yellow target band, then release. "
-                    "Too light or too hard — try again."
+                    "The left arm starts selected. Key figures at the top right show "
+                    "which keys to use. (1) Catch the red ball as it rolls toward "
+                    "you — Space to close, E to lift. Touching is fine; it only "
+                    "respawns if it falls off the table. "
+                    "(2) Grasp the mallet handle and lift it. Arms reset between steps."
                 )
             briefing = build_briefing_text(
                 label=f"Tutorial · {label}",
@@ -1397,6 +1420,16 @@ class InteractiveTaskLauncher(tk.Tk):
             )
             self._prepare_result_file()
             child_env[TASK_RESULT_ENV] = str(self.result_file)
+            stamp_child_env(child_env, controller=control_mode, seed=seed)
+            self._run_meta = {
+                "suite": "tutorial",
+                "task": script_stem,
+                "task_label": f"Tutorial · {label}",
+                "scenario": None,
+                "controller": control_mode,
+                "seed": seed,
+                "started_at": time.perf_counter(),
+            }
             command = [
                 sys.executable,
                 str(script),
@@ -1408,6 +1441,8 @@ class InteractiveTaskLauncher(tk.Tk):
                 control_mode,
                 "--part",
                 str(index + 1),
+                "--suite",
+                "base",
             ]
             self._apply_record_launch(child_env, command)
             self.child = subprocess.Popen(
@@ -1433,7 +1468,7 @@ class InteractiveTaskLauncher(tk.Tk):
             "Close its viewer or press Stop."
         )
         if bool(self.record_data.get()):
-            run_text = f"{run_text} Recording collect_data episode + video."
+            run_text = f"{run_text} Recording data (cameras render after the viewer closes)."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -1508,6 +1543,18 @@ class InteractiveTaskLauncher(tk.Tk):
             child_env["ROBODYNA_SCENARIO"] = scenario
             self._prepare_result_file()
             child_env[TASK_RESULT_ENV] = str(self.result_file)
+            stamp_child_env(
+                child_env, controller=control_mode, seed=seed, scenario=scenario
+            )
+            self._run_meta = {
+                "suite": "base",
+                "task": task,
+                "task_label": label,
+                "scenario": scenario,
+                "controller": control_mode,
+                "seed": seed,
+                "started_at": time.perf_counter(),
+            }
             command = [
                 sys.executable,
                 str(script),
@@ -1549,7 +1596,7 @@ class InteractiveTaskLauncher(tk.Tk):
         if desc:
             run_text = f"{run_text}  ({desc})"
         if bool(self.record_data.get()):
-            run_text = f"{run_text} Recording collect_data episode + video."
+            run_text = f"{run_text} Recording data (cameras render after the viewer closes)."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -1558,11 +1605,7 @@ class InteractiveTaskLauncher(tk.Tk):
         if self.child is not None:
             code = self.child.poll()
             if code is not None:
-                was_tutorial = (
-                    isinstance(self.active_selection, tuple)
-                    and bool(self.active_selection)
-                    and self.active_selection[0] == "tutorial"
-                )
+                run_meta = self._run_meta
                 self.child = None
                 self.active_selection = None
                 payload = self._read_result_payload()
@@ -1574,12 +1617,14 @@ class InteractiveTaskLauncher(tk.Tk):
                         reason = detail.strip()
                 self._run_status_base = None
                 self._shown_episode_condition = None
+                self._record_experiment_play(run_meta, payload, exit_code=code)
+                self._run_meta = None
                 self._remove_temporary_config()
                 self._remove_result_file()
                 self._reset_task_buttons()
                 # Tutorials are practice — no SUCCESS/FAILURE, including viewer
                 # close crashes (often exit -11 / SIGSEGV).
-                if was_tutorial:
+                if isinstance(run_meta, dict) and run_meta.get("suite") == "tutorial":
                     self._set_status(
                         "Tutorial completed. Select another part or task below.",
                         TEXT_SECONDARY,
@@ -1642,6 +1687,47 @@ class InteractiveTaskLauncher(tk.Tk):
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
             )
+        self._apply_completed_locks()
+
+    def _apply_completed_locks(self, *, keep_active: bool = False):
+        """Gray out scenarios already finished by this experiment user."""
+        if not experiment_mode():
+            return
+        for task_index, row in enumerate(self.task_buttons):
+            task = TASKS[task_index][1]
+            for scenario, button in zip(SCENARIOS, row):
+                if keep_active and self.active_selection == (task_index, scenario):
+                    continue
+                if not is_completed("base", task, scenario):
+                    continue
+                button.configure(
+                    state="disabled",
+                    text="Done",
+                    bg="#59616b",
+                    activebackground="#59616b",
+                )
+
+    def _record_experiment_play(self, run_meta, payload, *, exit_code=None, stopped=False):
+        if not experiment_mode() or not isinstance(run_meta, dict):
+            return
+        if run_meta.get("suite") != "base":
+            return
+        started = run_meta.get("started_at")
+        wall_fallback = None
+        if isinstance(started, (int, float)):
+            wall_fallback = time.perf_counter() - float(started)
+        append_play(
+            suite="base",
+            task=str(run_meta.get("task") or ""),
+            task_label=run_meta.get("task_label"),
+            scenario=run_meta.get("scenario"),
+            controller=run_meta.get("controller"),
+            seed=run_meta.get("seed"),
+            exit_code=exit_code,
+            payload=payload if isinstance(payload, dict) else None,
+            stopped=stopped,
+            wall_fallback_s=wall_fallback,
+        )
 
     def _remove_temporary_config(self):
         path = self.temporary_config
@@ -1704,6 +1790,8 @@ class InteractiveTaskLauncher(tk.Tk):
 
     def _stop_task(self, status=None):
         child = self.child
+        run_meta = self._run_meta
+        payload = self._read_result_payload()
         if child is None:
             self._remove_temporary_config()
             self._remove_result_file()
@@ -1719,6 +1807,8 @@ class InteractiveTaskLauncher(tk.Tk):
         finally:
             self.child = None
             self.active_selection = None
+            self._record_experiment_play(run_meta, payload, stopped=True)
+            self._run_meta = None
             self._remove_temporary_config()
             self._remove_result_file()
             self._reset_task_buttons()

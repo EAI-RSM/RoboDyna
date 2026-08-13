@@ -376,11 +376,11 @@ def build_part3_key_hud(scene) -> TutorialKeyHud:
     return hud
 
 
-def build_part4_key_hud(scene) -> TutorialKeyHud:
-    """Overlays for ball → stove → mallet → force key (same size as parts 2–3)."""
-    stages = ("ball", "stove", "mallet", "force_key")
-    images = {name: draw_advanced_stage(name) for name in stages}
-    hud = build_staged_hud(scene, images, start_stage="ball")
+def build_part4_key_hud(scene, stages=None) -> TutorialKeyHud:
+    """Overlays for Part 4 advanced stages (suite-specific sequence)."""
+    stage_names = tuple(stages or ("ball", "mallet"))
+    images = {name: draw_advanced_stage(name) for name in stage_names}
+    hud = build_staged_hud(scene, images, start_stage=stage_names[0])
     hud.flash_drawer = lambda pressed=None, **kwargs: draw_advanced_stage(
         hud.stage, pressed, **hud.flash_kwargs
     )

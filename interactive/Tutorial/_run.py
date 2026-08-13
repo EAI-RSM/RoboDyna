@@ -50,9 +50,16 @@ def main(part: int | None = None) -> int:
     parser.add_argument("--config", default="demo_dynamic")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--part", type=int, default=part or 1, choices=(1, 2, 3, 4))
+    parser.add_argument(
+        "--suite",
+        default="base",
+        choices=("base", "household"),
+        help="Part 4 stage set: base=ball+mallet, household=stove+force key.",
+    )
     add_robot_motion_arg(parser)
     args = parser.parse_args()
     part_id = int(args.part)
+    suite = str(args.suite)
     title = PART_TITLES[part_id]
 
     from envs.tutorial_empty import tutorial_empty
@@ -124,12 +131,16 @@ def main(part: int | None = None) -> int:
 
         return run_part3(env)
 
+    if suite == "household":
+        part4_line = "Top-right overlay: stove knob, then multi-stage force key."
+    else:
+        part4_line = "Top-right overlay: catch a rolling ball, then pick up a mallet."
     print_banner(
         f"Tutorial {title}",
         [
-            f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
+            f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}  |  suite: {suite}",
             "Left arm starts selected (green). 1 / 2 / 3 still switch arms.",
-            "Top-right overlay: catch a rolling ball, stove knob, mallet, then force key.",
+            part4_line,
             "Keys flash green while pressed. Esc — close the viewer to quit",
         ],
     )
@@ -139,4 +150,8 @@ def main(part: int | None = None) -> int:
     )
     from _part4 import run_part4
 
-    return run_part4(env)
+    return run_part4(env, suite=suite)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
