@@ -1068,12 +1068,20 @@ class Base_Task(gym.Env):
         video_cameras = None
         if getattr(self, "_record_preview_head_only", False):
             video_cameras = ["head_camera"]
+        write_hdf5 = bool(getattr(self, "_record_write_hdf5", True))
+        write_video = bool(getattr(self, "_record_write_video", True))
+        if write_hdf5:
+            os.makedirs(f"{self.save_dir}/data", exist_ok=True)
+        if write_video:
+            os.makedirs(f"{self.save_dir}/video", exist_ok=True)
         process_folder_to_hdf5_video(
             cache_path,
             target_file_path,
             target_video_path,
             fps=_rt_fps,
             video_cameras=video_cameras,
+            write_hdf5=write_hdf5,
+            write_video=write_video,
         )
 
     def remove_data_cache(self):

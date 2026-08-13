@@ -139,37 +139,45 @@ def _stack_camera_streams(obs, cam_names):
     return arr
 
 
-def pkl_files_to_hdf5_and_video(pkl_files, hdf5_path, video_path, fps=30.0, video_cameras=None):
+def pkl_files_to_hdf5_and_video(
+    pkl_files, hdf5_path, video_path, fps=30.0, video_cameras=None,
+    write_hdf5=True, write_video=True,
+):
     data_list = parse_dict_structure(load_pkl_file(pkl_files[0]))
     for pkl_file_path in pkl_files:
         pkl_file = load_pkl_file(pkl_file_path)
         append_data_to_structure(data_list, pkl_file)
 
     obs = data_list["observation"]
-    if video_cameras:
-        vid = _stack_camera_streams(obs, list(video_cameras))
+    if write_video:
+        if video_cameras:
+            vid = _stack_camera_streams(obs, list(video_cameras))
+            if vid is None:
+                missing = ", ".join(video_cameras)
+                raise RuntimeError(f"No RGB frames for video cameras: {missing}")
+        elif "demo_camera" in obs and "rgb" in obs["demo_camera"]:
+            # Prefer third-person demo_camera (visualize_task_scene view) when present; else
+            # head + countertop side-by-side; else any single static camera.
+            vid = np.array(obs["demo_camera"]["rgb"])
+        else:
+            vid = _stack_camera_streams(obs, ["head_camera", "countertop_camera"])
         if vid is None:
-            missing = ", ".join(video_cameras)
-            raise RuntimeError(f"No RGB frames for video cameras: {missing}")
-    elif "demo_camera" in obs and "rgb" in obs["demo_camera"]:
-        # Prefer third-person demo_camera (visualize_task_scene view) when present; else
-        # head + countertop side-by-side; else any single static camera.
-        vid = np.array(obs["demo_camera"]["rgb"])
-    else:
-        vid = _stack_camera_streams(obs, ["head_camera", "countertop_camera"])
-    if vid is None:
-        _vid_cam = next((c for c in ("countertop_camera", "head_camera", "front_camera")
-                         if c in obs and "rgb" in obs[c]), None)
-        vid = np.array(obs[_vid_cam]["rgb"])
-    # fps = 250/save_freq -> the preview video plays at REAL sim time (so its length == the actual
-    # motion duration); default 30 keeps legacy behavior for callers that don't pass it.
-    images_to_video(vid, out_path=video_path, fps=fps)
+            _vid_cam = next((c for c in ("countertop_camera", "head_camera", "front_camera")
+                             if c in obs and "rgb" in obs[c]), None)
+            vid = np.array(obs[_vid_cam]["rgb"])
+        # fps = 250/save_freq -> the preview video plays at REAL sim time (so its length == the actual
+        # motion duration); default 30 keeps legacy behavior for callers that don't pass it.
+        images_to_video(vid, out_path=video_path, fps=fps)
 
-    with h5py.File(hdf5_path, "w") as f:
-        create_hdf5_from_dict(f, data_list)
+    if write_hdf5:
+        with h5py.File(hdf5_path, "w") as f:
+            create_hdf5_from_dict(f, data_list)
 
 
-def process_folder_to_hdf5_video(folder_path, hdf5_path, video_path, fps=30.0, video_cameras=None):
+def process_folder_to_hdf5_video(
+    folder_path, hdf5_path, video_path, fps=30.0, video_cameras=None,
+    write_hdf5=True, write_video=True,
+):
     pkl_files = []
     for fname in os.listdir(folder_path):
         if fname.endswith(".pkl") and fname[:-4].isdigit():
@@ -189,5 +197,6 @@ def process_folder_to_hdf5_video(folder_path, hdf5_path, video_path, fps=30.0, v
         expected += 1
 
     pkl_files_to_hdf5_and_video(
-        pkl_files, hdf5_path, video_path, fps=fps, video_cameras=video_cameras
+        pkl_files, hdf5_path, video_path, fps=fps, video_cameras=video_cameras,
+        write_hdf5=write_hdf5, write_video=write_video,
     )

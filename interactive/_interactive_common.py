@@ -139,12 +139,38 @@ def add_record_data_arg(parser):
     return parser
 
 
+def _env_flag(name: str) -> str | None:
+    flag = os.environ.get(name, "").strip().lower()
+    if flag in ("1", "true", "yes"):
+        return "1"
+    if flag in ("0", "false", "no"):
+        return "0"
+    return None
+
+
 def interactive_record_data_requested() -> bool:
     """True when the GUI env var or ``--record-data`` CLI flag is set."""
-    flag = os.environ.get("ROBODYNA_RECORD_DATA", "").strip().lower()
-    if flag in ("1", "true", "yes"):
+    flag = _env_flag("ROBODYNA_RECORD_DATA")
+    if flag == "1":
         return True
+    if flag == "0":
+        return False
     return "--record-data" in sys.argv
+
+
+def interactive_save_video_requested() -> bool:
+    """GUI Save video tick, or the collect_data preview mp4 for CLI ``--record-data``."""
+    flag = _env_flag("ROBODYNA_SAVE_VIDEO")
+    if flag == "0":
+        return False
+    if flag == "1":
+        return True
+    return interactive_record_data_requested()
+
+
+def interactive_capture_requested() -> bool:
+    """True when Record data and/or Save video should run after the viewer closes."""
+    return interactive_record_data_requested() or interactive_save_video_requested()
 
 
 def _argv_value(flag: str, default: str | None = None) -> str | None:
@@ -360,11 +386,11 @@ def _interactive_record_after_step(env):
 def maybe_attach_interactive_data_recorder(env) -> bool:
     """Log cheap state during play; render collect_data cameras after the viewer closes.
 
-    Idempotent. No-ops unless ``--record-data`` / ``ROBODYNA_RECORD_DATA`` is set.
+    Idempotent. No-ops unless Record data and/or Save video is requested.
     """
     if getattr(env, "_interactive_record_active", False):
         return True
-    if not interactive_record_data_requested():
+    if not interactive_capture_requested():
         return False
     scene = getattr(env, "scene", None)
     if scene is None or not hasattr(scene, "step"):
@@ -419,12 +445,14 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
     )
     env._interactive_record_use_robot = str(control).strip().lower() == "robot"
     env._interactive_record_task_cls = type(env)
+    env._interactive_record_write_hdf5 = interactive_record_data_requested()
+    env._interactive_record_write_video = interactive_save_video_requested()
     env._interactive_record_args = {
         "task_name": task_name,
         "task_config": folder,
         "save_path": save_root,
         "save_freq": env.save_freq,
-        "export_lerobot": True,
+        "export_lerobot": bool(env._interactive_record_write_hdf5),
         "lerobot_root": "./data_lerobot/domino_suite",
         "lerobot_chunks_size": 1000,
         "lerobot_task_state_dim": 32,
@@ -459,9 +487,15 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
     _interactive_record_log_state(env)
     hdf5 = os.path.join(save_root, "data", f"episode{env.ep_num}.hdf5")
     preview = os.path.join(save_root, "video", f"episode{env.ep_num}.mp4")
+    bits = []
+    if env._interactive_record_write_hdf5:
+        bits.append(hdf5)
+    if env._interactive_record_write_video:
+        bits.append(preview)
+    dest = " + ".join(bits) if bits else save_root
     print(
         f"[record-data] logging robot/object state for episode {env.ep_num}; "
-        f"head_camera renders after the viewer closes → {hdf5} + {preview}"
+        f"head_camera renders after the viewer closes → {dest}"
     )
     return True
 
@@ -508,6 +542,8 @@ def _replay_interactive_cameras(meta: dict):
     replay.FRAME_IDX = 0
     replay.task_config = folder
     replay._record_preview_head_only = True
+    replay._record_write_hdf5 = bool(meta.get("write_hdf5", True))
+    replay._record_write_video = bool(meta.get("write_video", True))
     if data_type:
         replay.data_type = data_type
     try:
@@ -575,6 +611,8 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
         "use_robot": bool(getattr(env, "_interactive_record_use_robot", True)),
         "args": dict(getattr(env, "_interactive_record_args", None) or {}),
         "success": bool(success),
+        "write_hdf5": bool(getattr(env, "_interactive_record_write_hdf5", True)),
+        "write_video": bool(getattr(env, "_interactive_record_write_video", True)),
     }
 
     if live_close is not None:
@@ -609,7 +647,9 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
         return None
 
     args = dict(meta.get("args") or {})
-    if args.get("export_lerobot", True):
+    want_data = bool(meta.get("write_hdf5", True))
+    want_video = bool(meta.get("write_video", True))
+    if want_data and args.get("export_lerobot", True):
         try:
             from envs.utils.lerobot_export import LeRobotEpisodeExporter
 
@@ -627,73 +667,79 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
         pass
 
     seed = int(meta["seed"])
-    seed_path = os.path.join(save_dir, "seed.txt")
-    try:
-        existing = []
-        if os.path.exists(seed_path):
-            existing = [int(x) for x in Path(seed_path).read_text(encoding="utf-8").split() if x.strip()]
-        existing.append(seed)
-        Path(seed_path).write_text(" ".join(str(s) for s in existing) + " ", encoding="utf-8")
-    except Exception as exc:
-        print(f"[record-data] seed.txt update failed: {exc}")
+    if want_data:
+        seed_path = os.path.join(save_dir, "seed.txt")
+        try:
+            existing = []
+            if os.path.exists(seed_path):
+                existing = [int(x) for x in Path(seed_path).read_text(encoding="utf-8").split() if x.strip()]
+            existing.append(seed)
+            Path(seed_path).write_text(" ".join(str(s) for s in existing) + " ", encoding="utf-8")
+        except Exception as exc:
+            print(f"[record-data] seed.txt update failed: {exc}")
 
-    info_path = os.path.join(save_dir, "scene_info.json")
-    try:
-        info_db = {}
-        if os.path.exists(info_path):
-            info_db = json.loads(Path(info_path).read_text(encoding="utf-8") or "{}")
-        info_db[f"episode_{ep_num}"] = {
-            "seed": seed,
-            "success": bool(success),
-            "source": "interactive",
-            "scenario": (
-                os.environ.get("ROBODYNA_SCENARIO")
-                or "default"
-            ),
-            "frames": n_frames,
-        }
-        Path(info_path).write_text(
-            json.dumps(info_db, ensure_ascii=False, indent=4),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        print(f"[record-data] scene_info.json update failed: {exc}")
+        info_path = os.path.join(save_dir, "scene_info.json")
+        try:
+            info_db = {}
+            if os.path.exists(info_path):
+                info_db = json.loads(Path(info_path).read_text(encoding="utf-8") or "{}")
+            info_db[f"episode_{ep_num}"] = {
+                "seed": seed,
+                "success": bool(success),
+                "source": "interactive",
+                "scenario": (
+                    os.environ.get("ROBODYNA_SCENARIO")
+                    or "default"
+                ),
+                "frames": n_frames,
+            }
+            Path(info_path).write_text(
+                json.dumps(info_db, ensure_ascii=False, indent=4),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            print(f"[record-data] scene_info.json update failed: {exc}")
 
     hdf5 = os.path.join(save_dir, "data", f"episode{ep_num}.hdf5")
     preview = os.path.join(save_dir, "video", f"episode{ep_num}.mp4")
-    if not os.path.exists(preview):
+    if not want_video or not os.path.exists(preview):
         preview = None
+    if not want_data or not os.path.exists(hdf5):
+        hdf5 = None
     env._interactive_record_hdf5 = hdf5
     extra = {
         "record_path": save_dir,
         "record_episode": ep_num,
-        "record_hdf5": hdf5,
     }
+    if hdf5:
+        extra["record_hdf5"] = hdf5
     if preview:
         extra["record_video"] = preview
     _persist_task_result(_LAST_TASK_RESULT, _LAST_TASK_DETAIL, extra=extra)
-    print(f"[record-data] saved {hdf5} ({n_frames} frames, success={bool(success)})")
+    if hdf5:
+        print(f"[record-data] saved {hdf5} ({n_frames} frames, success={bool(success)})")
     if preview:
         print(f"[record-data] preview video {preview}")
 
-    try:
-        language_num = int(args.get("language_num", 100) or 100)
-        task_name = args.get("task_name") or meta["task_name"]
-        task_config = args.get("task_config") or meta["folder"]
-        if task_name and task_config:
-            cmd = (
-                "cd description && bash gen_episode_instructions.sh "
-                f"{shlex.quote(str(task_name))} {shlex.quote(str(task_config))} "
-                f"{int(language_num)}"
-            )
-            result = subprocess.run(cmd, shell=True, cwd=str(REPO_ROOT))
-            if result.returncode != 0:
-                print(
-                    "[record-data] instruction generation skipped "
-                    f"(exit {result.returncode})"
+    if want_data:
+        try:
+            language_num = int(args.get("language_num", 100) or 100)
+            task_name = args.get("task_name") or meta["task_name"]
+            task_config = args.get("task_config") or meta["folder"]
+            if task_name and task_config:
+                cmd = (
+                    "cd description && bash gen_episode_instructions.sh "
+                    f"{shlex.quote(str(task_name))} {shlex.quote(str(task_config))} "
+                    f"{int(language_num)}"
                 )
-    except Exception as exc:
-        print(f"[record-data] instruction generation skipped: {exc}")
+                result = subprocess.run(cmd, shell=True, cwd=str(REPO_ROOT))
+                if result.returncode != 0:
+                    print(
+                        "[record-data] instruction generation skipped "
+                        f"(exit {result.returncode})"
+                    )
+        except Exception as exc:
+            print(f"[record-data] instruction generation skipped: {exc}")
     return hdf5
 
 def folder_name_from_save_dir(save_dir: str) -> str:

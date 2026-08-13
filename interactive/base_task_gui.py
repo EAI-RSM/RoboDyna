@@ -600,61 +600,20 @@ class InteractiveTaskLauncher(tk.Tk):
         self.controls = tk.Frame(self.header, bg=HEADER_BG)
         self.controls.pack(in_=self.header_top, side="right", padx=22, pady=16)
 
-        self.brief_group = tk.Frame(self.controls, bg=HEADER_BG)
-        self.brief_group.pack(side="left", padx=(0, 16))
-        self.brief_caption = tk.Label(
-            self.brief_group,
-            text="Briefing",
-            bg=HEADER_BG,
-            fg=HEADER_MUTED,
-            font=("Sans", 13, "bold"),
-        )
-        self.brief_caption.pack(anchor="w")
+        self.option_group = tk.Frame(self.controls, bg=HEADER_BG)
+        self.option_group.pack(side="left", padx=(0, 16))
         self.show_briefing = tk.BooleanVar(value=True)
-        self.briefing_check = tk.Checkbutton(
-            self.brief_group,
-            text="Show before start",
-            variable=self.show_briefing,
-            onvalue=True,
-            offvalue=False,
-            bg=HEADER_BG,
-            fg=HEADER_FG,
-            activebackground=HEADER_BG,
-            activeforeground=HEADER_FG,
-            selectcolor="#ffffff",
-            highlightthickness=0,
-            font=("Sans", 14, "bold"),
-            cursor="hand2",
-        )
-        self.briefing_check.pack(anchor="w", pady=(6, 0))
-
-        self.record_group = tk.Frame(self.controls, bg=HEADER_BG)
-        self.record_group.pack(side="left", padx=(0, 16))
-        self.record_caption = tk.Label(
-            self.record_group,
-            text="Record data",
-            bg=HEADER_BG,
-            fg=HEADER_MUTED,
-            font=("Sans", 13, "bold"),
-        )
-        self.record_caption.pack(anchor="w")
         self.record_data = tk.BooleanVar(value=False)
-        self.record_check = tk.Checkbutton(
-            self.record_group,
-            text="Save episode + video",
-            variable=self.record_data,
-            onvalue=True,
-            offvalue=False,
-            bg=HEADER_BG,
-            fg=HEADER_FG,
-            activebackground=HEADER_BG,
-            activeforeground=HEADER_FG,
-            selectcolor="#ffffff",
-            highlightthickness=0,
-            font=("Sans", 14, "bold"),
-            cursor="hand2",
+        self.save_video = tk.BooleanVar(value=False)
+        self.briefing_check = self._header_tick(
+            self.option_group, "Briefing", self.show_briefing
         )
-        self.record_check.pack(anchor="w", pady=(6, 0))
+        self.record_check = self._header_tick(
+            self.option_group, "Record data", self.record_data
+        )
+        self.video_check = self._header_tick(
+            self.option_group, "Save video", self.save_video
+        )
 
         self.seed_group = tk.Frame(self.controls, bg=HEADER_BG)
         self.seed_group.pack(side="left", padx=(0, 18))
@@ -698,7 +657,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.set("robot")
         self.control.pack(pady=(4, 0))
         self._style_control_menu(("Sans", 13, "bold"))
-        self._control_groups = (self.brief_group, self.record_group, self.seed_group, self.control_group)
+        self._control_groups = (self.option_group, self.seed_group, self.control_group)
 
         self.status = tk.Label(
             self,
@@ -758,6 +717,44 @@ class InteractiveTaskLauncher(tk.Tk):
             self.after_cancel(self._ui_scale_job)
         self._ui_scale_job = self.after(80, self._apply_ui_scale)
 
+    def _header_tick(self, parent, text, variable):
+        """Square checkbox used for Briefing / Record data / Save video."""
+        btn = tk.Checkbutton(
+            parent,
+            text=text,
+            variable=variable,
+            onvalue=True,
+            offvalue=False,
+            bg=HEADER_BG,
+            fg=HEADER_FG,
+            activebackground=HEADER_BG,
+            activeforeground=HEADER_FG,
+            selectcolor="#ffffff",
+            highlightthickness=0,
+            bd=0,
+            indicatoron=True,
+            font=("Sans", 14, "bold"),
+            cursor="hand2",
+            anchor="w",
+        )
+        btn.pack(anchor="w")
+        return btn
+
+    def _set_option_checks(self, state: str) -> None:
+        for widget in (self.briefing_check, self.record_check, self.video_check):
+            widget.configure(state=state)
+
+    def _capture_run_note(self) -> str:
+        data = bool(self.record_data.get())
+        video = bool(self.save_video.get())
+        if data and video:
+            return " Recording data and head-camera video after the viewer closes."
+        if data:
+            return " Recording data after the viewer closes."
+        if video:
+            return " Saving head-camera video after the viewer closes."
+        return ""
+
     def _apply_ui_scale(self):
         self._ui_scale_job = None
         if getattr(self, "title_label", None) is None:
@@ -778,10 +775,9 @@ class InteractiveTaskLauncher(tk.Tk):
         self.header.pack_configure(padx=self._px(24, s), pady=(self._px(12, s), self._px(12, s)))
         self.title_label.configure(font=self._scaled_font(34, "bold", s))
         self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
-        self.brief_caption.configure(font=self._scaled_font(13, "bold", s))
         self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
-        self.record_caption.configure(font=self._scaled_font(13, "bold", s))
         self.record_check.configure(font=self._scaled_font(14, "bold", s))
+        self.video_check.configure(font=self._scaled_font(14, "bold", s))
         self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
         self.control_caption.configure(font=self._scaled_font(13, "bold", s))
         self.seed_entry.configure(font=self._scaled_font(13, "bold", s))
@@ -913,14 +909,14 @@ class InteractiveTaskLauncher(tk.Tk):
             )
 
     def _controls_natural_width(self, scale: float) -> int:
-        pads = (self._px(16, scale), self._px(16, scale), self._px(18, scale), self._px(14, scale))
+        pads = (self._px(16, scale), self._px(18, scale), self._px(14, scale))
         return sum(
             group.winfo_reqwidth() + pad
             for group, pad in zip(self._control_groups, pads)
         )
 
     def _pack_control_groups(self, *, wrap: bool, scale: float) -> None:
-        pads = (self._px(16, scale), self._px(16, scale), self._px(18, scale), self._px(14, scale))
+        pads = (self._px(16, scale), self._px(18, scale), self._px(14, scale))
         for group in self._control_groups:
             group.pack_forget()
         if wrap:
@@ -1458,8 +1454,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self._mark_running_buttons()
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
-        self.briefing_check.configure(state="disabled")
-        self.record_check.configure(state="disabled")
+        self._set_option_checks("disabled")
         self.tutorial_buttons[index].configure(
             text="Stop", bg="#b06a20", activebackground="#d0842b"
         )
@@ -1467,19 +1462,22 @@ class InteractiveTaskLauncher(tk.Tk):
             f"Running Tutorial / {label} with seed {seed}. "
             "Close its viewer or press Stop."
         )
-        if bool(self.record_data.get()):
-            run_text = f"{run_text} Recording data (cameras render after the viewer closes)."
+        run_text = f"{run_text}{self._capture_run_note()}"
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
 
     def _apply_record_launch(self, child_env: dict, command: list[str]) -> None:
-        """Pass the GUI Record data option through to the interactive child."""
-        if not bool(self.record_data.get()):
-            return
-        child_env["ROBODYNA_RECORD_DATA"] = "1"
-        child_env["ROBODYNA_RECORD_CONFIG"] = "demo_dynamic"
-        command.append("--record-data")
+        """Pass GUI Record data / Save video options through to the interactive child."""
+        want_data = bool(self.record_data.get())
+        want_video = bool(self.save_video.get())
+        child_env["ROBODYNA_SAVE_VIDEO"] = "1" if want_video else "0"
+        if want_data:
+            child_env["ROBODYNA_RECORD_DATA"] = "1"
+            child_env["ROBODYNA_RECORD_CONFIG"] = "demo_dynamic"
+            command.append("--record-data")
+        elif want_video:
+            child_env["ROBODYNA_RECORD_CONFIG"] = "demo_dynamic"
 
     def _write_temporary_config(self, task: str, scenario: str) -> str:
         config = build_scenario_config(task, scenario)
@@ -1584,8 +1582,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self._mark_running_buttons()
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
-        self.briefing_check.configure(state="disabled")
-        self.record_check.configure(state="disabled")
+        self._set_option_checks("disabled")
         active_button = self.task_buttons[index][SCENARIOS.index(scenario)]
         active_button.configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
         desc = condition_description(task, scenario)
@@ -1595,8 +1592,7 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         if desc:
             run_text = f"{run_text}  ({desc})"
-        if bool(self.record_data.get()):
-            run_text = f"{run_text} Recording data (cameras render after the viewer closes)."
+        run_text = f"{run_text}{self._capture_run_note()}"
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -1670,8 +1666,7 @@ class InteractiveTaskLauncher(tk.Tk):
     def _reset_task_buttons(self):
         self.control.configure(state="readonly")
         self.seed_entry.configure(state="normal")
-        self.briefing_check.configure(state="normal")
-        self.record_check.configure(state="normal")
+        self._set_option_checks("normal")
         for row in self.task_buttons:
             for scenario, button in zip(SCENARIOS, row):
                 button.configure(
