@@ -463,7 +463,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self._ui_scale_job: str | None = None
         self._preview_width = self.IMAGE_SIZE[0]
         self._ui_scale = 1.0
-        self._header_narrow: bool | None = None
+        self._header_layout_key: tuple | None = None
         self.tutorial_source: Image.Image | None = None
         self.tutorial_photo: ImageTk.PhotoImage | None = None
         self.tutorial_preview_labels: list[tk.Label] = []
@@ -509,13 +509,31 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         self.header.pack(fill="x", padx=24, pady=(12, 12))
 
-        self.heading = tk.Frame(self.header, bg=HEADER_BG)
+        # Title + Exit live in the top row so Exit is packed first and never clipped.
+        self.header_top = tk.Frame(self.header, bg=HEADER_BG)
+        self.header_top.pack(fill="x")
+        self.exit_button = RoundedButton(
+            self.header_top,
+            text="Exit",
+            command=self.exit_app,
+            bg="#e34a33",
+            activebackground="#eb6854",
+            font=("Sans", 17, "bold"),
+            width=150,
+            height=76,
+            radius=28,
+        )
+        self.exit_button.pack(side="right", padx=(8, 22), pady=16)
+
+        self.heading = tk.Frame(self.header_top, bg=HEADER_BG)
         self.heading.pack(side="left", padx=24, pady=18)
         self.title_label = tk.Label(
             self.heading,
             text="Base Tasks",
             bg=HEADER_BG,
             fg=HEADER_FG,
+            anchor="w",
+            justify="left",
             font=("Sans", 34, "bold"),
         )
         self.title_label.pack(anchor="w")
@@ -524,17 +542,21 @@ class InteractiveTaskLauncher(tk.Tk):
             text="Choose a tutorial part or a task and one of its four scenario variants.",
             bg=HEADER_BG,
             fg=HEADER_MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=720,
             font=("Sans", 14),
         )
         self.subtitle_label.pack(anchor="w", pady=(3, 0))
 
+        # Master is header so this can sit on the title row or wrap onto a full-width row.
         self.controls = tk.Frame(self.header, bg=HEADER_BG)
-        self.controls.pack(side="right", padx=22, pady=16)
+        self.controls.pack(in_=self.header_top, side="right", padx=22, pady=16)
 
-        brief_group = tk.Frame(self.controls, bg=HEADER_BG)
-        brief_group.pack(side="left", padx=(0, 16))
+        self.brief_group = tk.Frame(self.controls, bg=HEADER_BG)
+        self.brief_group.pack(side="left", padx=(0, 16))
         self.brief_caption = tk.Label(
-            brief_group,
+            self.brief_group,
             text="Briefing",
             bg=HEADER_BG,
             fg=HEADER_MUTED,
@@ -543,7 +565,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.brief_caption.pack(anchor="w")
         self.show_briefing = tk.BooleanVar(value=True)
         self.briefing_check = tk.Checkbutton(
-            brief_group,
+            self.brief_group,
             text="Show before start",
             variable=self.show_briefing,
             onvalue=True,
@@ -559,10 +581,38 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         self.briefing_check.pack(anchor="w", pady=(6, 0))
 
-        seed_group = tk.Frame(self.controls, bg=HEADER_BG)
-        seed_group.pack(side="left", padx=(0, 18))
+        self.record_group = tk.Frame(self.controls, bg=HEADER_BG)
+        self.record_group.pack(side="left", padx=(0, 16))
+        self.record_caption = tk.Label(
+            self.record_group,
+            text="Record data",
+            bg=HEADER_BG,
+            fg=HEADER_MUTED,
+            font=("Sans", 13, "bold"),
+        )
+        self.record_caption.pack(anchor="w")
+        self.record_data = tk.BooleanVar(value=False)
+        self.record_check = tk.Checkbutton(
+            self.record_group,
+            text="Save this episode",
+            variable=self.record_data,
+            onvalue=True,
+            offvalue=False,
+            bg=HEADER_BG,
+            fg=HEADER_FG,
+            activebackground=HEADER_BG,
+            activeforeground=HEADER_FG,
+            selectcolor="#ffffff",
+            highlightthickness=0,
+            font=("Sans", 14, "bold"),
+            cursor="hand2",
+        )
+        self.record_check.pack(anchor="w", pady=(6, 0))
+
+        self.seed_group = tk.Frame(self.controls, bg=HEADER_BG)
+        self.seed_group.pack(side="left", padx=(0, 18))
         self.seed_caption = tk.Label(
-            seed_group,
+            self.seed_group,
             text="Seed (blank = random)",
             bg=HEADER_BG,
             fg=HEADER_MUTED,
@@ -570,7 +620,7 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         self.seed_caption.pack(anchor="w")
         self.seed_entry = tk.Entry(
-            seed_group,
+            self.seed_group,
             width=16,
             font=("Sans", 13, "bold"),
             bg="#f7fafc",
@@ -580,10 +630,10 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         self.seed_entry.pack(ipady=5, pady=(4, 0))
 
-        control_group = tk.Frame(self.controls, bg=HEADER_BG)
-        control_group.pack(side="left", padx=(0, 14))
+        self.control_group = tk.Frame(self.controls, bg=HEADER_BG)
+        self.control_group.pack(side="left", padx=(0, 14))
         self.control_caption = tk.Label(
-            control_group,
+            self.control_group,
             text="Control",
             bg=HEADER_BG,
             fg=HEADER_MUTED,
@@ -591,7 +641,7 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         self.control_caption.pack(anchor="w")
         self.control = ttk.Combobox(
-            control_group,
+            self.control_group,
             values=("keyboard", "robot"),
             state="readonly",
             width=8,
@@ -601,19 +651,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.set("robot")
         self.control.pack(pady=(4, 0))
         self._style_control_menu(("Sans", 13, "bold"))
-
-        self.exit_button = RoundedButton(
-            self.controls,
-            text="Exit",
-            command=self.exit_app,
-            bg="#e34a33",
-            activebackground="#eb6854",
-            font=("Sans", 17, "bold"),
-            width=150,
-            height=76,
-            radius=28,
-        )
-        self.exit_button.pack(side="left", pady=(18, 0))
+        self._control_groups = (self.brief_group, self.record_group, self.seed_group, self.control_group)
 
         self.status = tk.Label(
             self,
@@ -678,15 +716,12 @@ class InteractiveTaskLauncher(tk.Tk):
         if getattr(self, "title_label", None) is None:
             return
         scale = self._compute_ui_scale()
-        narrow = self.winfo_width() < 1200 or scale < 0.78
         if abs(scale - self._ui_scale) < 0.02:
             # Width-only change near the same scale: refresh wrap + header stack.
             self.status.configure(
                 wraplength=max(360, self.winfo_width() - self._px(68, scale))
             )
-            if narrow != getattr(self, "_header_narrow", None):
-                self._header_narrow = narrow
-                self._relayout_header(scale)
+            self._relayout_header(scale)
             return
         self._ui_scale = scale
         s = scale
@@ -698,6 +733,8 @@ class InteractiveTaskLauncher(tk.Tk):
         self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
         self.brief_caption.configure(font=self._scaled_font(13, "bold", s))
         self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
+        self.record_caption.configure(font=self._scaled_font(13, "bold", s))
+        self.record_check.configure(font=self._scaled_font(14, "bold", s))
         self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
         self.control_caption.configure(font=self._scaled_font(13, "bold", s))
         self.seed_entry.configure(font=self._scaled_font(13, "bold", s))
@@ -719,7 +756,6 @@ class InteractiveTaskLauncher(tk.Tk):
             height=self._px(76, s),
             radius=self._px(28, s),
         )
-        self.exit_button.pack_configure(pady=(self._px(18, s), 0))
         self.status.configure(
             font=self._scaled_font(19, scale=s),
             wraplength=max(360, self.winfo_width() - self._px(68, s)),
@@ -735,7 +771,10 @@ class InteractiveTaskLauncher(tk.Tk):
                 pady=idx_pady,
             )
         for label in self.card_title_labels:
-            label.configure(font=self._scaled_font(27, "bold", s))
+            label.configure(
+                font=self._scaled_font(27, "bold", s),
+                wraplength=max(160, self.winfo_width() - self._px(280, s)),
+            )
         for label in self.card_badge_labels:
             label.configure(font=self._scaled_font(12, "bold", s))
 
@@ -748,7 +787,6 @@ class InteractiveTaskLauncher(tk.Tk):
         for button in self.tutorial_buttons:
             button.configure(font=btn_font, height=btn_h, radius=btn_radius)
 
-        self._header_narrow = narrow
         self._relayout_header(s)
 
     @staticmethod
@@ -756,21 +794,94 @@ class InteractiveTaskLauncher(tk.Tk):
         return max(1, int(round(value * scale)))
 
     def _relayout_header(self, scale: float):
-        """Keep header controls on-screen by stacking when the window is narrow."""
-        narrow = self.winfo_width() < 1200 or scale < 0.78
+        """Keep Exit visible and reflow title/controls as the window width changes."""
+        if getattr(self, "_relayouting", False):
+            return
+        self._relayouting = True
+        try:
+            self._relayout_header_body(scale)
+        finally:
+            self._relayouting = False
+
+    def _relayout_header_body(self, scale: float):
+        header_w = int(self.header.winfo_width())
+        if header_w <= 1:
+            header_w = max(1, int(self.winfo_width()) - 2 * self._px(24, scale))
+        pad_exit = self._px(16, scale)
+        pad_head = self._px(24, scale)
+        pad_ctrl = self._px(22, scale)
+        gap = self._px(16, scale)
+        self.update_idletasks()
+        exit_w = self.exit_button.winfo_reqwidth() + pad_exit + self._px(8, scale)
+        avail = max(self._px(160, scale), header_w - exit_w)
+        controls_w = self._controls_natural_width(scale)
+        min_heading = self._px(220, scale)
+        stacked = controls_w + gap + min_heading > avail
+        wrap_groups = stacked and controls_w > avail - self._px(12, scale)
+        if stacked:
+            wrap = max(self._px(160, scale), avail - 2 * pad_head)
+        else:
+            wrap = max(self._px(160, scale), avail - controls_w - gap - 2 * pad_head)
+        wrap -= wrap % 8
+        key = (stacked, wrap_groups, wrap, round(scale, 2))
+        if key == self._header_layout_key:
+            return
+        self._header_layout_key = key
+
+        self.title_label.configure(wraplength=wrap)
+        self.subtitle_label.configure(wraplength=wrap)
         self.heading.pack_forget()
         self.controls.pack_forget()
-        if narrow:
-            self.heading.pack(side="top", anchor="w", padx=self._px(24, scale), pady=(self._px(14, scale), 0))
+        self.exit_button.pack_forget()
+
+        self.exit_button.pack(
+            side="right",
+            padx=(self._px(8, scale), pad_exit),
+            pady=self._px(16, scale),
+        )
+        self._pack_control_groups(wrap=wrap_groups, scale=scale)
+        if stacked:
+            self.heading.pack(
+                side="left",
+                fill="x",
+                expand=True,
+                padx=pad_head,
+                pady=(self._px(14, scale), self._px(10, scale)),
+            )
             self.controls.pack(
+                in_=self.header,
                 side="top",
                 anchor="w",
-                padx=self._px(22, scale),
-                pady=(self._px(8, scale), self._px(14, scale)),
+                fill="x",
+                padx=pad_ctrl,
+                pady=(0, self._px(14, scale)),
             )
         else:
-            self.heading.pack(side="left", padx=self._px(24, scale), pady=self._px(18, scale))
-            self.controls.pack(side="right", padx=self._px(22, scale), pady=self._px(16, scale))
+            self.heading.pack(side="left", padx=pad_head, pady=self._px(18, scale))
+            self.controls.pack(
+                in_=self.header_top,
+                side="right",
+                padx=pad_ctrl,
+                pady=self._px(16, scale),
+            )
+
+    def _controls_natural_width(self, scale: float) -> int:
+        pads = (self._px(16, scale), self._px(16, scale), self._px(18, scale), self._px(14, scale))
+        return sum(
+            group.winfo_reqwidth() + pad
+            for group, pad in zip(self._control_groups, pads)
+        )
+
+    def _pack_control_groups(self, *, wrap: bool, scale: float) -> None:
+        pads = (self._px(16, scale), self._px(16, scale), self._px(18, scale), self._px(14, scale))
+        for group in self._control_groups:
+            group.pack_forget()
+        if wrap:
+            for group in self._control_groups:
+                group.pack(side="top", anchor="w", pady=(0, self._px(6, scale)))
+        else:
+            for group, pad in zip(self._control_groups, pads):
+                group.pack(side="left", padx=(0, pad))
 
     def _update_scroll_region(self, _event=None):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
@@ -987,7 +1098,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
                 font=("Sans", 16, "bold"),
-                width=220,
+                width=80,
                 height=70,
                 radius=26,
                 on_enter=lambda h=hint, l=label: self._show_tutorial_hint(l, h),
@@ -1084,7 +1195,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
                 font=("Sans", 16, "bold"),
-                width=220,
+                width=80,
                 height=70,
                 radius=26,
                 on_enter=lambda t=task, s=scenario, l=label: self._show_condition_hint(t, s, l),
@@ -1257,6 +1368,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 "--part",
                 str(index + 1),
             ]
+            self._apply_record_launch(child_env, command)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1271,6 +1383,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.briefing_check.configure(state="disabled")
+        self.record_check.configure(state="disabled")
         self.tutorial_buttons[index].configure(
             text="Stop", bg="#b06a20", activebackground="#d0842b"
         )
@@ -1278,6 +1391,8 @@ class InteractiveTaskLauncher(tk.Tk):
             f"Running Tutorial / {label} with seed {seed}. "
             "Close its viewer or press Stop."
         )
+        if bool(self.record_data.get()):
+            run_text = f"{run_text} Recording collect_data episode."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -1358,6 +1473,7 @@ class InteractiveTaskLauncher(tk.Tk):
             # understands it (pack_fruits); unknown flags are avoided below.
             if task == "pack_fruits":
                 command.extend(["--scenario", scenario])
+            self._apply_record_launch(child_env, command)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1373,6 +1489,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.briefing_check.configure(state="disabled")
+        self.record_check.configure(state="disabled")
         active_button = self.task_buttons[index][SCENARIOS.index(scenario)]
         active_button.configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
         desc = condition_description(task, scenario)
@@ -1382,6 +1499,8 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         if desc:
             run_text = f"{run_text}  ({desc})"
+        if bool(self.record_data.get()):
+            run_text = f"{run_text} Recording collect_data episode."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -1394,6 +1513,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 self.active_selection = None
                 payload = self._read_result_payload()
                 reason = None
+                recorded = record_status_note(payload)
                 if isinstance(payload, dict):
                     detail = payload.get("detail")
                     if isinstance(detail, str) and detail.strip():
@@ -1406,7 +1526,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 # Match household_task_gui: 0=SUCCESS, 10=FAILURE, 2=closed early.
                 if code == 0:
                     self._set_status(
-                        "Task result: SUCCESS. Select another scenario below.",
+                        f"Task result: SUCCESS.{recorded} Select another scenario below.",
                         "#70d6a2",
                         sticky=True,
                     )
@@ -1415,19 +1535,19 @@ class InteractiveTaskLauncher(tk.Tk):
                     if reason:
                         msg = f"{msg} ({reason})"
                     self._set_status(
-                        f"{msg}. Select another scenario below.",
+                        f"{msg}.{recorded} Select another scenario below.",
                         "#e6a15c",
                         sticky=True,
                     )
                 elif code == 2:
                     self._set_status(
-                        "Task closed before a result was reached.",
+                        f"Task closed before a result was reached.{recorded}",
                         TEXT_SECONDARY,
                         sticky=True,
                     )
                 else:
                     self._set_status(
-                        f"Task result: ERROR (exit status {code}). Check the terminal.",
+                        f"Task result: ERROR (exit status {code}). Check the terminal.{recorded}",
                         "#e6a15c",
                         sticky=True,
                     )
@@ -1444,6 +1564,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="readonly")
         self.seed_entry.configure(state="normal")
         self.briefing_check.configure(state="normal")
+        self.record_check.configure(state="normal")
         for row in self.task_buttons:
             for scenario, button in zip(SCENARIOS, row):
                 button.configure(
