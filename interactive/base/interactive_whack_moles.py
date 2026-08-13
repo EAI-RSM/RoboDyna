@@ -46,7 +46,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  1 / 2 / 3         select left, right, or both arms
+  1 / 2 / 3         select left, right, or both arms (selected gripper turns green)
   Space             open / close selected gripper only (close on mallet handle to latch)
   Arrows / E / Q    teleop; lower the mallet head onto rising moles to strike
 """

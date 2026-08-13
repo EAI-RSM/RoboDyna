@@ -160,7 +160,7 @@ def main():
             "Goal: pinch the GOOD (red-path) apple near peak red; drop in the basket.",
             "      Do NOT pick the spoiled/yellow apple (Opt1).",
             "Arms keep home XYZ with front pre-grasp orientation (gripper level).",
-            "1 / 2 / 3 — select left / right / both arms",
+            "1 / 2 / 3 — select left / right / both arms (selected gripper turns green)",
             "Space — close to pinch / open to release into the basket",
             "Arrows / E / Q — teleop selected arm(s); orientation stays level",
             "V — cycle view: head_camera ↔ gripper(s)",

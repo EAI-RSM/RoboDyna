@@ -231,7 +231,7 @@ Arrow keys — move selected arm(s) in world XY
 E / Q — raise / lower selected arm(s)
 F / G — tip gripper left / right (world Y)
 R / T — yaw gripper CCW / CW (world Z)
-1 / 2 / 3 — select left / right / both arms
+1 / 2 / 3 — select left / right / both arms (selected gripper turns green)
 O — return selected arm(s) to original position
 Space — open / close selected gripper(s)
 V — cycle view: head_camera ↔ gripper(s)
@@ -473,6 +473,7 @@ def _shared_teleop_is_generic(line: str) -> bool:
         "tip gripper",
         "yaw gripper",
         "select left",
+        "turns green",
         "return selected",
         "original position",
         "move in z",

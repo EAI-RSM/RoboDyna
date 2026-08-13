@@ -103,7 +103,7 @@ def main():
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: place the tall block on the belt BEFORE the red place line;",
             "      stay in the clear lane if a blocker is present.",
-            "1 / 2 / 3 — select left / right / both arms (robot mode)",
+            "1 / 2 / 3 — select left / right / both arms (robot mode; selected gripper turns green)",
             "Space — close to grasp / open to release (drop onto the belt)",
             "Arrows / E / Q — teleop the selected arm(s)",
             "V — cycle view: head_camera ↔ gripper(s)",

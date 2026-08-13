@@ -183,7 +183,7 @@ def print_banner(title: str, lines: list[str]):
         insert_at = 1 if lines else 0
         lines[insert_at:insert_at] = [
             "Arrows — move selected arm(s) in XY | E/Q — move in Z",
-            "1 / 2 / 3 — select left / right / both arms",
+            "1 / 2 / 3 — select left / right / both arms (selected gripper turns green)",
             "O — return selected arm(s) to original position",
         ]
     lines = _ensure_view_help_lines(lines)
@@ -1149,7 +1149,8 @@ class UniversalRobotControls:
     via ``ViewerViewToggle`` so it also works when teleop is not attached.
 
     No arm is highlighted at start — press 1 / 2 / 3 to activate left / right /
-    both (until then both grippers stay gray and teleop / Space do nothing).
+    both. The selected gripper turns green; until then both stay gray and
+    teleop / Space do nothing.
     Task scripts must not pre-seed ``_interactive_selected_arms``; any leftover
     value is cleared here so every interactive starts unselected.
     """
@@ -1898,7 +1899,7 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
             "  E / Q             raise / lower selected arm(s)\n"
             "  F / G             tip gripper left / right (world Y)\n"
             "  R / T             yaw gripper CCW / CW (world Z)\n"
-            "  1 / 2 / 3         select left / right / both arms\n"
+            "  1 / 2 / 3         select left / right / both arms (selected gripper turns green)\n"
             "  O                 return selected arm(s) to original position\n"
         )
         if not _line_documents_key(task_lines, "Space"):

@@ -54,7 +54,7 @@ CONTROLS_KEYBOARD = """
 
 CONTROLS_ROBOT = """
   Space             open / close selected gripper to grasp or release the cup
-  1 / 2 / 3         select left / right / both arms
+  1 / 2 / 3         select left / right / both arms (selected gripper turns green)
   Arrows / E / Q    teleop the selected arm(s)
   When the cup leaves the fingers, landing is scored after a short settle.
 """

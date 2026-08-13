@@ -293,7 +293,7 @@ def main():
             + (f"  |  scenario: {args.scenario}" if args.scenario else ""),
             goal,
             "Never pack black distractors (Opt2).",
-            "1 / 2 / 3 — select left / right / both arms",
+            "1 / 2 / 3 — select left / right / both arms (selected gripper turns green)",
             "Arrows / E / Q — teleop the selected arm(s)",
             "Space — close to pinch; apple keeps moving until a real grasp",
             "V — cycle view: head_camera ↔ gripper(s)",

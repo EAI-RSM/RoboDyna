@@ -131,7 +131,7 @@ def main():
             f"config: {args.config}  |  seed: {args.seed}",
             "Goal: drop the ball into an open wagon as it passes under the near rail.",
             "Opt 1 (target wagon): ONLY the RED wagon counts — gray ones are distractors.",
-            "1 / 2 / 3 — select left / right / both arms (robot mode)",
+            "1 / 2 / 3 — select left / right / both arms (robot mode; selected gripper turns green)",
             "Space — open / close selected gripper(s) only",
             "Arrows / E / Q — teleop the selected arm(s)",
             "V — cycle view: head_camera ↔ gripper(s)",
