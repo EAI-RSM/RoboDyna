@@ -34,6 +34,7 @@ from _task_briefing import (  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent / "base"
+TUTORIAL_DIR = Path(__file__).resolve().parent / "Tutorial"
 CONFIG_DIR = ROOT / "task_config"
 DEMO_DIR = ROOT / "final_task_demos"
 README_PATH = ROOT / "README.md"
@@ -64,6 +65,13 @@ TASKS = (
     ("Drop Ball Hole", "drop_ball_hole"),
     ("Sort Apples Belt", "sort_apples_belt"),
     ("Whack Moles", "whack_moles"),
+)
+
+TUTORIAL_PARTS = (
+    ("Part 1", "tutorial_part1", "Look around the empty table."),
+    ("Part 2", "tutorial_part2", "Move the arms."),
+    ("Part 3", "tutorial_part3", "Open and close the gripper."),
+    ("Part 4", "tutorial_part4", "Practice freely."),
 )
 
 SCENARIOS = ("default", "opt1", "opt2", "opt1+2")
@@ -440,7 +448,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
 
         self.child: subprocess.Popen | None = None
-        self.active_selection: tuple[int, str] | None = None
+        self.active_selection: tuple | None = None
         self.temporary_config: Path | None = None
         self.result_file: Path | None = None
         # Per task: one source/photo/label per scenario (Default / Opt1 / Opt2 / Opt1+2).
@@ -456,8 +464,13 @@ class InteractiveTaskLauncher(tk.Tk):
         self._preview_width = self.IMAGE_SIZE[0]
         self._ui_scale = 1.0
         self._header_narrow: bool | None = None
+        self.tutorial_source: Image.Image | None = None
+        self.tutorial_photo: ImageTk.PhotoImage | None = None
+        self.tutorial_preview_labels: list[tk.Label] = []
+        self.tutorial_buttons: list[RoundedButton] = []
         self._idle_status = (
-            f"{len(TASKS)} tasks available  |  Hover a scenario key for its README description."
+            f"Tutorial (4 parts)  ·  {len(TASKS)} tasks  |  "
+            "Hover a scenario key for its README description."
         )
         self._idle_status_fg = HEADER_MUTED
 
@@ -508,7 +521,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.title_label.pack(anchor="w")
         self.subtitle_label = tk.Label(
             self.heading,
-            text="Choose a task and one of its four scenario variants.",
+            text="Choose a tutorial part or a task and one of its four scenario variants.",
             bg=HEADER_BG,
             fg=HEADER_MUTED,
             font=("Sans", 14),
@@ -629,6 +642,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.canvas.bind_all("<Button-4>", lambda _event: self.canvas.yview_scroll(-3, "units"))
         self.canvas.bind_all("<Button-5>", lambda _event: self.canvas.yview_scroll(3, "units"))
 
+        self._add_tutorial_section()
         for index, (label, task) in enumerate(TASKS):
             self._add_task_card(index, label, task)
 
@@ -731,6 +745,8 @@ class InteractiveTaskLauncher(tk.Tk):
         for row in self.task_buttons:
             for button in row:
                 button.configure(font=btn_font, height=btn_h, radius=btn_radius)
+        for button in self.tutorial_buttons:
+            button.configure(font=btn_font, height=btn_h, radius=btn_radius)
 
         self._header_narrow = narrow
         self._relayout_header(s)
@@ -798,6 +814,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 else:
                     label.configure(image=photo, text="", width=0, height=0)
             self.preview_photos[task_index] = photos
+        self._refresh_tutorial_previews(cell_width)
 
     def _cuboidwheel(self, event):
         if event.delta:
@@ -854,6 +871,135 @@ class InteractiveTaskLauncher(tk.Tk):
         height = max(1, int(round(width / aspect)))
         image = source.resize((width, height), Image.Resampling.LANCZOS)
         return ImageTk.PhotoImage(image)
+
+    def _tutorial_snapshot_path(self) -> Path | None:
+        candidates = (
+            TUTORIAL_DIR / "scene_snapshot.png",
+            DEMO_DIR / "tutorial_empty" / "scene_snapshot.png",
+        )
+        for path in candidates:
+            if path.exists():
+                return path
+        return None
+
+    def _load_tutorial_source(self) -> Image.Image | None:
+        path = self._tutorial_snapshot_path()
+        if path is None:
+            return None
+        try:
+            with Image.open(path) as source:
+                source.seek(0)
+                return source.convert("RGB")
+        except Exception:
+            return None
+
+    def _refresh_tutorial_previews(self, width: int | None = None) -> None:
+        cell_width = int(width if width is not None else self._cell_preview_width(self._preview_width))
+        photo = self._render_preview(self.tutorial_source, cell_width)
+        self.tutorial_photo = photo
+        for label in self.tutorial_preview_labels:
+            if photo is None:
+                label.configure(
+                    image="",
+                    text="No preview",
+                    width=max(8, cell_width // 10),
+                    height=max(4, (cell_width * 3) // (8 * 16)),
+                )
+            else:
+                label.configure(image=photo, text="", width=0, height=0)
+
+    def _add_tutorial_section(self):
+        """Same four-column card as other base tasks; index 00."""
+        card = tk.Frame(
+            self.page,
+            bg=CARD_BG,
+            highlightbackground=CARD_BORDER,
+            highlightthickness=2,
+        )
+        card.pack(fill="x", padx=self.CARD_PAD, pady=12)
+
+        card_header = tk.Frame(card, bg=CARD_BG)
+        card_header.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(14, 8))
+        index_label = tk.Label(
+            card_header,
+            text="00",
+            bg=PLAY_BLUE,
+            fg="white",
+            font=("Sans", 17, "bold"),
+            padx=13,
+            pady=6,
+        )
+        index_label.pack(side="left", padx=(0, 14))
+        title_label = tk.Label(
+            card_header,
+            text="Tutorial",
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+            anchor="w",
+            font=("Sans", 27, "bold"),
+        )
+        title_label.pack(side="left", fill="x", expand=True)
+        badge_label = tk.Label(
+            card_header,
+            text="4 PARTS",
+            bg=CARD_BG,
+            fg="#7fb6dc",
+            font=("Sans", 12, "bold"),
+        )
+        badge_label.pack(side="right")
+        self.card_index_labels.append(index_label)
+        self.card_title_labels.append(title_label)
+        self.card_badge_labels.append(badge_label)
+
+        grid = tk.Frame(card, bg=CARD_BG)
+        grid.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(0, 16))
+        self.tutorial_source = self._load_tutorial_source()
+        cell_width = self._cell_preview_width(self._preview_width)
+        photo = self._render_preview(self.tutorial_source, cell_width)
+        self.tutorial_photo = photo
+
+        for index, (label, _script, hint) in enumerate(TUTORIAL_PARTS):
+            col = tk.Frame(grid, bg=CARD_BG)
+            col.pack(side="left", expand=True, fill="both", padx=6)
+
+            preview_label = tk.Label(
+                col,
+                image=photo,
+                text="No preview" if photo is None else "",
+                bg=CARD_BG,
+                fg=TEXT_SECONDARY,
+                font=("Sans", 12),
+                bd=0,
+                highlightthickness=0,
+            )
+            if photo is None:
+                preview_label.configure(
+                    width=max(8, cell_width // 10),
+                    height=max(4, (cell_width * 3) // (8 * 16)),
+                )
+            preview_label.pack(fill="x", pady=(0, 8))
+            self.tutorial_preview_labels.append(preview_label)
+
+            button = RoundedButton(
+                col,
+                text=label,
+                command=lambda i=index: self.play_or_stop_tutorial(i),
+                bg=PLAY_BLUE,
+                activebackground=PLAY_BLUE_ACTIVE,
+                font=("Sans", 16, "bold"),
+                width=220,
+                height=70,
+                radius=26,
+                on_enter=lambda h=hint, l=label: self._show_tutorial_hint(l, h),
+                on_leave=self._clear_condition_hint,
+            )
+            button.pack(fill="x")
+            self.tutorial_buttons.append(button)
+
+    def _show_tutorial_hint(self, label: str, hint: str):
+        if self.child is not None:
+            return
+        self.status.configure(text=f"Tutorial · {label}: {hint}", fg="#7fb6dc")
 
     def _add_task_card(self, index: int, label: str, task: str):
         card = tk.Frame(
@@ -989,6 +1135,110 @@ class InteractiveTaskLauncher(tk.Tk):
             return
         self._start_task(index, scenario)
 
+    def play_or_stop_tutorial(self, index: int):
+        if self.child is not None:
+            if self.active_selection == ("tutorial", index):
+                self._stop_task("Tutorial stopped. Select a part or task when ready.")
+            else:
+                self._set_status(
+                    "Stop the running session before starting another.",
+                    "#e6a15c",
+                    sticky=True,
+                )
+            return
+        self._start_tutorial(index)
+
+    def _mark_running_buttons(self):
+        """Disable every Play control except the active Stop button."""
+        for task_index, row in enumerate(self.task_buttons):
+            for button_scenario, button in zip(SCENARIOS, row):
+                is_active = self.active_selection == (task_index, button_scenario)
+                button.configure(state="normal" if is_active else "disabled")
+        for part_index, button in enumerate(self.tutorial_buttons):
+            is_active = self.active_selection == ("tutorial", part_index)
+            button.configure(state="normal" if is_active else "disabled")
+
+    def _start_tutorial(self, index: int):
+        label, script_stem, hint = TUTORIAL_PARTS[index]
+        script = TUTORIAL_DIR / f"{script_stem}.py"
+        if not script.exists():
+            messagebox.showerror("Tutorial unavailable", f"Missing launcher:\n{script}")
+            return
+        try:
+            seed = resolve_seed(self.seed_entry.get())
+        except ValueError as exc:
+            messagebox.showerror("Invalid seed", str(exc))
+            self.seed_entry.focus_set()
+            return
+
+        control_mode = str(self.control.get() or "robot")
+        if bool(self.show_briefing.get()):
+            briefing = build_briefing_text(
+                label=f"Tutorial · {label}",
+                task="tutorial_empty",
+                scenario_label=label,
+                scenario_desc=hint,
+                summary="Empty table with both arms. No task objects yet — practice looking around and moving the robots.",
+                control_mode=control_mode,
+                script_path=TUTORIAL_DIR / "_run.py",
+            )
+            briefing["instruction"] = (
+                "This is a tutorial sandbox: table, wall, and dual UR5 only. "
+                "Later parts will add objects and goals. Close the viewer or press Esc when done."
+            )
+            if not show_task_briefing(self, briefing):
+                self._set_status(
+                    "Briefing cancelled. Select a tutorial part when ready.",
+                    TEXT_SECONDARY,
+                    sticky=True,
+                )
+                return
+
+        try:
+            child_env = os.environ.copy()
+            child_env.setdefault(
+                "PYTHONWARNINGS",
+                "ignore::UserWarning,ignore::FutureWarning,ignore::DeprecationWarning",
+            )
+            self._prepare_result_file()
+            child_env[TASK_RESULT_ENV] = str(self.result_file)
+            command = [
+                sys.executable,
+                str(script),
+                "--config",
+                "demo_dynamic",
+                "--seed",
+                str(seed),
+                "--control",
+                control_mode,
+                "--part",
+                str(index + 1),
+            ]
+            self.child = subprocess.Popen(
+                command, cwd=ROOT, start_new_session=True, env=child_env
+            )
+        except Exception as exc:
+            self._remove_result_file()
+            messagebox.showerror("Could not start tutorial", str(exc))
+            self.child = None
+            return
+
+        self.active_selection = ("tutorial", index)
+        self._mark_running_buttons()
+        self.control.configure(state="disabled")
+        self.seed_entry.configure(state="disabled")
+        self.briefing_check.configure(state="disabled")
+        self.tutorial_buttons[index].configure(
+            text="Stop", bg="#b06a20", activebackground="#d0842b"
+        )
+        run_text = (
+            f"Running Tutorial / {label} with seed {seed}. "
+            "Close its viewer or press Stop."
+        )
+        self._run_status_base = run_text
+        self._shown_episode_condition = None
+        self._set_status(run_text, "#70d6a2", sticky=True)
+
     def _write_temporary_config(self, task: str, scenario: str) -> str:
         config = build_scenario_config(task, scenario)
         handle = tempfile.NamedTemporaryFile(
@@ -1076,11 +1326,7 @@ class InteractiveTaskLauncher(tk.Tk):
             return
 
         self.active_selection = (index, scenario)
-        for task_index, row in enumerate(self.task_buttons):
-            for button_scenario, button in zip(SCENARIOS, row):
-                button.configure(
-                    state="normal" if (task_index, button_scenario) == self.active_selection else "disabled"
-                )
+        self._mark_running_buttons()
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.briefing_check.configure(state="disabled")
@@ -1163,6 +1409,13 @@ class InteractiveTaskLauncher(tk.Tk):
                     bg=PLAY_BLUE,
                     activebackground=PLAY_BLUE_ACTIVE,
                 )
+        for index, button in enumerate(self.tutorial_buttons):
+            button.configure(
+                state="normal",
+                text=TUTORIAL_PARTS[index][0],
+                bg=PLAY_BLUE,
+                activebackground=PLAY_BLUE_ACTIVE,
+            )
 
     def _remove_temporary_config(self):
         path = self.temporary_config
