@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tutorial part 1 — empty scene (placeholder)."""
+"""Tutorial part 1 — arm selection (1/2/3) then camera view (V)."""
 from __future__ import annotations
 
 import sys

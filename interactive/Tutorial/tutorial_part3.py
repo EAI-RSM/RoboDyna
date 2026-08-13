@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tutorial part 3 — empty scene (placeholder)."""
+"""Tutorial part 3 — grasp, hold-button, on/off switch, then push a box."""
 from __future__ import annotations
 
 import sys

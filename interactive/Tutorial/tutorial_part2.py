@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tutorial part 2 — empty scene (placeholder)."""
+"""Tutorial part 2 — base teleop controls (arrows, E/Q, R/T, F/G, Space)."""
 from __future__ import annotations
 
 import sys

@@ -68,9 +68,9 @@ TASKS = (
 )
 
 TUTORIAL_PARTS = (
-    ("Part 1", "tutorial_part1", "Look around the empty table."),
-    ("Part 2", "tutorial_part2", "Move the arms."),
-    ("Part 3", "tutorial_part3", "Open and close the gripper."),
+    ("Part 1", "tutorial_part1", "Select arms (1, 2, 3) then switch camera (V)."),
+    ("Part 2", "tutorial_part2", "Move with arrows, E/Q, R/T, F/G, then Space."),
+    ("Part 3", "tutorial_part3", "Grasp, hold-button, switch, then push a box."),
     ("Part 4", "tutorial_part4", "Practice freely."),
 )
 
@@ -1173,19 +1173,61 @@ class InteractiveTaskLauncher(tk.Tk):
 
         control_mode = str(self.control.get() or "robot")
         if bool(self.show_briefing.get()):
+            if index == 0:
+                summary = (
+                    "Empty table with both arms. Test arm selection (1 / 2 / 3), "
+                    "then press V to switch camera views."
+                )
+                instruction = (
+                    "Key figures appear at the top right of the viewer. "
+                    "Press 1, 2, and 3 to select left / right / both arms. "
+                    "When those are tested, the overlay switches to V — press V to cycle "
+                    "head and gripper views."
+                )
+            elif index == 1:
+                summary = (
+                    "Empty table with both arms. Practice the base teleop keys "
+                    "on the selected (green) arm."
+                )
+                instruction = (
+                    "The left arm starts selected. Key figures at the top right "
+                    "walk through: arrow keys (move), E/Q (height), R/T (rotate), "
+                    "F/G (tilt), then Space twice (open and close the gripper). "
+                    "Each key turns green after you press it."
+                )
+            elif index == 2:
+                summary = (
+                    "Four basic actions on the left side of the table, one at a time: "
+                    "pick up a cube, hold a spring button, toggle an on/off switch, "
+                    "then push a box to a green line."
+                )
+                instruction = (
+                    "The left arm starts selected. Key figures at the top right show "
+                    "which keys to use. (1) Grasp the orange cube — Space to close, "
+                    "E to lift. (2) Hold Q on the green button until it goes red, then "
+                    "lift off with E. (3) Press the switch ON (stays down, red) then "
+                    "press again to turn it OFF. (4) Close the gripper and push the "
+                    "blue box onto the green line."
+                )
+            else:
+                summary = (
+                    "Empty table with both arms. No task objects yet — practice "
+                    "looking around and moving the robots."
+                )
+                instruction = (
+                    "This is a tutorial sandbox: table, wall, and dual UR5 only. "
+                    "Later parts will add objects and goals. Close the viewer or press Esc when done."
+                )
             briefing = build_briefing_text(
                 label=f"Tutorial · {label}",
                 task="tutorial_empty",
                 scenario_label=label,
                 scenario_desc=hint,
-                summary="Empty table with both arms. No task objects yet — practice looking around and moving the robots.",
+                summary=summary,
                 control_mode=control_mode,
                 script_path=TUTORIAL_DIR / "_run.py",
             )
-            briefing["instruction"] = (
-                "This is a tutorial sandbox: table, wall, and dual UR5 only. "
-                "Later parts will add objects and goals. Close the viewer or press Esc when done."
-            )
+            briefing["instruction"] = instruction
             if not show_task_briefing(self, briefing):
                 self._set_status(
                     "Briefing cancelled. Select a tutorial part when ready.",

@@ -1679,7 +1679,7 @@ def terminal_hold_should_close(terminal_started_at: float | None) -> bool:
 
 
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
-                    overhead: bool = True, is_done=None):
+                    overhead: bool = True, is_done=None, extra_plugins=None):
     """Standard interactive loop: input → physics catch-up → render.
 
     Physics uses a fixed timestep catch-up so wall-clock motion speed stays
@@ -1694,6 +1694,8 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     backward compatibility.
     Starts on head_camera; press V to cycle head ↔ gripper/wrist view(s).
     ``overhead`` is accepted for API compat but ignored (top-down removed).
+    ``extra_plugins`` are appended after the stock ImGui panels are hidden, so
+    their HUD windows stay visible.
     """
     global _LAST_TASK_RESULT, _LAST_TASK_DETAIL, _LAST_EPISODE_CONDITION
     _LAST_TASK_RESULT = None
@@ -1705,6 +1707,17 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     print_episode_condition(env)
     views = make_viewer_view_toggle(env, viewer)
+    for plugin in extra_plugins or []:
+        if plugin is None:
+            continue
+        try:
+            plugin.init(viewer)
+        except Exception:
+            pass
+        try:
+            viewer.plugins.append(plugin)
+        except Exception:
+            pass
     step = 0
     terminal_started_at = None
     pacer = RealtimePhysicsPacer(env)
