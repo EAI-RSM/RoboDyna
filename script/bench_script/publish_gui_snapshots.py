@@ -12,7 +12,8 @@ plus ``scene_snapshot.png`` (copy of default) for compatibility.
 
 Household GUI tasks write a single ``scene_snapshot.png``.
 
-Each still is a single ``head_camera`` frame (no top-down montage).
+Each still is a single camera frame (no dual-view montage). Most tasks use
+the elevated ``head_camera``; ``make_soup`` uses a true top-down still.
 
 Usage (repo root, robodyna env, headless Vulkan)::
 
@@ -36,8 +37,15 @@ sys.path.insert(0, "./script_hh_exp")
 import numpy as np
 from PIL import Image
 
+import sapien
+
 from envs.utils.household_view import configure_standard_head_camera
-from script.bench_script.record_demo import build_args
+from script.bench_script.record_demo import (
+    TOPDOWN_FOVY_DEG,
+    TOPDOWN_LOOK_AT,
+    TOPDOWN_POS,
+    build_args,
+)
 from script.collect_data import class_decorator
 from script_exp.interactive_task_gui import (
     SCENARIO_OVERRIDES,
@@ -51,6 +59,8 @@ FINAL = os.path.join(ROOT, "final_task_demos")
 # Upscale head stills for crisp GUI cards (native D435 is typically 640×480).
 SNAPSHOT_MAX_WIDTH = 1280
 SETTLE_STEPS = 8
+# Household cards that read better as a bird's-eye still than the head cam.
+TOPDOWN_GUI_TASKS = frozenset({"make_soup"})
 
 
 def _suite_tasks() -> list[str]:
@@ -92,6 +102,38 @@ def _prepare_head_frame(head: np.ndarray) -> np.ndarray:
     return frame
 
 
+def configure_topdown_head_camera(task) -> None:
+    """Point ``head_camera`` straight down using the shared demo bird's-eye pose."""
+    cams = getattr(task, "cameras", None)
+    if cams is None:
+        return
+    names = list(getattr(cams, "static_camera_name", []) or [])
+    clist = list(getattr(cams, "static_camera_list", []) or [])
+    if "head_camera" not in names:
+        return
+    camera = clist[names.index("head_camera")]
+    forward = TOPDOWN_LOOK_AT - TOPDOWN_POS
+    forward = forward / np.linalg.norm(forward)
+    world_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    left = np.cross(world_up, forward)
+    if np.linalg.norm(left) < 1e-6:
+        left = np.cross(np.array([1.0, 0.0, 0.0], dtype=np.float64), forward)
+    left = left / np.linalg.norm(left)
+    up = np.cross(forward, left)
+    m = np.eye(4)
+    m[:3, :3] = np.stack([forward, left, up], axis=1)
+    m[:3, 3] = TOPDOWN_POS
+    camera.entity.set_pose(sapien.Pose(m))
+    fovy = float(np.deg2rad(TOPDOWN_FOVY_DEG))
+    try:
+        camera.set_fovy(fovy)
+    except Exception:
+        try:
+            camera.fovy = fovy
+        except Exception:
+            pass
+
+
 def _overrides_to_cli(overrides: dict) -> list[str]:
     out: list[str] = []
     for key, value in overrides.items():
@@ -110,6 +152,7 @@ def capture_snapshot(
     scenario: str | None = None,
     task_arg_overrides: list[str] | None = None,
     out_name: str = "scene_snapshot.png",
+    view: str = "head",
 ) -> str:
     save_root = os.path.abspath(f"./tmp/tmp_{task_name}_snapshot")
     os.makedirs(save_root, exist_ok=True)
@@ -139,8 +182,10 @@ def capture_snapshot(
 
     def _setup_demo(**kwargs):
         _orig_setup(**kwargs)
-        # Same elevated head pose for base suite + household GUI cards.
-        configure_standard_head_camera(task)
+        if view == "topdown":
+            configure_topdown_head_camera(task)
+        else:
+            configure_standard_head_camera(task)
 
     task.setup_demo = _setup_demo
     task.setup_demo(now_ep_num=0, seed=int(seed), **args)
@@ -194,7 +239,8 @@ def publish_suite_task(task_name: str, seed: int = 0) -> None:
 
 
 def publish_household_task(task_name: str, seed: int = 0) -> None:
-    capture_snapshot(task_name, seed=seed, out_name="scene_snapshot.png")
+    view = "topdown" if task_name in TOPDOWN_GUI_TASKS else "head"
+    capture_snapshot(task_name, seed=seed, out_name="scene_snapshot.png", view=view)
 
 
 def main() -> int:
