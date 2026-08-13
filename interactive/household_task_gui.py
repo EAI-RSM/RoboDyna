@@ -302,7 +302,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.title_label.pack(anchor="w")
         self.subtitle_label = tk.Label(
             self.heading,
-            text="Choose a scenario, deploy the robot, and return here when it finishes.",
+            text="Select one of the household tasks",
             bg=HEADER_BG,
             fg=HEADER_MUTED,
             font=("Sans", 14),
