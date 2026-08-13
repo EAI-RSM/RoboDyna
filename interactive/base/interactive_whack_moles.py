@@ -29,10 +29,17 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
+    UniversalRobotControls,
     action_failed,
+    actor_scene_id,
     add_record_data_arg,
+    add_robot_motion_arg,
+    click_hits_actor_map,
     gripper_width,
+    is_robot_control,
     make_viewer_view_toggle,
+    prepare_interactive_control,
+    print_instructions,
     print_mode_controls,
     report_task_result,
     terminal_hold_should_close,
@@ -41,9 +48,8 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Q / E             select previous / next unhit mole
-  1 .. N            select mole index directly
-  (Prefer --control robot to grasp mallets with Space and strike by teleop.)
+  Mouse click       click a mole while it is above the board to hit it
+                    (clicking a rabbit fails; clicking a buried mole misses)
 """
 
 CONTROLS_ROBOT = """
@@ -124,6 +130,47 @@ def _set_cube_over_hole(env, arm_name, hole_xy, z=None):
             rigid.set_kinematic_target(pose)
         except Exception:
             pass
+
+
+class ClickMoleController:
+    """Click moles above the surface to hit; rabbits fail (like catch_cuboid)."""
+
+    def __init__(self, env):
+        self.env = env
+        self._mole_ids = {}
+        self._rabbit_ids = {}
+        for idx, mole in enumerate(getattr(env, "moles", []) or []):
+            sid = actor_scene_id(mole)
+            if sid is not None:
+                self._mole_ids[int(sid)] = int(idx)
+        for idx, rabbit in enumerate(getattr(env, "rabbits", []) or []):
+            sid = actor_scene_id(rabbit)
+            if sid is not None:
+                self._rabbit_ids[int(sid)] = int(idx)
+
+    def on_click(self, viewer, pixel_x, pixel_y):
+        if self.env.distractor_hit or getattr(self.env, "appearances_exhausted", False):
+            return False
+        rabbit = click_hits_actor_map(viewer, pixel_x, pixel_y, self._rabbit_ids)
+        if rabbit is not None:
+            self.env._mark_rabbit_touched(int(rabbit))
+            print("Rabbit clicked — failure.")
+            return True
+        idx = click_hits_actor_map(viewer, pixel_x, pixel_y, self._mole_ids)
+        if idx is None:
+            return False
+        idx = int(idx)
+        if self.env.touched[idx]:
+            return True
+        if not self.env._mole_above_surface(idx):
+            print(f"Miss — mole {idx} is not above the board.")
+            return True
+        self.env._mark_touched(idx)
+        print(f"Hit mole {idx}.")
+        return True
+
+    def update(self, _window):
+        return
 
 
 class KeyboardMoleController:
@@ -258,18 +305,7 @@ def main():
     parser = argparse.ArgumentParser(description="Interactive whack_moles viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
-    parser.add_argument(
-        "--control",
-        choices=("keyboard", "keyboard+mouse", "robot"),
-        default="robot",
-        help="Interaction method (default: robot)",
-    )
-    parser.add_argument(
-        "--robot-motion",
-        choices=("planner", "interpolate"),
-        default="planner",
-        help="Robot motion backend (interpolate = faster joint interp when supported; default planner)",
-    )
+    add_robot_motion_arg(parser, robot_motion_default="planner")
     add_record_data_arg(parser)
     args = parser.parse_args()
 
@@ -279,14 +315,11 @@ def main():
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("whack_moles", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
-    if args.robot_motion == "interpolate":
-        print(
-            "Note: --robot-motion interpolate uses planner motions for this teleop task "
-            "(key-press sandboxes use joint interpolation)."
-        )
 
+    use_robot = is_robot_control(args.control)
     env = whack_moles()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    prepare_interactive_control(env, args.control)
     print(
         f"moles={env.num_moles}; appearances={env.num_appearances}; "
         f"distractors={env.num_distractors}; "
@@ -294,19 +327,23 @@ def main():
     )
     print_episode_condition(env)
 
-    controller = (
-        RobotMoleController(env, ArmTag) if args.control == "robot"
-        else KeyboardMoleController(env, ArmTag)
-    )
-
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
 
-    # For keyboard teleop, prevent EE weld from yanking cubes every step.
-    if args.control in ("keyboard", "keyboard+mouse"):
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        controller = RobotMoleController(env, ArmTag)
+        print_instructions("Latch a mallet with Space, then jab rising moles.")
+    else:
         env._cube_weld = {}
+        controller = ClickMoleController(env)
+        viewer.register_click_handler(controller.on_click)
+        print_instructions(
+            "Click moles while they are above the board; rabbits fail."
+        )
 
     done_since = None
     terminal_started_at = None

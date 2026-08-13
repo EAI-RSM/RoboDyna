@@ -91,15 +91,58 @@ def _configure_default_task(config_name: str, seed: int, use_robot: bool = False
 
 
 def _update_keyboard_control(env, window):
-    """Map arrow keys to left, right, or simultaneous button holds."""
+    """Map arrow keys to left, right, or dump holds (Up = dump / spoiled)."""
 
     left_down = window.key_down("left")
     right_down = window.key_down("right")
-    down_down = window.key_down("down")
-    env._expert_hold = "dump" if down_down else (
+    dump_down = window.key_down("up") or window.key_down("down")
+    env._expert_hold = "dump" if dump_down else (
         "left" if left_down and not right_down else
         "right" if right_down and not left_down else None
     )
+
+
+def _mouse_picture_xy(viewer):
+    window = viewer.window
+    mx, my = window.mouse_position
+    ww, wh = window.size
+    if ww <= 0 or wh <= 0 or mx < 0 or my < 0 or mx >= ww or my >= wh:
+        return None
+    tw, th = window.get_picture_size("Segmentation")
+    return int(mx * tw / ww), int(my * th / wh)
+
+
+def _button_hold_from_mouse(env, viewer):
+    """While LMB held on a button, return that side; else None (no toggle)."""
+    window = viewer.window
+    if not bool(window.mouse_down(0)):
+        return None
+    pix = _mouse_picture_xy(viewer)
+    if pix is None:
+        return None
+    button_ids = {
+        int(button.actor.per_scene_id): side for side, button in env.buttons.items()
+    }
+    pixel = viewer.window.get_picture_pixel("Segmentation", pix[0], pix[1])
+    return button_ids.get(int(pixel[1]))
+
+
+def _update_keyboard_mouse_control(env, viewer):
+    """Arrows or hold-click buttons; Up opens dump for spoiled apples."""
+    window = viewer.window
+    left_down = window.key_down("left")
+    right_down = window.key_down("right")
+    dump_down = window.key_down("up") or window.key_down("down")
+    if dump_down:
+        env._expert_hold = "dump"
+        return
+    if left_down and not right_down:
+        env._expert_hold = "left"
+        return
+    if right_down and not left_down:
+        env._expert_hold = "right"
+        return
+    env._expert_hold = _button_hold_from_mouse(env, viewer)
 
 
 class FastArmTeleop:
@@ -447,19 +490,21 @@ def main():
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     env = sort_apples_belt()
-    # Always enable arm teleop when robot mode: button presses are gripper-Z; Space = gripper.
-    if args.control == "robot":
+    use_robot = args.control == "robot"
+    if use_robot:
         env._interactive_robot_mode = True
     env.setup_demo(**_configure_default_task(
-        args.config, args.seed, use_robot=args.control == "robot"
+        args.config, args.seed, use_robot=use_robot
     ))
+    if args.control in ("keyboard", "keyboard+mouse"):
+        from _interactive_common import prepare_interactive_control
+        prepare_interactive_control(env, args.control)
+        env._interactive_universal_controls = True
     print_episode_condition(env)
-    # The base task opens both grippers during setup; this interactive launcher
-    # starts them closed so button presses use a compact resting posture.
-    env.together_close_gripper(save_freq=None)
-    _move_grippers_to_ready_position(env, ArmTag)
+    if use_robot:
+        env.together_close_gripper(save_freq=None)
+        _move_grippers_to_ready_position(env, ArmTag)
     belt_clear_since = None
-    # Disable legacy Space-click latch if the env still checks it.
     env._interactive_space_click = False
     recorder = None
     record_frame_count = 0
@@ -505,9 +550,10 @@ def main():
                 "\n"
                 "  Left Arrow        hold to divert left\n"
                 "  Right Arrow       hold to divert right\n"
-                "  Down Arrow        hold both (dump)\n"
+                "  Up Arrow          hold dump (spoiled apple hatch)\n"
+                "  Mouse             hold click on a button (releases when you let go)\n"
                 "\n"
-                "  Release the arrow key to let the plank return to rest.\n"
+                "  Release to let the plank return to rest.\n"
             ),
             robot="",
         )
@@ -523,7 +569,9 @@ def main():
             if composite_view is not None:
                 # Composite mode has no SAPIEN key window; retain its click action.
                 env._expert_hold = composite_view.action
-            elif args.control in ("keyboard", "keyboard+mouse"):
+            elif args.control == "keyboard+mouse":
+                _update_keyboard_mouse_control(env, viewer)
+            elif args.control == "keyboard":
                 _update_keyboard_control(env, viewer.window)
 
             if n_steps == 0:

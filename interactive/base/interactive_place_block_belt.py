@@ -1,8 +1,8 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive sandbox for ``place_block_belt``.
 
-Grasp the tall block with Space, teleop over the belt, open Space to drop it so the
-belt can carry it. Space opens/closes the gripper only.
+Keyboard+mouse: click the belt to teleport the cube (XY + belt-height Z).
+Robot: grasp with Space, teleop over the belt, open to drop.
 
 Run from any directory:
 
@@ -16,22 +16,27 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import sapien
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     add_robot_motion_arg,
     bootstrap_repo,
     configure_task,
+    is_robot_control,
+    prepare_interactive_control,
     print_banner,
     run_viewer_loop,
     print_episode_condition,
+    table_xy_from_click,
 )
 
 bootstrap_repo()
 
 
 def _block_held(env) -> bool:
-    """True while fingers still contact the block (Space-close grasp)."""
     if getattr(env, "block", None) is None:
         return False
     try:
@@ -40,9 +45,59 @@ def _block_held(env) -> bool:
         return False
 
 
-class BlockReleaseMonitor:
-    """When the block leaves the hand, mark release so the belt drive can engage."""
+def _teleport_block_to_belt(env, x: float, y: float) -> None:
+    """Seat the cube on the belt surface at ``(x, y)`` and arm the conveyor."""
+    half_x = float(getattr(env, "_belt_half_len_x", 0.2))
+    half_y = float(getattr(env, "_belt_half_w", getattr(env, "belt_half_w", 0.05)))
+    cx = float(getattr(env, "_belt_cx", 0.0))
+    by = float(env.belt_y)
+    x = float(np.clip(x, cx - half_x, cx + half_x))
+    y = float(np.clip(y, by - half_y, by + half_y))
+    z = float(env.belt_surface_z + env.block_half_h)
+    q = [1.0, 0.0, 0.0, 0.0]
+    pose = sapien.Pose([x, y, z], q)
+    try:
+        env.block.set_pose(pose)
+    except Exception:
+        env.block.actor.set_pose(pose)
+    rigid = getattr(env, "_block_dyn", None)
+    if rigid is not None:
+        try:
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+        except Exception:
+            pass
+    env._release_q = list(q)
+    env._released = True
+    env._interactive_released = True
+    env._interactive_holding = False
+    env._release_delay_left = int(getattr(env, "belt_release_delay_steps", 0))
+    if env._release_delay_left <= 0:
+        env._belt_active = True
+    print(f"Block teleported onto belt at ({x:.3f}, {y:.3f}, z={z:.3f}).")
 
+
+class BlockClickController:
+    def __init__(self, env):
+        self.env = env
+        self.placed = False
+
+    def on_click(self, viewer, pixel_x, pixel_y):
+        if self.placed or getattr(self.env, "_interactive_released", False):
+            return False
+        hit = table_xy_from_click(
+            viewer, pixel_x, pixel_y, float(self.env.belt_surface_z)
+        )
+        if hit is None:
+            return False
+        _teleport_block_to_belt(self.env, hit[0], hit[1])
+        self.placed = True
+        return True
+
+
+class BlockReleaseMonitor:
     def __init__(self, env):
         self.env = env
         self.holding = False
@@ -89,54 +144,58 @@ def main():
 
     from envs.place_block_belt import place_block_belt
 
-    use_robot = args.control == "robot"
+    use_robot = is_robot_control(args.control)
     env = place_block_belt()
     env.setup_demo(**configure_task(
         "place_block_belt", args.config, args.seed, use_robot=use_robot,
     ))
+    prepare_interactive_control(env, args.control)
     print_episode_condition(env)
 
-    print_banner(
-        "place_block_belt — interactive controls",
-        [
-            f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
-            f"config: {args.config}  |  seed: {args.seed}",
-            "Goal: place the tall block on the belt BEFORE the red place line;",
-            "      stay in the clear lane if a blocker is present.",
-            "1 / 2 / 3 — select left / right / both arms (robot mode; selected gripper turns green)",
-            "Space — close to grasp / open to release (drop onto the belt)",
-            "Arrows / E / Q — teleop the selected arm(s)",
-            "V — cycle view: head_camera ↔ gripper(s)",
-            "Esc — close the viewer window to quit",
-            "Release too late (past the red line) or into the blocker → failure.",
-            "--robot-motion planner|interpolate",
-        ],
-    )
-    if args.robot_motion == "interpolate":
-        print(
-            "Note: --robot-motion interpolate uses planner motions for this teleop task "
-            "(key-press sandboxes use joint interpolation)."
+    if use_robot:
+        print_banner(
+            "place_block_belt — interactive controls",
+            [
+                f"Mode: {args.control}  |  robot-motion: {args.robot_motion}",
+                "Grasp the block, place before the red line, Space to release.",
+            ],
+        )
+    else:
+        print_banner(
+            "place_block_belt — keyboard+mouse",
+            [
+                f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
+                "Click the belt to teleport the cube (Z seats on the belt surface).",
+            ],
         )
 
-    suggested_arm = "right" if env.block.get_pose().p[0] > 0 else "left"
     env._interactive_holding = False
     env._interactive_released = False
     env._released = False
     env._belt_active = False
     env._release_delay_left = 0
-    print_instructions(
-        f"Press 1/2/3 to select an arm (block is on the {suggested_arm}). "
-        "Space closes/opens the gripper to grasp/release the block. "
-        "When the block leaves the fingers on the belt, the conveyor engages."
-    )
 
-    release_monitor = BlockReleaseMonitor(env)
+    clicker = None
+    release_monitor = None
+    if use_robot:
+        release_monitor = BlockReleaseMonitor(env)
+        print_instructions("Space closes/opens the gripper to grasp/release the block.")
+    else:
+        viewer = env.viewer
+        if viewer is None:
+            raise SystemExit("Viewer was not created.")
+        clicker = BlockClickController(env)
+        viewer.register_click_handler(clicker.on_click)
+        print_instructions("Click once on the belt to place the cube.")
+
     off_belt_since = None
     settle_steps = max(1, int(round(2.0 / float(env.scene.get_timestep()))))
 
     def on_step(window, step):
         nonlocal off_belt_since
-        release_monitor.update()
+        del window
+        if release_monitor is not None:
+            release_monitor.update()
 
         if env._interactive_released:
             if env._release_delay_left > 0:
@@ -145,9 +204,6 @@ def main():
                     env._belt_active = True
                     print("Belt drive engaged.")
 
-            # ``_block_dropped`` is latched by the task exactly when the
-            # conveyor carries the block past its exit.  The fallback also
-            # catches a block that falls off after a verified belt contact.
             left_belt = bool(getattr(env, "_block_dropped", False)) or (
                 bool(getattr(env, "placed_on_belt", False)) and not env._on_belt()
             )
@@ -168,6 +224,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
     from _interactive_common import task_result_exit_code
     raise SystemExit(task_result_exit_code())

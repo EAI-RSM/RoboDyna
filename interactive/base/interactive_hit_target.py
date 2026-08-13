@@ -6,9 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/interactive/base/interactive_hit_target.py --control keyboard
     /path/to/RoboDynaExp/interactive/base/interactive_hit_target.py --control robot
 
-Keyboard mode aims the dart tip with arrows and drives it into the board.
-Robot mode: grasp the dart with Space, aim with the movement keys, then jab the
-tip into the yellow center by teleop.
+Keyboard+mouse: click the board to plant the dart; click a blocker to fail.
+Robot: grasp the dart and jab the yellow center by teleop.
 """
 
 import argparse
@@ -29,8 +28,14 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
-    add_record_data_arg,
+    UniversalRobotControls,
+    actor_scene_id,
+    add_robot_motion_arg,
+    click_hits_actor_map,
+    is_robot_control,
     make_viewer_view_toggle,
+    prepare_interactive_control,
+    print_instructions,
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
@@ -40,9 +45,7 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Arrow keys        aim dart tip (L/R = x, U/D = y / depth)
-  E / Q             raise/lower dart tip
-  Drive the tip into the yellow center to stick.
+  Mouse click       click the target to plant the dart; click a blocker to fail
 """
 
 CONTROLS_ROBOT = """
@@ -110,7 +113,6 @@ def _set_tip_xyz(env, tip_xyz, kinematic=True):
     new_body = np.asarray(tip_xyz, dtype=float) - offset
     pose = env.dart.get_pose()
     new_pose = sapien.Pose(new_body.tolist(), pose.q)
-    # ``create_actor`` returns an Actor wrapper; only its entity can be posed.
     entity = getattr(env.dart, "actor", env.dart)
     entity.set_pose(new_pose)
     rigid = env._dart_rigid or _get_rigid(env.dart)
@@ -129,50 +131,78 @@ def _set_tip_xyz(env, tip_xyz, kinematic=True):
         pass
 
 
-def _nudge_from_keys(window, step=0.008):
-    dx = dy = dz = 0.0
-    if window.key_down("left"):
-        dx -= step
-    if window.key_down("right"):
-        dx += step
-    if window.key_down("up"):
-        dy += step
-    if window.key_down("down"):
-        dy -= step
-    if window.key_down("q"):
-        dz += step
-    if window.key_down("e"):
-        dz -= step
-    return dx, dy, dz
+def _blocker_tip_xyz(env, which: str):
+    bz = float(env.blocker_z)
+    if which == "static":
+        return np.array(
+            [float(env._static_blocker_x()), float(env.static_blocker_y), bz],
+            dtype=float,
+        )
+    bx = float(env._dynamic_blocker_x_at(getattr(env, "_step_count", 0)))
+    return np.array([bx, float(env.dynamic_blocker_y), bz], dtype=float)
 
 
-class KeyboardDartController:
-    def __init__(self, env):
+class ClickDartController:
+    """One click plants the dart on the target or fails on a blocker."""
+
+    def __init__(self, env, viewer):
         self.env = env
-        tip = _tip(env)
-        _set_tip_xyz(env, tip, kinematic=True)
+        self.viewer = viewer
+        self.done = False
+        self._ids = {}
+        tid = actor_scene_id(getattr(env, "target", None))
+        if tid is not None:
+            self._ids[int(tid)] = "target"
+        for name in ("static_blocker", "dynamic_blocker", "blocker"):
+            actor = getattr(env, name, None)
+            sid = actor_scene_id(actor)
+            if sid is None:
+                continue
+            label = "dynamic" if "dynamic" in name else "static"
+            if name == "blocker":
+                label = "dynamic" if getattr(env, "dynamic_blocker", None) is actor else "static"
+            self._ids[int(sid)] = label
 
-    def update(self, window):
-        if self.env._stuck or self.env._hit_blocker:
-            return
-        dx, dy, dz = _nudge_from_keys(window)
-        if dx or dy or dz:
-            tip = _tip(self.env)
-            _set_tip_xyz(self.env, tip + np.array([dx, dy, dz]), kinematic=True)
+    def on_click(self, viewer, pixel_x, pixel_y):
+        if self.done or self.env._stuck or self.env._hit_blocker:
+            return False
+        hit = click_hits_actor_map(viewer, pixel_x, pixel_y, self._ids)
+        if hit is None:
+            return False
+        if hit == "target":
+            center = np.asarray(self.env._target_center_world(), dtype=float)
+            tip = np.array(
+                [center[0], float(self.env._plant_tip_y()), center[2]],
+                dtype=float,
+            )
+            _set_tip_xyz(self.env, tip, kinematic=True)
+            self.env._try_form_stick(any_ring=True, exact_pose=True)
+            if not self.env._stuck:
+                # Force a center plant if spring stick didn't latch yet.
+                self.env._record_board_hit()
+                self.env._try_form_stick(any_ring=True, exact_pose=True)
+            print("Dart planted on the target.")
+        else:
+            tip = _blocker_tip_xyz(self.env, hit)
+            _set_tip_xyz(self.env, tip, kinematic=True)
+            self.env._hit_blocker = True
+            self.env.hit_score = 0.0
+            self.env._check_blocker_hit()
+            print(f"Dart hit the {hit} blocker — failure.")
+        self.done = True
+        return True
+
+    def update(self, _window):
+        return
 
 
 class RobotDartController:
     """Teleop aim only — Space gripper toggle is shared; jab by driving tip in."""
 
-    def __init__(self, env, ArmTag, robot_motion="interpolate"):
+    def __init__(self, env):
         self.env = env
-        self.ArmTag = ArmTag
-        self.arm = ArmTag("right" if env.dart_side > 0 else "left")
-        self.busy = False
-        self.robot_motion = robot_motion
 
     def update(self, window):
-        # Universal viewer controls own arrow/E/Q / Space gripper motion.
         del window
 
 
@@ -180,44 +210,40 @@ def main():
     parser = argparse.ArgumentParser(description="Interactive hit_target viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
-    parser.add_argument(
-        "--control",
-        choices=("keyboard", "keyboard+mouse", "robot"),
-        default="robot",
-        help="Interaction method (default: robot)",
-    )
-    parser.add_argument(
-        "--robot-motion",
-        choices=("planner", "interpolate"),
-        default="interpolate",
-        help="Robot motion backend for aim nudges (default: interpolate)",
-    )
-    add_record_data_arg(parser)
+    add_robot_motion_arg(parser, robot_motion_default="interpolate")
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
     from envs.hit_target import hit_target
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("hit_target", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
+    use_robot = is_robot_control(args.control)
     env = hit_target()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    prepare_interactive_control(env, args.control)
     print_episode_condition(env)
     print(
         f"Arm={'right' if env.dart_side > 0 else 'left'}; "
         f"blocker_static={env.blocker_enabled}; blocker_dyn={env.blocker_dynamic}."
     )
 
-    controller = (
-        RobotDartController(env, ArmTag, args.robot_motion) if args.control == "robot"
-        else KeyboardDartController(env)
-    )
-
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        controller = RobotDartController(env)
+        print_instructions("Grasp the dart and jab the yellow center.")
+    else:
+        controller = ClickDartController(env, viewer)
+        viewer.register_click_handler(controller.on_click)
+        print_instructions(
+            "Click the target to plant the dart, or a blocker to fail."
+        )
 
     settle_after = None
     terminal_started_at = None
@@ -273,6 +299,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
     from _interactive_common import task_result_exit_code
     raise SystemExit(task_result_exit_code())

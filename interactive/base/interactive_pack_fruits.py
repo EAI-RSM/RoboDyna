@@ -3,13 +3,9 @@
 
 Pack red apples into the left basket and green apples into the right
 (when both colors are present). Opt2 black distractors are never packed.
-Default / Opt 2: colored apples may appear on either belt. Opt 1 / 1+2:
-red rides the left belt, green the right; black distractors may use either.
 
-Physical grasp (same pattern as pick_ripe_apple — no teleport / no EE weld):
-  Teleop over a belt apple → Space closes the gripper. The apple keeps riding
-  the belt until a real pinch is confirmed, then frees in place for a friction
-  hold → lift with E → Space opens → falls under gravity.
+Keyboard+mouse: click a fruit (highlights lighter), then click a basket.
+Robot: physical pinch grasp (no teleport / no EE weld).
 
 Run from any directory:
 
@@ -28,12 +24,17 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _interactive_common import (  # noqa: E402
+    actor_scene_id,
     add_robot_motion_arg,
     bootstrap_repo,
+    click_hits_actor_map,
     configure_task,
     gripper_width,
+    is_robot_control,
+    prepare_interactive_control,
     print_banner,
     print_episode_condition,
+    print_instructions,
     run_viewer_loop,
 )
 
@@ -86,21 +87,104 @@ def _near_fruit(env, idx, arm_name: str) -> bool:
     return xy <= PINCH_XY and -0.02 <= dz <= PINCH_Z_MAX
 
 
-class FruitPinchMonitor:
-    """Detach a belt apple only when a real pinch is confirmed.
+def _lighter_rgb(rgb):
+    return [min(1.0, 0.45 * float(c) + 0.55) for c in list(rgb)[:3]]
 
-    Closing early near an apple does **not** pull it off the belt — it keeps
-    riding at its current lateral pose. Only confirmed contact/proximity frees
-    it for a friction hold (stacking/drop unchanged).
-    """
+
+class FruitClickController:
+    """Click fruit (highlight) then click a basket to pack it there."""
+
+    def __init__(self, env, viewer):
+        self.env = env
+        self.viewer = viewer
+        self.selected = None
+        self._basket_ids = {}
+        for ftype, basket in (getattr(env, "baskets", {}) or {}).items():
+            sid = actor_scene_id(basket)
+            if sid is not None:
+                self._basket_ids[int(sid)] = str(ftype)
+
+    def _fruit_ids(self):
+        ids = {}
+        for idx in range(self.env.n_items):
+            if (
+                not self.env._spawned_mask[idx]
+                or self.env._packed[idx]
+                or self.env._missed[idx]
+            ):
+                continue
+            sid = actor_scene_id(self.env.items[idx])
+            if sid is not None:
+                ids[int(sid)] = int(idx)
+        return ids
+
+    def _restore_color(self, idx):
+        ftype = self.env.item_types[idx]
+        self.env._recolor(self.env.items[idx], self.env._type_rgb(ftype))
+
+    def _highlight(self, idx):
+        ftype = self.env.item_types[idx]
+        self.env._recolor(self.env.items[idx], _lighter_rgb(self.env._type_rgb(ftype)))
+
+    def _select(self, idx):
+        if self.selected is not None and self.selected != idx:
+            if not self.env._packed[self.selected] and not self.env._missed[self.selected]:
+                self._restore_color(self.selected)
+        self.selected = int(idx)
+        self._highlight(idx)
+        ftype = self.env.item_types[idx]
+        print(f"Selected {ftype}_{idx} — click a basket to pack it.")
+
+    def _pack_into(self, basket_type: str):
+        idx = self.selected
+        if idx is None:
+            print("Select a fruit first.")
+            return
+        if self.env._packed[idx] or self.env._missed[idx]:
+            self.selected = None
+            return
+        xy = self.env._basket_target_xy(idx, basket=basket_type)
+        z = float(self.env.basket_base_z[basket_type]) + float(self.env.fruit_r) + 0.01
+        # Leave the belt stream, then seat into the clicked basket.
+        self.env._item_y[idx] = None
+        self.env._grasping_idxs.discard(idx)
+        self.env._set_fruit_pose(idx, float(xy[0]), float(xy[1]), z)
+        self.env._mark_packed(idx, freeze=False)
+        want = self.env.item_types[idx]
+        if basket_type == want:
+            print(f"Packed {want}_{idx} into the {basket_type} basket.")
+        else:
+            print(
+                f"Placed {want}_{idx} into the {basket_type} basket "
+                "(wrong color — will count as failure)."
+            )
+        self.selected = None
+
+    def on_click(self, viewer, pixel_x, pixel_y):
+        fruit_hit = click_hits_actor_map(
+            viewer, pixel_x, pixel_y, self._fruit_ids()
+        )
+        if fruit_hit is not None:
+            self._select(int(fruit_hit))
+            return True
+        basket_hit = click_hits_actor_map(
+            viewer, pixel_x, pixel_y, self._basket_ids
+        )
+        if basket_hit is not None:
+            self._pack_into(str(basket_hit))
+            return True
+        return False
+
+
+class FruitPinchMonitor:
+    """Detach a belt apple only when a real pinch is confirmed."""
 
     def __init__(self, env):
         self.env = env
         self._prev_width = {"left": 1.0, "right": 1.0}
         self._held = {}  # arm_name -> fruit idx
-        # arm -> (idx, step_when_fingers_should_be_closed)
         self._pending = {}
-        self._settle = None  # (idx, arm, steps_left) after release
+        self._settle = None
         self._announced = set()
 
     def _try_pinch(self, arm_name: str, step: int) -> None:
@@ -109,7 +193,6 @@ class FruitPinchMonitor:
         idx = _nearest_graspable(self.env, arm_name)
         if idx is None:
             return
-        # Stay on the kinematic belt stream while the jaws close.
         self._pending[arm_name] = (idx, step + GRASP_SETTLE_STEPS)
 
     def _confirm_or_abort_pinch(self, arm_name: str, idx: int) -> None:
@@ -119,7 +202,6 @@ class FruitPinchMonitor:
         on_belt = self.env._item_y[idx] is not None
 
         if closed and (held or near):
-            # Real pinch — only now leave the belt, at the apple's current pose.
             self.env._free_fruit_for_physical_grasp(idx)
             self.env._grasping_idxs.add(idx)
             self.env._enable_fruit_gravity(idx)
@@ -135,7 +217,6 @@ class FruitPinchMonitor:
                 )
             return
 
-        # Missed / early close: apple never left the belt — keep riding.
         if on_belt:
             return
         self.env._reseat_on_belt(idx)
@@ -246,12 +327,11 @@ def main():
     scenario = args.scenario or os.environ.get("ROBODYNA_SCENARIO") or None
     overrides = scenario_overrides.get(scenario) if scenario else None
 
-    use_robot = args.control == "robot"
+    use_robot = is_robot_control(args.control)
     config = configure_task(
         "pack_fruits", args.config, args.seed, use_robot=use_robot,
         task_arg_overrides=overrides,
     )
-    # Prefer CLI/env scenario; fall back to top-level key from GUI temp yml.
     scenario = scenario or config.get("interactive_scenario")
     if scenario in scenario_overrides:
         config.setdefault("task_args", {}).setdefault("pack_fruits", {}).update(
@@ -266,14 +346,16 @@ def main():
     )
     env = pack_fruits()
     env.setup_demo(**config)
+    prepare_interactive_control(env, args.control)
     print_episode_condition(env)
     env._belt_running = True
 
-    for side in ("left", "right"):
-        try:
-            env.robot.set_gripper(1.0, side, gripper_eps=0.0)
-        except Exception:
-            pass
+    if use_robot:
+        for side in ("left", "right"):
+            try:
+                env.robot.set_gripper(1.0, side, gripper_eps=0.0)
+            except Exception:
+                pass
 
     if env.two_colors_enabled:
         goal = (
@@ -285,29 +367,51 @@ def main():
         side = "left" if color == "red" else "right"
         goal = f"Default/Opt2: {env.n_items} {color} apples → {side} basket."
 
-    print_banner(
-        "pack_fruits — interactive controls",
-        [
-            f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
-            f"config: {args.config}  |  seed: {args.seed}"
-            + (f"  |  scenario: {args.scenario}" if args.scenario else ""),
-            goal,
-            "Never pack black distractors (Opt2).",
-            "1 / 2 / 3 — select left / right / both arms (selected gripper turns green)",
-            "Arrows / E / Q — teleop the selected arm(s)",
-            "Space — close to pinch; apple keeps moving until a real grasp",
-            "V — cycle view: head_camera ↔ gripper(s)",
-            "Esc — close the viewer window to quit",
-            "--scenario default|opt1|opt2|opt1+2",
-            "--robot-motion planner|interpolate",
-        ],
-    )
+    if use_robot:
+        print_banner(
+            "pack_fruits — interactive controls",
+            [
+                f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
+                f"config: {args.config}  |  seed: {args.seed}"
+                + (f"  |  scenario: {args.scenario}" if args.scenario else ""),
+                goal,
+                "Never pack black distractors (Opt2).",
+                "1 / 2 / 3 — select left / right / both arms (selected gripper turns green)",
+                "Arrows / E / Q — teleop the selected arm(s)",
+                "Space — close to pinch; apple keeps moving until a real grasp",
+                "V — cycle view: head_camera ↔ gripper(s)",
+                "Esc — close the viewer window to quit",
+                "--scenario default|opt1|opt2|opt1+2",
+                "--robot-motion planner|interpolate",
+            ],
+        )
+    else:
+        print_banner(
+            "pack_fruits — keyboard+mouse",
+            [
+                f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}"
+                + (f"  |  scenario: {args.scenario}" if args.scenario else ""),
+                goal,
+                "Click a fruit to select (highlights lighter), then click a basket.",
+                "Never pack black distractors (Opt2).",
+                "Esc — quit",
+            ],
+        )
 
     settle_after_done = None
     pinch = FruitPinchMonitor(env) if use_robot else None
+    clicker = None
+    if not use_robot:
+        viewer = env.viewer
+        if viewer is None:
+            raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+        clicker = FruitClickController(env, viewer)
+        viewer.register_click_handler(clicker.on_click)
+        print_instructions("Click a fruit, then click a basket to pack it.")
 
     def on_step(window, step):
         nonlocal settle_after_done
+        del window
         env._belt_running = True
 
         if pinch is not None:

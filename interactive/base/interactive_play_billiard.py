@@ -30,10 +30,16 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     add_record_data_arg,
+    add_robot_motion_arg,
+    edge_pressed,
+    is_robot_control,
     make_viewer_view_toggle,
+    prepare_interactive_control,
+    print_instructions,
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
+    table_xy_from_click,
     terminal_hold_should_close,
     print_episode_condition,
     UniversalRobotControls,
@@ -41,16 +47,15 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left / Right      rotate aim direction
-  Up / Down         slide tip along aim (approach / retreat)
-  (hit)             drive the blue tip into the ball — one tip contact only
+  Mouse click       place the cue tip at that XY (Z = ball height)
+  Left / Right      rotate stick counterclockwise / clockwise
+  Space             hit the ball along the aim direction
 """
 
 CONTROLS_ROBOT = """
   Space             open / close gripper to grasp or release the cue
   (hit)             move the blue tip into the ball — one tip contact only
 """
-
 
 def _embodiment_config(robot_file):
     with open(Path(robot_file) / "config.yml", "r", encoding="utf-8") as handle:
@@ -115,22 +120,21 @@ def _default_aim(env):
     return env._aim_dir
 
 
-def _place_cue_for_aim(env, gap=None):
-    """Park the cue tip behind the ball along ``_aim_dir`` (keyboard sandbox)."""
-    if gap is None:
-        gap = float(env.APPROACH_GAP)
-    ball = np.asarray(env.primary_ball.get_pose().p, dtype=float)
-    aim = np.asarray(env._aim_dir, dtype=float)
-    tip_xy = ball[:2] - aim * gap
-    tip = np.array([tip_xy[0], tip_xy[1], float(env.ball_z)], dtype=float)
-    # Cue body: tip along +local X; park body so tip ≈ ball − aim*gap.
+def _place_cue_tip_at(env, tip_xy, aim=None):
+    """Park the cue so its tip sits at ``tip_xy`` on the ball-height plane."""
+    aim = np.asarray(env._aim_dir if aim is None else aim, dtype=float)
+    n = float(np.linalg.norm(aim))
+    if n < 1e-6:
+        aim = np.array([0.0, 1.0], dtype=float)
+    else:
+        aim = aim / n
+    env._aim_dir = aim
+    tip = np.array([float(tip_xy[0]), float(tip_xy[1]), float(env.ball_z)], dtype=float)
     yaw = float(np.arctan2(aim[1], aim[0]))
     q = _yaw_quat(yaw)
     half = float(env.CUE_HALF_LEN)
     new_body = tip - np.array([aim[0] * half, aim[1] * half, 0.0])
     new_pose = sapien.Pose(new_body.tolist(), q)
-    # ``cue`` is the task's Actor wrapper; pose updates belong to its
-    # underlying SAPIEN actor (matching the main task's cue placement code).
     env.cue.actor.set_pose(new_pose)
     rigid = _get_rigid(env.cue)
     if rigid is not None:
@@ -144,47 +148,107 @@ def _place_cue_for_aim(env, gap=None):
     return tip
 
 
+def _place_cue_for_aim(env, gap=None):
+    """Park the cue tip behind the ball along ``_aim_dir`` (keyboard sandbox)."""
+    if gap is None:
+        gap = float(env.APPROACH_GAP)
+    ball = np.asarray(env.primary_ball.get_pose().p, dtype=float)
+    aim = np.asarray(env._aim_dir, dtype=float)
+    tip_xy = ball[:2] - aim * gap
+    return _place_cue_tip_at(env, tip_xy, aim=aim)
+
+
 def _yaw_quat(yaw):
     """Quaternion (wxyz) for a yaw about +Z."""
     half = 0.5 * yaw
     return [float(np.cos(half)), 0.0, 0.0, float(np.sin(half))]
 
 
+def _force_strike(env) -> bool:
+    """Apply the strike impulse without requiring PhysX tip contact (KM Space)."""
+    if env._strike_done or env._primary_pocketed:
+        return False
+    rigid = getattr(env, "_primary_rigid", None)
+    if rigid is None:
+        return False
+    direction = np.array(
+        [float(env._aim_dir[0]), float(env._aim_dir[1]), 0.0], dtype=float
+    )
+    n = float(np.linalg.norm(direction))
+    if n < 1e-6:
+        return False
+    direction /= n
+    # Seat tip against the ball, then kick.
+    ball = np.asarray(env.primary_ball.get_pose().p, dtype=float)
+    gap = float(env.ball_radius + 2.0 * env.CUE_RADIUS)
+    _place_cue_tip_at(env, ball[:2] - direction[:2] * gap, aim=direction[:2])
+    try:
+        rigid.set_linear_velocity(direction * float(env.strike_impulse))
+        rigid.set_angular_velocity(np.zeros(3))
+        rigid.wake_up()
+    except Exception:
+        return False
+    if hasattr(env, "_wake_all_balls"):
+        env._wake_all_balls()
+    env._strike_done = True
+    env._strike_armed = False
+    if hasattr(env, "_disable_cue_tip_ball_collision"):
+        env._disable_cue_tip_ball_collision()
+    print("Strike!")
+    return True
+
+
 class KeyboardCueController:
-    def __init__(self, env):
+    def __init__(self, env, viewer):
         self.env = env
+        self.viewer = viewer
         self.struck = False
         self.gap = float(env.APPROACH_GAP)
+        self._prev = {}
+        self._tip_xy = None
         _default_aim(env)
-        _place_cue_for_aim(env, gap=self.gap)
+        tip = _place_cue_for_aim(env, gap=self.gap)
+        self._tip_xy = tip[:2].copy()
         print(
-            f"Aim → {env._target_pocket_name}; tip parked behind the red ball. "
-            "Slide the blue tip into the ball to hit (one contact)."
+            f"Aim → {env._target_pocket_name}. Click to place the tip; "
+            "Left/Right rotate; Space hits."
         )
+
+    def on_click(self, viewer, pixel_x, pixel_y):
+        if self.env._strike_done or self.env._primary_pocketed:
+            return False
+        hit = table_xy_from_click(
+            viewer, pixel_x, pixel_y, float(self.env.ball_z)
+        )
+        if hit is None:
+            return False
+        self._tip_xy = np.asarray(hit[:2], dtype=float)
+        _place_cue_tip_at(self.env, self._tip_xy)
+        print(f"Cue tip placed at ({self._tip_xy[0]:.3f}, {self._tip_xy[1]:.3f}).")
+        return True
 
     def update(self, window):
         if self.env._strike_done or self.env._primary_pocketed:
             self.struck = True
             return
-        # Rotate aim
         rot = 0.0
         if window.key_down("left"):
-            rot += 0.04
+            rot += 0.04  # counterclockwise
         if window.key_down("right"):
-            rot -= 0.04
+            rot -= 0.04  # clockwise
         if rot:
             c, s = np.cos(rot), np.sin(rot)
             ax, ay = self.env._aim_dir
             self.env._aim_dir = np.array([c * ax - s * ay, s * ax + c * ay], dtype=float)
             n = float(np.linalg.norm(self.env._aim_dir))
             self.env._aim_dir /= max(n, 1e-6)
-            _place_cue_for_aim(self.env, gap=self.gap)
-        if window.key_down("up"):
-            self.gap = max(0.018, self.gap - 0.004)
-            _place_cue_for_aim(self.env, gap=self.gap)
-        if window.key_down("down"):
-            self.gap = min(0.12, self.gap + 0.004)
-            _place_cue_for_aim(self.env, gap=self.gap)
+            if self._tip_xy is None:
+                _place_cue_for_aim(self.env, gap=self.gap)
+            else:
+                _place_cue_tip_at(self.env, self._tip_xy)
+        if edge_pressed(window, "space", self._prev):
+            _force_strike(self.env)
+            self.struck = True
 
 
 class RobotCueController:
@@ -212,18 +276,7 @@ def main():
     parser = argparse.ArgumentParser(description="Interactive play_billiard viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
-    parser.add_argument(
-        "--control",
-        choices=("keyboard", "keyboard+mouse", "robot"),
-        default="robot",
-        help="Interaction method (default: robot)",
-    )
-    parser.add_argument(
-        "--robot-motion",
-        choices=("planner", "interpolate"),
-        default="planner",
-        help="Robot motion backend (interpolate = faster joint interp when supported; default planner)",
-    )
+    add_robot_motion_arg(parser, robot_motion_default="planner")
     add_record_data_arg(parser)
     args = parser.parse_args()
 
@@ -233,34 +286,33 @@ def main():
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("play_billiard", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
-    if args.robot_motion == "interpolate":
-        print(
-            "Note: --robot-motion interpolate uses planner motions for this teleop task "
-            "(key-press sandboxes use joint interpolation)."
-        )
 
+    use_robot = is_robot_control(args.control)
     env = play_billiard()
-    # Always enable arm teleop + Space grasp/release; hit by driving the tip into the ball.
-    env._interactive_robot_mode = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    prepare_interactive_control(env, args.control)
     print_episode_condition(env)
     print(
         f"Arm={env._arm_side}; target pocket={env._target_pocket_name}; "
-        f"specific_hole={env.specific_hole}; distractors={env.enable_distractors}. "
-        "Blue tip only; one contact."
-    )
-
-    controller = (
-        RobotCueController(env, ArmTag) if args.control == "robot"
-        else KeyboardCueController(env)
+        f"specific_hole={env.specific_hole}; distractors={env.enable_distractors}."
     )
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
+
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        controller = RobotCueController(env, ArmTag)
+        print_instructions("Grasp the cue and drive the blue tip into the ball.")
+    else:
+        controller = KeyboardCueController(env, viewer)
+        viewer.register_click_handler(controller.on_click)
+        print_instructions(
+            "Click to place the tip; Left/Right rotate; Space to hit."
+        )
 
     settle_after = None
     terminal_started_at = None

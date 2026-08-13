@@ -6,12 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/interactive/base/interactive_marble_shelf_maze.py --control keyboard
     /path/to/RoboDynaExp/interactive/base/interactive_marble_shelf_maze.py --control robot
 
-Robot mode: select an arm, move over a shelf key, lower with Q to press
-(``ReactivePushButtons`` spring keycap). Hold keeps the active shelf tilting;
-release springs the key up and the shelf returns to flat.
-
-Keyboard mode: hold Left/Right arrows to latch the matching key (sandbox
-shortcut — same hold-to-tilt / release-to-return behavior). Sandbox only.
+Keyboard+mouse: hold Left/Right or hold-click a keycap (releases when you let go).
+Robot: select an arm, move over a shelf key, lower with Q to press.
 """
 
 import argparse
@@ -31,8 +27,12 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     UniversalRobotControls,
+    actor_scene_id,
+    click_hits_actor_map,
     make_viewer_view_toggle,
     add_robot_motion_arg,
+    is_robot_control,
+    prepare_interactive_control,
     report_task_result,
     RealtimePhysicsPacer,
     terminal_hold_should_close,
@@ -44,9 +44,7 @@ from _interactive_common import (  # noqa: E402
 CONTROLS_KEYBOARD = """
   Left Arrow        hold left key (tilt active shelf left while held)
   Right Arrow       hold right key (tilt active shelf right while held)
-
-  Release to spring the key up and return the shelf flat.
-  If the marble already landed below, release also switches control to that next shelf.
+  Mouse             hold click on a keycap to press it (releases when you let go)
 """
 
 CONTROLS_ROBOT = """
@@ -106,9 +104,58 @@ def _requested_side(window):
     return None
 
 
-def _update_keyboard(env, window):
-    """Latch arrow keys onto the spring buttons (same hold-to-tilt path as Q)."""
-    env._expert_hold = _requested_side(window)
+def _mouse_picture_xy(viewer):
+    """Map window mouse position into Segmentation picture coordinates."""
+    window = viewer.window
+    mx, my = window.mouse_position
+    ww, wh = window.size
+    if ww <= 0 or wh <= 0 or mx < 0 or my < 0 or mx >= ww or my >= wh:
+        return None
+    tw, th = window.get_picture_size("Segmentation")
+    return int(mx * tw / ww), int(my * th / wh)
+
+
+class KeyboardShelfController:
+    """Arrows or hold-click on a keycap (no latch/toggle)."""
+
+    def __init__(self, env, viewer):
+        self.env = env
+        self.viewer = viewer
+        self._key_ids = {}
+        self._last_side = None
+        buttons = list(getattr(env, "buttons", []) or [])
+        if len(buttons) >= 2:
+            mapping = (("left", buttons[0]), ("right", buttons[1]))
+        else:
+            mapping = (
+                ("left", getattr(env, "left_button", None)),
+                ("right", getattr(env, "right_button", None)),
+            )
+        for side, key in mapping:
+            sid = actor_scene_id(key)
+            if sid is not None:
+                self._key_ids[int(sid)] = side
+
+    def _mouse_held_side(self):
+        window = self.viewer.window
+        if not bool(window.mouse_down(0)):
+            return None
+        pix = _mouse_picture_xy(self.viewer)
+        if pix is None:
+            return None
+        return click_hits_actor_map(self.viewer, pix[0], pix[1], self._key_ids)
+
+    def update(self, window):
+        side = _requested_side(window)
+        if side is None:
+            side = self._mouse_held_side()
+        if side != self._last_side:
+            if side is not None:
+                print(f"Shelf key pressed: {side}")
+            elif self._last_side is not None:
+                print(f"Shelf key released: {self._last_side}")
+            self._last_side = side
+        self.env._expert_hold = side
 
 
 def main():
@@ -124,13 +171,17 @@ def main():
 
     print_mode_controls("marble_shelf_maze", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
+    use_robot = is_robot_control(args.control)
     env = marble_shelf_maze()
-    # Always enable arm teleop: button presses are gripper-Z; Space opens/closes grippers.
-    env._interactive_robot_mode = True
     # Raster viewer: pour_beer-style plain-alpha shelves/panes (transmission is invisible here).
     env._plain_glass = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    env.together_close_gripper(save_freq=None)
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    prepare_interactive_control(env, args.control)
+    # Keep interactive tilt sync / hold-to-tilt path alive after arm strip.
+    if not use_robot:
+        env._interactive_universal_controls = True
+    if use_robot:
+        env.together_close_gripper(save_freq=None)
     print_episode_condition(env)
     env._bowl_armed = bool(getattr(env, "osc_bowl_enabled", False))
     env.plan_success = True
@@ -140,13 +191,19 @@ def main():
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
+    keyboard = None
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        print_instructions("Select an arm, hover a key, lower with Q to press.")
+    else:
+        keyboard = KeyboardShelfController(env, viewer)
+        print_instructions(
+            "Hold Left/Right arrows, or hold mouse on a keycap (releases when you let go)."
+        )
 
     dirs = list(getattr(env, "correct_dir", []) or [])
     print(f"Shelves={env.n_shelves}. Suggested directions top→bottom: {dirs}")
-    if args.control in ("keyboard", "keyboard+mouse"):
-        print_instructions("Keyboard arrows latch the spring keys (hold-to-tilt) as a sandbox shortcut.")
 
     terminal_started_at = None
     pacer = RealtimePhysicsPacer(env)
@@ -155,8 +212,8 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            if args.control in ("keyboard", "keyboard+mouse"):
-                _update_keyboard(env, viewer.window)
+            if keyboard is not None:
+                keyboard.update(viewer.window)
             else:
                 env._expert_hold = None
 
@@ -191,6 +248,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
     from _interactive_common import task_result_exit_code
     raise SystemExit(task_result_exit_code())

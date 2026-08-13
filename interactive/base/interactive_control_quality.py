@@ -28,8 +28,13 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     UniversalRobotControls,
+    actor_scene_id,
     add_record_data_arg,
+    add_robot_motion_arg,
+    click_hits_actor_map,
+    is_robot_control,
     make_viewer_view_toggle,
+    prepare_interactive_control,
     report_task_result,
     RealtimePhysicsPacer,
     terminal_hold_should_close,
@@ -39,8 +44,9 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow        stamp RED (left arm)
-  Right Arrow       stamp GREEN (right arm)
+  Left Arrow        hold to stamp RED
+  Right Arrow       hold to stamp GREEN
+  Mouse             hold click on a keycap to press it (releases when you let go)
 
   Skip BLACK tiles — do not press while they are under the stamp.
 """
@@ -203,8 +209,59 @@ class KeyboardStampController:
         self._queued_taps = {"left": [], "right": []}
 
 
+class HoldStampController:
+    """Hold Left/Right or hold-click a keycap (no latch after release)."""
+
+    def __init__(self, env, viewer):
+        self.env = env
+        self.viewer = viewer
+        self._key_ids = {}
+        self._last = None
+        for color, key in (getattr(env, "keys", {}) or {}).items():
+            sid = actor_scene_id(key)
+            if sid is not None:
+                self._key_ids[int(sid)] = str(color)
+
+    def _mouse_held_color(self):
+        window = self.viewer.window
+        if not bool(window.mouse_down(0)):
+            return None
+        mx, my = window.mouse_position
+        ww, wh = window.size
+        if ww <= 0 or wh <= 0 or mx < 0 or my < 0 or mx >= ww or my >= wh:
+            return None
+        tw, th = window.get_picture_size("Segmentation")
+        pix = (int(mx * tw / ww), int(my * th / wh))
+        return click_hits_actor_map(self.viewer, pix[0], pix[1], self._key_ids)
+
+    def update(self, window):
+        color = None
+        if window.key_down("left") and not window.key_down("right"):
+            color = "red"
+        elif window.key_down("right") and not window.key_down("left"):
+            color = "green"
+        if color is None:
+            color = self._mouse_held_color()
+        if color != self._last:
+            if color is not None:
+                print(f"Key pressed: {color}")
+            elif self._last is not None:
+                print(f"Key released: {self._last}")
+            self._last = color
+        bank = getattr(self.env, "_reactive_buttons", None)
+        if bank is None:
+            if color is not None:
+                self.env._press_key(color)
+            return
+        for c in ("red", "green"):
+            try:
+                bank.set_forced(c, color == c)
+            except Exception:
+                pass
+
+
 class ArrowPresses:
-    """Emit one stamp request for each Left/Right Arrow press edge."""
+    """Legacy edge taps for robot-assisted keyboard animation (unused in KM)."""
 
     def __init__(self):
         self._previous = {"left": False, "right": False}
@@ -267,52 +324,47 @@ def main():
     parser = argparse.ArgumentParser(description="Interactive control_quality viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
-    parser.add_argument(
-        "--control",
-        choices=("keyboard", "keyboard+mouse", "robot"),
-        default="robot",
-        help="Interaction method (default: robot)",
-    )
+    add_robot_motion_arg(parser)
     add_record_data_arg(parser)
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
     from envs.control_quality import control_quality
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("control_quality", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
+    use_robot = is_robot_control(args.control)
     env = control_quality()
-    env._interactive_robot_mode = True
-    # Arrow presses / gripper teleop need planner support.
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    prepare_interactive_control(env, args.control)
+    if not use_robot:
+        # Reactive key → stamp path must stay armed after arm strip.
+        env._interactive_universal_controls = True
     env.enable_interactive_tile_pause()
     print_episode_condition(env)
-    # Keep the belt frozen while arms move to the key hover poses. Starting it
-    # earlier burns the first tile's pause window before the operator can act.
-    _move_arms_to_ready(env)
-
-    stamp_controller = None
-    arrow_presses = None
-    if args.control in ("keyboard", "keyboard+mouse"):
-        stamp_controller = KeyboardStampController(env, ArmTag)
-        arrow_presses = ArrowPresses()
-    last_under = None
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
-    # Start rolling only after both grippers are parked above the keys.
+
+    hold = None
+    if use_robot:
+        _move_arms_to_ready(env)
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        print_instructions("Select an arm, hover a key, lower with Q to press.")
+    else:
+        hold = HoldStampController(env, viewer)
+        print_instructions(
+            "Hold Left/Right or hold mouse on a keycap (releases when you let go)."
+        )
+
     _start_belt(env)
-
     print(f"Tile colors: {env.tile_colors}")
-    if args.control in ("keyboard", "keyboard+mouse"):
-        print_instructions("Keyboard arrows still animate key taps as a sandbox shortcut.")
 
+    last_under = None
     terminal_started_at = None
     pacer = RealtimePhysicsPacer(env)
 
@@ -320,9 +372,8 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            if stamp_controller is not None and arrow_presses is not None:
-                arrow_presses.update(viewer.window, stamp_controller)
-                stamp_controller.update()
+            if hold is not None:
+                hold.update(viewer.window)
 
             last_under = _finalize_departed_tiles(env, last_under)
             under = env._tile_under_stamp(require_unhandled=True)
@@ -361,11 +412,7 @@ def main():
                 )
                 terminal_started_at = time.perf_counter()
     finally:
-        try:
-            if stamp_controller is not None:
-                stamp_controller.release()
-        finally:
-            env.close_env()
+        env.close_env()
 
 
 if __name__ == "__main__":

@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/interactive/base/interactive_punch_dual_holes.py --control keyboard
     /path/to/RoboDynaExp/interactive/base/interactive_punch_dual_holes.py --control robot
 
-Keyboard mode calls ``_fire_punch`` via arrows. Robot mode: select an arm, move
-over the key, lower with Q to press (ReactivePushButtons fires the punch).
+Keyboard+mouse: Left/Right (or click a button) fires that side's punch.
+Robot: select an arm, move over the key, lower with Q to press.
 """
 
 import argparse
@@ -28,8 +28,12 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     UniversalRobotControls,
+    actor_scene_id,
+    click_hits_actor_map,
     make_viewer_view_toggle,
     add_robot_motion_arg,
+    prepare_interactive_control,
+    is_robot_control,
     report_task_result,
     RealtimePhysicsPacer,
     terminal_hold_should_close,
@@ -39,10 +43,9 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow / Right Arrow
-                    fire punch on the matching belt
-
-  Prefer --control robot for gripper-Z key presses.
+  Left Arrow        fire left punch
+  Right Arrow       fire right punch
+  Mouse             click a punch button to fire that side
 """
 
 CONTROLS_ROBOT = """
@@ -113,6 +116,41 @@ class EdgeSides:
         edge = bool(key) and key != self._prev
         self._prev = key
         return key if edge else ()
+
+
+class KeyboardPunchController:
+    """Arrow edge or mouse click on a button fires ``_fire_punch``."""
+
+    def __init__(self, env, viewer):
+        self.env = env
+        self.viewer = viewer
+        self._edge = EdgeSides()
+        self._pending = []
+        self._button_ids = {}
+        for side in ("left", "right"):
+            btn = (getattr(env, "button", {}) or {}).get(side)
+            sid = actor_scene_id(btn)
+            if sid is not None:
+                self._button_ids[int(sid)] = side
+
+    def on_click(self, viewer, pixel_x, pixel_y):
+        hit = click_hits_actor_map(viewer, pixel_x, pixel_y, self._button_ids)
+        if hit is None:
+            return False
+        self._pending.append(str(hit))
+        return True
+
+    def update(self, window):
+        fired = list(self._edge.poll(_requested_sides(window)))
+        fired.extend(self._pending)
+        self._pending.clear()
+        seen = set()
+        for side in fired:
+            if side in seen:
+                continue
+            seen.add(side)
+            self.env._fire_punch(side)
+            print(f"Punch fired: {side}")
 
 
 class RobotPunchController:
@@ -197,7 +235,6 @@ class RobotPunchController:
         if self._phase[side] != "idle" or self._queued[side] <= 0:
             return
         self._queued[side] -= 1
-        # Return directly above the button before every vertical press.
         self._begin(side, "to_hover", self.hover_qpos[side])
 
     def _finish_transition(self, side, now):
@@ -251,13 +288,7 @@ class RobotPunchController:
 
 
 def _move_arms_to_ready(env):
-    """Hover both grippers above their buttons while belts stay inactive.
-
-    Mirrors ``punch_dual_holes.play_once`` / ``_hover_button``: grasp the button
-    top-down contact at ``pre_grasp_dis=grasp_dis=0.09`` so the closed gripper
-    parks above the keycap without pressing. Belts remain off because
-    ``_belt_active`` is still False and ``advance_belts=False``.
-    """
+    """Hover both grippers above their buttons while belts stay inactive."""
     env.plan_success = True
     env._last_plan_fail = None
     env._move_with_belt_motion(
@@ -273,8 +304,6 @@ def _move_arms_to_ready(env):
 
 def _start_belts(env):
     env._belt_active = True
-    # Continuous mode advances from the task's mode flag.  Discrete mode is
-    # started by _update_interactive_belt below and pauses at each punch stop.
     continuous = bool(getattr(env, "belt_continous_motion", False))
     env._belt_running = continuous
     env._interactive_discrete_stop_started = None
@@ -290,15 +319,7 @@ def _start_belts(env):
 
 
 def _update_interactive_belt(env):
-    """Drive the belt according to the task's configured motion mode.
-
-    Discrete (default): advance to the next tile arrival step, snap under the
-    stamp, and HOLD until every ready tile is stamped OR ``tile_pause_s``
-    elapses (miss then resume) — whichever comes first.
-
-    Must run once per physics step so multi-step display frames cannot skip
-    the single-step arrival window.
-    """
+    """Drive the belt according to the task's configured motion mode."""
     if bool(getattr(env, "belt_continous_motion", False)):
         env._belt_running = True
         return
@@ -310,7 +331,6 @@ def _update_interactive_belt(env):
             if not env.page_punched[side][page_idx]:
                 env._align_page_under_punch(side, page_idx)
 
-        # Stamp-first: resume as soon as every tile in this stop is punched.
         if all(bool(env.page_punched[side][k]) for side, k in stop.items()):
             env._interactive_discrete_stop_pages = None
             env._interactive_discrete_stop_started = None
@@ -328,15 +348,12 @@ def _update_interactive_belt(env):
             env._belt_running = True
         return
 
-    # Cruise until the next unpunched tile's arrival step (play_once style).
     next_steps = []
     for side in ("left", "right"):
         k = env._next_unpunched_page(side)
         if k is not None:
             next_steps.append(env._page_arrival_step(side, k))
     if not next_steps:
-        # All tiles stamped/missed — keep advancing so the last cards clear
-        # the stamp (matches play_once final belt runout).
         env._belt_running = True
         return
 
@@ -353,7 +370,6 @@ def _update_interactive_belt(env):
         if int(env._page_arrival_step(side, k)) == target:
             ready[side] = k
     if not ready:
-        # Fallback: overlap-based ready (should be rare once arrival is hit).
         ready = dict(env._ready_pages_at_current_step())
     if not ready:
         env._belt_running = True
@@ -389,35 +405,39 @@ def main():
 
     print_mode_controls("punch_dual_holes", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
+    use_robot = is_robot_control(args.control)
     env = punch_dual_holes()
-    env._interactive_robot_mode = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    env.together_close_gripper(save_freq=None)
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    prepare_interactive_control(env, args.control)
     print_episode_condition(env)
 
-    # Match play_once: approach buttons with belts inactive, then start motion.
-    _move_arms_to_ready(env)
+    if use_robot:
+        env.together_close_gripper(save_freq=None)
+        _move_arms_to_ready(env)
     _start_belts(env)
-
-    edge = EdgeSides()
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
-    # Start in the same front/head-camera view normally reached with V.
+    keyboard = None
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        print_instructions(
+            "Arms start above the buttons; belts begin after that ready pose. "
+            "Select an arm (1/2/3), move over a key, lower with Q to press."
+        )
+    else:
+        keyboard = KeyboardPunchController(env, viewer)
+        viewer.register_click_handler(keyboard.on_click)
+        print_instructions(
+            "Left/Right arrows (or click a punch button) fire that side's punch."
+        )
+
     if getattr(views, "_head", None) is not None:
         views.mode = "head"
         views.apply(announce=False)
-
-    print_instructions(
-        "Arms start above the buttons; belts begin after that ready pose. "
-        "Select an arm (1/2/3), move over a key, lower with Q to press. "
-    )
-    if args.control in ("keyboard", "keyboard+mouse"):
-        print_instructions("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")
 
     terminal_started_at = None
     runout_start_step = None
@@ -427,12 +447,8 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            if args.control in ("keyboard", "keyboard+mouse"):
-                fired = edge.poll(_requested_sides(viewer.window))
-                for side in fired:
-                    env._fire_punch(side)
-                if fired:
-                    print(f"Punch fired: {', '.join(fired)}")
+            if keyboard is not None:
+                keyboard.update(viewer.window)
 
             continuous = bool(getattr(env, "belt_continous_motion", False))
 
@@ -447,13 +463,9 @@ def main():
                 continue
 
             for _ in range(n_steps):
-                # Discrete: decide stop/go every physics step so multi-step
-                # display frames cannot skip the single-step arrival window.
                 _update_interactive_belt(env)
                 env._update_kinematic_tasks()
                 env.scene.step()
-            # Continuous only: miss tiles that slid past without a punch.
-            # Discrete misses are handled by the stop timeout.
             if continuous:
                 env._mark_overdue_pages()
             env.scene.update_render()
@@ -471,8 +483,6 @@ def main():
                 runout_start_step = None
                 continue
 
-            # After the last tile, keep the belt moving (play_once runout) so
-            # stamped cards clear the heads before reporting the result.
             if runout_start_step is None:
                 runout_start_step = int(env._belt_step)
                 print("Last tile resolved — running belt clear…")
@@ -494,6 +504,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
     from _interactive_common import task_result_exit_code
     raise SystemExit(task_result_exit_code())

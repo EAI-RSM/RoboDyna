@@ -221,7 +221,13 @@ def configure_task(task_name: str, config_name: str, seed: int, use_robot: bool,
 
 
 def add_record_data_arg(parser):
-    """Add ``--record-data`` (same HDF5 / LeRobot layout as ``collect_data.py``)."""
+    """Add ``--record-data`` (same HDF5 / LeRobot layout as ``collect_data.py``).
+
+    Idempotent: safe to call after ``add_robot_motion_arg``, which already
+    registers this flag.
+    """
+    if any("--record-data" in getattr(a, "option_strings", ()) for a in parser._actions):
+        return parser
     parser.add_argument(
         "--record-data",
         action="store_true",

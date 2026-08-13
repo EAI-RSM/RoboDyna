@@ -6,8 +6,8 @@ Run from any directory:
     /path/to/RoboDynaExp/interactive/base/interactive_save_goal.py --control keyboard
     /path/to/RoboDynaExp/interactive/base/interactive_save_goal.py --control robot
 
-Place the square keeper in the green zone before the red line so the solid
-keeper can bounce the ball from any angle (mass-aware: ball 100 g, keeper 500 g).
+Keyboard+mouse: click the table to place the goalkeeper (once).
+Robot: teleop grasp / place the keeper in the green zone before the red line.
 """
 
 import argparse
@@ -26,26 +26,30 @@ sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
 sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
-    add_record_data_arg,
+    UniversalRobotControls,
+    add_robot_motion_arg,
+    is_robot_control,
     make_viewer_view_toggle,
+    prepare_interactive_control,
+    print_instructions,
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
+    table_xy_from_click,
     terminal_hold_should_close,
     print_episode_condition,
 )
 
 
 CONTROLS_KEYBOARD = """
-  Arrow keys        nudge keeper XY (stay inside the green zone)
+  Mouse click       place the goalkeeper at that table XY (once)
 
-  Place the keeper before the ball crosses the red line.
+  Place it in the green zone before the ball crosses the red line.
 """
 
 CONTROLS_ROBOT = """
-  Arrow keys        nudge keeper XY (stay inside the green zone)
-
-  Place the keeper before the ball crosses the red line.
+  Grasp and place the keeper in the green zone before the red line.
+  Space opens/closes the gripper.
 """
 
 
@@ -89,19 +93,6 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
     return config
 
 
-def _nudge_from_keys(window, step=0.008):
-    dx = dy = 0.0
-    if window.key_down("left"):
-        dx -= step
-    if window.key_down("right"):
-        dx += step
-    if window.key_down("up"):
-        dy += step
-    if window.key_down("down"):
-        dy -= step
-    return dx, dy
-
-
 def _clip_keeper_xy(env, x, y):
     x_min = float(env.green_area_x_min + env.keeper_half_x)
     x_max = float(env.green_area_x_max - env.keeper_half_x)
@@ -110,7 +101,7 @@ def _clip_keeper_xy(env, x, y):
     return float(np.clip(x, x_min, x_max)), float(np.clip(y, y_min, y_max))
 
 
-def _set_keeper_xy(env, x, y, clip=True):
+def _set_keeper_xy(env, x, y, clip=True, kinematic=True):
     import sapien
     if clip:
         x, y = _clip_keeper_xy(env, x, y)
@@ -126,10 +117,54 @@ def _set_keeper_xy(env, x, y, clip=True):
         try:
             rigid.set_linear_velocity(np.zeros(3))
             rigid.set_angular_velocity(np.zeros(3))
+            if kinematic:
+                rigid.set_kinematic(True)
+                rigid.set_kinematic_target(pose)
+            else:
+                rigid.set_kinematic(False)
+        except Exception:
+            pass
+    return x, y
+
+
+def _park_keeper_hidden(env):
+    """Stash the keeper off the field until the player clicks a place."""
+    import sapien
+    z = float(env.table_top_z + env.keeper_half_z + 0.35)
+    pose = sapien.Pose([0.0, -0.55, z], [1, 0, 0, 0])
+    try:
+        env.goalkeeper.set_pose(pose)
+    except Exception:
+        env.goalkeeper.actor.set_pose(pose)
+    rigid = env._get_rigid(env.goalkeeper)
+    if rigid is not None:
+        try:
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
             rigid.set_kinematic(True)
             rigid.set_kinematic_target(pose)
         except Exception:
             pass
+    if hasattr(env, "_set_collision_enabled"):
+        try:
+            env._set_collision_enabled(env.goalkeeper, False)
+        except Exception:
+            pass
+
+
+def _place_keeper_at_click(env, x, y):
+    x, y = _set_keeper_xy(env, x, y, clip=True, kinematic=True)
+    if hasattr(env, "_seat_keeper_dynamic"):
+        env._seat_keeper_dynamic()
+    else:
+        _set_keeper_xy(env, x, y, clip=False, kinematic=False)
+        if hasattr(env, "_set_collision_enabled"):
+            try:
+                env._set_collision_enabled(env.goalkeeper, True)
+            except Exception:
+                pass
+    env._keeper_deployed = True
+    print(f"Goalkeeper placed at ({x:.3f}, {y:.3f}).")
     return x, y
 
 
@@ -162,81 +197,93 @@ def _start_shot(env):
                 pass
 
 
-class KeyboardKeeperController:
-    def __init__(self, env):
+def _save_ok_without_grippers(env) -> bool:
+    """``check_success`` requires open grippers; keyboard mode has no arms."""
+    return bool(
+        env._keeper_in_zone()
+        and getattr(env, "_block_was_legal", False)
+        and env._ball_blocked
+        and (not env._late_failure)
+        and (not env._goal_conceded)
+    )
+
+
+class ClickKeeperController:
+    """One click places the keeper; further clicks ignored."""
+
+    def __init__(self, env, viewer):
         self.env = env
+        self.viewer = viewer
         self.deployed = False
 
-    def update(self, window):
-        if self.deployed:
-            return
-        dx, dy = _nudge_from_keys(window)
-        if dx or dy:
-            p = np.asarray(self.env.goalkeeper.get_pose().p, dtype=float)
-            _set_keeper_xy(self.env, p[0] + dx, p[1] + dy, clip=True)
+    def on_click(self, viewer, pixel_x, pixel_y):
+        if self.deployed or getattr(self.env, "_keeper_deployed", False):
+            return False
+        hit = table_xy_from_click(
+            viewer, pixel_x, pixel_y, float(self.env.table_top_z)
+        )
+        if hit is None:
+            return False
+        _place_keeper_at_click(self.env, hit[0], hit[1])
+        self.deployed = True
+        return True
+
+    def update(self, _window):
+        return
 
 
 class RobotKeeperController:
     """Teleop only — Space opens/closes the gripper only."""
 
-    def __init__(self, env, ArmTag):
+    def __init__(self, env):
         self.env = env
-        self.ArmTag = ArmTag
 
     def update(self, window):
-        # Shared viewer Space / arrows / E/Q own gripper and arm motion.
-        return
+        del window
 
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive save_goal viewer")
     parser.add_argument("--config", default="demo_dynamic", help="Task config name without .yml")
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
-    parser.add_argument(
-        "--control",
-        choices=("keyboard", "keyboard+mouse", "robot"),
-        default="robot",
-        help="Interaction method (default: robot)",
-    )
-    parser.add_argument(
-        "--robot-motion",
-        choices=("planner", "interpolate"),
-        default="planner",
-        help="Robot motion backend (interpolate = faster joint interp when supported; default planner)",
-    )
-    add_record_data_arg(parser)
+    add_robot_motion_arg(parser, robot_motion_default="planner")
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH
     from envs.save_goal import save_goal
-    from envs.utils.action import ArmTag
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("save_goal", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
-    if args.robot_motion == "interpolate":
-        print(
-            "Note: --robot-motion interpolate uses planner motions for this teleop task "
-            "(key-press sandboxes use joint interpolation)."
-        )
 
+    use_robot = is_robot_control(args.control)
     env = save_goal()
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    prepare_interactive_control(env, args.control)
     print_episode_condition(env)
     _start_shot(env)
+    if not use_robot:
+        _park_keeper_hidden(env)
+
     target = env.goalkeeper_target_pose.p if env.goalkeeper_target_pose is not None else [0, 0, 0]
     print(
         f"Shot started. Intercept target ≈ ({target[0]:.3f}, {target[1]:.3f}); "
         f"red_line_x={env.red_line_x:.3f}; mirrored={env.mirrored}."
     )
 
-    controller = (
-        RobotKeeperController(env, ArmTag) if args.control == "robot" else KeyboardKeeperController(env)
-    )
-
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        controller = RobotKeeperController(env)
+        print_instructions("Teleop the keeper into the green zone before the red line.")
+    else:
+        controller = ClickKeeperController(env, viewer)
+        viewer.register_click_handler(controller.on_click)
+        print_instructions("Click once on the table to place the goalkeeper.")
 
     done_since = None
     terminal_started_at = None
@@ -276,11 +323,16 @@ def main():
                 if done_since is None:
                     done_since = time.perf_counter()
                 elif time.perf_counter() - done_since >= 1.0:
-                    report_task_result(
-                        env,
-                        f"in_zone={env._keeper_in_zone()}, legal_block={getattr(env, '_block_was_legal', False)}, "
-                        f"blocked={env._ball_blocked}, late={env._late_failure}, conceded={env._goal_conceded}",
+                    detail = (
+                        f"in_zone={env._keeper_in_zone()}, "
+                        f"legal_block={getattr(env, '_block_was_legal', False)}, "
+                        f"blocked={env._ball_blocked}, late={env._late_failure}, "
+                        f"conceded={env._goal_conceded}"
                     )
+                    if use_robot:
+                        report_task_result(env, detail)
+                    else:
+                        report_task_result(env, detail, ok=_save_ok_without_grippers(env))
                     terminal_started_at = time.perf_counter()
     finally:
         env.close_env()
@@ -288,6 +340,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
     from _interactive_common import task_result_exit_code
     raise SystemExit(task_result_exit_code())

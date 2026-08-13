@@ -1,8 +1,8 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
 """Interactive sandbox for ``load_train``.
 
-Pick the ball, hover over the near rail, release into an open wagon.
-Space opens/closes the gripper only — no automated pick-up / carry.
+Keyboard+mouse: marble hovers over the near-rail drop; Space releases it.
+Robot: pick the ball, hover over a wagon, Space to open / drop.
 
 Run from any directory:
 
@@ -16,12 +16,18 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import sapien
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     add_robot_motion_arg,
     bootstrap_repo,
     configure_task,
+    edge_pressed,
+    is_robot_control,
+    prepare_interactive_control,
     print_banner,
     release_dynamic,
     run_viewer_loop,
@@ -41,13 +47,90 @@ def _ball_held(env) -> bool:
         return False
 
 
-class BallReleaseMonitor:
-    """When the ball leaves the hand, mark release so wagon latching can run.
+def _hover_z(env) -> float:
+    return float(
+        env.car_floor_z
+        + env.car_floor_h
+        + env.car_wall_h
+        + env.ball_radius
+        + max(
+            float(getattr(env, "transport_clearance_z", 0.02)),
+            float(getattr(env, "release_clearance_z", 0.02)),
+        )
+    )
 
-    Shared ``ViewerViewToggle`` already binds Space to open/close gripper only.
-    This monitor watches contact so a manual grasp → open drop sets
-    ``_ball_released`` and ``is_done`` can report SUCCESS/FAILURE.
-    """
+
+def _set_ball_pose(env, xyz, *, kinematic=True, gravity_off=True):
+    pose = sapien.Pose(
+        [float(xyz[0]), float(xyz[1]), float(xyz[2])],
+        list(env.ball.get_pose().q),
+    )
+    try:
+        env.ball.set_pose(pose)
+    except Exception:
+        env.ball.actor.set_pose(pose)
+    rigid = getattr(env, "_ball_rigid", None)
+    if rigid is None:
+        return
+    try:
+        rigid.set_linear_velocity(np.zeros(3))
+        rigid.set_angular_velocity(np.zeros(3))
+        if gravity_off:
+            rigid.set_disable_gravity(True)
+        if kinematic:
+            rigid.set_kinematic(True)
+            rigid.set_kinematic_target(pose)
+        else:
+            rigid.set_kinematic(False)
+            if not gravity_off:
+                rigid.set_disable_gravity(False)
+    except Exception:
+        pass
+
+
+class KeyboardHoverRelease:
+    """Hold the ball over the drop station; Space drops it into the train."""
+
+    def __init__(self, env):
+        self.env = env
+        self._prev = {}
+        self.released = False
+        xy = np.asarray(env._drop_target_xy, dtype=float)
+        _set_ball_pose(env, [xy[0], xy[1], _hover_z(env)], kinematic=True, gravity_off=True)
+        print(
+            "Marble hovering over the train drop — press Space to release "
+            "when a wagon is underneath."
+        )
+
+    def update(self, window):
+        if self.released:
+            return
+        xy = np.asarray(self.env._drop_target_xy, dtype=float)
+        _set_ball_pose(
+            self.env,
+            [xy[0], xy[1], _hover_z(self.env)],
+            kinematic=True,
+            gravity_off=True,
+        )
+        if not edge_pressed(window, "space", self._prev):
+            return
+        self.released = True
+        self.env._interactive_holding = False
+        self.env._interactive_released = True
+        rigid = getattr(self.env, "_ball_rigid", None)
+        if rigid is not None:
+            try:
+                rigid.set_disable_gravity(False)
+            except Exception:
+                pass
+        release_dynamic(rigid)
+        self.env._ball_released = True
+        self.env._bed_contact_steps = 0
+        print("Ball released — watch for wagon latch.")
+
+
+class BallReleaseMonitor:
+    """When the ball leaves the hand, mark release so wagon latching can run."""
 
     def __init__(self, env):
         self.env = env
@@ -118,43 +201,64 @@ def main():
 
     from envs.load_train import load_train
 
-    use_robot = args.control == "robot"
+    use_robot = is_robot_control(args.control)
     env = load_train()
     env.setup_demo(**configure_task("load_train", args.config, args.seed, use_robot=use_robot))
+    prepare_interactive_control(env, args.control)
     print_episode_condition(env)
     env._train_running = True
 
-    print_banner(
-        "load_train — interactive controls",
-        [
-            f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
-            f"config: {args.config}  |  seed: {args.seed}",
-            "Goal: drop the ball into an open wagon as it passes under the near rail.",
-            "Opt 1 (target wagon): ONLY the RED wagon counts — gray ones are distractors.",
-            "1 / 2 / 3 — select left / right / both arms (robot mode; selected gripper turns green)",
-            "Space — open / close selected gripper(s) only",
-            "Arrows / E / Q — teleop the selected arm(s)",
-            "V — cycle view: head_camera ↔ gripper(s)",
-            "Esc — close the viewer window to quit",
-            "Close Space on the ball to grasp; open Space over a wagon to drop.",
-            "--robot-motion planner|interpolate",
-        ],
-    )
+    if use_robot:
+        print_banner(
+            "load_train — interactive controls",
+            [
+                f"Mode: {args.control}  |  robot-motion: {args.robot_motion}  |  "
+                f"config: {args.config}  |  seed: {args.seed}",
+                "Goal: drop the ball into an open wagon as it passes under the near rail.",
+                "Opt 1 (target wagon): ONLY the RED wagon counts — gray ones are distractors.",
+                "1 / 2 / 3 — select left / right / both arms (robot mode; selected gripper turns green)",
+                "Space — open / close selected gripper(s) only",
+                "Arrows / E / Q — teleop the selected arm(s)",
+                "V — cycle view: head_camera ↔ gripper(s)",
+                "Esc — close the viewer window to quit",
+                "Close Space on the ball to grasp; open Space over a wagon to drop.",
+                "--robot-motion planner|interpolate",
+            ],
+        )
+    else:
+        print_banner(
+            "load_train — keyboard+mouse",
+            [
+                f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}",
+                "Marble hovers over the low train drop station.",
+                "Space — release the marble when a wagon is underneath",
+                "Opt 1: only the RED wagon counts",
+                "Esc — quit",
+            ],
+        )
+
     env._interactive_holding = False
     env._interactive_released = False
     env._ball_released = False
-    release_monitor = BallReleaseMonitor(env)
-    print_instructions(
-        "Ball ready. Teleop to the ball, Space to close/open the gripper. "
-        "Drop into a wagon as it passes."
-    )
+    release_monitor = BallReleaseMonitor(env) if use_robot else None
+    hover = KeyboardHoverRelease(env) if not use_robot else None
+    if use_robot:
+        print_instructions(
+            "Ball ready. Teleop to the ball, Space to close/open the gripper. "
+            "Drop into a wagon as it passes."
+        )
+    else:
+        print_instructions("Press Space to release the hovering marble into a wagon.")
 
     post_release = 0
 
     def on_step(window, step):
         nonlocal post_release
-        del window, step  # teleop / Space gripper owned by shared viewer controls
-        release_monitor.update()
+        del step
+        if hover is not None:
+            hover.update(window)
+        if release_monitor is not None:
+            release_monitor.update()
         if env._interactive_released:
             post_release += 1
 
@@ -171,6 +275,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # household_task_gui convention: 0=SUCCESS, 10=FAILURE, 2=no result
     from _interactive_common import task_result_exit_code
     raise SystemExit(task_result_exit_code())
