@@ -120,31 +120,74 @@ def _default_aim(env):
     return env._aim_dir
 
 
-def _place_cue_tip_at(env, tip_xy, aim=None):
-    """Park the cue so its tip sits at ``tip_xy`` on the ball-height plane."""
-    aim = np.asarray(env._aim_dir if aim is None else aim, dtype=float)
-    n = float(np.linalg.norm(aim))
+def _qmult(a, b):
+    aw, ax, ay, az = [float(v) for v in a]
+    bw, bx, by, bz = [float(v) for v in b]
+    return [
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ]
+
+
+def _aim_xy_from_quat(q) -> np.ndarray:
+    """World XY of the cue's local +X (tip) axis."""
+    w, x, y, z = [float(v) for v in q]
+    dx = 1.0 - 2.0 * (y * y + z * z)
+    dy = 2.0 * (x * y + w * z)
+    n = float(np.hypot(dx, dy))
     if n < 1e-6:
-        aim = np.array([0.0, 1.0], dtype=float)
-    else:
-        aim = aim / n
-    env._aim_dir = aim
-    tip = np.array([float(tip_xy[0]), float(tip_xy[1]), float(env.ball_z)], dtype=float)
-    yaw = float(np.arctan2(aim[1], aim[0]))
-    q = _yaw_quat(yaw)
-    half = float(env.CUE_HALF_LEN)
-    new_body = tip - np.array([aim[0] * half, aim[1] * half, 0.0])
-    new_pose = sapien.Pose(new_body.tolist(), q)
-    env.cue.actor.set_pose(new_pose)
+        return np.array([0.0, 1.0], dtype=float)
+    return np.array([dx / n, dy / n], dtype=float)
+
+
+def _quat_rotate_vec(q, v) -> np.ndarray:
+    w, x, y, z = [float(c) for c in q]
+    vx, vy, vz = [float(c) for c in v]
+    # q * v * q_conj
+    iw = -x * vx - y * vy - z * vz
+    ix = w * vx + y * vz - z * vy
+    iy = w * vy + z * vx - x * vz
+    iz = w * vz + x * vy - y * vx
+    return np.array(
+        [
+            iw * (-x) + ix * w + iy * (-z) - iz * (-y),
+            iw * (-y) - ix * (-z) + iy * w + iz * (-x),
+            iw * (-z) + ix * (-y) - iy * (-x) + iz * w,
+        ],
+        dtype=float,
+    )
+
+
+def _set_cue_pose(env, pose) -> None:
+    env.cue.actor.set_pose(pose)
     rigid = _get_rigid(env.cue)
-    if rigid is not None:
-        try:
-            rigid.set_kinematic(True)
-            rigid.set_linear_velocity(np.zeros(3))
-            rigid.set_angular_velocity(np.zeros(3))
-            rigid.set_kinematic_target(new_pose)
-        except Exception:
-            pass
+    if rigid is None:
+        return
+    try:
+        rigid.set_kinematic(True)
+        rigid.set_linear_velocity(np.zeros(3))
+        rigid.set_angular_velocity(np.zeros(3))
+        rigid.set_kinematic_target(pose)
+    except Exception:
+        pass
+
+
+def _place_cue_tip_at(env, tip_xy, q=None):
+    """Move the cue so its tip is at ``tip_xy``; keep ``q`` (stand yaw by default)."""
+    pose = env.cue.get_pose()
+    q = list(pose.q if q is None else q)
+    aim = _aim_xy_from_quat(q)
+    env._aim_dir = aim
+    tip = np.array(
+        [float(tip_xy[0]), float(tip_xy[1]), float(env.ball_z)], dtype=float
+    )
+    half = float(env.CUE_HALF_LEN)
+    offset = _quat_rotate_vec(q, [half, 0.0, 0.0])
+    body = tip - offset
+    new_pose = sapien.Pose(body.tolist(), q)
+    _set_cue_pose(env, new_pose)
     return tip
 
 
@@ -155,7 +198,7 @@ def _place_cue_for_aim(env, gap=None):
     ball = np.asarray(env.primary_ball.get_pose().p, dtype=float)
     aim = np.asarray(env._aim_dir, dtype=float)
     tip_xy = ball[:2] - aim * gap
-    return _place_cue_tip_at(env, tip_xy, aim=aim)
+    return _place_cue_tip_at(env, tip_xy)
 
 
 def _yaw_quat(yaw):
@@ -181,7 +224,7 @@ def _force_strike(env) -> bool:
     # Seat tip against the ball, then kick.
     ball = np.asarray(env.primary_ball.get_pose().p, dtype=float)
     gap = float(env.ball_radius + 2.0 * env.CUE_RADIUS)
-    _place_cue_tip_at(env, ball[:2] - direction[:2] * gap, aim=direction[:2])
+    _place_cue_tip_at(env, ball[:2] - direction[:2] * gap)
     try:
         rigid.set_linear_velocity(direction * float(env.strike_impulse))
         rigid.set_angular_velocity(np.zeros(3))
@@ -203,15 +246,14 @@ class KeyboardCueController:
         self.env = env
         self.viewer = viewer
         self.struck = False
-        self.gap = float(env.APPROACH_GAP)
         self._prev = {}
         self._tip_xy = None
         _default_aim(env)
-        tip = _place_cue_for_aim(env, gap=self.gap)
-        self._tip_xy = tip[:2].copy()
+        env._aim_dir = _aim_xy_from_quat(list(env.cue.get_pose().q))
+        env._cue_tip_hit_allowed = False
         print(
-            f"Aim → {env._target_pocket_name}. Click to place the tip; "
-            "Left/Right rotate; Space hits."
+            f"Aim → {env._target_pocket_name}. Click to place the cue tip; "
+            "Left/Right rotate about the tip; Space hits."
         )
 
     def on_click(self, viewer, pixel_x, pixel_y):
@@ -228,8 +270,7 @@ class KeyboardCueController:
         return True
 
     def update(self, window):
-        if self.env._strike_done or self.env._primary_pocketed:
-            self.struck = True
+        if self.struck:
             return
         rot = 0.0
         if window.key_down("left"):
@@ -237,15 +278,13 @@ class KeyboardCueController:
         if window.key_down("right"):
             rot -= 0.04  # clockwise
         if rot:
-            c, s = np.cos(rot), np.sin(rot)
-            ax, ay = self.env._aim_dir
-            self.env._aim_dir = np.array([c * ax - s * ay, s * ax + c * ay], dtype=float)
-            n = float(np.linalg.norm(self.env._aim_dir))
-            self.env._aim_dir /= max(n, 1e-6)
-            if self._tip_xy is None:
-                _place_cue_for_aim(self.env, gap=self.gap)
+            q = _qmult(_yaw_quat(rot), list(self.env.cue.get_pose().q))
+            self.env._aim_dir = _aim_xy_from_quat(q)
+            if self._tip_xy is not None:
+                _place_cue_tip_at(self.env, self._tip_xy, q=q)
             else:
-                _place_cue_tip_at(self.env, self._tip_xy)
+                pose = self.env.cue.get_pose()
+                _set_cue_pose(self.env, sapien.Pose(list(pose.p), q))
         if edge_pressed(window, "space", self._prev):
             _force_strike(self.env)
             self.struck = True
@@ -334,8 +373,12 @@ def main():
                 continue
 
             for _ in range(n_steps):
-                env._update_kinematic_tasks()
-                env.scene.step()
+                try:
+                    env._update_kinematic_tasks()
+                    env.scene.step()
+                except Exception as exc:
+                    print(f"play_billiard physics step error: {type(exc).__name__}: {exc}")
+                    break
             env.scene.update_render()
             viewer.render()
 
@@ -347,11 +390,14 @@ def main():
                     break
                 continue
 
-            if env._robot_ball_contact:
+            if env._robot_ball_contact and use_robot:
                 report_task_result(env, "robot touched ball")
                 terminal_started_at = time.perf_counter()
                 continue
             if getattr(env, "_cue_distractor_contact", False):
+                if not use_robot and getattr(controller, "_tip_xy", None) is None:
+                    env._cue_distractor_contact = False
+                    continue
                 report_task_result(env, "cue touched non-target ball")
                 terminal_started_at = time.perf_counter()
                 continue
@@ -360,6 +406,9 @@ def main():
                 terminal_started_at = time.perf_counter()
                 continue
             if env._strike_done or env._primary_pocketed:
+                if not getattr(controller, "struck", False) and not use_robot:
+                    # Ignore leftover strike flags from spawn; wait for Space.
+                    continue
                 if settle_after is None:
                     settle_after = time.perf_counter()
                     print("Ball in motion; settling…")

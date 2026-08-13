@@ -1254,6 +1254,16 @@ class play_billiard(Base_Task):
                 return True
         return False
 
+    def _contact_pair_names(self, contact):
+        """Actor names for a PhysX contact pair; None if a body was removed."""
+        names = []
+        bodies = getattr(contact, "bodies", None) or ()
+        for i in range(2):
+            body = bodies[i] if i < len(bodies) else None
+            ent = getattr(body, "entity", None) if body is not None else None
+            names.append(None if ent is None else getattr(ent, "name", None))
+        return names[0], names[1]
+
     def _cue_ball_contacting(self):
         """True only when PhysX reports touching tip↔primary-ball contact.
 
@@ -1270,8 +1280,9 @@ class play_billiard(Base_Task):
         ball_name = self.primary_ball.get_name()
         try:
             for contact in self.scene.get_contacts():
-                n0 = contact.bodies[0].entity.name
-                n1 = contact.bodies[1].entity.name
+                n0, n1 = self._contact_pair_names(contact)
+                if n0 is None or n1 is None:
+                    continue
                 if not (
                     (n0 == cue_name and n1 == ball_name)
                     or (n1 == cue_name and n0 == ball_name)
@@ -1300,8 +1311,9 @@ class play_billiard(Base_Task):
             return
         try:
             for contact in self.scene.get_contacts():
-                n0 = contact.bodies[0].entity.name
-                n1 = contact.bodies[1].entity.name
+                n0, n1 = self._contact_pair_names(contact)
+                if n0 is None or n1 is None:
+                    continue
                 if not (
                     (n0 == cue_name and n1 in extra_names)
                     or (n1 == cue_name and n0 in extra_names)
@@ -1424,20 +1436,27 @@ class play_billiard(Base_Task):
             return
         if self.primary_ball is None:
             return
+        # Keyboard mode strips the arms; leftover contacts have no entity.
+        if getattr(self, "_interactive_robot_mode", True) is False:
+            return
         # While the cue is welded (or after the tip has spent its hit), WSG pads
         # can ghost through the stick and spuriously touch the ball — ignore.
         if self._cue_welded or self._strike_armed or self._strike_done:
             return
         ball_name = self.primary_ball.get_name()
-        for contact in self.scene.get_contacts():
-            name0 = contact.bodies[0].entity.name
-            name1 = contact.bodies[1].entity.name
-            if (
-                (name0 == ball_name and name1 in self._robot_link_names)
-                or (name1 == ball_name and name0 in self._robot_link_names)
-            ):
-                self._robot_ball_contact = True
-                return
+        try:
+            for contact in self.scene.get_contacts():
+                name0, name1 = self._contact_pair_names(contact)
+                if name0 is None or name1 is None:
+                    continue
+                if (
+                    (name0 == ball_name and name1 in self._robot_link_names)
+                    or (name1 == ball_name and name0 in self._robot_link_names)
+                ):
+                    self._robot_ball_contact = True
+                    return
+        except Exception:
+            pass
 
     def _stick_tip_dir_xy(self):
         """Unit XY direction the cue tip is pointing (stick orientation, not pocket aim)."""
@@ -1461,6 +1480,9 @@ class play_billiard(Base_Task):
             or self._primary_pocketed
             or not getattr(self, "_cue_tip_hit_allowed", True)
         ):
+            return
+        # Keyboard Space applies the hit; do not auto-strike from tip proximity.
+        if getattr(self, "_interactive_robot_mode", True) is False:
             return
         tip = self._tip_xyz()
         ball_p = np.asarray(self.primary_ball.get_pose().p, dtype=np.float64)
@@ -1612,6 +1634,11 @@ class play_billiard(Base_Task):
         if not getattr(self, "_loaded", False):
             return
         self._update_welded_cue()
+        if getattr(self, "_interactive_robot_mode", True) is False:
+            self._check_cue_distractor_contact()
+            self._ensure_balls_dynamic()
+            self._check_and_sink_pockets()
+            return
         self._check_robot_ball_contact()
         self._check_cue_distractor_contact()
         self._try_apply_strike_impulse()

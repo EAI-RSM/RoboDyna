@@ -107,10 +107,12 @@ def is_robot_control(value) -> bool:
 
 
 def strip_interactive_arms(env) -> None:
-    """Remove dual-arm articulations from the interactive scene (keyboard+mouse).
+    """Hide dual-arm articulations for keyboard+mouse (do not destroy them).
 
-    Env files stay unchanged: robots still load during ``setup_demo``, then this
-    drops them so they are not visible, collidable, or teleop-able.
+    Env files stay unchanged: robots still load during ``setup_demo``. Removing
+    articulations from the PhysX scene leaves dangling contacts and can SIGSEGV
+    on the next ``scene.step()`` / ``get_contacts()``. Hide, disable collision,
+    and bury them instead.
     """
     if bool(getattr(env, "_interactive_arms_removed", False)):
         return
@@ -145,24 +147,19 @@ def strip_interactive_arms(env) -> None:
                             pass
         except Exception:
             pass
-        removed = False
+        # Do not remove_articulation: PhysX then SIGSEGVs on scene.step / get_contacts.
         try:
-            scene.remove_articulation(entity)
-            removed = True
+            pose = entity.get_root_pose()
+            entity.set_root_pose(sapien.Pose([pose.p[0], pose.p[1], -8.0], pose.q))
         except Exception:
             try:
-                scene.remove_entity(entity)
-                removed = True
-            except Exception:
-                try:
-                    entity.set_root_pose(sapien.Pose([0.0, 0.0, -5.0]))
-                except Exception:
-                    pass
-        if removed:
-            try:
-                setattr(robot, f"{side}_entity", None)
+                entity.set_root_pose(sapien.Pose([0.0, 0.0, -8.0]))
             except Exception:
                 pass
+        try:
+            entity.set_qvel(np.zeros_like(entity.get_qpos()))
+        except Exception:
+            pass
     env._interactive_arms_removed = True
     env._interactive_robot_mode = False
 
