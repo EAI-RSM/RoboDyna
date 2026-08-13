@@ -4,12 +4,169 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import shutil
+import subprocess
+import sys
 import tkinter as tk
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTRUCTION_DIR = REPO_ROOT / "description" / "task_instruction"
+# Same Robo/Dyna stamp mark as control_quality tiles (cropped + upright).
+APP_ICON_PATH = REPO_ROOT / "assets" / "static" / "robodyna_app_icon.png"
+_APP_ICON_SIZES = (16, 32, 48, 64, 128, 256, 512)
+# XDG icon name installed under ~/.local/share/icons/hicolor/.../apps/
+APP_ICON_NAME = "robodyna"
+
+# Tk lowercases everything after the first letter for WM_CLASS class, so pass the
+# final GNOME StartupWMClass string here (must match the .desktop file).
+GUI_WM_CLASS = {
+    "interactive": "Robodynainteractive",
+    "household": "Robodynahousehold",
+}
+
+
+def _xdg_data_home() -> Path:
+    raw = os.environ.get("XDG_DATA_HOME", "").strip()
+    if raw:
+        return Path(raw)
+    return Path.home() / ".local" / "share"
+
+
+def install_ubuntu_dock_icon(
+    *,
+    desktop_id: str,
+    name: str,
+    comment: str,
+    script_path: Path,
+    wm_class: str,
+    python_exe: str | None = None,
+) -> Path | None:
+    """Install the stamp PNG + a .desktop entry so Ubuntu's dock shows it.
+
+    GNOME ignores Tk ``iconphoto`` for the dock; it uses ``Icon=`` from a
+    matching ``.desktop`` via ``StartupWMClass``.
+    """
+    if not APP_ICON_PATH.is_file():
+        return None
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+
+    data_home = _xdg_data_home()
+    icon_root = data_home / "icons" / "hicolor"
+    apps_dir = data_home / "applications"
+    apps_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        master = Image.open(APP_ICON_PATH).convert("RGBA")
+    except OSError:
+        return None
+
+    for size in _APP_ICON_SIZES:
+        dest_dir = icon_root / f"{size}x{size}" / "apps"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{APP_ICON_NAME}.png"
+        master.resize((size, size), Image.Resampling.LANCZOS).save(dest, optimize=True)
+
+    exe = python_exe or sys.executable
+    script = script_path.resolve()
+    desktop_path = apps_dir / f"{desktop_id}.desktop"
+    # Absolute Icon= path is the most reliable fallback if the theme cache lags.
+    icon_abs = (icon_root / "256x256" / "apps" / f"{APP_ICON_NAME}.png").resolve()
+    desktop_path.write_text(
+        "\n".join(
+            [
+                "[Desktop Entry]",
+                "Version=1.0",
+                "Type=Application",
+                f"Name={name}",
+                f"Comment={comment}",
+                f"Exec={exe} {script}",
+                f"Icon={icon_abs}",
+                "Terminal=false",
+                "Categories=Science;Education;",
+                f"StartupWMClass={wm_class}",
+                "StartupNotify=true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    desktop_path.chmod(desktop_path.stat().st_mode | 0o111)
+
+    # Refresh caches when tools exist (best-effort; dock still works without).
+    for cmd in (
+        ["update-desktop-database", str(apps_dir)],
+        ["gtk-update-icon-cache", "-f", "-t", str(icon_root)],
+    ):
+        if shutil.which(cmd[0]) is None:
+            continue
+        try:
+            subprocess.run(cmd, check=False, capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return desktop_path
+
+
+def apply_window_icon(window: tk.Misc) -> None:
+    """Set the window decoration icon (title bar). Dock icon needs .desktop install."""
+    if not APP_ICON_PATH.is_file():
+        return
+    try:
+        from PIL import Image, ImageTk
+    except ImportError:
+        return
+    try:
+        master = Image.open(APP_ICON_PATH).convert("RGBA")
+    except OSError:
+        return
+    photos: list = []
+    for size in (16, 32, 48, 64, 128, 256):
+        im = master.resize((size, size), Image.Resampling.LANCZOS)
+        photos.append(ImageTk.PhotoImage(im, master=window))
+    if not photos:
+        return
+    try:
+        window.iconphoto(True, *photos)
+    except tk.TclError:
+        return
+    # Keep PhotoImage refs alive for the lifetime of the window.
+    existing = getattr(window, "_robodyna_icon_photos", None)
+    if isinstance(existing, list):
+        existing.extend(photos)
+    else:
+        window._robodyna_icon_photos = photos
+
+
+def setup_gui_app_icon(
+    window: tk.Tk,
+    *,
+    suite: str,
+    script_path: Path,
+) -> None:
+    """Install Ubuntu dock branding and apply the in-window icon."""
+    wm_class = GUI_WM_CLASS.get(suite, "Robodyna")
+    if suite == "household":
+        name = "RoboDyna Household Tasks"
+        comment = "Household interactive task launcher"
+        desktop_id = "robodyna-household-tasks"
+    else:
+        name = "RoboDyna Interactive Tasks"
+        comment = "Dynamic interactive task launcher"
+        desktop_id = "robodyna-interactive-tasks"
+
+    install_ubuntu_dock_icon(
+        desktop_id=desktop_id,
+        name=name,
+        comment=comment,
+        script_path=script_path,
+        wm_class=wm_class,
+    )
+    apply_window_icon(window)
 
 # Warm slate + copper accent — distinct from the launcher chrome, not purple/cream.
 PAGE_BG = "#0e141c"
@@ -499,6 +656,7 @@ def show_task_briefing(parent: tk.Tk | tk.Toplevel, briefing: dict) -> bool:
     dialog = tk.Toplevel(parent)
     dialog.title("Task briefing")
     dialog.configure(bg=PAGE_BG)
+    apply_window_icon(dialog)
     dialog.transient(parent)
     dialog.grab_set()
     dialog.resizable(True, True)

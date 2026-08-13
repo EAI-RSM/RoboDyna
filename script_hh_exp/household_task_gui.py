@@ -27,7 +27,12 @@ TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"
 _SCRIPT_EXP = ROOT / "script_exp"
 if str(_SCRIPT_EXP) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_EXP))
-from _task_briefing import build_briefing_text, show_task_briefing  # noqa: E402
+from _task_briefing import (  # noqa: E402
+    GUI_WM_CLASS,
+    build_briefing_text,
+    setup_gui_app_icon,
+    show_task_briefing,
+)
 
 TASKS = (
     ("Trap Bug", "trap_bug", "interactive_trap_bug.py"),
@@ -218,11 +223,17 @@ class HouseholdTaskLauncher(tk.Tk):
     UI_SCALE_MAX = 1.15
 
     def __init__(self):
-        super().__init__()
+        # className becomes StartupWMClass for the Ubuntu dock .desktop entry.
+        super().__init__(className=GUI_WM_CLASS["household"])
         self.title("Household Interactive Tasks")
         self.geometry("1560x980")
         self.minsize(900, 640)
         self.configure(bg=PAGE_BG)
+        setup_gui_app_icon(
+            self,
+            suite="household",
+            script_path=Path(__file__),
+        )
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
 
         self.child: subprocess.Popen | None = None

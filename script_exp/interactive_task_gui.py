@@ -17,7 +17,12 @@ from tkinter import messagebox, ttk
 import yaml
 from PIL import Image, ImageTk
 
-from _task_briefing import build_briefing_text, show_task_briefing
+from _task_briefing import (
+    GUI_WM_CLASS,
+    build_briefing_text,
+    setup_gui_app_icon,
+    show_task_briefing,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -412,11 +417,17 @@ class InteractiveTaskLauncher(tk.Tk):
     UI_SCALE_MAX = 1.15
 
     def __init__(self):
-        super().__init__()
+        # className becomes StartupWMClass for the Ubuntu dock .desktop entry.
+        super().__init__(className=GUI_WM_CLASS["interactive"])
         self.title("Interactive Tasks")
         self.geometry("1600x1000")
         self.minsize(900, 640)
         self.configure(bg=PAGE_BG)
+        setup_gui_app_icon(
+            self,
+            suite="interactive",
+            script_path=Path(__file__),
+        )
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
 
         self.child: subprocess.Popen | None = None
