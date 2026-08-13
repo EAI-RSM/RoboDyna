@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     UniversalRobotControls,
+    add_record_data_arg,
     make_viewer_view_toggle,
     report_task_result,
     RealtimePhysicsPacer,
@@ -272,6 +273,7 @@ def main():
         default="robot",
         help="Interaction method (default: robot)",
     )
+    add_record_data_arg(parser)
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH

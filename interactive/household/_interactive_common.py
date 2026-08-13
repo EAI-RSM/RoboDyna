@@ -30,6 +30,7 @@ if str(BENCH) not in sys.path:
 from interactive._interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
     action_failed,
+    add_record_data_arg,
     configure_task,
     flash_gripper_failure,
     gripper_failure_feedback,
@@ -870,4 +871,5 @@ def make_parser(task, description):
         action="store_true",
         help="initialize, render three frames, report state, and exit",
     )
+    add_record_data_arg(p)
     return p

@@ -28,13 +28,22 @@ def record_status_note(payload) -> str:
     """Append-only note when the child wrote collect_data-format files."""
     if not isinstance(payload, dict):
         return ""
+    bits = []
     hdf5 = str(payload.get("record_hdf5") or "").strip()
+    video = str(payload.get("record_video") or "").strip()
+    viewer = str(payload.get("record_viewer") or "").strip()
     if hdf5:
-        return f" Recorded {hdf5}."
+        bits.append(hdf5)
+    if video:
+        bits.append(video)
+    if viewer:
+        bits.append(viewer)
+    if bits:
+        return " Recorded " + "; ".join(bits) + "."
     path = str(payload.get("record_path") or "").strip()
     ep = payload.get("record_episode")
     if path and ep is not None:
-        return f" Recorded {path}/data/episode{ep}.hdf5."
+        return f" Recorded {path}/data/episode{ep}.hdf5 + video/episode{ep}.mp4."
     return ""
 
 _INTERACTIVE_DIR = Path(__file__).resolve().parent
@@ -398,7 +407,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.record_data = tk.BooleanVar(value=False)
         self.record_check = tk.Checkbutton(
             self.record_group,
-            text="Save this episode",
+            text="Save episode + video",
             variable=self.record_data,
             onvalue=True,
             offvalue=False,
@@ -954,7 +963,7 @@ class HouseholdTaskLauncher(tk.Tk):
             f"Running {label} with seed {seed}. Close its viewer or press Stop to return."
         )
         if bool(self.record_data.get()):
-            run_text = f"{run_text} Recording collect_data episode."
+            run_text = f"{run_text} Recording collect_data episode + video."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)

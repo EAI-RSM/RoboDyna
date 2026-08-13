@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -119,8 +121,479 @@ def configure_task(task_name: str, config_name: str, seed: int, use_robot: bool,
     config["right_robot_file"] = embodiments[right_name]["file_path"]
     config["left_embodiment_config"] = embodiment_config(config["left_robot_file"])
     config["right_embodiment_config"] = embodiment_config(config["right_robot_file"])
+    config["task_config"] = config_name
     return config
 
+
+def add_record_data_arg(parser):
+    """Add ``--record-data`` (same HDF5 / LeRobot layout as ``collect_data.py``)."""
+    parser.add_argument(
+        "--record-data",
+        action="store_true",
+        help=(
+            "Record this episode in the same format as collect_data.py "
+            "(HDF5 + preview mp4 + live viewer mp4 + LeRobot under data/<task>/<config>/)"
+        ),
+    )
+    return parser
+
+
+def interactive_record_data_requested() -> bool:
+    """True when the GUI env var or ``--record-data`` CLI flag is set."""
+    flag = os.environ.get("ROBODYNA_RECORD_DATA", "").strip().lower()
+    if flag in ("1", "true", "yes"):
+        return True
+    return "--record-data" in sys.argv
+
+
+def _argv_value(flag: str, default: str | None = None) -> str | None:
+    if flag in sys.argv:
+        i = sys.argv.index(flag)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
+
+
+def _record_config_folder(env) -> str:
+    """Folder name under ``data/<task>/``, matching collect_data when possible."""
+    scenario = (
+        os.environ.get("ROBODYNA_SCENARIO")
+        or getattr(env, "interactive_scenario", None)
+        or ""
+    )
+    scenario = str(scenario).strip()
+    config_name = (
+        os.environ.get("ROBODYNA_RECORD_CONFIG")
+        or getattr(env, "task_config", None)
+        or _argv_value("--config")
+        or "demo_dynamic"
+    )
+    config_name = str(config_name).strip() or "demo_dynamic"
+    if config_name.startswith(".interactive_gui_"):
+        config_name = "demo_dynamic"
+    if scenario and scenario != "default":
+        return f"{config_name}_{scenario}"
+    return config_name
+
+
+def _next_hdf5_episode_index(save_dir: str) -> int:
+    idx = 0
+    data_dir = os.path.join(save_dir, "data")
+    while os.path.exists(os.path.join(data_dir, f"episode{idx}.hdf5")):
+        idx += 1
+    return idx
+
+
+def _cli_seed_for_record(env) -> int:
+    seed = getattr(env, "seed", None)
+    if seed is not None:
+        try:
+            return int(seed)
+        except (TypeError, ValueError):
+            pass
+    if "--seed" in sys.argv:
+        i = sys.argv.index("--seed")
+        if i + 1 < len(sys.argv):
+            try:
+                return int(sys.argv[i + 1])
+            except ValueError:
+                pass
+    return 0
+
+
+def _ffmpeg_bin() -> str | None:
+    beside_python = Path(sys.executable).with_name("ffmpeg")
+    if beside_python.exists():
+        return str(beside_python)
+    return shutil.which("ffmpeg")
+
+
+def _interactive_record_capture(env):
+    env._interactive_record_now = True
+    try:
+        env._take_picture()
+    except Exception as extra:
+        from envs.utils.household_view import EpisodeTimeLimit
+
+        if isinstance(extra, EpisodeTimeLimit):
+            env._interactive_record_cutoff = True
+            print(f"[record-data] episode cutoff while recording: {extra}")
+            return
+        print(f"[record-data] frame save failed: {extra}")
+    finally:
+        env._interactive_record_now = False
+
+
+def _viewer_rgb_frame(viewer):
+    rgba = viewer.window.get_picture("Color")
+    return np.flipud((np.asarray(rgba)[..., :3] * 255).clip(0, 255).astype(np.uint8))
+
+
+def _close_viewer_recorder(env) -> str | None:
+    proc = getattr(env, "_interactive_record_ffmpeg", None)
+    path = getattr(env, "_interactive_record_viewer_mp4", None)
+    env._interactive_record_ffmpeg = None
+    if proc is None:
+        return path if path and os.path.exists(str(path)) else None
+    try:
+        if proc.stdin is not None:
+            proc.stdin.close()
+        rc = proc.wait(timeout=30)
+    except Exception as extra:
+        print(f"[record-data] viewer ffmpeg finalize failed: {extra}")
+        rc = -1
+    if rc not in (0, None) and getattr(proc, "stderr", None) is not None:
+        try:
+            err = proc.stderr.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            err = ""
+        if err:
+            print(f"[record-data] viewer ffmpeg: {err}")
+    return path if path and os.path.exists(str(path)) else None
+
+
+def _ensure_viewer_render_hook(env) -> None:
+    """Wrap ``viewer.render`` once so live GUI frames go into ``episodeN_viewer.mp4``.
+
+    Tasks that later wrap ``viewer.render`` should chain the previous function;
+    wrapping twice would duplicate frames.
+    """
+    if not getattr(env, "_interactive_record_active", False):
+        return
+    if getattr(env, "_interactive_record_finished", False):
+        return
+    if getattr(env, "_interactive_record_hooked", False):
+        return
+    viewer = getattr(env, "viewer", None)
+    if viewer is None:
+        return
+    orig = viewer.render
+
+    def _render_and_record(*args, **kwargs):
+        result = orig(*args, **kwargs)
+        _interactive_record_viewer_frame(env)
+        return result
+
+    viewer.render = _render_and_record
+    env._interactive_record_hooked = True
+    env._interactive_record_render_wrapper = _render_and_record
+    env._interactive_record_render_orig = orig
+
+
+def _interactive_record_viewer_frame(env):
+    if getattr(env, "_interactive_record_finished", False):
+        return
+    viewer = getattr(env, "viewer", None)
+    if viewer is None or getattr(viewer, "closed", False):
+        return
+    now = time.perf_counter()
+    last = float(getattr(env, "_interactive_record_viewer_t", 0.0) or 0.0)
+    if last and (now - last) < (1.0 / 30.0):
+        return
+    try:
+        frame = _viewer_rgb_frame(viewer)
+    except Exception:
+        return
+    proc = getattr(env, "_interactive_record_ffmpeg", None)
+    if proc is not None and proc.poll() is not None:
+        env._interactive_record_ffmpeg = None
+        proc = None
+    if proc is None:
+        ffmpeg = _ffmpeg_bin()
+        if not ffmpeg:
+            if not getattr(env, "_interactive_record_ffmpeg_missing", False):
+                print("[record-data] ffmpeg not found; skipping live viewer mp4")
+                env._interactive_record_ffmpeg_missing = True
+            return
+        height, width = frame.shape[:2]
+        out_path = getattr(env, "_interactive_record_viewer_mp4", None)
+        if not out_path:
+            return
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        proc = subprocess.Popen(
+            [
+                ffmpeg, "-y", "-loglevel", "error",
+                "-f", "rawvideo", "-pixel_format", "rgb24",
+                "-video_size", f"{width}x{height}", "-framerate", "30",
+                "-i", "-",
+                "-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2,hflip,vflip",
+                "-pix_fmt", "yuv420p", "-vcodec", "libx264", "-crf", "20",
+                str(out_path),
+            ],
+            stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        env._interactive_record_ffmpeg = proc
+        print(f"[record-data] recording viewer → {out_path}")
+    try:
+        proc.stdin.write(frame.tobytes())
+        env._interactive_record_viewer_t = now
+    except Exception as extra:
+        print(f"[record-data] viewer frame write failed: {extra}")
+        env._interactive_record_ffmpeg = None
+
+
+def _interactive_record_after_step(env):
+    _ensure_viewer_render_hook(env)
+    if getattr(env, "_interactive_record_cutoff", False):
+        return
+    env._interactive_record_steps = int(getattr(env, "_interactive_record_steps", 0)) + 1
+    freq = int(getattr(env, "save_freq", None) or 15)
+    if freq <= 0:
+        freq = 15
+    if env._interactive_record_steps % freq == 0:
+        _interactive_record_capture(env)
+
+
+def maybe_attach_interactive_data_recorder(env) -> bool:
+    """Start live recording in collect_data format after ``setup_demo``.
+
+    Idempotent. No-ops unless ``--record-data`` / ``ROBODYNA_RECORD_DATA`` is set.
+    """
+    if getattr(env, "_interactive_record_active", False):
+        _ensure_viewer_render_hook(env)
+        return True
+    if not interactive_record_data_requested():
+        return False
+    scene = getattr(env, "scene", None)
+    if scene is None or not hasattr(scene, "step"):
+        return False
+
+    task_name = str(getattr(env, "task_name", None) or type(env).__name__)
+    folder = _record_config_folder(env)
+    save_root = str(getattr(env, "save_dir", None) or "./data")
+    # setup_demo leaves yaml save_path (./data); nest like collect_data.py.
+    expected = os.path.join(task_name, folder)
+    if not os.path.abspath(save_root).replace("\\", "/").endswith(expected.replace("\\", "/")):
+        save_root = os.path.join(save_root, task_name, folder)
+    os.makedirs(save_root, exist_ok=True)
+    os.makedirs(os.path.join(save_root, "data"), exist_ok=True)
+    os.makedirs(os.path.join(save_root, "video"), exist_ok=True)
+
+    env.save_dir = save_root
+    env.save_data = True
+    env.task_config = folder
+    env.ep_num = _next_hdf5_episode_index(save_root)
+    env.FRAME_IDX = 0
+    if not isinstance(getattr(env, "data_type", None), dict):
+        env.data_type = {
+            "rgb": True,
+            "third_view": False,
+            "depth": False,
+            "pointcloud": False,
+            "observer": False,
+            "endpose": True,
+            "qpos": True,
+            "mesh_segmentation": False,
+            "actor_segmentation": False,
+        }
+    if not getattr(env, "save_freq", None):
+        env.save_freq = 15
+
+    env._interactive_record_active = True
+    env._interactive_record_via_step = True
+    env._interactive_record_now = False
+    env._interactive_record_cutoff = False
+    env._interactive_record_steps = 0
+    env._interactive_record_finished = False
+    env._interactive_record_ffmpeg = None
+    env._interactive_record_viewer_t = 0.0
+    env._interactive_record_viewer_mp4 = os.path.join(
+        save_root, "video", f"episode{env.ep_num}_viewer.mp4"
+    )
+    env._interactive_record_seed = _cli_seed_for_record(env)
+    env._interactive_record_args = {
+        "task_name": task_name,
+        "task_config": folder,
+        "save_path": save_root,
+        "save_freq": env.save_freq,
+        "export_lerobot": True,
+        "lerobot_root": "./data_lerobot/domino_suite",
+        "lerobot_chunks_size": 1000,
+        "lerobot_task_state_dim": 32,
+        "language_num": 100,
+    }
+
+    orig_step = scene.step
+
+    def _step_and_record(*args, **kwargs):
+        result = orig_step(*args, **kwargs)
+        _interactive_record_after_step(env)
+        return result
+
+    scene.step = _step_and_record
+    env._interactive_record_orig_step = orig_step
+
+    orig_close = env.close_env
+
+    def _close_and_finalize(*args, **kwargs):
+        try:
+            finish_interactive_data_recording(env)
+        except Exception as exc:
+            print(f"[record-data] finalize failed: {exc}")
+        env.close_env = orig_close
+        return orig_close(*args, **kwargs)
+
+    env.close_env = _close_and_finalize
+    _ensure_viewer_render_hook(env)
+    _interactive_record_capture(env)
+    hdf5 = os.path.join(save_root, "data", f"episode{env.ep_num}.hdf5")
+    preview = os.path.join(save_root, "video", f"episode{env.ep_num}.mp4")
+    print(
+        f"[record-data] recording episode {env.ep_num} → {hdf5} "
+        f"+ {preview} (+ live viewer mp4)"
+    )
+    return True
+
+
+def finish_interactive_data_recording(env) -> str | None:
+    """Merge pkl cache to HDF5/mp4, optional LeRobot export, seed.txt, scene_info."""
+    if not getattr(env, "_interactive_record_active", False):
+        return None
+    if getattr(env, "_interactive_record_finished", False):
+        return getattr(env, "_interactive_record_hdf5", None)
+    env._interactive_record_finished = True
+    env._interactive_record_via_step = False
+    orig_step = getattr(env, "_interactive_record_orig_step", None)
+    scene = getattr(env, "scene", None)
+    if orig_step is not None and scene is not None:
+        try:
+            scene.step = orig_step
+        except Exception:
+            pass
+
+    wrapper = getattr(env, "_interactive_record_render_wrapper", None)
+    orig_render = getattr(env, "_interactive_record_render_orig", None)
+    viewer = getattr(env, "viewer", None)
+    if (
+        viewer is not None
+        and wrapper is not None
+        and orig_render is not None
+        and getattr(viewer, "render", None) is wrapper
+    ):
+        viewer.render = orig_render
+    env._interactive_record_render_wrapper = None
+
+    n_frames = int(getattr(env, "FRAME_IDX", 0) or 0)
+    save_dir = str(getattr(env, "save_dir", "") or "")
+    ep_num = int(getattr(env, "ep_num", 0) or 0)
+    viewer_mp4 = _close_viewer_recorder(env)
+    if n_frames <= 0 or not save_dir:
+        print("[record-data] no frames captured; nothing to save")
+        if viewer_mp4:
+            _persist_task_result(
+                _LAST_TASK_RESULT,
+                _LAST_TASK_DETAIL,
+                extra={"record_viewer": viewer_mp4},
+            )
+            print(f"[record-data] viewer video {viewer_mp4}")
+        return None
+
+    success = _LAST_TASK_RESULT
+    if success is None:
+        try:
+            success = bool(env.check_success())
+        except Exception:
+            success = False
+
+    try:
+        env.merge_pkl_to_hdf5_video()
+    except Exception as exc:
+        print(f"[record-data] HDF5 merge failed: {exc}")
+        if viewer_mp4:
+            _persist_task_result(
+                _LAST_TASK_RESULT,
+                _LAST_TASK_DETAIL,
+                extra={"record_viewer": viewer_mp4},
+            )
+            print(f"[record-data] viewer video {viewer_mp4}")
+        return None
+
+    args = dict(getattr(env, "_interactive_record_args", None) or {})
+    if args.get("export_lerobot", True):
+        try:
+            from envs.utils.lerobot_export import LeRobotEpisodeExporter
+
+            LeRobotEpisodeExporter(args).export(env, bool(success))
+        except Exception as exc:
+            print(f"[record-data] LeRobot export failed: {exc}")
+
+    try:
+        env.remove_data_cache()
+    except Exception:
+        pass
+
+    seed = int(getattr(env, "_interactive_record_seed", 0) or 0)
+    seed_path = os.path.join(save_dir, "seed.txt")
+    try:
+        existing = []
+        if os.path.exists(seed_path):
+            existing = [int(x) for x in Path(seed_path).read_text(encoding="utf-8").split() if x.strip()]
+        existing.append(seed)
+        Path(seed_path).write_text(" ".join(str(s) for s in existing) + " ", encoding="utf-8")
+    except Exception as exc:
+        print(f"[record-data] seed.txt update failed: {exc}")
+
+    info_path = os.path.join(save_dir, "scene_info.json")
+    try:
+        info_db = {}
+        if os.path.exists(info_path):
+            info_db = json.loads(Path(info_path).read_text(encoding="utf-8") or "{}")
+        info_db[f"episode_{ep_num}"] = {
+            "seed": seed,
+            "success": bool(success),
+            "source": "interactive",
+            "scenario": (
+                os.environ.get("ROBODYNA_SCENARIO")
+                or getattr(env, "interactive_scenario", None)
+                or "default"
+            ),
+            "frames": n_frames,
+        }
+        Path(info_path).write_text(
+            json.dumps(info_db, ensure_ascii=False, indent=4),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"[record-data] scene_info.json update failed: {exc}")
+
+    hdf5 = os.path.join(save_dir, "data", f"episode{ep_num}.hdf5")
+    preview = os.path.join(save_dir, "video", f"episode{ep_num}.mp4")
+    if not os.path.exists(preview):
+        preview = None
+    env._interactive_record_hdf5 = hdf5
+    extra = {
+        "record_path": save_dir,
+        "record_episode": ep_num,
+        "record_hdf5": hdf5,
+    }
+    if preview:
+        extra["record_video"] = preview
+    if viewer_mp4:
+        extra["record_viewer"] = viewer_mp4
+    _persist_task_result(_LAST_TASK_RESULT, _LAST_TASK_DETAIL, extra=extra)
+    print(f"[record-data] saved {hdf5} ({n_frames} frames, success={bool(success)})")
+    if preview:
+        print(f"[record-data] preview video {preview}")
+    if viewer_mp4:
+        print(f"[record-data] viewer video {viewer_mp4}")
+
+    try:
+        language_num = int(args.get("language_num", 100) or 100)
+        task_name = args.get("task_name") or getattr(env, "task_name", "")
+        task_config = args.get("task_config") or folder_name_from_save_dir(save_dir)
+        if task_name and task_config:
+            os.system(
+                f"cd description && bash gen_episode_instructions.sh "
+                f"{task_name} {task_config} {language_num}"
+            )
+    except Exception as exc:
+        print(f"[record-data] instruction generation skipped: {exc}")
+    return hdf5
+
+
+def folder_name_from_save_dir(save_dir: str) -> str:
+    return os.path.basename(os.path.abspath(save_dir))
 
 _VIEW_HELP_V = "V — cycle view: head_camera ↔ gripper(s)"
 
@@ -294,6 +767,7 @@ def _persist_task_result(
     detail: str | None,
     *,
     condition: str | None = None,
+    extra: dict | None = None,
 ) -> None:
     """Write the latest result for a parent GUI launcher, if requested."""
     global _LAST_EPISODE_CONDITION
@@ -302,16 +776,30 @@ def _persist_task_result(
     path = os.environ.get(TASK_RESULT_ENV)
     if not path:
         return
+    payload = {
+        "ok": ok,
+        "detail": detail or "",
+        "condition": _LAST_EPISODE_CONDITION or "",
+    }
+    try:
+        existing = json.loads(Path(path).read_text(encoding="utf-8") or "{}")
+    except Exception:
+        existing = {}
+    if isinstance(existing, dict):
+        for key in (
+            "record_path",
+            "record_episode",
+            "record_hdf5",
+            "record_video",
+            "record_viewer",
+        ):
+            if key in existing and key not in payload:
+                payload[key] = existing[key]
+    if extra:
+        payload.update(extra)
     try:
         Path(path).write_text(
-            json.dumps(
-                {
-                    "ok": ok,
-                    "detail": detail or "",
-                    "condition": _LAST_EPISODE_CONDITION or "",
-                },
-                ensure_ascii=False,
-            ),
+            json.dumps(payload, ensure_ascii=False),
             encoding="utf-8",
         )
     except OSError:
@@ -466,6 +954,7 @@ def print_episode_condition(env, task: str | None = None) -> str:
     and from ``run_viewer_loop`` without duplicate lines.
     """
     global _LAST_EPISODE_CONDITION
+    maybe_attach_interactive_data_recorder(env)
     if bool(getattr(env, "_episode_condition_printed", False)):
         return str(getattr(env, "_episode_condition_text", "") or "")
     text = format_episode_condition(env, task)
@@ -1798,6 +2287,7 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
             f"(default: {robot_motion_default})"
         ),
     )
+    add_record_data_arg(parser)
     return parser
 
 

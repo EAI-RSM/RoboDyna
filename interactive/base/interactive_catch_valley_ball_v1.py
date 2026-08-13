@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     action_failed,
+    add_record_data_arg,
     gripper_width,
     make_viewer_view_toggle,
     print_instructions,
@@ -286,6 +287,7 @@ def main():
         default="planner",
         help="Robot motion backend (interpolate = faster joint interp when supported; default planner)",
     )
+    add_record_data_arg(parser)
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH

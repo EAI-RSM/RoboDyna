@@ -30,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
+    add_record_data_arg,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
@@ -229,6 +230,7 @@ def main():
         default="interpolate",
         help="Retained for compatibility; arm teleop uses UniversalRobotControls.",
     )
+    add_record_data_arg(parser)
     args = parser.parse_args()
 
     from envs import CONFIGS_PATH

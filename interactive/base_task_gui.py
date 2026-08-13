@@ -46,13 +46,22 @@ def record_status_note(payload) -> str:
     """Append-only note when the child wrote collect_data-format files."""
     if not isinstance(payload, dict):
         return ""
+    bits = []
     hdf5 = str(payload.get("record_hdf5") or "").strip()
+    video = str(payload.get("record_video") or "").strip()
+    viewer = str(payload.get("record_viewer") or "").strip()
     if hdf5:
-        return f" Recorded {hdf5}."
+        bits.append(hdf5)
+    if video:
+        bits.append(video)
+    if viewer:
+        bits.append(viewer)
+    if bits:
+        return " Recorded " + "; ".join(bits) + "."
     path = str(payload.get("record_path") or "").strip()
     ep = payload.get("record_episode")
     if path and ep is not None:
-        return f" Recorded {path}/data/episode{ep}.hdf5."
+        return f" Recorded {path}/data/episode{ep}.hdf5 + video/episode{ep}.mp4."
     return ""
 
 TASKS = (
@@ -608,7 +617,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.record_data = tk.BooleanVar(value=False)
         self.record_check = tk.Checkbutton(
             self.record_group,
-            text="Save this episode",
+            text="Save episode + video",
             variable=self.record_data,
             onvalue=True,
             offvalue=False,
@@ -665,7 +674,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.set("robot")
         self.control.pack(pady=(4, 0))
         self._style_control_menu(("Sans", 13, "bold"))
-        self._control_groups = (self.brief_group, self.seed_group, self.control_group)
+        self._control_groups = (self.brief_group, self.record_group, self.seed_group, self.control_group)
 
         self.status = tk.Label(
             self,
@@ -747,6 +756,8 @@ class InteractiveTaskLauncher(tk.Tk):
         self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
         self.brief_caption.configure(font=self._scaled_font(13, "bold", s))
         self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
+        self.record_caption.configure(font=self._scaled_font(13, "bold", s))
+        self.record_check.configure(font=self._scaled_font(14, "bold", s))
         self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
         self.control_caption.configure(font=self._scaled_font(13, "bold", s))
         self.seed_entry.configure(font=self._scaled_font(13, "bold", s))
@@ -878,14 +889,14 @@ class InteractiveTaskLauncher(tk.Tk):
             )
 
     def _controls_natural_width(self, scale: float) -> int:
-        pads = (self._px(16, scale), self._px(18, scale), self._px(14, scale))
+        pads = (self._px(16, scale), self._px(16, scale), self._px(18, scale), self._px(14, scale))
         return sum(
             group.winfo_reqwidth() + pad
             for group, pad in zip(self._control_groups, pads)
         )
 
     def _pack_control_groups(self, *, wrap: bool, scale: float) -> None:
-        pads = (self._px(16, scale), self._px(18, scale), self._px(14, scale))
+        pads = (self._px(16, scale), self._px(16, scale), self._px(18, scale), self._px(14, scale))
         for group in self._control_groups:
             group.pack_forget()
         if wrap:
@@ -1397,6 +1408,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 "--part",
                 str(index + 1),
             ]
+            self._apply_record_launch(child_env, command)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1411,6 +1423,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.briefing_check.configure(state="disabled")
+        self.record_check.configure(state="disabled")
         self.tutorial_buttons[index].configure(
             text="Stop", bg="#b06a20", activebackground="#d0842b"
         )
@@ -1418,9 +1431,19 @@ class InteractiveTaskLauncher(tk.Tk):
             f"Running Tutorial / {label} with seed {seed}. "
             "Close its viewer or press Stop."
         )
+        if bool(self.record_data.get()):
+            run_text = f"{run_text} Recording collect_data episode + video."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
+
+    def _apply_record_launch(self, child_env: dict, command: list[str]) -> None:
+        """Pass the GUI Record data option through to the interactive child."""
+        if not bool(self.record_data.get()):
+            return
+        child_env["ROBODYNA_RECORD_DATA"] = "1"
+        child_env["ROBODYNA_RECORD_CONFIG"] = "demo_dynamic"
+        command.append("--record-data")
 
     def _write_temporary_config(self, task: str, scenario: str) -> str:
         config = build_scenario_config(task, scenario)
@@ -1498,6 +1521,7 @@ class InteractiveTaskLauncher(tk.Tk):
             # understands it (pack_fruits); unknown flags are avoided below.
             if task == "pack_fruits":
                 command.extend(["--scenario", scenario])
+            self._apply_record_launch(child_env, command)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1513,6 +1537,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self.briefing_check.configure(state="disabled")
+        self.record_check.configure(state="disabled")
         active_button = self.task_buttons[index][SCENARIOS.index(scenario)]
         active_button.configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
         desc = condition_description(task, scenario)
@@ -1522,6 +1547,8 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         if desc:
             run_text = f"{run_text}  ({desc})"
+        if bool(self.record_data.get()):
+            run_text = f"{run_text} Recording collect_data episode + video."
         self._run_status_base = run_text
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
@@ -1534,6 +1561,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 self.active_selection = None
                 payload = self._read_result_payload()
                 reason = None
+                recorded = record_status_note(payload)
                 if isinstance(payload, dict):
                     detail = payload.get("detail")
                     if isinstance(detail, str) and detail.strip():
@@ -1546,7 +1574,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 # Match household_task_gui: 0=SUCCESS, 10=FAILURE, 2=closed early.
                 if code == 0:
                     self._set_status(
-                        "Task result: SUCCESS. Select another scenario below.",
+                        f"Task result: SUCCESS.{recorded} Select another scenario below.",
                         "#70d6a2",
                         sticky=True,
                     )
@@ -1555,19 +1583,19 @@ class InteractiveTaskLauncher(tk.Tk):
                     if reason:
                         msg = f"{msg} ({reason})"
                     self._set_status(
-                        f"{msg}. Select another scenario below.",
+                        f"{msg}.{recorded} Select another scenario below.",
                         "#e6a15c",
                         sticky=True,
                     )
                 elif code == 2:
                     self._set_status(
-                        "Task closed before a result was reached.",
+                        f"Task closed before a result was reached.{recorded}",
                         TEXT_SECONDARY,
                         sticky=True,
                     )
                 else:
                     self._set_status(
-                        f"Task result: ERROR (exit status {code}). Check the terminal.",
+                        f"Task result: ERROR (exit status {code}). Check the terminal.{recorded}",
                         "#e6a15c",
                         sticky=True,
                     )
@@ -1584,6 +1612,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="readonly")
         self.seed_entry.configure(state="normal")
         self.briefing_check.configure(state="normal")
+        self.record_check.configure(state="normal")
         for row in self.task_buttons:
             for scenario, button in zip(SCENARIOS, row):
                 button.configure(

@@ -37,6 +37,7 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
+    add_record_data_arg,
     declutter_interactive_viewer,
     make_viewer_view_toggle,
     print_instructions,
@@ -428,6 +429,7 @@ def main():
         default="interpolate",
         help="Robot key-press implementation; interpolate is a faster test mode (default: interpolate)",
     )
+    add_record_data_arg(parser)
     args = parser.parse_args()
     if args.two_views and args.composite_view:
         raise SystemExit("Choose either --two-views or --composite-view.")

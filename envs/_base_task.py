@@ -69,6 +69,7 @@ class Base_Task(gym.Env):
         np.random.seed(seed)
         torch.manual_seed(seed)
         random.seed(seed)
+        self.seed = seed
 
         self.FRAME_IDX = 0
         self._phase_marks = []  # per-episode action/skill segment markers for the LeRobot annotation layer
@@ -973,6 +974,12 @@ class Base_Task(gym.Env):
 
     def _take_picture(self):  # save data
         if not self.save_data:
+            return
+        # Interactive recording samples uniformly via scene.step; skip the
+        # extra frames take_dense_action would otherwise insert.
+        if getattr(self, "_interactive_record_via_step", False) and not getattr(
+            self, "_interactive_record_now", False
+        ):
             return
         if self._episode_past_deadline():
             from .utils.household_view import EpisodeTimeLimit
