@@ -42,8 +42,8 @@ from _interactive_common import (  # noqa: E402
 )
 
 CONTROLS_KEYBOARD = """
-  Mouse click       click a cuboid while it is above the board to pull it out
-                    (miss if it is still in the hole — episode continues)
+  Mouse click       each cuboid can be clicked once. Above the board: pull it out.
+                    Below the board surface: episode FAILURE.
 """
 
 CONTROLS_ROBOT = """
@@ -107,11 +107,15 @@ def _cuboid_rising(env, idx=0):
     motion = env._cuboid_auto_motion[idx] if idx < len(env._cuboid_auto_motion) else None
     if motion == "rising":
         return True
-    # Also accept raised / near crest.
-    if idx < len(env.cuboids):
-        top = float(env.cuboids[idx].get_pose().p[2]) + float(env.cuboid_half[2])
-        return top >= float(env.board_top_z) + 0.005
-    return False
+    return _cuboid_above_board(env, idx)
+
+
+def _cuboid_above_board(env, idx=0):
+    """True when any of the cuboid is visibly above the board top."""
+    if idx >= len(getattr(env, "cuboids", []) or []):
+        return False
+    top = float(env.cuboids[idx].get_pose().p[2]) + float(env.cuboid_half[2])
+    return top >= float(env.board_top_z) + 0.005
 
 
 def _close_gripper_direct(env, arm_name):
@@ -157,13 +161,14 @@ def _mark_latch_failure(controller, env, arms, detail="insufficient contact"):
 
 
 class KeyboardCatchController:
-    """Click a cuboid: extract if above the board, otherwise miss and continue."""
+    """One click per cuboid: extract if above the board, else episode failure."""
 
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
         self.dual = bool(env.dual_catch)
         self._latched = set()
+        self._clicked = set()
         self.done = False
         self.success = False
         self.fail_detail = None
@@ -220,10 +225,16 @@ class KeyboardCatchController:
         if idx is None:
             return False
         idx = int(idx)
-        if idx in self._latched:
+        if idx in self._latched or idx in self._clicked:
             return True
-        if not _cuboid_rising(self.env, idx):
-            print(f"Miss — {self.env._cuboid_names[idx]} is not above the board.")
+        self._clicked.add(idx)
+        if not _cuboid_above_board(self.env, idx):
+            name = self.env._cuboid_names[idx]
+            detail = f"{name} clicked below the board surface"
+            self.done = True
+            self.success = False
+            self.fail_detail = detail
+            print(f"Miss — {name} is below the board — episode FAILURE.")
             return True
         self._extract_cuboid(idx)
         return True
@@ -347,7 +358,8 @@ def main():
         )
     else:
         print_instructions(
-            "Click a cuboid while it is above the board to pull it out; misses continue."
+            "Click each cuboid once while it is above the board to pull it out; "
+            "clicking while it is below the surface is a failure."
         )
     controller = (
         RobotCatchController(env, ArmTag) if args.control == "robot"
