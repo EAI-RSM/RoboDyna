@@ -14,7 +14,7 @@ from script.bench_script.record_demo import record_demo
 ROOT = os.path.abspath(".")
 FINAL = os.path.join(ROOT, "final_task_demos")
 
-# Matches script_hh_exp/household_task_gui.py + README extras.
+# Matches interactive/household_task_gui.py + README extras.
 HOUSEHOLD_TASKS = (
     "trap_bug",
     "catch_rolling_cup",

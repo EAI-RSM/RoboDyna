@@ -8,8 +8,8 @@ No auto-grasp / auto-drop beyond Space gripper.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_pick_ripe_apple.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_pick_ripe_apple.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_pick_ripe_apple.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_pick_ripe_apple.py --control robot
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     bootstrap_repo,

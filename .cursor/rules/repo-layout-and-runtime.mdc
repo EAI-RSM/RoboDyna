@@ -12,8 +12,12 @@ alwaysApply: true
 | `envs/<task>.py` | Task class: spawn, expert `play_once`, `check_success` |
 | `task_config/*.yml` | Configs; stock tree mostly gitignored — use `demo_*.yml` / `_*.yml` |
 | `description/task_instruction/<task>.json` | Language instructions |
-| `script_exp/` | Base interactive runners + suite GUI + basic sweeps |
-| `script_hh_exp/` | Household interactive runners + suite GUI + HH sweeps |
+| `interactive/` | Shared helpers + GUI launchers (`base_task_gui.py`, `household_task_gui.py`) |
+| `interactive/base/` | Base suite interactive runners (`interactive_<task>.py`) |
+| `interactive/household/` | Household interactive runners + `_interactive_common.py` |
+| `interactive/tests/` | One-off probes, smoke tests, and helper record scripts |
+| `script_exp/` | Base success sweeps + gallery demo publish |
+| `script_hh_exp/` | Household success sweeps + gallery demo publish |
 | `script/bench_script/record_demo.py` | Shared demo recorder |
 | `final_task_demos/` | Curated gallery clips (side-by-side GIFs/MP4s, snapshots) |
 | `tmp/` / `tmp/tmp_<task>/` | Local scratch for demos, sweeps, probes (gitignored except keep) |

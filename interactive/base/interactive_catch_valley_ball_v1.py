@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball_v1.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball_v1.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_valley_ball_v1.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_valley_ball_v1.py --control robot
 
 Keyboard mode teleports the catcher with arrow keys (always placed).
 Robot mode: teleop to the catcher; Space only opens/closes the gripper.
@@ -20,11 +20,11 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     action_failed,

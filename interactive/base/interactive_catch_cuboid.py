@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_catch_cuboid.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_catch_cuboid.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_cuboid.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_cuboid.py --control robot
 
 Close the gripper (Space) while the cuboid is rising to latch it, then lift it out.
 Opt1 supports dual arms.
@@ -19,11 +19,11 @@ from pathlib import Path
 import sapien
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     print_instructions,

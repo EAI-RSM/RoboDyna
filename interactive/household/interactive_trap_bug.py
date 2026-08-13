@@ -2,7 +2,7 @@
 """Interactive household task: trap_bug."""
 try:
     from ._interactive_common import make_parser, run_task
-except ImportError:  # direct ``python script_hh_exp/...py`` execution
+except ImportError:  # direct ``python interactive/household/...py`` execution
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """

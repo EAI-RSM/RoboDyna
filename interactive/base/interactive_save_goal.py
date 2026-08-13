@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_save_goal.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_save_goal.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_save_goal.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_save_goal.py --control robot
 
 Place the square keeper in the green zone before the red line so the solid
 keeper can bounce the ball from any angle (mass-aware: ball 100 g, keeper 500 g).
@@ -19,11 +19,11 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,

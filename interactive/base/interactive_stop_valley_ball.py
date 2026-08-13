@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_stop_valley_ball.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_stop_valley_ball.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_stop_valley_ball.py --control robot
 
 Close the gripper (Space) on the bat handle to latch it, then teleop to the intercept.
 """
@@ -18,11 +18,11 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     print_instructions,

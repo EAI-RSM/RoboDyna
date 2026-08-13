@@ -16,7 +16,7 @@ _GALLERY_ROOT = Path(
 )
 GALLERY_HTML = _GALLERY_ROOT.parent / "index.html"
 README = ROOT / "README.md"
-HH_README = ROOT / "script_hh_exp/README.md"
+HH_README = ROOT / "interactive/household/README.md"
 META = Path("/tmp/hh_gallery_meta.json")
 
 # Prefer README order (matches prior README household section).

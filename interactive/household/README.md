@@ -3,7 +3,7 @@
 Launch the graphical household task selector with:
 
 ```bash
-./script_hh_exp/household_task_gui.py
+./interactive/household_task_gui.py
 ```
 
 The selector shows the tasks as a vertically scrollable table. Each task has a
@@ -20,18 +20,18 @@ for the card preview, falling back to `default_sidebyside.gif`.
 
 | Task | Demo |
 |---|---|
-| **`trap_bug`** | <img src="../final_task_demos/trap_bug/success1_head.gif" width="200"/> <img src="../final_task_demos/trap_bug/success2_head.gif" width="200"/> |
-| **`catch_cup`** | <img src="../final_task_demos/catch_cup/success1_head.gif" width="200"/> <img src="../final_task_demos/catch_cup/success2_head.gif" width="200"/> |
-| **`catch_mouse_object_drop`** | <img src="../final_task_demos/catch_mouse_object_drop/success_head.gif" width="200"/> <img src="../final_task_demos/catch_mouse_object_drop/success2_head.gif" width="200"/> |
-| **`stop_ball`** | <img src="../final_task_demos/stop_ball/success_head.gif" width="200"/> <img src="../final_task_demos/stop_ball/failure_head.gif" width="200"/> |
-| **`clean_table`** | <img src="../final_task_demos/clean_table/success1_head.gif" width="200"/> <img src="../final_task_demos/clean_table/success2_head.gif" width="200"/> |
-| **`fill_coffee_jar`** | <img src="../final_task_demos/fill_coffee_jar/success1_head.gif" width="200"/> <img src="../final_task_demos/fill_coffee_jar/success2_head.gif" width="200"/> |
-| **`pour_beer`** | <img src="../final_task_demos/pour_beer/success_head.gif" width="200"/> <img src="../final_task_demos/pour_beer/failure_head.gif" width="200"/> |
-| **`boil_milk`** | <img src="../final_task_demos/boil_milk/success_head.gif" width="200"/> <img src="../final_task_demos/boil_milk/failure_head.gif" width="200"/> |
-| **`cook_food`** | <img src="../final_task_demos/cook_food/success_head.gif" width="200"/> <img src="../final_task_demos/cook_food/success2_head.gif" width="200"/> |
-| **`cook_food_timer`** | <img src="../final_task_demos/cook_food_timer/success_head.gif" width="200"/> <img src="../final_task_demos/cook_food_timer/success2_head.gif" width="200"/> |
-| **`make_soup`** | <img src="../final_task_demos/make_soup/success_head.gif" width="200"/> <img src="../final_task_demos/make_soup/success2_head.gif" width="200"/> |
-| **`measure_ingredient`** | <img src="../final_task_demos/measure_ingredient/success1_head.gif" width="200"/> <img src="../final_task_demos/measure_ingredient/success2_head.gif" width="200"/> |
+| **`trap_bug`** | <img src="../../final_task_demos/trap_bug/success1_head.gif" width="200"/> <img src="../../final_task_demos/trap_bug/success2_head.gif" width="200"/> |
+| **`catch_cup`** | <img src="../../final_task_demos/catch_cup/success1_head.gif" width="200"/> <img src="../../final_task_demos/catch_cup/success2_head.gif" width="200"/> |
+| **`catch_mouse_object_drop`** | <img src="../../final_task_demos/catch_mouse_object_drop/success_head.gif" width="200"/> <img src="../../final_task_demos/catch_mouse_object_drop/success2_head.gif" width="200"/> |
+| **`stop_ball`** | <img src="../../final_task_demos/stop_ball/success_head.gif" width="200"/> <img src="../../final_task_demos/stop_ball/failure_head.gif" width="200"/> |
+| **`clean_table`** | <img src="../../final_task_demos/clean_table/success1_head.gif" width="200"/> <img src="../../final_task_demos/clean_table/success2_head.gif" width="200"/> |
+| **`fill_coffee_jar`** | <img src="../../final_task_demos/fill_coffee_jar/success1_head.gif" width="200"/> <img src="../../final_task_demos/fill_coffee_jar/success2_head.gif" width="200"/> |
+| **`pour_beer`** | <img src="../../final_task_demos/pour_beer/success_head.gif" width="200"/> <img src="../../final_task_demos/pour_beer/failure_head.gif" width="200"/> |
+| **`boil_milk`** | <img src="../../final_task_demos/boil_milk/success_head.gif" width="200"/> <img src="../../final_task_demos/boil_milk/failure_head.gif" width="200"/> |
+| **`cook_food`** | <img src="../../final_task_demos/cook_food/success_head.gif" width="200"/> <img src="../../final_task_demos/cook_food/success2_head.gif" width="200"/> |
+| **`cook_food_timer`** | <img src="../../final_task_demos/cook_food_timer/success_head.gif" width="200"/> <img src="../../final_task_demos/cook_food_timer/success2_head.gif" width="200"/> |
+| **`make_soup`** | <img src="../../final_task_demos/make_soup/success_head.gif" width="200"/> <img src="../../final_task_demos/make_soup/success2_head.gif" width="200"/> |
+| **`measure_ingredient`** | <img src="../../final_task_demos/measure_ingredient/success1_head.gif" width="200"/> <img src="../../final_task_demos/measure_ingredient/success2_head.gif" width="200"/> |
 
 
 Refresh GUI head-camera card snapshots:
@@ -49,7 +49,7 @@ python script/bench_script/publish_household_demos.py
 ```
 
 Each script starts the corresponding environment in a SAPIEN viewer and uses
-the same controls as the interactive examples in `script_exp`:
+the same controls as the interactive examples in `interactive/base`:
 
 ```text
 --control robot (default): 1/2/3 selects left/right/both arms
@@ -65,9 +65,9 @@ Escape                     quit
 Examples:
 
 ```bash
-./script_hh_exp/interactive_trap_bug.py --control robot --seed 11
-./script_hh_exp/interactive_clean_table.py --control keyboard
-./script_hh_exp/interactive_make_soup.py --task-arg target_fill=0.75
+./interactive/household/interactive_trap_bug.py --control robot --seed 11
+./interactive/household/interactive_clean_table.py --control keyboard
+./interactive/household/interactive_make_soup.py --task-arg target_fill=0.75
 ```
 
 The optional `--config`, `--seed`, `--robot-motion`, and repeated

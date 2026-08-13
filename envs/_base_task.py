@@ -811,7 +811,7 @@ class Base_Task(gym.Env):
         )
         self.cameras.load_camera(self.scene)
         # Shared elevated head framing for household always, and for any
-        # interactive session (base suite GUI / script_exp viewers).
+        # interactive session (base suite GUI / interactive/base viewers).
         try:
             from .utils.household_view import (
                 HOUSEHOLD_TASKS,

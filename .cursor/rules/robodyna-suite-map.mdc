@@ -7,19 +7,19 @@ alwaysApply: true
 
 Two interactive suites share SAPIEN 3.0.3 + dual-UR5 (`ur5-wsg`) and `task_config/demo_dynamic.yml`.
 
-## Base / dynamic (23 tasks) — `script_exp/`
+## Base / dynamic (23 tasks) — `interactive/base/`
 
-GUI: `script_exp/interactive_task_gui.py`. Sweep list: `script_exp/_sweep_basic_success.TASKS`.
+GUI: `interactive/base_task_gui.py`. Sweep list: `script_exp/_sweep_basic_success.TASKS`.
 
 `catch_marbles_trapdoors`, `catch_ramp_ball`, `catch_cuboid`, `catch_shelf_marble`, `catch_valley_ball`, `stop_valley_ball`, `cook_meat`, `cook_meat_timer`, `put_cup_belt`, `dispense_gummy`, `punch_dual_holes`, `save_goal`, `hit_target`, `load_train`, `marble_shelf_maze`, `pack_fruits`, `pick_ripe_apple`, `place_block_belt`, `play_billiard`, `control_quality`, `drop_ball_hole`, `sort_apples_belt`, `whack_moles`
 
 - Each task has **four scenarios**: `default` / `opt1` / `opt2` / `opt1+2`.
-- Scenario flags are explicit in `interactive_task_gui.SCENARIO_OVERRIDES` (mirrored in `_sweep_basic_success`). Do not assume yaml defaults match GUI Default — overrides force Default independent of `demo_dynamic.yml` feature flags.
-- Envs: `envs/<task>.py`. Interactive: `script_exp/interactive_<task>.py`.
+- Scenario flags are explicit in `base_task_gui.SCENARIO_OVERRIDES` (mirrored in `_sweep_basic_success`). Do not assume yaml defaults match GUI Default — overrides force Default independent of `demo_dynamic.yml` feature flags.
+- Envs: `envs/<task>.py`. Interactive: `interactive/base/interactive_<task>.py`.
 
-## Household (12 tasks) — `script_hh_exp/`
+## Household (12 tasks) — `interactive/household/`
 
-Office / KitchenS scenes. GUI: `script_hh_exp/household_task_gui.py`. Sweep: `script_hh_exp/_sweep_household_success.TASKS`.
+Office / KitchenS scenes. GUI: `interactive/household_task_gui.py`. Sweep: `script_hh_exp/_sweep_household_success.TASKS`.
 
 `trap_bug`, `boil_milk`, `fill_coffee_jar`, `pour_beer`, `cook_food`, `cook_food_timer`, `measure_ingredient`, `make_soup`, `catch_cup`, `catch_mouse_object_drop`, `stop_ball`, `clean_table`
 

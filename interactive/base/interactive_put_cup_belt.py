@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_put_cup_belt.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_put_cup_belt.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_put_cup_belt.py --control robot
 
 Grasp / release with Space (open/close selected gripper). Teleop the cup onto the
 belt gap; when the cup leaves the fingers (open gripper or slip), landing pose
@@ -22,11 +22,11 @@ import sapien
 import sapien.physx
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     UniversalRobotControls,

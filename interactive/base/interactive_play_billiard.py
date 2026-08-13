@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_play_billiard.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_play_billiard.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_play_billiard.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_play_billiard.py --control robot
 
 Keyboard mode aims the cue; slide the tip into the ball to hit (blue tip only,
 one contact). Robot mode: grasp/release with Space, aim with arrows/E/Q/R/T, and
@@ -22,11 +22,11 @@ import sapien
 import sapien.physx
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     make_viewer_view_toggle,

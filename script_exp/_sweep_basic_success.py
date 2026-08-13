@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run expert play_once for every script_exp basic task; report success counts.
+"""Run expert play_once for every base-suite task; report success counts.
 
-Uses scenario overrides matching ``interactive_task_gui.SCENARIO_OVERRIDES``
+Uses scenario overrides matching ``interactive.base_task_gui.SCENARIO_OVERRIDES``
 (default / opt1 / opt2 / opt1+2). The scripted expert path — not interactive.
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ TASKS = (
     "whack_moles",
 )
 
-# Mirrors interactive_task_gui.SCENARIO_OVERRIDES (+ catch_valley_ball_v1 = valley).
+# Mirrors base_task_gui.SCENARIO_OVERRIDES (+ catch_valley_ball_v1 = valley).
 SCENARIO_OVERRIDES = {
     "catch_marbles_trapdoors": {
         "default": {"door_open_once": False, "enable_distractor": False},

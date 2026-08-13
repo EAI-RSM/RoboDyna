@@ -17,8 +17,15 @@ from tkinter import messagebox, ttk
 import yaml
 from PIL import Image, ImageTk
 
-from _task_briefing import (
+_INTERACTIVE_DIR = Path(__file__).resolve().parent
+if str(_INTERACTIVE_DIR) not in sys.path:
+    sys.path.insert(0, str(_INTERACTIVE_DIR))
+from _task_briefing import (  # noqa: E402
+    GUI_INK,
+    GUI_MUTED,
+    GUI_PAGE_BG,
     GUI_WM_CLASS,
+    apply_gui_logo,
     build_briefing_text,
     setup_gui_app_icon,
     show_task_briefing,
@@ -26,11 +33,11 @@ from _task_briefing import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent / "base"
 CONFIG_DIR = ROOT / "task_config"
 DEMO_DIR = ROOT / "final_task_demos"
 README_PATH = ROOT / "README.md"
-# Must match script_exp._interactive_common.TASK_RESULT_ENV
+# Must match interactive._interactive_common.TASK_RESULT_ENV
 TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"
 
 TASKS = (
@@ -212,8 +219,10 @@ SCENARIO_OVERRIDES = {
 
 PLAY_BLUE = "#3182bd"
 PLAY_BLUE_ACTIVE = "#4295d0"
-PAGE_BG = "#111820"
-HEADER_BG = "#1b2733"
+PAGE_BG = GUI_PAGE_BG
+HEADER_BG = GUI_PAGE_BG
+HEADER_FG = GUI_INK
+HEADER_MUTED = GUI_MUTED
 CARD_BG = "#202c38"
 CARD_BORDER = "#405367"
 TEXT_PRIMARY = "#f4f8fb"
@@ -419,7 +428,7 @@ class InteractiveTaskLauncher(tk.Tk):
     def __init__(self):
         # className becomes StartupWMClass for the Ubuntu dock .desktop entry.
         super().__init__(className=GUI_WM_CLASS["interactive"])
-        self.title("Interactive Tasks")
+        self.title("Base Tasks")
         self.geometry("1600x1000")
         self.minsize(900, 640)
         self.configure(bg=PAGE_BG)
@@ -450,7 +459,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self._idle_status = (
             f"{len(TASKS)} tasks available  |  Hover a scenario key for its README description."
         )
-        self._idle_status_fg = TEXT_SECONDARY
+        self._idle_status_fg = HEADER_MUTED
 
         self._build_ui()
         self.bind("<Configure>", self._on_root_configure)
@@ -465,29 +474,35 @@ class InteractiveTaskLauncher(tk.Tk):
             pass
         self.style.configure(
             "Task.TCombobox",
-            padding=(14, 10),
-            arrowsize=26,
+            padding=(8, 6),
+            arrowsize=16,
             fieldbackground="#f7fafc",
             foreground="#182633",
             selectbackground="#f7fafc",
             selectforeground="#182633",
         )
 
+        self.logo_bar = tk.Frame(self, bg=PAGE_BG)
+        self.logo_bar.pack(fill="x", padx=24, pady=(16, 0))
+        self.logo_label = tk.Label(self.logo_bar, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.logo_label.pack(anchor="center")
+        apply_gui_logo(self.logo_label, height=160)
+
         self.header = tk.Frame(
             self,
             bg=HEADER_BG,
-            highlightbackground="#34495d",
+            highlightbackground="#d4d5db",
             highlightthickness=1,
         )
-        self.header.pack(fill="x", padx=24, pady=(18, 12))
+        self.header.pack(fill="x", padx=24, pady=(12, 12))
 
         self.heading = tk.Frame(self.header, bg=HEADER_BG)
         self.heading.pack(side="left", padx=24, pady=18)
         self.title_label = tk.Label(
             self.heading,
-            text="Interactive Tasks",
+            text="Base Tasks",
             bg=HEADER_BG,
-            fg=TEXT_PRIMARY,
+            fg=HEADER_FG,
             font=("Sans", 34, "bold"),
         )
         self.title_label.pack(anchor="w")
@@ -495,7 +510,7 @@ class InteractiveTaskLauncher(tk.Tk):
             self.heading,
             text="Choose a task and one of its four scenario variants.",
             bg=HEADER_BG,
-            fg=TEXT_SECONDARY,
+            fg=HEADER_MUTED,
             font=("Sans", 14),
         )
         self.subtitle_label.pack(anchor="w", pady=(3, 0))
@@ -509,7 +524,7 @@ class InteractiveTaskLauncher(tk.Tk):
             brief_group,
             text="Briefing",
             bg=HEADER_BG,
-            fg=TEXT_SECONDARY,
+            fg=HEADER_MUTED,
             font=("Sans", 13, "bold"),
         )
         self.brief_caption.pack(anchor="w")
@@ -521,10 +536,10 @@ class InteractiveTaskLauncher(tk.Tk):
             onvalue=True,
             offvalue=False,
             bg=HEADER_BG,
-            fg=TEXT_PRIMARY,
+            fg=HEADER_FG,
             activebackground=HEADER_BG,
-            activeforeground=TEXT_PRIMARY,
-            selectcolor="#182633",
+            activeforeground=HEADER_FG,
+            selectcolor="#ffffff",
             highlightthickness=0,
             font=("Sans", 14, "bold"),
             cursor="hand2",
@@ -537,20 +552,20 @@ class InteractiveTaskLauncher(tk.Tk):
             seed_group,
             text="Seed (blank = random)",
             bg=HEADER_BG,
-            fg=TEXT_SECONDARY,
+            fg=HEADER_MUTED,
             font=("Sans", 13, "bold"),
         )
         self.seed_caption.pack(anchor="w")
         self.seed_entry = tk.Entry(
             seed_group,
-            width=14,
-            font=("Sans", 22, "bold"),
+            width=16,
+            font=("Sans", 13, "bold"),
             bg="#f7fafc",
             fg="#182633",
             insertbackground="#182633",
             relief="flat",
         )
-        self.seed_entry.pack(ipady=8, pady=(4, 0))
+        self.seed_entry.pack(ipady=5, pady=(4, 0))
 
         control_group = tk.Frame(self.controls, bg=HEADER_BG)
         control_group.pack(side="left", padx=(0, 14))
@@ -558,7 +573,7 @@ class InteractiveTaskLauncher(tk.Tk):
             control_group,
             text="Control",
             bg=HEADER_BG,
-            fg=TEXT_SECONDARY,
+            fg=HEADER_MUTED,
             font=("Sans", 13, "bold"),
         )
         self.control_caption.pack(anchor="w")
@@ -566,12 +581,13 @@ class InteractiveTaskLauncher(tk.Tk):
             control_group,
             values=("keyboard", "robot"),
             state="readonly",
-            width=10,
-            font=("Sans", 22, "bold"),
+            width=8,
+            font=("Sans", 13, "bold"),
             style="Task.TCombobox",
         )
         self.control.set("robot")
         self.control.pack(pady=(4, 0))
+        self._style_control_menu(("Sans", 13, "bold"))
 
         self.exit_button = RoundedButton(
             self.controls,
@@ -621,6 +637,14 @@ class InteractiveTaskLauncher(tk.Tk):
         px = max(8, int(round(size * scale)))
         return ("Sans", px, weight) if weight else ("Sans", px)
 
+    def _style_control_menu(self, font) -> None:
+        """Enlarge the Control combobox dropdown list independently of the field."""
+        try:
+            popdown = self.tk.call("ttk::combobox::PopdownWindow", self.control)
+            self.tk.call(f"{popdown}.f.l", "configure", "-font", font)
+        except tk.TclError:
+            self.option_add("*TCombobox*Listbox.font", font)
+
     def _compute_ui_scale(self, width: int | None = None, height: int | None = None) -> float:
         design_w, design_h = self.DESIGN_SIZE
         width = int(width if width is not None else max(self.winfo_width(), 1))
@@ -653,20 +677,23 @@ class InteractiveTaskLauncher(tk.Tk):
         self._ui_scale = scale
         s = scale
 
-        self.header.pack_configure(padx=self._px(24, s), pady=(self._px(18, s), self._px(12, s)))
+        self.logo_bar.pack_configure(padx=self._px(24, s), pady=(self._px(16, s), 0))
+        apply_gui_logo(self.logo_label, height=self._px(160, s))
+        self.header.pack_configure(padx=self._px(24, s), pady=(self._px(12, s), self._px(12, s)))
         self.title_label.configure(font=self._scaled_font(34, "bold", s))
         self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
         self.brief_caption.configure(font=self._scaled_font(13, "bold", s))
         self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
         self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
         self.control_caption.configure(font=self._scaled_font(13, "bold", s))
-        self.seed_entry.configure(font=self._scaled_font(22, "bold", s))
-        self.seed_entry.pack_configure(ipady=self._px(8, s), pady=(self._px(4, s), 0))
-        self.control.configure(font=self._scaled_font(22, "bold", s))
+        self.seed_entry.configure(font=self._scaled_font(13, "bold", s))
+        self.seed_entry.pack_configure(ipady=self._px(5, s), pady=(self._px(4, s), 0))
+        self.control.configure(font=self._scaled_font(13, "bold", s))
+        self._style_control_menu(self._scaled_font(13, "bold", s))
         self.style.configure(
             "Task.TCombobox",
-            padding=(self._px(14, s), self._px(10, s)),
-            arrowsize=max(12, self._px(26, s)),
+            padding=(self._px(8, s), self._px(6, s)),
+            arrowsize=max(10, self._px(16, s)),
             fieldbackground="#f7fafc",
             foreground="#182633",
             selectbackground="#f7fafc",

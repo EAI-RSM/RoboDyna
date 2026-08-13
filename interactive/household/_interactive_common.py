@@ -2,7 +2,7 @@
 
 The household environments deliberately keep their normal physics and success
 checks.  This module only adds the same viewer/arm teleoperation used by
-``script_exp``: arrows move the selected end-effector in XY, Q/E move it in Z,
+``interactive/_interactive_common.py``: arrows move the selected end-effector in XY, Q/E move it in Z,
 F/G tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
 Space opens/closes the selected gripper(s) only (shared ``ViewerViewToggle``);
 V cycles head_camera ↔ gripper views (default head framing matches base suite
@@ -21,16 +21,13 @@ import numpy as np
 import sapien
 import sapien.physx
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 BENCH = ROOT / "script" / "bench_script"
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
-if str(ROOT / "script_exp") not in sys.path:
-    sys.path.insert(0, str(ROOT / "script_exp"))
-
-from script_exp._interactive_common import (  # noqa: E402
+from interactive._interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
     action_failed,
     configure_task,
@@ -412,7 +409,7 @@ class HouseholdController:
     def _snap_stove_knob(self, want_on: bool, *, continuous_angle: float | None = None):
         """Instant interactive knob/fire update (no planner reach).
 
-        Matches the snappy script_exp control feel: teleop stays on UniversalRobotControls;
+        Matches the snappy base-suite control feel: teleop stays on UniversalRobotControls;
         Space/C only flips task state instead of running a multi-second expert path.
         """
         e = self.env
@@ -772,7 +769,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     terminal_started_at = None
     terminal_fill_detail = ""
     terminal_failure_reason = None
-    # Match script_exp run_viewer_loop: teleop once per display frame, then
+    # Match interactive/_interactive_common run_viewer_loop: teleop once per display frame, then
     # fixed-dt physics catch-up so 60 Hz / 240 Hz monitors feel the same speed.
     # Success checks every few *physics* steps keep kitchen eval cost down.
     SUCCESS_CHECK_EVERY = 5

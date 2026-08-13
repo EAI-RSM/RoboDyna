@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 HH_JSON = Path("/tmp/hh_sweep_results.json")
 if not HH_JSON.is_file():
     HH_JSON = ROOT / "logs/hh_sweep_results.json"

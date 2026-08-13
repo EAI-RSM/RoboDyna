@@ -6,8 +6,8 @@ Space opens/closes the gripper only — no automated pick-up / carry.
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_load_train.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_load_train.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_load_train.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_load_train.py --control robot
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     add_robot_motion_arg,

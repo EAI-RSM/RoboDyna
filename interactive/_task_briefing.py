@@ -19,6 +19,14 @@ APP_ICON_PATH = REPO_ROOT / "assets" / "static" / "robodyna_app_icon.png"
 _APP_ICON_SIZES = (16, 32, 48, 64, 128, 256, 512)
 # XDG icon name installed under ~/.local/share/icons/hicolor/.../apps/
 APP_ICON_NAME = "robodyna"
+# Sampled from robodyna_logo.png corners (RGB 238, 238, 242).
+GUI_PAGE_BG = "#eeeef2"
+GUI_INK = "#002d56"
+GUI_MUTED = "#5a6a7c"
+LOGO_PATHS = (
+    REPO_ROOT / "assets" / "static" / "robodyna_logo.png",
+    REPO_ROOT / "robodyna_logo.png",
+)
 
 # Tk lowercases everything after the first letter for WM_CLASS class, so pass the
 # final GNOME StartupWMClass string here (must match the .desktop file).
@@ -155,7 +163,7 @@ def setup_gui_app_icon(
         comment = "Household interactive task launcher"
         desktop_id = "robodyna-household-tasks"
     else:
-        name = "RoboDyna Interactive Tasks"
+        name = "RoboDyna Base Tasks"
         comment = "Dynamic interactive task launcher"
         desktop_id = "robodyna-interactive-tasks"
 
@@ -167,6 +175,36 @@ def setup_gui_app_icon(
         wm_class=wm_class,
     )
     apply_window_icon(window)
+
+
+def apply_gui_logo(label: tk.Label, *, height: int) -> None:
+    """Put ``robodyna_logo.png`` on ``label``, scaled to ``height`` pixels."""
+    height = max(28, int(height))
+    cache = getattr(label, "_robodyna_logo", None)
+    if isinstance(cache, dict) and cache.get("height") == height and cache.get("photo") is not None:
+        return
+    try:
+        from PIL import Image, ImageTk
+    except ImportError:
+        return
+    path = next((p for p in LOGO_PATHS if p.is_file()), None)
+    if path is None:
+        return
+    try:
+        source = Image.open(path).convert("RGB")
+    except OSError:
+        return
+    src_w, src_h = source.size
+    if src_h <= 0:
+        return
+    width = max(1, int(round(src_w * (height / src_h))))
+    photo = ImageTk.PhotoImage(
+        source.resize((width, height), Image.Resampling.LANCZOS),
+        master=label,
+    )
+    label.configure(image=photo)
+    label._robodyna_logo = {"height": height, "photo": photo}
+
 
 # Warm slate + copper accent — distinct from the launcher chrome, not purple/cream.
 PAGE_BG = "#0e141c"
@@ -187,7 +225,7 @@ CANCEL_ACTIVE = "#314255"
 CANCEL_FG = "#d7e0e8"
 
 # Keep in sync with ``print_mode_controls`` shared teleop block in
-# ``script_exp/_interactive_common.py`` (UniversalRobotControls).
+# ``interactive/_interactive_common.py`` (UniversalRobotControls).
 _SHARED_ROBOT = """\
 Arrow keys — move selected arm(s) in world XY
 E / Q — raise / lower selected arm(s)

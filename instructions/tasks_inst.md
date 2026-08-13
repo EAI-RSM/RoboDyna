@@ -134,7 +134,7 @@
   <ol class="index"><li><a href="#serve_dinner"><code>serve_dinner</code></a> — Serve Dinner</li><li><a href="#make_soup_test"><code>make_soup_test</code></a> — Make Soup Test</li><li><a href="#catch_rolling_cup"><code>catch_rolling_cup</code></a> — Catch Rolling Cup</li><li><a href="#empty_bag"><code>empty_bag</code></a> — Empty Bag</li></ol>
 
   <h2 id="basic">Basic tasks</h2>
-  <p class="muted">Source: <code>script_exp/interactive_task_gui.py</code> TASKS (23).</p>
+  <p class="muted">Source: <code>interactive/base_task_gui.py</code> TASKS (23).</p>
   
     <section class="task" id="catch_marbles_trapdoors" data-suite="basic" data-name="catch_marbles_trapdoors Catch Marbles Trapdoors">
       <header>
@@ -413,7 +413,7 @@
     </section>
 
   <h2 id="household">Household tasks</h2>
-  <p class="muted">Source: <code>script_hh_exp/household_task_gui.py</code> TASKS (12). Shared head camera + step cutoff via <code>HOUSEHOLD_TASKS</code> in <code>envs/utils/household_view.py</code>.</p>
+  <p class="muted">Source: <code>interactive/household_task_gui.py</code> TASKS (12). Shared head camera + step cutoff via <code>HOUSEHOLD_TASKS</code> in <code>envs/utils/household_view.py</code>.</p>
   
     <section class="task" id="trap_bug" data-suite="household" data-name="trap_bug Trap Bug">
       <header>

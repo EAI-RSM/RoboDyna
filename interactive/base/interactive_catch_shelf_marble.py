@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_catch_shelf_marble.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_catch_shelf_marble.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_shelf_marble.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_shelf_marble.py --control robot
 
 Keyboard mode latches bowl keys directly via arrows. Robot mode: select an arm,
 move over the bowl key, lower with Q to press (gripper-Z / ReactivePushButtons).
@@ -22,11 +22,11 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     print_instructions,

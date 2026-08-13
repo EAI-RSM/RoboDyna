@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_cook_meat_timer.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_cook_meat_timer.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_cook_meat_timer.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_cook_meat_timer.py --control robot
 
 Cooking uses a latching cook key: press to latch ON (key stays down, cooking/
 timer start while steak is on the pan), press again while ON to latch OFF
@@ -23,11 +23,11 @@ import numpy as np
 import sapien
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     print_instructions,

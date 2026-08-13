@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 OUT_HTML = ROOT / "instructions" / "tasks_final_seed_test.html"
 OUT_JSON = ROOT / "logs" / "tasks_final_seed_test.json"
 SCENARIOS = ("default", "opt1", "opt2", "opt1+2")

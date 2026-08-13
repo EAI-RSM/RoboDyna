@@ -3,9 +3,9 @@
 
 Run directly from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_sort_apples_belt.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_sort_apples_belt.py --control mouse
-    /path/to/RoboDynaExp/script_exp/interactive_sort_apples_belt.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_sort_apples_belt.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_sort_apples_belt.py --control mouse
+    /path/to/RoboDynaExp/interactive/base/interactive_sort_apples_belt.py --control robot
 
 Keyboard mode changes the diverter directly. Robot mode uses 1/2/3 to select
 gripper and arrows/E/Q to move it; lower with Q onto a button to divert
@@ -27,13 +27,13 @@ import numpy as np
 import yaml
 
 
-# This copy lives at <repo>/script_exp/; resolve the repository independently
+# This copy lives at <repo>/interactive/base/; resolve the repository independently
 # of the caller's working directory.
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     UniversalRobotControls,

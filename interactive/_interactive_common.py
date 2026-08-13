@@ -1,4 +1,4 @@
-"""Shared helpers for ``script_exp/interactive_*.py`` sandboxes."""
+"""Shared helpers for ``interactive/base`` and ``interactive/household`` sandboxes."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# When set by interactive_task_gui / household_task_gui, report_task_result
+# When set by base_task_gui / household_task_gui, report_task_result
 # writes {"ok": bool, "detail": str} here so the launcher can show failure reasons.
 TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"
 
@@ -482,7 +482,7 @@ def print_episode_condition(env, task: str | None = None) -> str:
 def report_task_result(env, detail: str | None = None) -> bool:
     """Print ``Task complete: SUCCESS|FAILURE`` from ``check_success``; return success.
 
-    Also stores the result for ``task_result_exit_code()`` so ``interactive_task_gui``
+    Also stores the result for ``task_result_exit_code()`` so ``base_task_gui``
     can show SUCCESS/FAILURE like ``household_task_gui``. When ``ROBODYNA_TASK_RESULT_FILE``
     is set, persists ``ok`` + failure/success ``detail`` for the GUI status line.
     """

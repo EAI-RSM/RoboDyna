@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_whack_moles.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_whack_moles.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_whack_moles.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_whack_moles.py --control robot
 
 Pick up a side-staged mallet by teleoping onto the handle and closing Space, then
 jab moles mid-rise by lowering the mallet head. Avoid rabbits (Opt1).
@@ -21,11 +21,11 @@ import numpy as np
 import sapien
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,

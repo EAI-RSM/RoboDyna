@@ -3,7 +3,7 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_catch_valley_ball.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_valley_ball.py --control robot
 
 The catch box is an ordinary dynamic body (same mechanism as ``catch_cup``'s
 pillow): it only moves when the closed gripper shoves it. There is no keyboard
@@ -18,11 +18,11 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     UniversalRobotControls,

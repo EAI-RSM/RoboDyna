@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "script_exp"))
+sys.path.insert(0, str(ROOT / "interactive"))
 
 from _task_briefing import GUI_WM_CLASS, install_ubuntu_dock_icon  # noqa: E402
 
@@ -26,9 +26,9 @@ def main() -> int:
     paths = [
         install_ubuntu_dock_icon(
             desktop_id="robodyna-interactive-tasks",
-            name="RoboDyna Interactive Tasks",
+            name="RoboDyna Base Tasks",
             comment="Dynamic interactive task launcher",
-            script_path=ROOT / "script_exp" / "interactive_task_gui.py",
+            script_path=ROOT / "interactive" / "base_task_gui.py",
             wm_class=GUI_WM_CLASS["interactive"],
             python_exe=py,
         ),
@@ -36,7 +36,7 @@ def main() -> int:
             desktop_id="robodyna-household-tasks",
             name="RoboDyna Household Tasks",
             comment="Household interactive task launcher",
-            script_path=ROOT / "script_hh_exp" / "household_task_gui.py",
+            script_path=ROOT / "interactive" / "household_task_gui.py",
             wm_class=GUI_WM_CLASS["household"],
             python_exe=py,
         ),

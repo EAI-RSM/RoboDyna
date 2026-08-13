@@ -3,8 +3,8 @@
 
 Run from any directory:
 
-    /path/to/RoboDynaExp/script_exp/interactive_dispense_gummy.py --control keyboard
-    /path/to/RoboDynaExp/script_exp/interactive_dispense_gummy.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_dispense_gummy.py --control keyboard
+    /path/to/RoboDynaExp/interactive/base/interactive_dispense_gummy.py --control robot
 
 Keyboard mode forces belt-key latches via arrows. Robot mode: select an arm,
 move over a key, lower with Q to press (left → red dispense; right → belt keys). Sandbox only — not data collection.
@@ -19,11 +19,11 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "script" / "bench_script"))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from _interactive_common import (  # noqa: E402
     print_instructions,

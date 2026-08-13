@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 import sapien
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 os.chdir(REPO)
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "script" / "bench_script"))
-sys.path.insert(0, str(REPO / "script_exp"))
+sys.path.insert(0, str(REPO / "interactive"))
 
 os.environ.setdefault("VK_ICD_FILENAMES", "/usr/share/vulkan/icd.d/nvidia_icd.json")
 os.environ.pop("DISPLAY", None)
