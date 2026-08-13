@@ -16,6 +16,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import sapien
 import yaml
 
@@ -28,7 +29,9 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     action_failed,
+    actor_scene_id,
     add_record_data_arg,
+    click_hits_actor_map,
     gripper_width,
     make_viewer_view_toggle,
     print_mode_controls,
@@ -39,7 +42,8 @@ from _interactive_common import (  # noqa: E402
 )
 
 CONTROLS_KEYBOARD = """
-  Space             open / close gripper (closing latches a rising cuboid; you lift it out)
+  Mouse click       click a cuboid while it is above the board to pull it out
+                    (miss if it is still in the hole — episode continues)
 """
 
 CONTROLS_ROBOT = """
@@ -153,76 +157,76 @@ def _mark_latch_failure(controller, env, arms, detail="insufficient contact"):
 
 
 class KeyboardCatchController:
-    """On Space close, latch the cuboid; user lifts for success."""
+    """Click a cuboid: extract if above the board, otherwise miss and continue."""
 
     def __init__(self, env, ArmTag):
         self.env = env
         self.ArmTag = ArmTag
         self.dual = bool(env.dual_catch)
-        self.selected = "right"
-        if not self.dual:
-            hole = env._cuboid_holes[0]
-            self.selected = "right" if env.holes[hole][0] > 0 else "left"
-        self._q = EdgeKey()
-        self._e = EdgeKey()
-        self._pending = None  # (arms, cuboid_indices, steps_left)
-        self._prev_width = {"left": 1.0, "right": 1.0}
         self._latched = set()
         self.done = False
+        self.success = False
         self.fail_detail = None
+        self._cuboid_ids = {}
+        for i, cuboid in enumerate(getattr(env, "cuboids", []) or []):
+            sid = actor_scene_id(cuboid)
+            if sid is not None:
+                self._cuboid_ids[int(sid)] = int(i)
 
-    def _begin_latch(self, arms):
-        indices = [_cuboid_idx_for_arm(self.dual, a) for a in arms]
-        self._pending = (list(arms), indices, 20)
-        print(f"Gripper closing on {', '.join(arms)}; checking latch…")
+    def update(self, _window):
+        return
 
-    def _tick_pending(self):
-        if not self._pending:
-            return
-        arms, indices, left = self._pending
-        for a in arms:
-            _close_gripper_direct(self.env, a)
-        left -= 1
-        if left > 0:
-            self._pending = (arms, indices, left)
-            return
-        self._pending = None
-        attempted = []
-        for arm_name, idx in zip(arms, indices):
-            if idx in self._latched:
-                continue
-            attempted.append(idx)
-            if _try_latch_catch(self.env, idx, self.ArmTag(arm_name)):
-                self._latched.add(idx)
-        if attempted and not all(idx in self._latched for idx in attempted):
-            _mark_latch_failure(self, self.env, arms)
+    def _extract_cuboid(self, idx: int) -> None:
+        import sapien
 
-    def update(self, window):
+        env = self.env
+        cuboid = env.cuboids[idx]
+        env._release_cuboid(idx)
+        p = np.asarray(cuboid.get_pose().p, dtype=float)
+        # Park just clear of the board so the cuboid "comes out and stays outside".
+        clear_z = (
+            float(env.board_top_z)
+            + float(env.cuboid_half[2])
+            + float(getattr(env, "PULL_OUT_CLEARANCE", 0.04))
+            + 0.02
+        )
+        outward_y = float(p[1]) - 0.08
+        pose = sapien.Pose([float(p[0]), outward_y, clear_z], list(cuboid.get_pose().q))
+        try:
+            cuboid.set_pose(pose)
+        except Exception:
+            cuboid.actor.set_pose(pose)
+        try:
+            rigid = cuboid.actor.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent)
+            if rigid is not None:
+                rigid.set_linear_velocity([0, 0, 0])
+                rigid.set_angular_velocity([0, 0, 0])
+                rigid.set_kinematic(True)
+                rigid.set_kinematic_target(pose)
+        except Exception:
+            pass
+        env.catches = int(getattr(env, "catches", 0)) + 1
+        self._latched.add(idx)
+        print(f"Pulled {env._cuboid_names[idx]} out of the hole.")
+        need = 2 if self.dual else 1
+        if len(self._latched) >= need:
+            self.done = True
+            self.success = True
+
+    def on_click(self, viewer, pixel_x, pixel_y):
         if self.done:
-            return
-        self._tick_pending()
-        if self._pending:
-            return
-        if self.dual:
-            if self._q.poll(window.key_down("q")):
-                self.selected = "left"
-                self.env._interactive_selected_arms = ("left",)
-                print("Selected LEFT arm.")
-            if self._e.poll(window.key_down("e")):
-                self.selected = "right"
-                self.env._interactive_selected_arms = ("right",)
-                print("Selected RIGHT arm.")
-
-        arms = list(_selected_arms(self.env, (self.selected,)))
-        closing = False
-        for side in ("left", "right"):
-            width = gripper_width(self.env, side)
-            prev = self._prev_width.get(side, 1.0)
-            if side in arms and prev > 0.5 and width <= 0.5:
-                closing = True
-            self._prev_width[side] = width
-        if closing:
-            self._begin_latch(arms)
+            return False
+        idx = click_hits_actor_map(viewer, pixel_x, pixel_y, self._cuboid_ids)
+        if idx is None:
+            return False
+        idx = int(idx)
+        if idx in self._latched:
+            return True
+        if not _cuboid_rising(self.env, idx):
+            print(f"Miss — {self.env._cuboid_names[idx]} is not above the board.")
+            return True
+        self._extract_cuboid(idx)
+        return True
 
 
 class RobotCatchController:
@@ -290,7 +294,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
         "--control",
-        choices=("keyboard", "robot"),
+        choices=("keyboard", "keyboard+mouse", "robot"),
         default="robot",
         help="Interaction method (default: robot)",
     )
@@ -324,13 +328,15 @@ def main():
         )
 
     env = catch_cuboid()
+    env._interactive_robot_mode = args.control == "robot"
     env.setup_demo(**_configure_task(args.config, args.seed, use_robot=args.control == "robot"))
     print_episode_condition(env)
     # Start with open grippers so Space close has an effect.
-    try:
-        env.together_open_gripper(save_freq=None)
-    except Exception:
-        pass
+    if args.control == "robot":
+        try:
+            env.together_open_gripper(save_freq=None)
+        except Exception:
+            pass
     print(
         f"dual={env.dual_catch}; opaque={env.opaque_surface}; "
         f"holes={env._cuboid_holes}; speed={env._cuboid_pop_speed:.3f} m/s."
@@ -341,7 +347,7 @@ def main():
         )
     else:
         print_instructions(
-            "Wait for the cuboid to rise, close with Space to latch, then lift it out."
+            "Click a cuboid while it is above the board to pull it out; misses continue."
         )
     controller = (
         RobotCatchController(env, ArmTag) if args.control == "robot"
@@ -352,6 +358,8 @@ def main():
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
+    if args.control in ("keyboard", "keyboard+mouse"):
+        viewer.register_click_handler(controller.on_click)
 
     settle_after = None
     # Env never increments appearances_done; count completed pop cycles locally.
@@ -406,13 +414,18 @@ def main():
                 if settle_after is None:
                     settle_after = time.perf_counter()
                 elif time.perf_counter() - settle_after >= 1.0:
-                    if getattr(controller, "done", False) and not env.check_success():
+                    if getattr(controller, "success", False):
+                        detail = f"catches={env.catches}"
+                        report_task_result(env, detail, ok=True)
+                    elif getattr(controller, "done", False) and not env.check_success():
                         detail = getattr(controller, "fail_detail", None) or "insufficient contact"
+                        report_task_result(env, detail)
                     elif appearances_exhausted:
                         detail = f"missed after {cycles_done}/{num_appearances} appearances"
+                        report_task_result(env, detail)
                     else:
                         detail = f"catches={env.catches}"
-                    report_task_result(env, detail)
+                        report_task_result(env, detail)
                     terminal_started_at = time.perf_counter()
     finally:
         env.close_env()

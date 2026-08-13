@@ -269,7 +269,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
         "--control",
-        choices=("keyboard", "robot"),
+        choices=("keyboard", "keyboard+mouse", "robot"),
         default="robot",
         help="Interaction method (default: robot)",
     )
@@ -295,7 +295,7 @@ def main():
 
     stamp_controller = None
     arrow_presses = None
-    if args.control == "keyboard":
+    if args.control in ("keyboard", "keyboard+mouse"):
         stamp_controller = KeyboardStampController(env, ArmTag)
         arrow_presses = ArrowPresses()
     last_under = None
@@ -310,7 +310,7 @@ def main():
     _start_belt(env)
 
     print(f"Tile colors: {env.tile_colors}")
-    if args.control == "keyboard":
+    if args.control in ("keyboard", "keyboard+mouse"):
         print_instructions("Keyboard arrows still animate key taps as a sandbox shortcut.")
 
     terminal_started_at = None

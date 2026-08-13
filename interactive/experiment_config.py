@@ -129,9 +129,11 @@ def _as_seed(value) -> int | None:
 
 
 def _as_controller(value) -> str:
-    text = str(value or "robot").strip().lower()
-    if text in ("keyboard", "robot"):
-        return text
+    text = str(value or "robot").strip().lower().replace("_", "+").replace(" ", "")
+    if text in ("keyboard", "keyboard+mouse", "keyboardmouse", "key+mouse", "keymouse", "km"):
+        return "keyboard+mouse"
+    if text == "robot":
+        return "robot"
     return "robot"
 
 

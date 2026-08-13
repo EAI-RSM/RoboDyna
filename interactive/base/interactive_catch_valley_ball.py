@@ -1,13 +1,13 @@
 #!/home/xuan/miniconda3/envs/robodyna/bin/python
-"""Interactive viewer for ``catch_valley_ball`` (PhysX push catch box).
+"""Interactive viewer for ``catch_valley_ball``.
 
 Run from any directory:
 
     /path/to/RoboDynaExp/interactive/base/interactive_catch_valley_ball.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_valley_ball.py --control keyboard
 
-The catch box is an ordinary dynamic body (same mechanism as ``catch_cup``'s
-pillow): it only moves when the closed gripper shoves it. There is no keyboard
-teleport of the box.
+Robot: shove the PhysX-dynamic catch box with a closed gripper.
+Keyboard: click once on the table to teleport the box there (one shot).
 """
 
 import argparse
@@ -16,6 +16,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -28,16 +29,18 @@ from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     add_robot_motion_arg,
     make_viewer_view_toggle,
+    print_instructions,
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
+    table_xy_from_click,
     terminal_hold_should_close,
     print_episode_condition,
 )
 
 
 CONTROLS_KEYBOARD = """
-  Prefer --control robot. The box is PhysX-dynamic — shove it with the closed gripper.
+  Mouse click       teleport the catch box to that table XY (once only; further clicks ignored)
 """
 
 CONTROLS_ROBOT = """
@@ -104,34 +107,57 @@ def main():
         robot=CONTROLS_ROBOT,
     )
 
+    use_robot = args.control == "robot"
     env = catch_valley_ball()
-    env._interactive_robot_mode = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
+    env._interactive_robot_mode = use_robot
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
 
-    # Same as catch_cup pillow: after settle, hand the box to PhysX. Block any
-    # freeze/teleport helpers while the interactive push session is active.
-    env._enable_box_physics()
+    if use_robot:
+        # Same as catch_cup pillow: after settle, hand the box to PhysX.
+        env._enable_box_physics()
+        env._push_active = True
+        env._bowl_ready = False
+        env.together_close_gripper(save_freq=None)
+    else:
+        # Keyboard places the box once; keep it frozen where clicked.
+        env._push_active = False
+        env._bowl_ready = True
+
     print_episode_condition(env)
-    env._push_active = True
-    env._bowl_ready = False
 
     catcher = "left" if env.mirrored else "right"
-    env.together_close_gripper(save_freq=None)
-
     landing = env.landing
     print(
-        f"Suggested catch arm={catcher} (press 1/2/3 to select); predicted landing ≈ "
+        f"Suggested catch arm={catcher}; predicted landing ≈ "
         f"({float(landing[0]):.3f}, {float(landing[1]):.3f}); "
-        f"red_line_x={env.red_line_x:.3f}; mirrored={env.mirrored}. "
-        f"Shove the box with the closed gripper (PhysX)."
+        f"red_line_x={env.red_line_x:.3f}; mirrored={env.mirrored}."
     )
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
+    box_placed = {"done": False}
+
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        print_instructions("Shove the box with the closed gripper (PhysX).")
+    else:
+        def _on_click(viewer, pixel_x, pixel_y):
+            if box_placed["done"]:
+                return False
+            hit = table_xy_from_click(viewer, pixel_x, pixel_y, float(env.table_top))
+            if hit is None:
+                return False
+            xy = env._clamp_table_xy(np.asarray(hit, dtype=np.float64))
+            env._freeze_box(env._box_pose_at(xy))
+            box_placed["done"] = True
+            print(f"Box teleported to ({xy[0]:.3f}, {xy[1]:.3f}); mouse disabled.")
+            return True
+
+        viewer.register_click_handler(_on_click)
+        print_instructions("Click once on the table to place the catch box; further clicks are ignored.")
 
     settle_after = None
     terminal_started_at = None
@@ -142,10 +168,11 @@ def main():
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
 
-            # Keep the box dynamic every frame (in case settle helpers re-freeze).
-            if not bool(getattr(env, "_push_active", False)):
-                env._enable_box_physics()
-                env._push_active = True
+            if use_robot:
+                # Keep the box dynamic every frame (in case settle helpers re-freeze).
+                if not bool(getattr(env, "_push_active", False)):
+                    env._enable_box_physics()
+                    env._push_active = True
 
             if n_steps == 0:
                 env.scene.update_render()

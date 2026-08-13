@@ -31,6 +31,8 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     UniversalRobotControls,
+    actor_scene_id,
+    click_hits_actor_map,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
@@ -42,8 +44,9 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow        move bowl left
-  Right Arrow       move bowl right
+  Left Arrow        hold to move bowl left
+  Right Arrow       hold to move bowl right
+  Mouse             hold click on a keycap to press it (releases when you let go)
 """
 
 CONTROLS_ROBOT = """
@@ -102,12 +105,53 @@ def _requested_side(window):
     return None
 
 
-def _update_keyboard(env, window):
-    side = _requested_side(window)
-    env._expert_hold = side
-    env._bowl_force_stop = False
-    if side is not None and getattr(env, "_marble_state", None) == "parked":
-        env._release_marble()
+def _mouse_picture_xy(viewer):
+    """Map window mouse position into Segmentation picture coordinates."""
+    window = viewer.window
+    mx, my = window.mouse_position
+    ww, wh = window.size
+    if ww <= 0 or wh <= 0 or mx < 0 or my < 0 or mx >= ww or my >= wh:
+        return None
+    tw, th = window.get_picture_size("Segmentation")
+    return int(mx * tw / ww), int(my * th / wh)
+
+
+class KeyboardBowlController:
+    """Arrows or hold-click on a keycap drive bowl motion (no latch/toggle)."""
+
+    def __init__(self, env, viewer):
+        self.env = env
+        self.viewer = viewer
+        self._key_ids = {}
+        self._last_mouse_side = None
+        for side, key in (getattr(env, "keys", {}) or {}).items():
+            sid = actor_scene_id(key)
+            if sid is not None:
+                self._key_ids[int(sid)] = str(side)
+
+    def _mouse_held_side(self):
+        window = self.viewer.window
+        if not bool(window.mouse_down(0)):
+            return None
+        pix = _mouse_picture_xy(self.viewer)
+        if pix is None:
+            return None
+        return click_hits_actor_map(self.viewer, pix[0], pix[1], self._key_ids)
+
+    def update(self, window):
+        side = _requested_side(window)
+        if side is None:
+            side = self._mouse_held_side()
+        if side != self._last_mouse_side:
+            if side is not None:
+                print(f"Bowl key pressed: {side}")
+            elif self._last_mouse_side is not None:
+                print(f"Bowl key released: {self._last_mouse_side}")
+            self._last_mouse_side = side
+        self.env._expert_hold = side
+        self.env._bowl_force_stop = False
+        if side is not None and getattr(self.env, "_marble_state", None) == "parked":
+            self.env._release_marble()
 
 
 def main():
@@ -123,13 +167,14 @@ def main():
 
     print_mode_controls("catch_shelf_marble", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
+    use_robot = args.control == "robot"
     env = catch_shelf_marble()
-    # Always enable arm teleop: button presses are gripper-Z; Space opens/closes grippers.
-    env._interactive_robot_mode = True
+    env._interactive_robot_mode = use_robot
     # Raster viewer: pour_beer-style plain-alpha shelves (transmission is invisible here).
     env._plain_glass = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    env.together_close_gripper(save_freq=None)
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    if use_robot:
+        env.together_close_gripper(save_freq=None)
     print_episode_condition(env)
     env._osc_armed = True
     env._bowl_force_stop = False
@@ -143,11 +188,16 @@ def main():
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
-
-    if args.control == "keyboard":
-        print_instructions("Keyboard arrows still latch bowl motion as a sandbox shortcut.")
+    keyboard = None
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        print_instructions("Select an arm, hover a key, lower with Q to press.")
+    else:
+        keyboard = KeyboardBowlController(env, viewer)
+        print_instructions(
+            "Hold Left/Right arrows, or hold mouse on a keycap (releases when you let go)."
+        )
 
     terminal_started_at = None
     pacer = RealtimePhysicsPacer(env)
@@ -156,8 +206,8 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            if args.control == "keyboard":
-                _update_keyboard(env, viewer.window)
+            if keyboard is not None:
+                keyboard.update(viewer.window)
 
             if n_steps == 0:
                 env.scene.update_render()

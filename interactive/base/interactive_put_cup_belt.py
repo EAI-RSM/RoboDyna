@@ -36,6 +36,7 @@ from _interactive_common import (  # noqa: E402
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
+    table_xy_from_click,
     terminal_hold_should_close,
     print_episode_condition,
 )
@@ -50,7 +51,7 @@ INTERACTIVE_CUP_SOUTH_CLEARANCE = 0.05
 
 
 CONTROLS_KEYBOARD = """
-  (Same as robot) Space grasp/release; arrows / E / Q teleop the arm.
+  Mouse click       click the belt to teleport the cup onto that belt XY
 """
 
 CONTROLS_ROBOT = """
@@ -165,6 +166,31 @@ def _mark_deposit(env):
     env._slot_x_at_deposit = float(env.slot_x())
 
 
+def _table_z(env) -> float:
+    """put_cup_belt has no ``table_top``; match env spawn height."""
+    return float(0.74 + float(getattr(env, "table_z_bias", 0.0)))
+
+
+def _teleport_cup_to_belt(env, x: float, y: float) -> None:
+    """Place the cup on the belt at ``(x, y)`` with Z raised to the belt surface."""
+    z0 = _table_z(env)
+    # ``slot_z`` is the belt-top height used by the env for place / success checks.
+    belt_z = float(getattr(env, "slot_z", z0 + float(getattr(env, "BELT_Z_OFF", 0.01))))
+    half_y = float(getattr(env, "belt_plate_half_size", [0.0, 0.05])[1])
+    y = float(np.clip(y, float(env.belt_y) - half_y, float(env.belt_y) + half_y))
+    half_x = float(getattr(env, "belt_plate_half_size", [0.2, 0.0])[0])
+    center_x = float(getattr(env, "belt_center_x", 0.0))
+    x = float(np.clip(x, center_x - half_x, center_x + half_x))
+    _set_cup_pose(
+        env, x, y, belt_z, kinematic=False, quat=env.CUP_UPRIGHT_QPOS,
+    )
+    _mark_deposit(env)
+    print(
+        f"Cup teleported onto belt at ({x:.3f}, {y:.3f}, z={belt_z:.3f}); "
+        "evaluating landing…"
+    )
+
+
 class CupReleaseMonitor:
     """Watch finger contact; when the cup leaves the hand, score the landing.
 
@@ -220,7 +246,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
         "--control",
-        choices=("keyboard", "robot"),
+        choices=("keyboard", "keyboard+mouse", "robot"),
         default="robot",
         help="Interaction method (default: robot)",
     )
@@ -239,10 +265,10 @@ def main():
 
     print_mode_controls("put_cup_belt", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
+    use_robot = args.control == "robot"
     env = put_cup_belt()
-    # Always enable arm teleop + Space grasp/release.
-    env._interactive_robot_mode = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
+    env._interactive_robot_mode = use_robot
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
     print_episode_condition(env)
     _place_cup_south_of_belt(env)
     print(
@@ -251,19 +277,37 @@ def main():
         f"gap x≈{env.slot_x():.3f}."
     )
 
-    release_monitor = CupReleaseMonitor(env)
+    release_monitor = CupReleaseMonitor(env) if use_robot else None
+    cup_placed = {"done": False}
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        print_instructions(
+            "Space opens/closes the gripper to grasp/release the cup. "
+            "When the cup leaves the fingers, landing is scored."
+        )
+    else:
+        def _on_click(viewer, pixel_x, pixel_y):
+            if cup_placed["done"]:
+                return False
+            hit = table_xy_from_click(viewer, pixel_x, pixel_y, _table_z(env))
+            if hit is None:
+                return False
+            half_y = float(getattr(env, "belt_plate_half_size", [0.0, 0.05])[1]) + 0.04
+            if abs(float(hit[1]) - float(env.belt_y)) > half_y:
+                print("Click the belt to place the cup.")
+                return True
+            _teleport_cup_to_belt(env, hit[0], hit[1])
+            cup_placed["done"] = True
+            return True
 
-    print_instructions(
-        "Space opens/closes the gripper to grasp/release the cup. "
-        "When the cup leaves the fingers, landing is scored."
-    )
+        viewer.register_click_handler(_on_click)
+        print_instructions("Click the belt to teleport the cup onto it.")
 
     placed_since = None
     terminal_started_at = None
@@ -273,7 +317,8 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            release_monitor.update(viewer.window)
+            if release_monitor is not None:
+                release_monitor.update(viewer.window)
 
             if n_steps == 0:
                 env.scene.update_render()
@@ -298,14 +343,18 @@ def main():
                     break
                 continue
 
+            placed = (
+                bool(release_monitor.placed) if release_monitor is not None
+                else bool(cup_placed["done"])
+            )
             if getattr(env, "_curtain_hit", False) and placed_since is None:
                 report_task_result(env, "curtain contact")
                 terminal_started_at = time.perf_counter()
                 continue
-            if release_monitor.placed:
+            if placed:
                 if placed_since is None:
                     placed_since = time.perf_counter()
-                    print("Cup detached; settling…")
+                    print("Cup on belt; settling…")
                 elif time.perf_counter() - placed_since >= 2.0:
                     hit = bool(getattr(env, "_curtain_hit", False))
                     detail = f"score={env.placement_score():.2f}"

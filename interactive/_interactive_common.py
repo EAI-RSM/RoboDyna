@@ -81,6 +81,101 @@ def embodiment_config(robot_file):
         return yaml.safe_load(handle)
 
 
+CONTROL_ROBOT = "robot"
+CONTROL_KEYBOARD_MOUSE = "keyboard+mouse"
+_CONTROL_KEYBOARD_ALIASES = {
+    "keyboard",
+    "keyboard+mouse",
+    "keyboardmouse",
+    "key+mouse",
+    "keymouse",
+    "km",
+}
+
+
+def normalize_control_mode(value) -> str:
+    """Canonical interactive controller: ``robot`` or ``keyboard+mouse``."""
+    text = str(value or CONTROL_ROBOT).strip().lower()
+    text = text.replace("_", "+").replace(" ", "")
+    if text in _CONTROL_KEYBOARD_ALIASES:
+        return CONTROL_KEYBOARD_MOUSE
+    return CONTROL_ROBOT
+
+
+def is_robot_control(value) -> bool:
+    return normalize_control_mode(value) == CONTROL_ROBOT
+
+
+def strip_interactive_arms(env) -> None:
+    """Remove dual-arm articulations from the interactive scene (keyboard+mouse).
+
+    Env files stay unchanged: robots still load during ``setup_demo``, then this
+    drops them so they are not visible, collidable, or teleop-able.
+    """
+    if bool(getattr(env, "_interactive_arms_removed", False)):
+        return
+    robot = getattr(env, "robot", None)
+    scene = getattr(env, "scene", None)
+    if robot is None or scene is None:
+        return
+    import sapien
+
+    for side in ("left", "right"):
+        entity = getattr(robot, f"{side}_entity", None)
+        if entity is None:
+            continue
+        # Hide any render bodies that survive a failed remove.
+        try:
+            for link in entity.get_links():
+                for comp in link.entity.get_components():
+                    if isinstance(comp, sapien.render.RenderBodyComponent):
+                        try:
+                            comp.visibility = 0.0
+                        except Exception:
+                            pass
+                        try:
+                            comp.disable()
+                        except Exception:
+                            pass
+                    if isinstance(comp, sapien.physx.PhysxArticulationLinkComponent):
+                        try:
+                            for shape in comp.get_collision_shapes():
+                                shape.set_collision_groups([0, 0, 0, 0])
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        removed = False
+        try:
+            scene.remove_articulation(entity)
+            removed = True
+        except Exception:
+            try:
+                scene.remove_entity(entity)
+                removed = True
+            except Exception:
+                try:
+                    entity.set_root_pose(sapien.Pose([0.0, 0.0, -5.0]))
+                except Exception:
+                    pass
+        if removed:
+            try:
+                setattr(robot, f"{side}_entity", None)
+            except Exception:
+                pass
+    env._interactive_arms_removed = True
+    env._interactive_robot_mode = False
+
+
+def prepare_interactive_control(env, control) -> str:
+    """Normalize ``control``, set robot-mode flag, and strip arms for keyboard+mouse."""
+    mode = normalize_control_mode(control)
+    env._interactive_robot_mode = mode == CONTROL_ROBOT
+    if mode != CONTROL_ROBOT:
+        strip_interactive_arms(env)
+    return mode
+
+
 def configure_task(task_name: str, config_name: str, seed: int, use_robot: bool,
                    task_arg_overrides: dict | None = None):
     """Load ``task_config/<config_name>.yml`` and wire embodiment paths."""
@@ -131,9 +226,10 @@ def add_record_data_arg(parser):
         "--record-data",
         action="store_true",
         help=(
-            "Record this episode in collect_data format. Cameras render after "
-            "the viewer closes so play stays real-time "
-            "(HDF5 + preview mp4 + LeRobot under data/<task>/<config>/)"
+            "Record this episode in collect_data format. State is logged during "
+            "play; cameras (head + wrists + static, per demo_dynamic.yml) render "
+            "after the viewer closes (HDF5 + preview mp4 + LeRobot under "
+            "data/<task>/<config>/)"
         ),
     )
     return parser
@@ -495,13 +591,18 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
     dest = " + ".join(bits) if bits else save_root
     print(
         f"[record-data] logging robot/object state for episode {env.ep_num}; "
-        f"head_camera renders after the viewer closes → {dest}"
+        f"cameras (collect_data yaml) render after the viewer closes → {dest}"
     )
     return True
 
 
 def _replay_interactive_cameras(meta: dict):
-    """Headless setup_demo + pose restore + _take_picture for logged snapshots."""
+    """Headless setup_demo + pose restore + _take_picture for logged snapshots.
+
+    Camera / ``data_type`` flags follow the same yaml as ``collect_data.py``
+    (head + wrists + embodiment static cams such as ``demo_camera`` /
+    ``front_camera``) so the HDF5 schema matches planner collection.
+    """
     snapshots = meta.get("snapshots") or []
     if not snapshots:
         print("[record-data] no state logged; nothing to save")
@@ -515,8 +616,14 @@ def _replay_interactive_cameras(meta: dict):
     save_freq = int(meta.get("save_freq") or 15)
     data_type = meta.get("data_type") or {}
     config_name = str(meta.get("config_name") or "demo_dynamic")
+    # GUI temp ymls are live-viewer only; record against the collect_data config.
+    if config_name.startswith(".interactive_gui_"):
+        config_name = "demo_dynamic"
     use_robot = bool(meta.get("use_robot", True))
-    print(f"[record-data] rendering {len(snapshots)} head_camera frames offscreen...")
+    print(
+        f"[record-data] rendering {len(snapshots)} frames offscreen "
+        f"(same cameras as collect_data / {config_name})..."
+    )
     config = configure_task(task_name, config_name, seed, use_robot)
     config["render_freq"] = 0
     config["save_data"] = True
@@ -525,15 +632,9 @@ def _replay_interactive_cameras(meta: dict):
     config["save_freq"] = save_freq
     config["task_config"] = folder
     if data_type:
-        config["data_type"] = data_type
-    cam = config.setdefault("camera", {})
-    cam["collect_head_camera"] = True
-    cam["collect_wrist_camera"] = False
-    cam["collect_static_cameras"] = ["head_camera"]
-    if isinstance(data_type, dict):
-        data_type = dict(data_type)
-        data_type["third_view"] = False
-        config["data_type"] = data_type
+        # Keep yaml data_type when unset; otherwise honor the live recorder copy
+        # (same keys collect_data reads from demo_dynamic.yml).
+        config["data_type"] = dict(data_type)
     replay = task_cls()
     replay.setup_demo(**config)
     replay.save_dir = save_root
@@ -541,11 +642,10 @@ def _replay_interactive_cameras(meta: dict):
     replay.ep_num = ep_num
     replay.FRAME_IDX = 0
     replay.task_config = folder
-    replay._record_preview_head_only = True
     replay._record_write_hdf5 = bool(meta.get("write_hdf5", True))
     replay._record_write_video = bool(meta.get("write_video", True))
     if data_type:
-        replay.data_type = data_type
+        replay.data_type = dict(data_type)
     try:
         for i, snap in enumerate(snapshots):
             _interactive_record_restore_state(replay, snap)
@@ -596,6 +696,18 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
             success = bool(env.check_success())
         except Exception:
             success = False
+    # Capture before close_env tears the scene down. Same payload shape as
+    # collect_data's ``info_db[episode_N] = play_once()`` when the task filled
+    # ``env.info`` (language placeholders live under ``info``).
+    live_info = None
+    try:
+        from copy import deepcopy
+
+        raw = getattr(env, "info", None)
+        if isinstance(raw, dict):
+            live_info = deepcopy(raw)
+    except Exception:
+        live_info = None
     meta = {
         "snapshots": snapshots,
         "task_cls": getattr(env, "_interactive_record_task_cls", None) or type(env),
@@ -613,6 +725,7 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
         "success": bool(success),
         "write_hdf5": bool(getattr(env, "_interactive_record_write_hdf5", True)),
         "write_video": bool(getattr(env, "_interactive_record_write_video", True)),
+        "live_info": live_info,
     }
 
     if live_close is not None:
@@ -683,16 +796,27 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
             info_db = {}
             if os.path.exists(info_path):
                 info_db = json.loads(Path(info_path).read_text(encoding="utf-8") or "{}")
-            info_db[f"episode_{ep_num}"] = {
-                "seed": seed,
-                "success": bool(success),
-                "source": "interactive",
-                "scenario": (
-                    os.environ.get("ROBODYNA_SCENARIO")
-                    or "default"
-                ),
-                "frames": n_frames,
-            }
+            # Match collect_data: play_once() dict (cluttered_table_info / texture_info /
+            # info placeholders) plus interactive provenance fields.
+            entry = {}
+            live = meta.get("live_info")
+            if isinstance(live, dict):
+                entry.update(live)
+            entry.setdefault("cluttered_table_info", [])
+            entry.setdefault(
+                "texture_info",
+                {"wall_texture": None, "table_texture": None},
+            )
+            entry.setdefault("info", {})
+            entry["seed"] = seed
+            entry["success"] = bool(success)
+            entry["source"] = "interactive"
+            entry["scenario"] = (
+                os.environ.get("ROBODYNA_SCENARIO")
+                or "default"
+            )
+            entry["frames"] = n_frames
+            info_db[f"episode_{ep_num}"] = entry
             Path(info_path).write_text(
                 json.dumps(info_db, ensure_ascii=False, indent=4),
                 encoding="utf-8",
@@ -826,6 +950,152 @@ def edge_pressed(window, key: str, prev: dict) -> bool:
     was = prev.get(key, False)
     prev[key] = down
     return down and not was
+
+
+def actor_entity(actor):
+    """Underlying sapien entity for an Actor wrapper or raw entity."""
+    if actor is None:
+        return None
+    return getattr(actor, "actor", actor)
+
+
+def actor_scene_id(actor) -> int | None:
+    entity = actor_entity(actor)
+    if entity is None:
+        return None
+    try:
+        return int(entity.per_scene_id)
+    except Exception:
+        return None
+
+
+def click_segmentation_ids(viewer, pixel_x: int, pixel_y: int) -> tuple[int, int]:
+    """Return ``(entity_id, scene_id)`` from the Segmentation buffer at a click."""
+    pixel = viewer.window.get_picture_pixel("Segmentation", int(pixel_x), int(pixel_y))
+    return int(pixel[1]), int(pixel[2])
+
+
+def click_hits_actor(viewer, pixel_x: int, pixel_y: int, actor) -> bool:
+    """True when the Segmentation pixel at ``(pixel_x, pixel_y)`` is ``actor``."""
+    wanted = actor_scene_id(actor)
+    if wanted is None:
+        return False
+    entity_id, _scene_id = click_segmentation_ids(viewer, pixel_x, pixel_y)
+    return entity_id == wanted
+
+
+def click_hits_actor_map(viewer, pixel_x: int, pixel_y: int, id_to_value: dict):
+    """Look up a click against ``{per_scene_id: value}``; return value or None."""
+    entity_id, _scene_id = click_segmentation_ids(viewer, pixel_x, pixel_y)
+    return id_to_value.get(int(entity_id))
+
+
+def table_xy_from_click(viewer, pixel_x: int, pixel_y: int, plane_z: float):
+    """Unproject a viewer click onto the horizontal plane ``z=plane_z``.
+
+    Prefers the renderer's ``Position`` buffer (view-space hit on visible
+    geometry — usually the tabletop). Falls back to a Vulkan-correct ray /
+    plane intersection when the pixel has no geometry.
+
+    Returns ``(x, y)`` or ``None`` if the ray misses (parallel / behind).
+    """
+    import sapien
+
+    window = viewer.window
+    tw, th = window.get_picture_size("Segmentation")
+    if tw <= 1 or th <= 1:
+        return None
+    px = int(np.clip(pixel_x, 0, tw - 1))
+    py = int(np.clip(pixel_y, 0, th - 1))
+
+    # SAPIEN viewer camera → GL/Vulkan view: same offset as TransformWindow.
+    gl_fix = sapien.Pose([0.0, 0.0, 0.0], [-0.5, -0.5, 0.5, 0.5])
+    cam_gl = window.get_camera_pose() * gl_fix
+    world_from_view = np.asarray(cam_gl.to_transformation_matrix(), dtype=np.float64)
+    proj = np.asarray(window.get_camera_projection_matrix(), dtype=np.float64)
+
+    def _as_xy(world_xyz) -> tuple[float, float] | None:
+        w = np.asarray(world_xyz, dtype=np.float64).reshape(3)
+        if not np.all(np.isfinite(w)):
+            return None
+        # Project onto the table plane along world Z (table is horizontal).
+        return float(w[0]), float(w[1])
+
+    # ---- 1) Position buffer: exact surface under the cursor (table / props) ----
+    for name in ("Position", "position"):
+        try:
+            pix = np.asarray(window.get_picture_pixel(name, px, py), dtype=np.float64)
+        except Exception:
+            continue
+        if pix.size < 3:
+            continue
+        view_xyz = pix[:3]
+        # Empty / sky samples are typically 0 or non-finite.
+        if not np.all(np.isfinite(view_xyz)):
+            continue
+        if float(np.linalg.norm(view_xyz)) < 1e-5:
+            continue
+        world_h = world_from_view @ np.array(
+            [view_xyz[0], view_xyz[1], view_xyz[2], 1.0], dtype=np.float64
+        )
+        if abs(float(world_h[3])) > 1e-9:
+            world_h = world_h / float(world_h[3])
+        hit = _as_xy(world_h[:3])
+        if hit is not None:
+            return hit
+
+    # ---- 2) Ray ∩ z=plane_z (Vulkan NDC; match deferred.frag UV→NDC) ----
+    try:
+        inv_proj = np.linalg.inv(proj)
+    except np.linalg.LinAlgError:
+        return None
+
+    u = (float(px) + 0.5) / float(tw)
+    v = (float(py) + 0.5) / float(th)
+    # deferred.frag: ndc.xy = inUV * 2 - 1. Picture (0,0) is top-left like mouse.
+    # Try both Y orientations; keep the forward hit closest to the camera.
+    candidates: list[tuple[float, float, float]] = []  # (cam_dist, x, y)
+    cam_pos = np.asarray(cam_gl.p, dtype=np.float64)
+
+    for ndc_y in (2.0 * v - 1.0, 1.0 - 2.0 * v):
+        ndc_x = 2.0 * u - 1.0
+        # Vulkan depth in [0, 1]; also try OpenGL-style ±1 for older matrices.
+        for z_near, z_far in ((0.0, 1.0), (-1.0, 1.0)):
+            def _eye(ndc_z: float) -> np.ndarray:
+                clip = np.array([ndc_x, ndc_y, ndc_z, 1.0], dtype=np.float64)
+                eye = inv_proj @ clip
+                if abs(float(eye[3])) > 1e-12:
+                    eye = eye / float(eye[3])
+                return eye[:3]
+
+            near_eye = _eye(z_near)
+            far_eye = _eye(z_far)
+            # View → world
+            def _world(eye_xyz: np.ndarray) -> np.ndarray:
+                h = world_from_view @ np.array(
+                    [eye_xyz[0], eye_xyz[1], eye_xyz[2], 1.0], dtype=np.float64
+                )
+                if abs(float(h[3])) > 1e-12:
+                    h = h / float(h[3])
+                return h[:3]
+
+            p0 = _world(near_eye)
+            p1 = _world(far_eye)
+            direction = p1 - p0
+            denom = float(direction[2])
+            if abs(denom) < 1e-9:
+                continue
+            t = (float(plane_z) - float(p0[2])) / denom
+            if t < 0.0:
+                continue
+            hit = p0 + t * direction
+            dist = float(np.linalg.norm(hit - cam_pos))
+            candidates.append((dist, float(hit[0]), float(hit[1])))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c[0])
+    return candidates[0][1], candidates[0][2]
 
 
 def arrow_nudge_xy(window, step: float = 0.003) -> np.ndarray:
@@ -1043,7 +1313,9 @@ def _interactive_result_extras(env, ok: bool | None, detail: str | None) -> dict
     if control:
         extras["controller"] = control
     elif getattr(env, "_interactive_robot_mode", None) is not None:
-        extras["controller"] = "robot" if env._interactive_robot_mode else "keyboard"
+        extras["controller"] = (
+            CONTROL_ROBOT if env._interactive_robot_mode else CONTROL_KEYBOARD_MOUSE
+        )
     seed_raw = os.environ.get("ROBODYNA_SEED", "").strip()
     if seed_raw:
         try:
@@ -1278,8 +1550,11 @@ def print_episode_condition(env, task: str | None = None) -> str:
     return text
 
 
-def report_task_result(env, detail: str | None = None) -> bool:
+def report_task_result(env, detail: str | None = None, *, ok: bool | None = None) -> bool:
     """Print ``Task complete: SUCCESS|FAILURE`` from ``check_success``; return success.
+
+    Pass ``ok=`` to override ``check_success`` (keyboard shortcuts that extract
+    objects without a gripper latch still need a terminal result).
 
     Also stores the result for ``task_result_exit_code()`` so ``base_task_gui``
     can show SUCCESS/FAILURE like ``household_task_gui``. When ``ROBODYNA_TASK_RESULT_FILE``
@@ -1287,7 +1562,10 @@ def report_task_result(env, detail: str | None = None) -> bool:
     """
     global _LAST_TASK_RESULT, _LAST_TASK_DETAIL
     try:
-        ok = bool(env.check_success())
+        if ok is None:
+            ok = bool(env.check_success())
+        else:
+            ok = bool(ok)
     except Exception as exc:
         detail = _normalize_result_detail(f"check_success error: {exc}")
         print_failure(f"Task complete: FAILURE ({detail})")
@@ -1755,8 +2033,12 @@ class ViewerViewToggle:
             # Restore red failure tint when UniversalRobotControls is absent
             # (keyboard mode still uses Space gripper / task action paths).
             gripper_failure_feedback(self.env).update()
-        # Space opens/closes selected gripper(s).
-        if self.env is not None and self._space_pressed(window):
+        # Space opens/closes selected gripper(s) — only when arms are present.
+        if (
+            self.env is not None
+            and not bool(getattr(self.env, "_interactive_arms_removed", False))
+            and self._space_pressed(window)
+        ):
             toggle_selected_grippers(self.env)
         if self._v_pressed(window):
             self._cycle_view()
@@ -1850,10 +2132,14 @@ def make_viewer_view_toggle(
             control_from_argv = arg.split("=", 1)[1]
             break
     if control_from_argv is not None:
-        robot_mode = control_from_argv == "robot"
+        robot_mode = is_robot_control(control_from_argv)
     elif not robot_mode:
         # Match add_robot_motion_arg default when --control is omitted.
         robot_mode = True
+    # keyboard+mouse: drop arms even if a launcher forgot prepare_interactive_control.
+    if not robot_mode:
+        strip_interactive_arms(env)
+        robot_mode = False
     if robot_mode:
         robot_controls = UniversalRobotControls(env)
     return ViewerViewToggle(
@@ -2618,9 +2904,9 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
     """Add ``--control`` + ``--robot-motion`` flags used by every interactive script."""
     parser.add_argument(
         "--control",
-        choices=("keyboard", "robot"),
+        choices=("keyboard", "keyboard+mouse", "robot"),
         default="robot",
-        help="Interaction method (default: robot)",
+        help="Interaction method (default: robot). ``keyboard`` is an alias of keyboard+mouse.",
     )
     parser.add_argument(
         "--robot-motion",
@@ -2633,6 +2919,16 @@ def add_robot_motion_arg(parser, robot_motion_default: str = "planner"):
     )
     add_record_data_arg(parser)
     return parser
+
+
+def parse_control_arg(args) -> str:
+    """Normalize ``args.control`` in place and return the canonical mode."""
+    mode = normalize_control_mode(getattr(args, "control", CONTROL_ROBOT))
+    try:
+        args.control = mode
+    except Exception:
+        pass
+    return mode
 
 
 def _line_documents_key(lines: list[str], key: str) -> bool:
@@ -2728,8 +3024,9 @@ def _is_shared_robot_teleop_help_line(line: str) -> bool:
 
 def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str) -> None:
     """Print only the help block for the selected ``--control`` mode."""
-    body = (robot if mode == "robot" else keyboard).strip("\n")
-    if mode == "robot":
+    mode = normalize_control_mode(mode)
+    body = (robot if mode == CONTROL_ROBOT else keyboard).strip("\n")
+    if mode == CONTROL_ROBOT:
         # Drop task lines that duplicate the shared teleop block below.
         task_lines = [
             ln for ln in body.splitlines()

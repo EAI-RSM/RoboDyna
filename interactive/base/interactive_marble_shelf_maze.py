@@ -145,7 +145,7 @@ def main():
 
     dirs = list(getattr(env, "correct_dir", []) or [])
     print(f"Shelves={env.n_shelves}. Suggested directions top→bottom: {dirs}")
-    if args.control == "keyboard":
+    if args.control in ("keyboard", "keyboard+mouse"):
         print_instructions("Keyboard arrows latch the spring keys (hold-to-tilt) as a sandbox shortcut.")
 
     terminal_started_at = None
@@ -155,7 +155,7 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            if args.control == "keyboard":
+            if args.control in ("keyboard", "keyboard+mouse"):
                 _update_keyboard(env, viewer.window)
             else:
                 env._expert_hold = None

@@ -4,9 +4,10 @@
 Run from any directory:
 
     /path/to/RoboDynaExp/interactive/base/interactive_catch_ramp_ball.py --control robot
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_ramp_ball.py --control keyboard
 
-Teleop the arm(s) and close the gripper (Space) to pick up the cup; place it under
-the predicted catch aim before the ball leaves the ramp. No auto-grasp beyond Space gripper.
+Robot: teleop and Space-grasp the cup into the catch aim.
+Keyboard: click once on empty table space to teleport the cup there (one shot).
 """
 
 import argparse
@@ -15,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+import sapien
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -31,13 +34,14 @@ from _interactive_common import (  # noqa: E402
     print_mode_controls,
     report_task_result,
     RealtimePhysicsPacer,
+    table_xy_from_click,
     terminal_hold_should_close,
     print_episode_condition,
 )
 
 
 CONTROLS_KEYBOARD = """
-  Prefer --control robot. Teleop the arm and use Space to grasp the cup.
+  Mouse click       teleport the cup to that table XY (once only; further clicks ignored)
 """
 
 CONTROLS_ROBOT = """
@@ -89,10 +93,29 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = True):
 
 
 def _aim_xy(env):
-    import numpy as np
     landing, _ = env._predict_landing()
     aim = np.asarray(getattr(env, "catch_aim", landing), dtype=float)
     return float(aim[0]), float(aim[1])
+
+
+def _set_cup_xy(env, x: float, y: float) -> None:
+    """Teleport cup in XY only; keep current Z so it stays on the table."""
+    cur = env.cup.get_pose()
+    z = float(cur.p[2])
+    pose = sapien.Pose([float(x), float(y), z], list(cur.q))
+    try:
+        env.cup.set_pose(pose)
+    except Exception:
+        env.cup.actor.set_pose(pose)
+    rigid = env._cup_comp() if hasattr(env, "_cup_comp") else None
+    if rigid is not None:
+        try:
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+            rigid.set_kinematic(True)
+            rigid.set_kinematic_target(pose)
+        except Exception:
+            pass
 
 
 def main():
@@ -113,30 +136,48 @@ def main():
         robot=CONTROLS_ROBOT,
     )
 
+    use_robot = args.control == "robot"
     env = catch_ramp_ball()
-    env._interactive_robot_mode = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
+    env._interactive_robot_mode = use_robot
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
     print_episode_condition(env)
 
     x, y = _aim_xy(env)
-    try:
-        env.together_open_gripper(save_freq=None)
-    except Exception:
-        pass
+    if use_robot:
+        try:
+            env.together_open_gripper(save_freq=None)
+        except Exception:
+            pass
 
     env._start_ball_motion(expert_demo=False)
     print(
-        f"Predicted catch aim ≈ ({x:.3f}, {y:.3f}). Ball is rolling. "
-        "Teleop the arm and use Space to grasp the cup."
+        f"Predicted catch aim ≈ ({x:.3f}, {y:.3f}). Ball is rolling."
     )
-    print_instructions("Arrows/E/Q move the arm; Space opens/closes the gripper to pick the cup.")
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
+    cup_placed = {"done": False}
+
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        print_instructions("Arrows/E/Q move the arm; Space opens/closes the gripper to pick the cup.")
+    else:
+        def _on_click(viewer, pixel_x, pixel_y):
+            if cup_placed["done"]:
+                return False
+            hit = table_xy_from_click(viewer, pixel_x, pixel_y, float(env.table_top))
+            if hit is None:
+                return False
+            _set_cup_xy(env, hit[0], hit[1])
+            cup_placed["done"] = True
+            print(f"Cup teleported to ({hit[0]:.3f}, {hit[1]:.3f}); mouse disabled.")
+            return True
+
+        viewer.register_click_handler(_on_click)
+        print_instructions("Click once on the table to place the cup; further clicks are ignored.")
 
     settle_after = None
     terminal_started_at = None

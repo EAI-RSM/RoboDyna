@@ -563,7 +563,9 @@ def load_task_controls(script_path: Path, mode: str) -> str:
         source = script_path.read_text(encoding="utf-8")
     except OSError:
         return ""
-    mode = "robot" if str(mode).lower() == "robot" else "keyboard"
+    mode_raw = str(mode or "").strip().lower().replace("_", "+").replace(" ", "")
+    mode = "robot" if mode_raw == "robot" else "keyboard"
+    # ``keyboard+mouse`` (and aliases) use the keyboard banner.
     if mode == "robot":
         body = (
             _extract_string_constant(source, "CONTROLS_ROBOT")

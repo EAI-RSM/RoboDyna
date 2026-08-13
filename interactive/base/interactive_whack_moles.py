@@ -260,7 +260,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
         "--control",
-        choices=("keyboard", "robot"),
+        choices=("keyboard", "keyboard+mouse", "robot"),
         default="robot",
         help="Interaction method (default: robot)",
     )
@@ -305,7 +305,7 @@ def main():
     views = make_viewer_view_toggle(env, viewer)
 
     # For keyboard teleop, prevent EE weld from yanking cubes every step.
-    if args.control == "keyboard":
+    if args.control in ("keyboard", "keyboard+mouse"):
         env._cube_weld = {}
 
     done_since = None

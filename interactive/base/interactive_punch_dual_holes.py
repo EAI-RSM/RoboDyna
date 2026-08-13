@@ -416,7 +416,7 @@ def main():
         "Arms start above the buttons; belts begin after that ready pose. "
         "Select an arm (1/2/3), move over a key, lower with Q to press. "
     )
-    if args.control == "keyboard":
+    if args.control in ("keyboard", "keyboard+mouse"):
         print_instructions("Keyboard arrows still call _fire_punch directly as a sandbox shortcut.")
 
     terminal_started_at = None
@@ -427,7 +427,7 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            if args.control == "keyboard":
+            if args.control in ("keyboard", "keyboard+mouse"):
                 fired = edge.poll(_requested_sides(viewer.window))
                 for side in fired:
                     env._fire_punch(side)

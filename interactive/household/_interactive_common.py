@@ -34,7 +34,10 @@ from interactive._interactive_common import (  # noqa: E402
     configure_task,
     flash_gripper_failure,
     gripper_failure_feedback,
+    is_robot_control,
     make_viewer_view_toggle,
+    normalize_control_mode,
+    prepare_interactive_control,
     print_episode_condition,
     print_failure,
     print_instructions,
@@ -735,7 +738,9 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     from envs import CONFIGS_PATH
 
     globals()["CONFIGS_PATH"] = CONFIGS_PATH
-    config = configure_task(task, args.config, args.seed, args.control == "robot")
+    use_robot = is_robot_control(args.control)
+    args.control = normalize_control_mode(args.control)
+    config = configure_task(task, args.config, args.seed, use_robot)
     task_args = config.setdefault("task_args", {}).setdefault(task, {})
     for item in args.task_arg:
         if "=" not in item:
@@ -750,17 +755,18 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                 value = raw
         task_args[key.strip()] = value
     env = task_cls()
-    env._interactive_robot_mode = args.control == "robot"
+    env._interactive_robot_mode = use_robot
     # Viewer sessions (keyboard or robot teleop) — tasks use this for live physics
     # handoff / miss-continues-until-fall behavior (e.g. stop_ball). Set before
     # setup_demo so interactive warning suppression applies during load.
     env._interactive_session = True
     env.setup_demo(**config)
+    prepare_interactive_control(env, args.control)
     if post_setup is not None:
         post_setup(env)
     print_episode_condition(env, task)
     print_mode_controls(task, args.control, keyboard=keyboard_controls, robot=robot_controls)
-    controller = HouseholdController(env, task, robot=args.control == "robot")
+    controller = HouseholdController(env, task, robot=use_robot)
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
@@ -863,7 +869,7 @@ def make_parser(task, description):
     p = argparse.ArgumentParser(description=description)
     p.add_argument("--config", default=PROFILES[task][2], help="task_config name without .yml")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--control", choices=("keyboard", "robot"), default="robot")
+    p.add_argument("--control", choices=("keyboard", "keyboard+mouse", "robot"), default="robot")
     p.add_argument("--robot-motion", choices=("planner", "interpolate"), default="interpolate")
     p.add_argument("--task-arg", action="append", default=[], help="override task_args entry (key=value)")
     p.add_argument(

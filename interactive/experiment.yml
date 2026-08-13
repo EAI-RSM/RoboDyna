@@ -7,7 +7,7 @@
 #
 # Override path with ROBODYNA_EXPERIMENT_CONFIG=/path/to/file.yml if needed.
 
-controller: robot           # robot | keyboard
+controller: robot           # robot | keyboard+mouse  (keyboard is an alias)
 
 # Seed for each play (0–500).
 #   null        → a new random seed every play

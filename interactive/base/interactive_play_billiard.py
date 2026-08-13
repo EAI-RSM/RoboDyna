@@ -214,7 +214,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
         "--control",
-        choices=("keyboard", "robot"),
+        choices=("keyboard", "keyboard+mouse", "robot"),
         default="robot",
         help="Interaction method (default: robot)",
     )

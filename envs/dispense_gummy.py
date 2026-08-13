@@ -121,7 +121,7 @@ class dispense_gummy(Base_Task):
         self._belt_key_depression = {"left": 0.0, "right": 0.0}
         self._dispense_key_depression = 0.0
         self._reactive_buttons = None
-        # Interactive latch: None | "left" | "right"; dispense pulse via _expert_dispense.
+        # Interactive latch: None | "left" | "right"; dispense hold via _expert_dispense.
         self._expert_belt_hold = None
         self._expert_dispense = False
         self._bowl_force_stop = False
@@ -305,11 +305,9 @@ class dispense_gummy(Base_Task):
         expert = getattr(self, "_expert_belt_hold", None)
         for side in ("left", "right"):
             bank.set_forced(side, expert == side)
-        if getattr(self, "_expert_dispense", False):
-            bank.set_forced("dispense", True)
-            self._expert_dispense = False
-        else:
-            bank.set_forced("dispense", False)
+        # Level hold (not a one-frame pulse): the spring needs several steps to
+        # reach trigger depth, same as belt keys under ``_expert_belt_hold``.
+        bank.set_forced("dispense", bool(getattr(self, "_expert_dispense", False)))
 
         triggered = set(bank.update())
 

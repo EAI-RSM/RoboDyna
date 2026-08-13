@@ -6,7 +6,7 @@ Run from any directory:
     /path/to/RoboDynaExp/interactive/base/interactive_dispense_gummy.py --control keyboard
     /path/to/RoboDynaExp/interactive/base/interactive_dispense_gummy.py --control robot
 
-Keyboard mode forces belt-key latches via arrows. Robot mode: select an arm,
+Keyboard mode: Space dispenses; arrows or hold-mouse on keycaps (no latch). Robot mode: select an arm,
 move over a key, lower with Q to press (left → red dispense; right → belt keys). Sandbox only — not data collection.
 """
 
@@ -28,6 +28,8 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     print_instructions,
     UniversalRobotControls,
+    actor_scene_id,
+    click_hits_actor_map,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
@@ -39,11 +41,9 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Left Arrow        move bowl left (right-arm belt key)
-  Right Arrow       move bowl right (right-arm belt key)
-
-  Continuous belt (Opt 2): hold an arrow key to slide.
-  Discrete belt (default): tap an arrow key to hop one station.
+  Space             hold to press the red dispense key
+  Left / Right      move bowl left / right (belt keys)
+  Mouse             hold click on a keycap to press it (releases when you let go)
 """
 
 CONTROLS_ROBOT = """
@@ -102,6 +102,17 @@ def _belt_side(window):
     if right and not left:
         return "right"
     return None
+
+
+def _mouse_picture_xy(viewer):
+    """Map window mouse position into Segmentation picture coordinates."""
+    window = viewer.window
+    mx, my = window.mouse_position
+    ww, wh = window.size
+    if ww <= 0 or wh <= 0 or mx < 0 or my < 0 or mx >= ww or my >= wh:
+        return None
+    tw, th = window.get_picture_size("Segmentation")
+    return int(mx * tw / ww), int(my * th / wh)
 
 
 def _remaining_in_tubes(env):
@@ -169,11 +180,53 @@ def _nearest_key_for_arm(env, side: str, max_dist: float = _KEY_XY_TOL):
 
 
 class KeyboardState:
-    """Arrow latches for belt only — dispense is gripper-Z (Space = gripper open/close)."""
+    """Space dispenses; arrows or hold-click on keycaps (no latch/toggle)."""
+
+    def __init__(self, env, viewer):
+        self.env = env
+        self.viewer = viewer
+        self._key_ids = {}
+        self._last_mouse_hit = None
+        self._dispense_was_held = False
+        dispense = getattr(env, "dispense_key", None)
+        sid = actor_scene_id(dispense)
+        if sid is not None:
+            self._key_ids[int(sid)] = "dispense"
+        for side, key in (getattr(env, "belt_keys", {}) or {}).items():
+            sid = actor_scene_id(key)
+            if sid is not None:
+                self._key_ids[int(sid)] = str(side)
+
+    def _mouse_held_hit(self):
+        window = self.viewer.window
+        if not bool(window.mouse_down(0)):
+            return None
+        pix = _mouse_picture_xy(self.viewer)
+        if pix is None:
+            return None
+        return click_hits_actor_map(self.viewer, pix[0], pix[1], self._key_ids)
 
     def update(self, env, window):
-        env._expert_belt_hold = _belt_side(window)
+        hit = self._mouse_held_hit()
+        if hit != self._last_mouse_hit:
+            if hit is not None:
+                print(f"Key pressed: {hit}")
+            elif self._last_mouse_hit is not None:
+                print(f"Key released: {self._last_mouse_hit}")
+            self._last_mouse_hit = hit
+
+        side = _belt_side(window)
+        if side is None and hit in ("left", "right"):
+            side = hit
+        env._expert_belt_hold = side
         env._bowl_force_stop = False
+
+        # Hold while Space or mouse is down so the spring can reach trigger depth.
+        dispense_held = bool(window.key_down("space")) or hit == "dispense"
+        env._expert_dispense = dispense_held
+        if dispense_held and not self._dispense_was_held:
+            print("Dispense.")
+        self._dispense_was_held = dispense_held
 
 
 class SmoothGummyPressController:
@@ -393,29 +446,38 @@ def main():
 
     print_mode_controls("dispense_gummy", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
+    use_robot = args.control == "robot"
     env = dispense_gummy()
-    # Always enable arm teleop: button presses are gripper-Z; Space opens/closes grippers.
-    env._interactive_robot_mode = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    env.together_close_gripper(save_freq=None)
+    env._interactive_robot_mode = use_robot
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    if use_robot:
+        env.together_close_gripper(save_freq=None)
     print_episode_condition(env)
     env._expert_belt_hold = None
     env._expert_dispense = False
     env._bowl_force_stop = False
 
-    keyboard = KeyboardState() if args.control == "keyboard" else None
-
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+    keyboard = (
+        KeyboardState(env, viewer)
+        if args.control in ("keyboard", "keyboard+mouse")
+        else None
+    )
+
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
 
     mode = "continuous" if getattr(env, "belt_continuous_motion", False) else "discrete"
     print(f"Belt mode: {mode}.")
-    if args.control == "keyboard":
-        print_instructions("Keyboard arrows still latch belt motion as a sandbox shortcut.")
+    if args.control in ("keyboard", "keyboard+mouse"):
+        print_instructions(
+            "Hold Space or the red keycap to dispense; hold Left/Right or belt "
+            "keycaps to move the bowl (releases when you let go)."
+        )
 
     terminal_started_at = None
     pacer = RealtimePhysicsPacer(env)

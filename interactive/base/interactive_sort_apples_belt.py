@@ -419,7 +419,7 @@ def main():
     )
     parser.add_argument(
         "--control",
-        choices=("keyboard", "mouse", "robot"),
+        choices=("keyboard", "keyboard+mouse", "mouse", "robot"),
         default="robot",
         help="Interaction method (default: robot)",
     )
@@ -523,7 +523,7 @@ def main():
             if composite_view is not None:
                 # Composite mode has no SAPIEN key window; retain its click action.
                 env._expert_hold = composite_view.action
-            elif args.control == "keyboard":
+            elif args.control in ("keyboard", "keyboard+mouse"):
                 _update_keyboard_control(env, viewer.window)
 
             if n_steps == 0:

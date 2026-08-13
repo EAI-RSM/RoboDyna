@@ -34,6 +34,7 @@ from _interactive_common import (  # noqa: E402
     print_instructions,
     UniversalRobotControls,
     action_failed,
+    edge_pressed,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     report_task_result,
@@ -45,12 +46,9 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  P                 snap steak(s) onto pan(s)
-  B                 snap steak(s) back to board(s)
-
-  Key is green when up, red when down.
-  Latch mode: press ON (stays down), press again OFF.
-  Hold mode (Opt 1): cook while depressed; result on first release.
+  Space             single-station cook key (press ON / press again OFF; hold mode: hold Space)
+  Left / Right      dual-station cook keys (left/right station)
+  Meat starts on the pan(s).
 """
 
 CONTROLS_ROBOT = """
@@ -150,7 +148,7 @@ def _snap_steaks_to_pans(env):
         pan = list(env._pan_place_target(st))
         pan[2] += 0.012
         q = st["steak"].get_pose().q
-        st["steak"].set_pose(sapien.Pose(pan[:3], q))
+        st["steak"].actor.set_pose(sapien.Pose(pan[:3], q))
         try:
             rigid = st["steak"].actor.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent)
             if rigid is not None:
@@ -166,29 +164,50 @@ def _snap_steaks_to_boards(env):
         p = st["board"].get_pose().p
         z = float(st.get("board_top", p[2] + 0.02)) + 0.02
         q = st["steak"].get_pose().q
-        st["steak"].set_pose(sapien.Pose([float(p[0]), float(p[1]), z], q))
+        st["steak"].actor.set_pose(sapien.Pose([float(p[0]), float(p[1]), z], q))
         env._latch_grasp_doneness(st, force=True)
     print("Snapped steak(s) to board(s); doneness latched.")
 
 
 class KeyboardState:
-    """P/B snap helpers — cooking is gripper-Z cook-key press."""
+    """Space (single) or Left/Right (dual) drive cook keys; meat starts on pan."""
 
     def __init__(self):
-        self.prev_p = False
-        self.prev_b = False
+        self._prev = {}
 
     def update(self, env, window):
-        _clear_cook_latches(env)
+        stations = list(getattr(env, "stations", []) or [])
+        if not stations:
+            return
+        hold = bool(getattr(env, "use_hold_cook", False))
+        dual = len(stations) >= 2
 
-        p = window.key_down("p")
-        if p and not self.prev_p:
-            _snap_steaks_to_pans(env)
-        self.prev_p = p
-        b = window.key_down("b")
-        if b and not self.prev_b:
-            _snap_steaks_to_boards(env)
-        self.prev_b = b
+        if hold:
+            _clear_cook_latches(env)
+            if dual:
+                left_st, right_st = _stations_by_arm(env)
+                if left_st is not None and window.key_down("left"):
+                    left_st["_expert_key_held"] = True
+                if right_st is not None and window.key_down("right"):
+                    right_st["_expert_key_held"] = True
+            else:
+                if window.key_down("space"):
+                    stations[0]["_expert_key_held"] = True
+            return
+
+        # Latch: edge toggles cook_on via the same env helper the expert uses.
+        if dual:
+            left_st, right_st = _stations_by_arm(env)
+            if left_st is not None and edge_pressed(window, "left", self._prev):
+                env._set_station_cook_on(left_st, not bool(left_st.get("cook_on")))
+                print(f"Left key → {'ON' if left_st.get('cook_on') else 'OFF'}.")
+            if right_st is not None and edge_pressed(window, "right", self._prev):
+                env._set_station_cook_on(right_st, not bool(right_st.get("cook_on")))
+                print(f"Right key → {'ON' if right_st.get('cook_on') else 'OFF'}.")
+        elif edge_pressed(window, "space", self._prev):
+            st = stations[0]
+            env._set_station_cook_on(st, not bool(st.get("cook_on")))
+            print(f"Cook key → {'ON' if st.get('cook_on') else 'OFF'}.")
 
 
 def _station_cook_finished(env, st):
@@ -402,33 +421,42 @@ def main():
     print_mode_controls("cook_meat", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     env = cook_meat()
-    # Always enable arm teleop: cooking is gripper-Z cook-key press.
-    env._interactive_robot_mode = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    # Match the main cook_meat rollout: open fingers before approaching steak.
-    env.together_open_gripper(save_freq=None)
+    use_robot = args.control == "robot"
+    env._interactive_robot_mode = use_robot
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    if use_robot:
+        # Match the main cook_meat rollout: open fingers before approaching steak.
+        env.together_open_gripper(save_freq=None)
     print_episode_condition(env)
     _clear_cook_latches(env)
 
-    # Keyboard sandbox starts with steaks on pans so gripper-Z can cook immediately.
-    if args.control == "keyboard":
+    # Keyboard: meat starts in the pan; keys drive cooking (no arm teleop).
+    if args.control in ("keyboard", "keyboard+mouse"):
         _snap_steaks_to_pans(env)
 
-    keyboard = KeyboardState()
+    keyboard = KeyboardState() if args.control in ("keyboard", "keyboard+mouse") else None
 
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
+    if use_robot and views.robot_controls is None:
         views.robot_controls = UniversalRobotControls(env)
 
     n = len(env.stations)
-    print_instructions(
-        f"Cook-key sandbox ready ({n} station(s)). "
-        "Select an arm, press the cook key to latch ON, press again to latch OFF. "
-        "Teleop steaks with Space (keyboard: P/B snap)."
-    )
+    if use_robot:
+        print_instructions(
+            f"Cook-key sandbox ready ({n} station(s)). "
+            "Select an arm, press the cook key to latch ON, press again to latch OFF. "
+            "Teleop steaks with Space."
+        )
+    else:
+        tip = (
+            "Left/Right arrows toggle each station key."
+            if n >= 2
+            else "Space toggles the cook key (hold Space in Opt 1)."
+        )
+        print_instructions(f"Cook-key sandbox ready ({n} station(s)). Meat on pan. {tip}")
 
     last_status = None
     terminal_started_at = None
@@ -438,7 +466,7 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
-            if args.control == "keyboard":
+            if keyboard is not None:
                 keyboard.update(env, viewer.window)
 
             if n_steps == 0:

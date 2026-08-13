@@ -659,9 +659,9 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control_caption.pack(anchor="w")
         self.control = ttk.Combobox(
             self.control_group,
-            values=("keyboard", "robot"),
+            values=("keyboard+mouse", "robot"),
             state="readonly",
-            width=8,
+            width=14,
             font=("Sans", 13, "bold"),
             style="Task.TCombobox",
         )

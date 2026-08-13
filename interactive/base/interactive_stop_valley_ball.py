@@ -40,8 +40,7 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Arrow keys        move bat in XY
-  E / Q             move bat height
+  Mouse click       move the bat to that XY (height stays at a stoppable intercept height)
 """
 
 CONTROLS_ROBOT = """
@@ -270,19 +269,41 @@ def _gripper_can_latch_bat(env, arm) -> bool:
     return False
 
 
+def _keyboard_bat_z(env) -> float:
+    """Fixed bat height that can still intercept the ball."""
+    try:
+        _ix, _iy, iz = _intercept_xyz(env)
+        return float(iz)
+    except Exception:
+        pass
+    if hasattr(env, "_bat_min_center_z"):
+        return float(env._bat_min_center_z()) + 0.02
+    return float(env.table_top + 0.10)
+
+
 class KeyboardBatController:
-    """Free bat teleport. Prefer --control robot for gripper latch."""
+    """Mouse-click bat teleport at a fixed intercept-ready height."""
 
     def __init__(self, env):
         self.env = env
         env._bowl_ready = True
+        self._z = _keyboard_bat_z(env)
+        # Park at the current XY with the standard stoppable height.
+        p = np.asarray(env.panel.get_pose().p, dtype=float)
+        _set_bat_xyz(env, float(p[0]), float(p[1]), self._z)
 
-    def update(self, window):
-        dx, dy, dz = _nudge_from_keys(window)
-        if not (dx or dy or dz):
-            return
-        p = np.asarray(self.env.panel.get_pose().p, dtype=float)
-        _set_bat_xyz(self.env, p[0] + dx, p[1] + dy, p[2] + dz)
+    def update(self, _window):
+        return
+
+    def on_click(self, viewer, pixel_x, pixel_y):
+        from _interactive_common import table_xy_from_click
+
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, float(self.env.table_top))
+        if hit is None:
+            return False
+        x, y, z = _set_bat_xyz(self.env, hit[0], hit[1], self._z)
+        print(f"Bat → ({x:.3f}, {y:.3f}, {z:.3f}).")
+        return True
 
 
 class RobotBatController:
@@ -342,7 +363,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="Scene randomization seed")
     parser.add_argument(
         "--control",
-        choices=("keyboard", "robot"),
+        choices=("keyboard", "keyboard+mouse", "robot"),
         default="robot",
         help="Interaction method (default: robot)",
     )
@@ -412,7 +433,10 @@ def main():
             "Teleop to the bat handle, close with Space to latch, then move to the intercept."
         )
     else:
-        print_instructions("Arrow keys move the bat in XY; E/Q change height.")
+        viewer.register_click_handler(controller.on_click)
+        print_instructions(
+            f"Click to move the bat (height fixed at z≈{float(controller._z):.3f})."
+        )
 
     settle_after = None
     terminal_started_at = None

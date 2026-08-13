@@ -4,12 +4,10 @@
 Run from any directory:
 
     /path/to/RoboDynaExp/interactive/base/interactive_catch_marbles_trapdoors.py --control robot
-    /path/to/RoboDynaExp/interactive/base/interactive_catch_marbles_trapdoors.py --control robot --seed 3
+    /path/to/RoboDynaExp/interactive/base/interactive_catch_marbles_trapdoors.py --control keyboard
 
-Select an arm, move over the matching colored key, then lower with Q to press.
-The keycap depresses and springs back like ``fill_coffee_jar``; the trapdoor
-opens briefly on the press edge (then auto-closes). Holding does not keep it
-open — release the key fully and press again to reopen.
+Robot: select an arm, move over the matching colored key, then lower with Q to press.
+Keyboard: press 1–4 or click a keycap to open the matching trapdoor.
 """
 
 import argparse
@@ -29,7 +27,10 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
     UniversalRobotControls,
+    actor_scene_id,
     add_robot_motion_arg,
+    click_hits_actor_map,
+    edge_pressed,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
@@ -40,8 +41,8 @@ from _interactive_common import (  # noqa: E402
 
 
 CONTROLS_KEYBOARD = """
-  Prefer --control robot: select an arm, move over the matching colored key, lower with Q to press.
-  The keycap springs back when you raise the gripper.
+  1 / 2 / 3 / 4     open trapdoor for key L→R (same as clicking that keycap)
+  Mouse click       click a colored keycap to open its trapdoor
 """
 
 CONTROLS_ROBOT = """
@@ -99,13 +100,58 @@ def _configure_task(config_name: str, seed: int, use_robot: bool = False):
 def _print_color_map(env):
     names = list(getattr(env, "button_color_names", []) or [])
     target = int(getattr(env, "target_button_idx", -1))
-    mapping = ", ".join(f"{i}:{c}" for i, c in enumerate(names))
+    mapping = ", ".join(f"{i + 1}:{c}" for i, c in enumerate(names))
     target_name = names[target] if 0 <= target < len(names) else "?"
-    left_keys = [f"{i}:{c}" for i, c in enumerate(names) if str(env._arm_for_door(i)) == "left"]
-    right_keys = [f"{i}:{c}" for i, c in enumerate(names) if str(env._arm_for_door(i)) == "right"]
+    left_keys = [f"{i + 1}:{c}" for i, c in enumerate(names) if str(env._arm_for_door(i)) == "left"]
+    right_keys = [f"{i + 1}:{c}" for i, c in enumerate(names) if str(env._arm_for_door(i)) == "right"]
     print(f"Buttons L→R: {mapping}")
     print(f"Left-arm keys: {', '.join(left_keys) or '(none)'} | Right-arm keys: {', '.join(right_keys) or '(none)'}")
     print(f"Target marble color: {target_name} (index {target})")
+
+
+def _trigger_door(env, idx: int, *, source: str) -> None:
+    if idx < 0 or idx >= int(getattr(env, "n_buttons", 0)):
+        return
+    bank = getattr(env, "_reactive_buttons", None)
+    if bank is not None:
+        try:
+            bank.set_forced(int(idx), True)
+            bank.update()
+            bank.set_forced(int(idx), False)
+        except Exception:
+            pass
+    opened = bool(env._open_door_direct(int(idx)))
+    names = list(getattr(env, "button_color_names", []) or [])
+    color = names[idx] if 0 <= idx < len(names) else "?"
+    if opened:
+        print(f"Opened door {idx + 1} ({color}) via {source}.")
+    else:
+        print(f"Door {idx + 1} ({color}) did not open ({source}; budget/lock).")
+
+
+class KeyboardTrapdoorController:
+    """Keys 1–4 and mouse clicks on keycaps open matching trapdoors."""
+
+    def __init__(self, env):
+        self.env = env
+        self._prev = {}
+        self._button_ids = {}
+        for i, btn in enumerate(getattr(env, "buttons", []) or []):
+            sid = actor_scene_id(btn)
+            if sid is not None:
+                self._button_ids[int(sid)] = int(i)
+
+    def update(self, window):
+        for digit, idx in (("1", 0), ("2", 1), ("3", 2), ("4", 3)):
+            if edge_pressed(window, digit, self._prev):
+                _trigger_door(self.env, idx, source=f"key {digit}")
+
+    def on_click(self, viewer, pixel_x, pixel_y):
+        idx = click_hits_actor_map(viewer, pixel_x, pixel_y, self._button_ids)
+        if idx is None:
+            return False
+        _trigger_door(self.env, int(idx), source="mouse click")
+        return True
 
 
 def main():
@@ -126,11 +172,12 @@ def main():
         robot=CONTROLS_ROBOT,
     )
 
+    use_robot = args.control == "robot"
     env = catch_marbles_trapdoors()
-    # Always enable arm teleop: button presses are gripper-Z; Space opens/closes grippers.
-    env._interactive_robot_mode = True
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=True))
-    env.together_close_gripper(save_freq=None)
+    env._interactive_robot_mode = use_robot
+    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    if use_robot:
+        env.together_close_gripper(save_freq=None)
     print_episode_condition(env)
     _print_color_map(env)
 
@@ -138,9 +185,15 @@ def main():
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
     views = make_viewer_view_toggle(env, viewer)
-    if views.robot_controls is None:
-        views.robot_controls = UniversalRobotControls(env)
-
+    keyboard = None
+    if use_robot:
+        if views.robot_controls is None:
+            views.robot_controls = UniversalRobotControls(env)
+        print_instructions("Select an arm, hover a key, lower with Q to press.")
+    else:
+        keyboard = KeyboardTrapdoorController(env)
+        viewer.register_click_handler(keyboard.on_click)
+        print_instructions("Press 1–4 or click a keycap to open its trapdoor.")
 
     left_track_since = None
     settle_s = 0.6
@@ -151,6 +204,8 @@ def main():
         while not viewer.closed:
             n_steps = pacer.begin_frame()
             views.update(viewer.window)
+            if keyboard is not None:
+                keyboard.update(viewer.window)
             if n_steps == 0:
                 env.scene.update_render()
                 viewer.render()
