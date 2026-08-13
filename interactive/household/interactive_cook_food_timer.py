@@ -6,8 +6,8 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Prefer --control robot: Space only opens/closes the gripper.
-  Grasp food and shut the stove off by twisting the knob; the pie timer follows the stove.
+  Food starts in the pan. The pie timer follows the stove.
+  Click the cooktop knob or press Space to turn the stove on/off.
 """
 ROBOT = """
   Space opens/closes the gripper only — no automatic food grasp.

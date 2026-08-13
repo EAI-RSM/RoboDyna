@@ -891,13 +891,15 @@ def _is_view_help_line(line: str) -> bool:
     )
 
 
-def _normalize_view_help_lines(lines: list[str]) -> list[str]:
-    """Keep a single V head↔gripper help line; drop stale top-down / G-view text."""
+def _normalize_view_help_lines(lines: list[str], *, include_v: bool = True) -> list[str]:
+    """Keep a single V head↔gripper help line, or strip V for keyboard+mouse."""
     out: list[str] = []
     saw_v = False
     for line in lines:
         if not _is_view_help_line(line):
             out.append(line)
+            continue
+        if not include_v:
             continue
         # Drop legacy G-only gripper-view lines; V owns the camera cycle now.
         s = line.strip()
@@ -918,14 +920,14 @@ def _normalize_view_help_lines(lines: list[str]) -> list[str]:
         else:
             out.append(f"{indent}V                 cycle view: head_camera ↔ gripper(s)")
         saw_v = True
-    if not saw_v:
+    if include_v and not saw_v:
         out.append(_VIEW_HELP_V)
     return out
 
 
-def _ensure_view_help_lines(lines: list[str]) -> list[str]:
+def _ensure_view_help_lines(lines: list[str], *, include_v: bool = True) -> list[str]:
     """Normalize / append V camera help (head ↔ grippers; no top-down)."""
-    return _normalize_view_help_lines(list(lines))
+    return _normalize_view_help_lines(list(lines), include_v=include_v)
 
 
 def print_banner(title: str, lines: list[str]):
@@ -937,7 +939,9 @@ def print_banner(title: str, lines: list[str]):
             "1 / 2 / 3 — select left / right / both arms (selected gripper turns green)",
             "O — return selected arm(s) to original position",
         ]
-    lines = _ensure_view_help_lines(lines)
+    blob = f"{title}\n" + "\n".join(lines)
+    include_v = "keyboard" not in blob.lower()
+    lines = _ensure_view_help_lines(lines, include_v=include_v)
     width = max(len(title), *(len(line) for line in lines), 40)
     bar = "=" * (width + 4)
     block = "\n".join([bar, f"  {title}", bar, *[f"  {line}" for line in lines], bar])
@@ -2036,14 +2040,14 @@ class ViewerViewToggle:
             # Restore red failure tint when UniversalRobotControls is absent
             # (keyboard mode still uses Space gripper / task action paths).
             gripper_failure_feedback(self.env).update()
+        arms_gone = bool(
+            getattr(self.env, "_interactive_arms_removed", False)
+        ) if self.env is not None else False
         # Space opens/closes selected gripper(s) — only when arms are present.
-        if (
-            self.env is not None
-            and not bool(getattr(self.env, "_interactive_arms_removed", False))
-            and self._space_pressed(window)
-        ):
+        # Keyboard+mouse has no grippers; stay on default head_camera (no V cycle).
+        if self.env is not None and not arms_gone and self._space_pressed(window):
             toggle_selected_grippers(self.env)
-        if self._v_pressed(window):
+        if not arms_gone and self._v_pressed(window):
             self._cycle_view()
             return
         # Keep head / gripper views locked to the moving cameras.
@@ -3052,7 +3056,8 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
         if not _line_documents_key(task_lines, "Space"):
             shared += f"  {_GRIPPER_TOGGLE_HELP}\n"
         body = shared + (("\n" + body) if body.strip() else "")
-    lines = _normalize_view_help_lines(body.splitlines())
+    include_v = mode == CONTROL_ROBOT
+    lines = _normalize_view_help_lines(body.splitlines(), include_v=include_v)
     # Collapse duplicate F/G/Space gripper-toggle rows; keep task-specific Space
     # wording, only rewrite stale F/G bindings to Space.
     rewritten = []
@@ -3070,7 +3075,8 @@ def print_mode_controls(task_name: str, mode: str, *, keyboard: str, robot: str)
         else:
             rewritten.append(ln)
     lines = rewritten
-    if not _line_documents_key(lines, "Space"):
+    # Keyboard+mouse hides the arms — do not advertise Space as a gripper toggle.
+    if mode == CONTROL_ROBOT and not _line_documents_key(lines, "Space"):
         inserted = False
         for i, ln in enumerate(lines):
             if (

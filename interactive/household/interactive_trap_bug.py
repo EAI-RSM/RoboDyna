@@ -7,7 +7,7 @@ except ImportError:  # direct ``python interactive/household/...py`` execution
 
 KEYBOARD = """
   Bug starts running as soon as the viewer is ready.
-  Prefer --control robot: Space only opens/closes the gripper (no auto grasp).
+  Click the table: trap teleports 4 cm above that spot and drops.
 """
 ROBOT = """
   Bug starts running as soon as the viewer is ready.

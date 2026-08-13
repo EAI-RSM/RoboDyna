@@ -6,8 +6,8 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Prefer --control robot: Space only opens/closes the gripper.
-  Close on the board handle, carry over the pot, then tip with F/G to pour.
+  Click to place the board (top-center at the click, 2 cm above the pot rim).
+  Left / Right arrows tilt the board.
 """
 ROBOT = """
   Space opens/closes the gripper only — no automatic board grasp.

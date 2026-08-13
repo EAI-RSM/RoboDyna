@@ -57,8 +57,8 @@ the same controls as the interactive examples in `interactive/base`:
                            Q/E move selected arm(s) in Z
                            F/G tip selected gripper(s) left/right
                            Space opens/closes selected gripper(s)
---control keyboard:        Space and arrows move the task prop directly
-V                          cycle head_camera ↔ gripper / wrist view(s)
+                           V cycles head_camera ↔ gripper / wrist view(s)
+--control keyboard:        task keys / mouse (no arms; head_camera only)
 Escape                     quit
 ```
 

@@ -6,8 +6,8 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Prefer --control robot: Space only opens/closes the gripper.
-  Pinch the sponge handle, then press the yellow pad onto stains to wipe.
+  Sponge hovers 5 cm above the table.
+  Click the table to press the pad onto that spot (stains wipe as usual).
 """
 ROBOT = """
   Space opens/closes the gripper only — no automatic sponge grasp.

@@ -4,10 +4,9 @@ The household environments deliberately keep their normal physics and success
 checks.  This module only adds the same viewer/arm teleoperation used by
 ``interactive/_interactive_common.py``: arrows move the selected end-effector in XY, Q/E move it in Z,
 F/G tip it left/right about world Y, and 1/2/3 select the left/right/both arms.
-Space opens/closes the selected gripper(s) only (shared ``ViewerViewToggle``);
-V cycles head_camera ↔ gripper views (default head framing matches base suite
-GUI snapshots — top-down is not available).  Space never auto-grasps, teleports,
-or runs planner pick/place shortcuts.
+Space opens/closes the selected gripper(s) only (shared ``ViewerViewToggle``)
+in robot mode. Keyboard+mouse hides the arms and stays on head_camera (no V
+cycle). Space never auto-grasps, teleports, or runs planner pick/place shortcuts.
 """
 from __future__ import annotations
 
@@ -31,7 +30,9 @@ from interactive._interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
     action_failed,
     add_record_data_arg,
+    click_hits_actor,
     configure_task,
+    edge_pressed,
     flash_gripper_failure,
     gripper_failure_feedback,
     is_robot_control,
@@ -46,6 +47,7 @@ from interactive._interactive_common import (  # noqa: E402
     report_task_result,
     require_selected_arms,
     resolve_action_arm,
+    table_xy_from_click,
 )
 
 
@@ -129,18 +131,24 @@ class HouseholdController:
         elif task in ("clean_table", "make_soup") and robot:
             # Start open so the WSG can close around the handle cube.
             self._open_clean_table_grippers_at_start()
-        # catch_cup / make_soup: keep the prop dynamic so gripper contact is real.
-        # Other keyboard tasks start kinematic so arrows can teleport the prop.
-        if not robot and self.actor is not None and task not in (
-            "catch_cup",
-            "make_soup",
-        ):
-            _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
-        elif task == "catch_cup" and self.actor is not None:
+        self._key_prev = {}
+        self._pour_held = False
+        self._board_tilt = 0.0
+        self._board_placed = False
+        self._board_flat_pose = None
+        self._last_tilt_t = None
+        self._orig_button_press_signal = None
+        self._click_via_handler = False
+        self._prev_mouse = False
+        # catch_cup / make_soup robot: keep the prop dynamic so gripper contact is real.
+        # Keyboard+mouse drives props via click / keys (arms are hidden).
+        if robot and task == "catch_cup" and self.actor is not None:
             try:
                 self.env._enable_pillow_physics()
             except Exception:
                 pass
+        elif not robot:
+            self._prepare_keyboard_props()
 
     def _close_grippers_at_start(self):
         """Start robot mode with both grippers closed at once."""
@@ -187,51 +195,405 @@ class HouseholdController:
             print(f"[{self.task}] could not pre-open grippers: {exc}")
         self.env.plan_success = True
 
+    def _prepare_keyboard_props(self):
+        """Seat keyboard-mode props without changing env files or robot play."""
+        e, t = self.env, self.task
+        if t == "catch_cup" and getattr(e, "pillow", None) is not None:
+            e._push_active = False
+            try:
+                e._freeze_pillow()
+            except Exception:
+                _set_pose(e.pillow, e.pillow.get_pose().p, kinematic=True)
+        elif t == "catch_mouse_object_drop" and getattr(e, "basket", None) is not None:
+            p = np.asarray(e.basket.get_pose().p, dtype=float)
+            hz = float(getattr(e, "basket_hz", 0.5 * float(getattr(e, "basket_height", 0.07))))
+            p[2] = float(e.table_top) + hz
+            _set_pose(e.basket, p, quat=list(e.basket.get_pose().q), kinematic=True)
+        elif t in ("cook_food", "cook_food_timer") and getattr(e, "food", None) is not None:
+            self._seat_food_in_pan()
+            # Keyboard has no gripper on the knob — don't let buried-arm
+            # contacts re-drive fire from the joint after a snap.
+            e._knob_is_grasped = lambda: False
+            e._knob_has_gripper_contact = lambda: False
+            e._knob_grasp_active = False
+            e._policy_controlling_knob = False
+            e._ignore_knob = False
+        elif t == "clean_table" and getattr(e, "sponge", None) is not None:
+            self._hover_sponge()
+        elif t == "make_soup" and getattr(e, "board", None) is not None:
+            _set_pose(e.board, e.board.get_pose().p, kinematic=True)
+        elif self.actor is not None and t not in ("stop_ball",):
+            _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
+        if t == "pour_beer":
+            self._orig_button_press_signal = getattr(e, "_button_press_signal", None)
+
+            def _keyboard_button_signal():
+                if getattr(self, "_pour_held", False):
+                    on_n = float(getattr(e, "PRESS_FORCE_ON", 1.0))
+                    return {
+                        "side": "left",
+                        "tcp": np.array([0.0, 0.0, 0.0], dtype=float),
+                        "force": on_n * 2.0,
+                    }
+                orig = self._orig_button_press_signal
+                return orig() if callable(orig) else None
+
+            e._button_press_signal = _keyboard_button_signal
+
+    def _seat_food_in_pan(self):
+        e = self.env
+        tgt = e._pan_place_target()
+        pose = sapien.Pose(
+            [float(tgt[0]), float(tgt[1]), float(tgt[2])],
+            list(getattr(e, "FOOD_QPOS", [1.0, 0.0, 0.0, 0.0])),
+        )
+        try:
+            e.food.actor.set_pose(pose)
+        except Exception:
+            e.food.set_pose(pose)
+        rigid = getattr(e, "_food_rigid", None)
+        if rigid is not None:
+            try:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+            except Exception:
+                pass
+        e._food_in_pan = True
+        try:
+            e._lock_food_to_pan()
+        except Exception:
+            pass
+        print(f"[{self.task}] food starts in the pan")
+
+    def _hover_sponge(self, xy=None):
+        e = self.env
+        if xy is None:
+            p = np.asarray(e.sponge.get_pose().p, dtype=float)
+            xy = (float(p[0]), float(p[1]))
+        z = float(e.table_top) + float(e.SPONGE_HALF[2]) + 0.05
+        e._sponge_welded = False
+        e._freeze_sponge(sapien.Pose([float(xy[0]), float(xy[1]), z], [1.0, 0.0, 0.0, 0.0]))
+
+    def _contact_sponge(self, x, y):
+        e = self.env
+        z = float(e._contact_z()) if callable(getattr(e, "_contact_z", None)) else (
+            float(e.table_top) + float(e.SPONGE_HALF[2]) + 0.002
+        )
+        e._sponge_welded = False
+        e._freeze_sponge(sapien.Pose([float(x), float(y), z], [1.0, 0.0, 0.0, 0.0]))
+        print(f"[clean_table] sponge contacting table at ({x:.3f}, {y:.3f})")
+
     def _keyboard_action(self):
         """Operate task state directly without moving either robot arm."""
         e, t = self.env, self.task
         try:
-            if t == "boil_milk":
-                # No keyboard snap — fire follows a physical gripper twist only.
-                print(
-                    "[boil_milk] turn the stove with the gripper on the knob "
-                    "(close on the knob and twist with teleop)"
-                )
+            if t in ("boil_milk", "cook_food", "cook_food_timer"):
+                want_on = not bool(getattr(e, "stove_on", False))
+                self._snap_stove_knob(want_on)
+                print(f"[{t}] stove {'ON' if want_on else 'OFF'}")
             elif t == "fill_coffee_jar":
                 self._fill_coffee_press(1)
-            elif t in ("cook_food", "cook_food_timer"):
-                # No keyboard snap — fire follows a physical gripper twist only.
-                print(
-                    f"[{t}] turn the stove with the gripper on the knob "
-                    "(close on the knob and twist with teleop)"
-                )
             elif t == "measure_ingredient":
-                # No C/keyboard proxy — oil key is pressed by lowering the gripper.
-                print(
-                    "[measure_ingredient] push jar under nozzle, then press the "
-                    "green key (ON/OFF); success is checked after OFF"
-                )
+                self._toggle_measure_nozzle()
+            elif t == "pour_beer":
+                pass
         except Exception as exc:
             print(f"[{t}] action unavailable: {exc}")
 
+    def _toggle_measure_nozzle(self):
+        e = self.env
+        want = not bool(getattr(e, "tab_open", False))
+        e._set_tab_open(want)
+        print(f"[measure_ingredient] nozzle {'ON' if want else 'OFF'}")
+
+    def _toggle_stove(self):
+        e, t = self.env, self.task
+        lit = bool(getattr(e, "stove_on", False)) or float(
+            getattr(e, "fire_intensity", 0.0)
+        ) > 0.02
+        want_on = not lit
+        self._snap_stove_knob(want_on)
+        print(f"[{t}] stove {'ON' if want_on else 'OFF'}")
+
+    def _mouse_picture_xy(self, viewer):
+        window = viewer.window
+        mx, my = window.mouse_position
+        ww, wh = window.size
+        if ww <= 0 or wh <= 0 or mx < 0 or my < 0 or mx >= ww or my >= wh:
+            return None
+        tw, th = window.get_picture_size("Segmentation")
+        return int(mx * tw / ww), int(my * th / wh)
+
+    def _click_hits(self, viewer, pixel_x, pixel_y, actor) -> bool:
+        if actor is None:
+            return False
+        try:
+            return bool(click_hits_actor(viewer, pixel_x, pixel_y, actor))
+        except Exception:
+            return False
+
+    def _click_hits_any(self, viewer, pixel_x, pixel_y, actors) -> bool:
+        for actor in actors:
+            if actor is None:
+                continue
+            if isinstance(actor, (list, tuple)):
+                if self._click_hits_any(viewer, pixel_x, pixel_y, actor):
+                    return True
+                continue
+            if self._click_hits(viewer, pixel_x, pixel_y, actor):
+                return True
+        return False
+
+    def _table_z(self):
+        return float(getattr(self.env, "table_top", 0.74))
+
+    def on_click(self, viewer, pixel_x, pixel_y):
+        """Keyboard+mouse click dispatch (ignored in robot mode)."""
+        if self.robot:
+            return False
+        t, e = self.task, self.env
+        try:
+            if t == "trap_bug":
+                return self._click_drop_trap(viewer, pixel_x, pixel_y)
+            if t in ("boil_milk", "cook_food", "cook_food_timer"):
+                knob = getattr(e, "stove_knob", None)
+                if self._click_hits(viewer, pixel_x, pixel_y, knob):
+                    self._toggle_stove()
+                    return True
+                hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+                kxy = getattr(e, "knob_xy", None)
+                if hit is not None and kxy is not None:
+                    if float(np.linalg.norm(np.asarray(hit) - np.asarray(kxy[:2]))) < 0.06:
+                        self._toggle_stove()
+                        return True
+                return False
+            if t == "pour_beer":
+                if self._click_hits(viewer, pixel_x, pixel_y, getattr(e, "bell", None)):
+                    e._bell_pressed = True
+                    print("[pour_beer] finish bell pressed")
+                    return True
+                return False
+            if t == "measure_ingredient":
+                return self._click_teleport_jar(viewer, pixel_x, pixel_y)
+            if t == "make_soup":
+                return self._click_place_board(viewer, pixel_x, pixel_y)
+            if t == "catch_cup":
+                return self._click_teleport_pillow(viewer, pixel_x, pixel_y)
+            if t == "catch_mouse_object_drop":
+                return self._click_teleport_basket(viewer, pixel_x, pixel_y)
+            if t == "stop_ball":
+                return self._click_stop_ball(viewer, pixel_x, pixel_y)
+            if t == "clean_table":
+                return self._click_sponge(viewer, pixel_x, pixel_y)
+        except Exception as exc:
+            print(f"[{t}] click unavailable: {exc}")
+        return False
+
+    def _click_drop_trap(self, viewer, pixel_x, pixel_y):
+        e = self.env
+        if bool(getattr(e, "_trap_released", False)) or bool(getattr(e, "_trap_falling", False)):
+            return False
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+        if hit is None:
+            return False
+        hz = float(e.trap_half[2])
+        z = float(e.table_top) + hz + 0.04
+        q = list(e.trap.get_pose().q)
+        e._set_trap_pose(sapien.Pose([float(hit[0]), float(hit[1]), z], q))
+        e._trap_welded = False
+        e._trap_released = True
+        e._trap_falling = True
+        print(f"[trap_bug] trap dropping from 4 cm at ({hit[0]:.3f}, {hit[1]:.3f})")
+        return True
+
+    def _click_place_board(self, viewer, pixel_x, pixel_y):
+        e = self.env
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+        if hit is None:
+            return False
+        hz = float(e.board_half[2])
+        top_z = float(e.pot_rim_z) + 0.02
+        z = top_z - hz
+        old = e.board.get_pose()
+        new = sapien.Pose([float(hit[0]), float(hit[1]), z], [1.0, 0.0, 0.0, 0.0])
+        rels = []
+        for veg in getattr(e, "veggies", []) or []:
+            try:
+                rels.append((veg, old.inv() * veg.get_pose()))
+            except Exception:
+                rels.append((veg, None))
+        e._set_entity_pose(e.board, new, snap=True)
+        for veg, rel in rels:
+            if rel is None:
+                continue
+            try:
+                e._set_entity_pose(veg, new * rel, snap=True)
+            except Exception:
+                pass
+        self._board_placed = True
+        self._board_tilt = 0.0
+        self._board_flat_pose = new
+        e._pour_armed = True
+        e._score_veg_spill = True
+        try:
+            e._ensure_veggies_dynamic()
+        except Exception:
+            pass
+        print(
+            f"[make_soup] board top-center at ({hit[0]:.3f}, {hit[1]:.3f}), "
+            f"2 cm above pot rim"
+        )
+        return True
+
+    def _click_teleport_jar(self, viewer, pixel_x, pixel_y):
+        e = self.env
+        if getattr(e, "jar", None) is None:
+            return False
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+        if hit is None:
+            return False
+        z = float(e.table_top) + 0.001
+        q = list(e.jar.get_pose().q)
+        pose = sapien.Pose([float(hit[0]), float(hit[1]), z], q)
+        if callable(getattr(e, "_freeze_jar", None)):
+            e._push_active = False
+            e._freeze_jar(pose)
+        else:
+            _set_pose(e.jar, pose.p, quat=q, kinematic=True)
+        if callable(getattr(e, "_sync_jar_followers", None)):
+            e._sync_jar_followers()
+        print(f"[measure_ingredient] jar at ({hit[0]:.3f}, {hit[1]:.3f})")
+        return True
+
+    def _click_teleport_pillow(self, viewer, pixel_x, pixel_y):
+        e = self.env
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+        if hit is None:
+            return False
+        e._push_active = False
+        e._slide_pillow_to(hit)
+        try:
+            e._freeze_pillow()
+        except Exception:
+            pass
+        print(f"[catch_cup] pillow on table at ({hit[0]:.3f}, {hit[1]:.3f})")
+        return True
+
+    def _click_teleport_basket(self, viewer, pixel_x, pixel_y):
+        e = self.env
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+        if hit is None:
+            return False
+        hz = float(getattr(e, "basket_hz", 0.5 * float(getattr(e, "basket_height", 0.07))))
+        q = list(e.basket.get_pose().q)
+        pose = sapien.Pose([float(hit[0]), float(hit[1]), float(e.table_top) + hz], q)
+        e._set_entity_pose(e.basket, pose)
+        print(f"[catch_mouse_object_drop] basket on table at ({hit[0]:.3f}, {hit[1]:.3f})")
+        return True
+
+    def _click_stop_ball(self, viewer, pixel_x, pixel_y):
+        e = self.env
+        if not self._click_hits(viewer, pixel_x, pixel_y, getattr(e, "ball", None)):
+            return False
+        state = str(getattr(e, "_ball_state", ""))
+        land = int(getattr(e, "_land_idx", 0))
+        step = int(getattr(e, "_traj_step", 0))
+        on_table = state == "live" or (state == "rolling" and step > land)
+        if not on_table:
+            e._keyboard_early_click = True
+            print("[stop_ball] clicked too early — failure")
+            return True
+        rigid = getattr(e, "_ball_rigid", None)
+        if rigid is not None:
+            try:
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_kinematic(True)
+            except Exception:
+                pass
+        e._arm_contacted = True
+        e._stopped = True
+        e._ball_state = "stopped"
+        print("[stop_ball] ball stopped")
+        return True
+
+    def _click_sponge(self, viewer, pixel_x, pixel_y):
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+        if hit is None:
+            return False
+        self._contact_sponge(hit[0], hit[1])
+        return True
+
+    def _tilt_board(self, window):
+        if not self._board_placed or self._board_flat_pose is None:
+            return
+        now = time.perf_counter()
+        dt = 0.016 if self._last_tilt_t is None else max(0.0, min(0.05, now - self._last_tilt_t))
+        self._last_tilt_t = now
+        direction = float(window.key_down("right")) - float(window.key_down("left"))
+        if abs(direction) < 1e-6:
+            return
+        self._board_tilt = float(np.clip(self._board_tilt + direction * 0.9 * dt, -1.2, 1.2))
+        e = self.env
+        pose = e._rot_about_y(self._board_flat_pose, self._board_flat_pose.p, self._board_tilt)
+        e._set_entity_pose(e.board, pose, snap=True)
+        e._pour_armed = True
+        e._score_veg_spill = True
+
+    def _pour_held_now(self, viewer, window) -> bool:
+        if bool(window.key_down("space")):
+            return True
+        if not bool(window.mouse_down(0)):
+            return False
+        pix = self._mouse_picture_xy(viewer)
+        if pix is None:
+            return False
+        e = self.env
+        # Red jewel is the visible press target; also accept brass cap / chrome rim.
+        if self._click_hits_any(
+            viewer,
+            pix[0],
+            pix[1],
+            (
+                getattr(e, "_button_jewel", None),
+                getattr(e, "_button_rim", None),
+                getattr(e, "_button_actor", None),
+                getattr(e, "_button_bezel", None),
+            ),
+        ):
+            return True
+        # Fallback: click near the button XY on the tap head.
+        hit = table_xy_from_click(viewer, pix[0], pix[1], self._table_z())
+        touch = getattr(e, "touch_xy", None)
+        if hit is not None and touch is not None:
+            r = float(getattr(e, "BTN_HALF", [0.018, 0.018, 0.01])[0]) + 0.012
+            if float(np.linalg.norm(np.asarray(hit)[:2] - np.asarray(touch)[:2])) <= r:
+                return True
+        return False
+
     def _fill_coffee_press(self, force_level):
-        """Dispense at the elapsed-contact force level after an in-place press."""
+        """Dispense at a chosen force level (keyboard 1–4), no arm press."""
         e = self.env
         level = max(1, min(4, int(force_level)))
+        orig_force = getattr(e, "_lid_press_force", None)
         try:
-            e._start_press()
+            force_n = float(e.force_thresholds[level - 1])
+            e._lid_press_force = lambda: force_n
+            e._awaiting_release = False
+            e._start_press(require_release=False)
             if not bool(getattr(e, "_press_active", False)):
                 return
-            e._interactive_force_level_override = level
-            e._press_peak_force = float(e.force_thresholds[level - 1])
+            e._press_peak_force = force_n
+            e._press_dispense_level = level
             e._press_force_level = level
             e._end_press()
             print(f"[fill_coffee_jar] completed force level {level} press")
         except Exception as exc:
             print(f"[fill_coffee_jar] level {level} press unavailable: {exc}")
         finally:
-            if hasattr(e, "_interactive_force_level_override"):
-                del e._interactive_force_level_override
+            if orig_force is not None:
+                e._lid_press_force = orig_force
+            e._awaiting_release = False
 
     @staticmethod
     def _fill_force_level(held_seconds):
@@ -421,14 +783,47 @@ class HouseholdController:
         # the previous committed angle.
         e._last_committed_knob_angle = None
         e._stove_fire_visual = None
-        if continuous_angle is not None and callable(getattr(e, "_set_knob_angle", None)):
-            e._set_knob_angle(0.0 if not want_on else float(continuous_angle))
+        # cook_food*: fire intensity + blue ring live on ``_set_knob_angle``.
+        # Only setting the joint left the halo lit after a keyboard shutoff.
+        if callable(getattr(e, "_set_knob_angle", None)):
+            if want_on:
+                if continuous_angle is not None:
+                    angle = float(continuous_angle)
+                else:
+                    max_ang = float(
+                        getattr(e, "KNOB_MAX_ANGLE", abs(float(e.KNOB_ON_ANGLE)))
+                    )
+                    angle = -float(getattr(e, "cook_intensity", 1.0)) * max_ang
+            else:
+                angle = 0.0
+            e._knob_grasp_active = False
+            e._policy_controlling_knob = False
+            e._expert_holding_knob = False
+            e._set_knob_angle(angle, drive_fire=True)
+            if callable(getattr(e, "_set_knob_joint_angle", None)):
+                e._set_knob_joint_angle(angle, hard=True)
+            if callable(getattr(e, "_set_knob_articulation_qpos", None)):
+                e._set_knob_articulation_qpos(angle)
+            if callable(getattr(e, "_hold_knob_joint", None)):
+                e._hold_knob_joint(stiff=True)
+            e.fire_intensity = 0.0 if not want_on else float(getattr(e, "fire_intensity", 1.0))
+            e.stove_on = bool(want_on)
+            if not want_on:
+                e.fire_intensity = 0.0
+                e.stove_on = False
+                if callable(getattr(e, "_set_burner_visuals", None)):
+                    e._set_burner_visuals(0.0)
+                elif callable(getattr(e, "_set_stove_fire", None)):
+                    e._set_stove_fire(False, intensity=0.0)
+            e._last_committed_knob_angle = float(angle)
             return
         angle = e.KNOB_ON_ANGLE if want_on else e.KNOB_OFF_ANGLE
         if callable(getattr(e, "_set_knob_joint_angle", None)):
             e._set_knob_joint_angle(angle, hard=True)
         if callable(getattr(e, "_set_stove", None)):
             e._set_stove(bool(want_on))
+        if callable(getattr(e, "_set_stove_fire", None)):
+            e._set_stove_fire(bool(want_on), intensity=1.0 if want_on else 0.0)
 
     def _return_arm_after_failure(self, arm):
         """Best-effort recovery for a failed scripted reach."""
@@ -496,10 +891,38 @@ class HouseholdController:
             self._keyboard_action()
 
     def update(self, window):
-        del window  # Space / teleop owned by shared ViewerViewToggle + UniversalRobotControls
         self._update_failure_visual()
-        # Space opens/closes grippers only (ViewerViewToggle). No auto-grasp,
-        # teleport hold, or planner pick/place shortcuts from this controller.
+        if self.robot:
+            return
+        e, t = self.env, self.task
+        viewer = getattr(e, "viewer", None)
+        if t in ("boil_milk", "cook_food", "cook_food_timer"):
+            if edge_pressed(window, "space", self._key_prev):
+                self._toggle_stove()
+        elif t == "fill_coffee_jar":
+            for n, key in enumerate(("1", "2", "3", "4"), start=1):
+                if edge_pressed(window, key, self._key_prev):
+                    e._awaiting_release = False
+                    self._fill_coffee_press(n)
+                    break
+        elif t == "pour_beer":
+            self._pour_held = bool(self._pour_held_now(viewer, window))
+        elif t == "measure_ingredient":
+            if edge_pressed(window, "space", self._key_prev):
+                self._toggle_measure_nozzle()
+        elif t == "make_soup":
+            self._tilt_board(window)
+        down = bool(window.mouse_down(0)) if viewer is not None else False
+        if (
+            not self._click_via_handler
+            and down
+            and not self._prev_mouse
+            and viewer is not None
+        ):
+            pix = self._mouse_picture_xy(viewer)
+            if pix is not None:
+                self.on_click(viewer, pix[0], pix[1])
+        self._prev_mouse = down
 
     def start_scenario(self):
         """Start time-sensitive scene motion after the first rendered frame."""
@@ -723,6 +1146,8 @@ def _terminal_failure(env, task):
         if bool(getattr(env, "_fell_on_table", False)) or getattr(env, "_obj_state", "") == "fallen":
             return "object fell on the table"
     elif task == "stop_ball":
+        if bool(getattr(env, "_keyboard_early_click", False)):
+            return "clicked the ball too early"
         if bool(getattr(env, "_fell_off", False)) or getattr(env, "_ball_state", "") == "fallen":
             return "ball fell off the table without being stopped"
     elif task == "clean_table":
@@ -770,6 +1195,18 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     viewer = env.viewer
     if viewer is None:
         raise SystemExit("Viewer was not created; ensure a graphical display is available.")
+    if not use_robot:
+        cw = getattr(viewer, "control_window", None)
+        if cw is None:
+            for plugin in getattr(viewer, "plugins", []) or []:
+                if hasattr(plugin, "click_handlers") and hasattr(
+                    plugin, "register_click_handler"
+                ):
+                    cw = plugin
+                    break
+        if cw is not None:
+            cw.register_click_handler(controller.on_click)
+            controller._click_via_handler = True
     views = make_viewer_view_toggle(env, viewer)
     rendered_frames = 0
     terminal_result = None  # True=success, False=failure, None=manual close/smoke

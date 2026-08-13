@@ -6,8 +6,8 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Prefer --control robot: Space only opens/closes the gripper.
-  Close on the basket handle and place it under the landing before the object falls.
+  Object drop starts as soon as the viewer is ready.
+  Click the table to teleport the basket onto the table surface.
 """
 ROBOT = """
   Space opens/closes the gripper only — no automatic basket grasp.

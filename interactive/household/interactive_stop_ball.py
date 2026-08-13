@@ -6,7 +6,8 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Ball starts rolling as soon as the viewer is ready. Block it with the open gripper before it falls off the table.
+  Ball starts rolling as soon as the viewer is ready.
+  Click the ball on the table to stop it. Clicking too early fails.
 """
 ROBOT = """
   Space             open / close selected gripper(s) only

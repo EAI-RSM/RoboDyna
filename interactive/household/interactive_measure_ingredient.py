@@ -6,9 +6,8 @@ except ImportError:
     from _interactive_common import make_parser, print_instructions, run_task
 
 KEYBOARD = """
-  Push the jar under the nozzle with a closed gripper (catch_cup style).
-  Lower onto the green key to latch oil ON (turns red) / OFF (turns green).
-  Success is checked only after the key turns OFF. Spill outside the jar fails.
+  Click the table to move the jar there. Space turns the nozzle on/off.
+  Success is checked after the key turns OFF.
 """
 ROBOT = """
   Push the jar under the nozzle, then press the green key to fill.

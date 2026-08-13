@@ -6,8 +6,7 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Prefer --control robot: Space only opens/closes the gripper.
-  Close on the cooktop knob and twist with teleop to control the stove.
+  Click the cooktop knob or press Space to turn the stove on/off.
 """
 ROBOT = """
   Space opens/closes the gripper only — no automatic knob twist.

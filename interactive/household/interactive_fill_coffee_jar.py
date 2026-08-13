@@ -6,7 +6,7 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Prefer --control robot: select an arm, move above the blue key, then lower in Z to press.
+  Press 1 / 2 / 3 / 4 for fill force levels 1–4.
 """
 ROBOT = """
   Select one arm, move above the blue key, then lower with Q to press and raise with E to release.

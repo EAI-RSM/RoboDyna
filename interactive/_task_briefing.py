@@ -627,9 +627,9 @@ def load_task_controls(script_path: Path, mode: str) -> str:
         or _extract_string_constant(source, "KEYBOARD")
     )
     lines = _rewrite_gripper_toggle_lines(_normalize_control_lines(body))
-    if not _line_documents_key(lines, "Space"):
-        lines.append(_GRIPPER_TOGGLE_HELP)
-    for extra in (_VIEW_HELP, _ESCAPE_HELP):
+    # Keyboard+mouse: no arms / no gripper view — omit Space gripper toggle and V.
+    extras = [_ESCAPE_HELP]
+    for extra in extras:
         if extra.lower() not in {x.lower() for x in lines}:
             lines.append(extra)
     core = [
@@ -637,8 +637,17 @@ def load_task_controls(script_path: Path, mode: str) -> str:
         for ln in _dedupe_lines(lines)
         if not _is_view_help_line(ln)
         and not ln.strip().lower().startswith("escape")
+        and not _is_gripper_toggle_help_line(ln)
     ]
-    return "\n".join(core + [_VIEW_HELP, _ESCAPE_HELP])
+    # Keep task-specific Space (pour, stove, …); drop generic gripper Space.
+    core = [
+        ln for ln in core
+        if not (
+            ln.strip().upper().startswith("SPACE")
+            and ("gripper" in ln.lower() or "open / close" in ln.lower())
+        )
+    ]
+    return "\n".join(core + extras)
 
 
 def build_briefing_text(

@@ -6,9 +6,8 @@ except ImportError:
     from _interactive_common import make_parser, run_task
 
 KEYBOARD = """
-  Prefer --control robot: Space only opens/closes the gripper.
   Cup starts moving as soon as the viewer is ready.
-  Pillow is PhysX-dynamic (pushable with the closed gripper).
+  Click the table to teleport the pillow onto the table surface.
 """
 ROBOT = """
   Space             open / close selected gripper(s) only

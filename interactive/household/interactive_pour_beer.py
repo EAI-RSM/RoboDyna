@@ -6,8 +6,8 @@ except ImportError:
     from _interactive_common import make_parser, print_instructions, run_task
 
 KEYBOARD = """
-  Use --control robot to pour with arm teleop (press/hold the tap button).
-  Hold the button to pour; release to stop. Fill rate varies by episode.
+  Click and hold the red circle on the tap, or hold Space, to pour. Release to stop.
+  Click the finish bell to score.
 """
 ROBOT = """
   Lower onto the fancy tap button and hold to pour; lift to stop.
