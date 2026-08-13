@@ -33,6 +33,7 @@ LOGO_PATHS = (
 GUI_WM_CLASS = {
     "interactive": "Robodynainteractive",
     "household": "Robodynahousehold",
+    "experiment": "Robodynaexperiment",
 }
 
 
@@ -162,6 +163,10 @@ def setup_gui_app_icon(
         name = "RoboDyna Household Tasks"
         comment = "Household interactive task launcher"
         desktop_id = "robodyna-household-tasks"
+    elif suite == "experiment":
+        name = "RoboDyna Human Experiment"
+        comment = "Human-experiment task launcher"
+        desktop_id = "robodyna-experiment"
     else:
         name = "RoboDyna Base Tasks"
         comment = "Dynamic interactive task launcher"

@@ -1,0 +1,111 @@
+# Human-experiment GUI protocol (same folder as experiment_gui.py).
+#
+# Edit this file to set recording, play limits, controller, seed, and which
+# tasks appear. Task lists use 1-based card numbers (the 01, 02, … badges).
+# Tutorial is 00 and is always shown; it is not part of these lists.
+# Tutorial parts can be replayed unlimited times and are not written to exp_logs.
+#
+# Override path with ROBODYNA_EXPERIMENT_CONFIG=/path/to/file.yml if needed.
+
+controller: robot           # robot | keyboard
+
+# Seed for each play (0–500).
+#   null        → a new random seed every play
+#   0           → the same seed every play
+#   [0, 1, 2]   → 1st SUCCESS/FAILURE play uses 0, 2nd uses 1, 3rd uses 2, then wraps
+seed: null
+
+# ---------------------------------------------------------------------------
+# How many SUCCESS/FAILURE plays before a slot grays out.
+# Stop / close the viewer does not count.
+#
+# One number — every visible slot:
+#   plays_per_scenario: 1
+#
+# By scenario kind (applies to EVERY base task). This is the usual form:
+#   plays_per_scenario:
+#     default: 1          # Default column
+#     opt1: 2             # Opt 1
+#     opt2: 2             # Opt 2
+#     opt1+2: 5           # Opt 1+2
+#     household: 1        # household tasks (no variants)
+#
+# Nested under a suite if you only want it for base (or household):
+#   plays_per_scenario:
+#     base:
+#       default: 1
+#       opt1: 2
+#       opt2: 1
+#       opt1+2: 5
+#     household: 2
+#
+# Optional per-task override (1-based card number still works):
+#   plays_per_scenario:
+#     default: 1
+#     opt1+2: 5
+#     base:
+#       1: {opt1+2: 8}    # task 01 Opt 1+2: 8 plays; other tasks keep opt1+2: 5
+#
+# null / unlimited = replay forever. Base keys: default, opt1, opt2, opt1+2.
+# ---------------------------------------------------------------------------
+plays_per_scenario: 1
+
+# Write terminal plays to data/exp_logs/<user>/user.json
+# true / false = all or none. Same map form as plays_per_scenario, e.g.
+#   log_plays: {opt1+2: true}     # only log Opt 1+2
+log_plays: true
+
+# HDF5 / LeRobot episode under data/<task>/  (true / false / slot map)
+record_data: false
+
+# head-camera preview mp4 after the viewer closes  (true / false / slot map)
+save_video: false
+
+# ---------------------------------------------------------------------------
+# Base task index table
+#   1  catch_marbles_trapdoors   Catch Marbles Trapdoors
+#   2  catch_ramp_ball           Catch Ramp Ball
+#   3  catch_cuboid              Catch Cuboid
+#   4  catch_shelf_marble        Catch Shelf Marble
+#   5  catch_valley_ball         Catch Valley Ball
+#   6  stop_valley_ball          Stop Valley Ball
+#   7  cook_meat                 Cook Meat
+#   8  cook_meat_timer           Cook Meat Timer
+#   9  put_cup_belt              Put Cup Belt
+#  10  dispense_gummy            Dispense Gummy
+#  11  punch_dual_holes          Punch Dual Holes
+#  12  save_goal                 Save Goal
+#  13  hit_target                Hit Target
+#  14  load_train                Load Train
+#  15  marble_shelf_maze         Marble Shelf Maze
+#  16  pack_fruits               Pack Fruits
+#  17  pick_ripe_apple           Pick Ripe Apple
+#  18  place_block_belt          Place Block Belt
+#  19  play_billiard             Play Billiard
+#  20  control_quality           Control Quality
+#  21  drop_ball_hole            Drop Ball Hole
+#  22  sort_apples_belt          Sort Apples Belt
+#  23  whack_moles               Whack Moles
+#
+# Default omits 3 catch_cuboid, 7 cook_meat, 11 punch_dual_holes.
+# ---------------------------------------------------------------------------
+base_tasks: [1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+
+# ---------------------------------------------------------------------------
+# Household task index table
+#   1  trap_bug                  Trap Bug
+#   2  boil_milk                 Boil Milk
+#   3  fill_coffee_jar           Fill Coffee Jar
+#   4  pour_beer                 Pour Beer
+#   5  cook_food                 Cook Food
+#   6  cook_food_timer           Cook Food Timer
+#   7  measure_ingredient        Measure Ingredient
+#   8  make_soup                 Make Soup
+#   9  catch_cup                 Catch Cup
+#  10  catch_mouse_object_drop   Catch Mouse Object Drop
+#  11  stop_ball                 Stop Ball
+#  12  clean_table               Clean Table
+#
+# Default omits 3 fill_coffee_jar, 5 cook_food.
+# ---------------------------------------------------------------------------
+household_tasks: [1, 2, 4, 6, 7, 8, 9, 10, 11, 12]

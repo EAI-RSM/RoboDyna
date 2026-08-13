@@ -31,11 +31,14 @@ from _task_briefing import (  # noqa: E402
     setup_gui_app_icon,
     show_task_briefing,
 )
+from experiment_config import load_experiment_config  # noqa: E402
 from experiment_logs import (  # noqa: E402
     append_play,
     experiment_mode,
-    is_completed,
+    is_slot_locked,
+    slot_success_label,
     stamp_child_env,
+    terminal_play_count,
 )
 
 
@@ -499,8 +502,14 @@ class InteractiveTaskLauncher(tk.Tk):
         self.tutorial_photos: list[ImageTk.PhotoImage | None] = []
         self.tutorial_preview_labels: list[tk.Label] = []
         self.tutorial_buttons: list[RoundedButton] = []
+        self._visible_task_indices: list[int] = list(range(len(TASKS)))
+        self._experiment_cfg = load_experiment_config() if experiment_mode() else None
+        if self._experiment_cfg is not None:
+            self._visible_task_indices = self._experiment_cfg.visible_indices(
+                "base", len(TASKS)
+            )
         self._idle_status = (
-            f"Tutorial (4 parts)  ·  {len(TASKS)} tasks  |  "
+            f"Tutorial (4 parts)  ·  {len(self._visible_task_indices)} tasks  |  "
             "Hover a scenario key for its README description."
         )
         self._idle_status_fg = HEADER_MUTED
@@ -515,12 +524,14 @@ class InteractiveTaskLauncher(tk.Tk):
                 text="Play each scenario once. Finished scenarios stay gray and cannot be replayed."
             )
             self.exit_button.configure(text="Back")
+            n_vis = len(self._visible_task_indices)
             self._idle_status = (
-                f"Experiment  ·  {user or 'participant'}  |  "
+                f"Experiment  ·  {user or 'participant'}  ·  {n_vis} tasks  |  "
                 "Completed scenarios are gray. Tutorial is always available."
             )
             self._idle_status_fg = HEADER_MUTED
             self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
+            self._apply_experiment_protocol()
             self._apply_completed_locks()
         self.bind("<Configure>", self._on_root_configure)
         self.after(0, self._apply_ui_scale)
@@ -687,7 +698,8 @@ class InteractiveTaskLauncher(tk.Tk):
         self.canvas.bind_all("<Button-5>", lambda _event: self.canvas.yview_scroll(3, "units"))
 
         self._add_tutorial_section()
-        for index, (label, task) in enumerate(TASKS):
+        for index in self._visible_task_indices:
+            label, task = TASKS[index]
             self._add_task_card(index, label, task)
 
     @staticmethod
@@ -745,8 +757,22 @@ class InteractiveTaskLauncher(tk.Tk):
             widget.configure(state=state)
 
     def _capture_run_note(self) -> str:
-        data = bool(self.record_data.get())
-        video = bool(self.save_video.get())
+        meta = getattr(self, "_run_meta", None)
+        if (
+            experiment_mode()
+            and isinstance(meta, dict)
+            and meta.get("suite") in ("base", "household")
+        ):
+            cfg = self._experiment_cfg or load_experiment_config()
+            self._experiment_cfg = cfg
+            suite = str(meta.get("suite") or "")
+            task = str(meta.get("task") or "")
+            scenario = meta.get("scenario")
+            data = cfg.should_record_data(suite, task, scenario)
+            video = cfg.should_save_video(suite, task, scenario)
+        else:
+            data = bool(self.record_data.get())
+            video = bool(self.save_video.get())
         if data and video:
             return " Recording data and head-camera video after the viewer closes."
         if data:
@@ -1288,6 +1314,13 @@ class InteractiveTaskLauncher(tk.Tk):
         self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
 
     def play_or_stop(self, index: int, scenario: str):
+        if experiment_mode() and self._slot_locked("base", TASKS[index][1], scenario):
+            self._set_status(
+                "Play limit reached. Choose another remaining scenario.",
+                "#e6a15c",
+                sticky=True,
+            )
+            return
         if self.child is not None:
             if self.active_selection == (index, scenario):
                 self._stop_task("Task stopped. Select another scenario when ready.")
@@ -1315,9 +1348,10 @@ class InteractiveTaskLauncher(tk.Tk):
 
     def _mark_running_buttons(self):
         """Disable every Play control except the active Stop button."""
-        for task_index, row in enumerate(self.task_buttons):
+        for display_i, row in enumerate(self.task_buttons):
+            orig = self._visible_task_indices[display_i]
             for button_scenario, button in zip(SCENARIOS, row):
-                is_active = self.active_selection == (task_index, button_scenario)
+                is_active = self.active_selection == (orig, button_scenario)
                 button.configure(state="normal" if is_active else "disabled")
         for part_index, button in enumerate(self.tutorial_buttons):
             is_active = self.active_selection == ("tutorial", part_index)
@@ -1440,7 +1474,10 @@ class InteractiveTaskLauncher(tk.Tk):
                 "--suite",
                 "base",
             ]
-            self._apply_record_launch(child_env, command)
+            # Practice only: never record HDF5 / preview video for tutorials.
+            child_env["ROBODYNA_SAVE_VIDEO"] = "0"
+            child_env.pop("ROBODYNA_RECORD_DATA", None)
+            child_env.pop("ROBODYNA_RECORD_CONFIG", None)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1467,10 +1504,24 @@ class InteractiveTaskLauncher(tk.Tk):
         self._shown_episode_condition = None
         self._set_status(run_text, "#70d6a2", sticky=True)
 
-    def _apply_record_launch(self, child_env: dict, command: list[str]) -> None:
-        """Pass GUI Record data / Save video options through to the interactive child."""
-        want_data = bool(self.record_data.get())
-        want_video = bool(self.save_video.get())
+    def _apply_record_launch(
+        self,
+        child_env: dict,
+        command: list[str],
+        *,
+        suite: str | None = None,
+        task: str | None = None,
+        scenario: str | None = None,
+    ) -> None:
+        """Pass Record data / Save video through to the interactive child."""
+        if experiment_mode() and suite and task:
+            cfg = self._experiment_cfg or load_experiment_config()
+            self._experiment_cfg = cfg
+            want_data = cfg.should_record_data(suite, task, scenario)
+            want_video = cfg.should_save_video(suite, task, scenario)
+        else:
+            want_data = bool(self.record_data.get())
+            want_video = bool(self.save_video.get())
         child_env["ROBODYNA_SAVE_VIDEO"] = "1" if want_video else "0"
         if want_data:
             child_env["ROBODYNA_RECORD_DATA"] = "1"
@@ -1567,7 +1618,9 @@ class InteractiveTaskLauncher(tk.Tk):
             # understands it (pack_fruits); unknown flags are avoided below.
             if task == "pack_fruits":
                 command.extend(["--scenario", scenario])
-            self._apply_record_launch(child_env, command)
+            self._apply_record_launch(
+                child_env, command, suite="base", task=task, scenario=scenario
+            )
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1583,7 +1636,8 @@ class InteractiveTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self._set_option_checks("disabled")
-        active_button = self.task_buttons[index][SCENARIOS.index(scenario)]
+        display = self._visible_task_indices.index(index)
+        active_button = self.task_buttons[display][SCENARIOS.index(scenario)]
         active_button.configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
         desc = condition_description(task, scenario)
         run_text = (
@@ -1664,9 +1718,12 @@ class InteractiveTaskLauncher(tk.Tk):
         self.after(250, self._poll_child)
 
     def _reset_task_buttons(self):
-        self.control.configure(state="readonly")
-        self.seed_entry.configure(state="normal")
-        self._set_option_checks("normal")
+        if experiment_mode():
+            self._apply_experiment_protocol()
+        else:
+            self.control.configure(state="readonly")
+            self.seed_entry.configure(state="normal")
+            self._set_option_checks("normal")
         for row in self.task_buttons:
             for scenario, button in zip(SCENARIOS, row):
                 button.configure(
@@ -1684,44 +1741,118 @@ class InteractiveTaskLauncher(tk.Tk):
             )
         self._apply_completed_locks()
 
+    def _resolve_launch_seed(self, suite: str, task: str, scenario: str | None = None) -> int:
+        """Protocol seed list/int, else the (locked) seed field / random."""
+        if experiment_mode():
+            cfg = self._experiment_cfg or load_experiment_config()
+            self._experiment_cfg = cfg
+            if cfg.seeds:
+                if suite == "tutorial":
+                    index = int(getattr(self, "_tutorial_seed_index", 0) or 0)
+                    self._tutorial_seed_index = index + 1
+                else:
+                    index = terminal_play_count(suite, task, scenario)
+                picked = cfg.pick_seed(play_index=index)
+                if picked is not None:
+                    return picked
+        return resolve_seed(self.seed_entry.get())
+
+    def _apply_experiment_protocol(self):
+        """Lock record / video / controller / seed from interactive/experiment.yml."""
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        self.record_data.set(bool(cfg.record_data))
+        self.save_video.set(bool(cfg.save_video))
+        self.control.set(cfg.controller)
+        self.control.configure(state="disabled")
+        self.seed_entry.configure(state="normal")
+        self.seed_entry.delete(0, "end")
+        display = cfg.seed_display()
+        if display:
+            self.seed_entry.insert(0, display)
+        self.seed_entry.configure(state="disabled")
+        self.briefing_check.configure(state="normal")
+        self.record_check.configure(state="disabled")
+        self.video_check.configure(state="disabled")
+
+    def _slot_locked(self, suite: str, task: str, scenario: str | None = None) -> bool:
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        return is_slot_locked(
+            suite,
+            task,
+            scenario,
+            max_plays=cfg.max_plays(suite, task, scenario),
+        )
+
+    def _slot_button_text(self, suite: str, task: str, default_text: str, scenario: str | None = None) -> str:
+        if not experiment_mode():
+            return default_text
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        limit = cfg.max_plays(suite, task, scenario)
+        if limit is None or int(limit) <= 1:
+            return default_text
+        used = terminal_play_count(suite, task, scenario)
+        if used <= 0:
+            return default_text
+        return f"{default_text} ({used}/{limit})"
+
     def _apply_completed_locks(self, *, keep_active: bool = False):
-        """Gray out scenarios already finished by this experiment user."""
+        """Gray out scenarios that have used up their experiment play budget."""
         if not experiment_mode():
             return
-        for task_index, row in enumerate(self.task_buttons):
-            task = TASKS[task_index][1]
+        for display_i, row in enumerate(self.task_buttons):
+            orig = self._visible_task_indices[display_i]
+            task = TASKS[orig][1]
             for scenario, button in zip(SCENARIOS, row):
-                if keep_active and self.active_selection == (task_index, scenario):
+                if keep_active and self.active_selection == (orig, scenario):
                     continue
-                if not is_completed("base", task, scenario):
+                if self._slot_locked("base", task, scenario):
+                    button.configure(
+                        state="disabled",
+                        text=slot_success_label("base", task, scenario),
+                        bg="#59616b",
+                        activebackground="#59616b",
+                    )
+                    continue
+                if keep_active:
                     continue
                 button.configure(
-                    state="disabled",
-                    text="Done",
-                    bg="#59616b",
-                    activebackground="#59616b",
+                    state="normal",
+                    text=self._slot_button_text(
+                        "base", task, SCENARIO_LABELS[scenario], scenario
+                    ),
+                    bg=PLAY_BLUE,
+                    activebackground=PLAY_BLUE_ACTIVE,
                 )
 
     def _record_experiment_play(self, run_meta, payload, *, exit_code=None, stopped=False):
         if not experiment_mode() or not isinstance(run_meta, dict):
             return
+        # Tutorials are unlimited practice — never write them to exp_logs.
         if run_meta.get("suite") != "base":
             return
         started = run_meta.get("started_at")
         wall_fallback = None
         if isinstance(started, (int, float)):
             wall_fallback = time.perf_counter() - float(started)
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        task = str(run_meta.get("task") or "")
+        scenario = run_meta.get("scenario")
         append_play(
             suite="base",
-            task=str(run_meta.get("task") or ""),
+            task=task,
             task_label=run_meta.get("task_label"),
-            scenario=run_meta.get("scenario"),
+            scenario=scenario,
             controller=run_meta.get("controller"),
             seed=run_meta.get("seed"),
             exit_code=exit_code,
             payload=payload if isinstance(payload, dict) else None,
             stopped=stopped,
             wall_fallback_s=wall_fallback,
+            write_entry=cfg.should_log("base", task, scenario),
         )
 
     def _remove_temporary_config(self):

@@ -61,11 +61,14 @@ from _task_briefing import (  # noqa: E402
     setup_gui_app_icon,
     show_task_briefing,
 )
+from experiment_config import load_experiment_config  # noqa: E402
 from experiment_logs import (  # noqa: E402
     append_play,
     experiment_mode,
-    is_completed,
+    is_slot_locked,
+    slot_success_label,
     stamp_child_env,
+    terminal_play_count,
 )
 
 TASKS = (
@@ -304,8 +307,14 @@ class HouseholdTaskLauncher(tk.Tk):
         self._preview_width = self.IMAGE_SIZE[0]
         self._ui_scale = 1.0
         self._header_layout_key: tuple | None = None
+        self._visible_task_indices: list[int] = list(range(len(TASKS)))
+        self._experiment_cfg = load_experiment_config() if experiment_mode() else None
+        if self._experiment_cfg is not None:
+            self._visible_task_indices = self._experiment_cfg.visible_indices(
+                "household", len(TASKS)
+            )
         self._idle_status = (
-            f"Tutorial (4 parts)  ·  {len(TASKS)} tasks  |  "
+            f"Tutorial (4 parts)  ·  {len(self._visible_task_indices)} tasks  |  "
             "Hover a task for its README description."
         )
         self._idle_status_fg = HEADER_MUTED
@@ -323,12 +332,14 @@ class HouseholdTaskLauncher(tk.Tk):
                 )
             )
             self.exit_button.configure(text="Back")
+            n_vis = len(self._visible_task_indices)
             self._idle_status = (
-                f"Experiment  ·  {user or 'participant'}  |  "
+                f"Experiment  ·  {user or 'participant'}  ·  {n_vis} tasks  |  "
                 "Completed tasks are gray. Tutorial is always available."
             )
             self._idle_status_fg = HEADER_MUTED
             self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
+            self._apply_experiment_protocol()
             self._apply_completed_locks()
         self.bind("<Configure>", self._on_root_configure)
         self.after(0, self._apply_ui_scale)
@@ -496,8 +507,9 @@ class HouseholdTaskLauncher(tk.Tk):
         self.canvas.bind_all("<Button-5>", lambda event: self.canvas.yview_scroll(3, "units"))
 
         self._add_tutorial_section()
-        for row_start in range(0, len(TASKS), self.COLUMNS):
-            self._add_task_row(row_start)
+        vis = self._visible_task_indices
+        for row_start in range(0, len(vis), self.COLUMNS):
+            self._add_task_row(vis[row_start : row_start + self.COLUMNS])
 
     @staticmethod
     def _scaled_font(size: float, weight: str = "", scale: float = 1.0) -> tuple:
@@ -558,8 +570,22 @@ class HouseholdTaskLauncher(tk.Tk):
             widget.configure(state=state)
 
     def _capture_run_note(self) -> str:
-        data = bool(self.record_data.get())
-        video = bool(self.save_video.get())
+        meta = getattr(self, "_run_meta", None)
+        if (
+            experiment_mode()
+            and isinstance(meta, dict)
+            and meta.get("suite") in ("base", "household")
+        ):
+            cfg = self._experiment_cfg or load_experiment_config()
+            self._experiment_cfg = cfg
+            suite = str(meta.get("suite") or "")
+            task = str(meta.get("task") or "")
+            scenario = meta.get("scenario")
+            data = cfg.should_record_data(suite, task, scenario)
+            video = cfg.should_save_video(suite, task, scenario)
+        else:
+            data = bool(self.record_data.get())
+            video = bool(self.save_video.get())
         if data and video:
             return " Recording data and head-camera video after the viewer closes."
         if data:
@@ -568,10 +594,24 @@ class HouseholdTaskLauncher(tk.Tk):
             return " Saving head-camera video after the viewer closes."
         return ""
 
-    def _apply_record_launch(self, child_env: dict, command: list[str]) -> None:
-        """Pass GUI Record data / Save video options through to the interactive child."""
-        want_data = bool(self.record_data.get())
-        want_video = bool(self.save_video.get())
+    def _apply_record_launch(
+        self,
+        child_env: dict,
+        command: list[str],
+        *,
+        suite: str | None = None,
+        task: str | None = None,
+        scenario: str | None = None,
+    ) -> None:
+        """Pass Record data / Save video through to the interactive child."""
+        if experiment_mode() and suite and task:
+            cfg = self._experiment_cfg or load_experiment_config()
+            self._experiment_cfg = cfg
+            want_data = cfg.should_record_data(suite, task, scenario)
+            want_video = cfg.should_save_video(suite, task, scenario)
+        else:
+            want_data = bool(self.record_data.get())
+            want_video = bool(self.save_video.get())
         child_env["ROBODYNA_SAVE_VIDEO"] = "1" if want_video else "0"
         if want_data:
             child_env["ROBODYNA_RECORD_DATA"] = "1"
@@ -979,7 +1019,7 @@ class HouseholdTaskLauncher(tk.Tk):
         image = source.resize((width, height), Image.Resampling.LANCZOS)
         return ImageTk.PhotoImage(image)
 
-    def _add_task_row(self, row_start: int):
+    def _add_task_row(self, indices):
         """One card holding up to four household tasks, matching the base GUI grid."""
         card = tk.Frame(
             self.page,
@@ -990,7 +1030,7 @@ class HouseholdTaskLauncher(tk.Tk):
         card.pack(fill="x", padx=self.CARD_PAD, pady=12)
         grid = tk.Frame(card, bg=CARD_BG)
         grid.pack(fill="x", padx=self.PREVIEW_SIDE_PAD, pady=(14, 16))
-        for index in range(row_start, min(row_start + self.COLUMNS, len(TASKS))):
+        for index in indices:
             label, task, _script_name = TASKS[index]
             self._add_task_cell(grid, index, label, task)
 
@@ -1092,9 +1132,9 @@ class HouseholdTaskLauncher(tk.Tk):
         self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
 
     def play_or_stop(self, index):
-        if experiment_mode() and is_completed("household", TASKS[index][1]):
+        if experiment_mode() and self._slot_locked("household", TASKS[index][1]):
             self._set_status(
-                "Already played. Choose another remaining task.",
+                "Play limit reached. Choose another remaining task.",
                 "#e6a15c",
                 sticky=True,
             )
@@ -1127,7 +1167,8 @@ class HouseholdTaskLauncher(tk.Tk):
     def _mark_running_buttons(self):
         """Disable every Play control except the active Stop button."""
         for i, button in enumerate(self.task_buttons):
-            is_active = self.active_index == i and self.active_tutorial is None
+            orig = self._visible_task_indices[i]
+            is_active = self.active_index == orig and self.active_tutorial is None
             button.configure(state="normal" if is_active else "disabled")
         for part_index, button in enumerate(self.tutorial_buttons):
             is_active = self.active_tutorial == part_index
@@ -1252,7 +1293,10 @@ class HouseholdTaskLauncher(tk.Tk):
                 "--suite",
                 "household",
             ]
-            self._apply_record_launch(child_env, command)
+            # Practice only: never record HDF5 / preview video for tutorials.
+            child_env["ROBODYNA_SAVE_VIDEO"] = "0"
+            child_env.pop("ROBODYNA_RECORD_DATA", None)
+            child_env.pop("ROBODYNA_RECORD_CONFIG", None)
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1332,7 +1376,9 @@ class HouseholdTaskLauncher(tk.Tk):
                 "seed": seed,
                 "started_at": time.perf_counter(),
             }
-            self._apply_record_launch(child_env, command)
+            self._apply_record_launch(
+                child_env, command, suite="household", task=task
+            )
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1348,7 +1394,8 @@ class HouseholdTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self._set_option_checks("disabled")
-        self.task_buttons[index].configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
+        display = self._visible_task_indices.index(index)
+        self.task_buttons[display].configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
         run_text = (
             f"Running {label} with seed {seed}. Close its viewer or press Stop to return."
         )
@@ -1422,9 +1469,12 @@ class HouseholdTaskLauncher(tk.Tk):
         self.after(250, self._poll_child)
 
     def _reset_task_buttons(self):
-        self.control.configure(state="readonly")
-        self.seed_entry.configure(state="normal")
-        self._set_option_checks("normal")
+        if experiment_mode():
+            self._apply_experiment_protocol()
+        else:
+            self.control.configure(state="readonly")
+            self.seed_entry.configure(state="normal")
+            self._set_option_checks("normal")
         for button in self.task_buttons:
             button.configure(state="normal", text="Play", bg=PLAY_BLUE, activebackground=PLAY_BLUE_ACTIVE)
         for index, button in enumerate(self.tutorial_buttons):
@@ -1436,35 +1486,105 @@ class HouseholdTaskLauncher(tk.Tk):
             )
         self._apply_completed_locks()
 
+    def _resolve_launch_seed(self, suite: str, task: str, scenario: str | None = None) -> int:
+        """Protocol seed list/int, else the (locked) seed field / random."""
+        if experiment_mode():
+            cfg = self._experiment_cfg or load_experiment_config()
+            self._experiment_cfg = cfg
+            if cfg.seeds:
+                if suite == "tutorial":
+                    index = int(getattr(self, "_tutorial_seed_index", 0) or 0)
+                    self._tutorial_seed_index = index + 1
+                else:
+                    index = terminal_play_count(suite, task, scenario)
+                picked = cfg.pick_seed(play_index=index)
+                if picked is not None:
+                    return picked
+        return resolve_seed(self.seed_entry.get())
+
+    def _apply_experiment_protocol(self):
+        """Lock record / video / controller / seed from interactive/experiment.yml."""
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        self.record_data.set(bool(cfg.record_data))
+        self.save_video.set(bool(cfg.save_video))
+        self.control.set(cfg.controller)
+        self.control.configure(state="disabled")
+        self.seed_entry.configure(state="normal")
+        self.seed_entry.delete(0, "end")
+        display = cfg.seed_display()
+        if display:
+            self.seed_entry.insert(0, display)
+        self.seed_entry.configure(state="disabled")
+        self.briefing_check.configure(state="normal")
+        self.record_check.configure(state="disabled")
+        self.video_check.configure(state="disabled")
+
+    def _slot_locked(self, suite: str, task: str, scenario: str | None = None) -> bool:
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        return is_slot_locked(
+            suite,
+            task,
+            scenario,
+            max_plays=cfg.max_plays(suite, task, scenario),
+        )
+
+    def _slot_button_text(self, suite: str, task: str, default_text: str, scenario: str | None = None) -> str:
+        if not experiment_mode():
+            return default_text
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        limit = cfg.max_plays(suite, task, scenario)
+        if limit is None or int(limit) <= 1:
+            return default_text
+        used = terminal_play_count(suite, task, scenario)
+        if used <= 0:
+            return default_text
+        return f"{default_text} ({used}/{limit})"
+
     def _apply_completed_locks(self, *, keep_active: bool = False):
-        """Gray out tasks already finished by this experiment user."""
+        """Gray out tasks that have used up their experiment play budget."""
         if not experiment_mode():
             return
-        for index, button in enumerate(self.task_buttons):
-            if keep_active and self.active_index == index:
+        for i, button in enumerate(self.task_buttons):
+            orig = self._visible_task_indices[i]
+            if keep_active and self.active_index == orig:
                 continue
-            task = TASKS[index][1]
-            if not is_completed("household", task):
+            task = TASKS[orig][1]
+            if self._slot_locked("household", task):
+                button.configure(
+                    state="disabled",
+                    text=slot_success_label("household", task),
+                    bg="#59616b",
+                    activebackground="#59616b",
+                )
+                continue
+            if keep_active:
                 continue
             button.configure(
-                state="disabled",
-                text="Done",
-                bg="#59616b",
-                activebackground="#59616b",
+                state="normal",
+                text=self._slot_button_text("household", task, "Play"),
+                bg=PLAY_BLUE,
+                activebackground=PLAY_BLUE_ACTIVE,
             )
 
     def _record_experiment_play(self, run_meta, payload, *, exit_code=None, stopped=False):
         if not experiment_mode() or not isinstance(run_meta, dict):
             return
+        # Tutorials are unlimited practice — never write them to exp_logs.
         if run_meta.get("suite") != "household":
             return
         started = run_meta.get("started_at")
         wall_fallback = None
         if isinstance(started, (int, float)):
             wall_fallback = time.perf_counter() - float(started)
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        task = str(run_meta.get("task") or "")
         append_play(
             suite="household",
-            task=str(run_meta.get("task") or ""),
+            task=task,
             task_label=run_meta.get("task_label"),
             scenario=None,
             controller=run_meta.get("controller"),
@@ -1473,6 +1593,7 @@ class HouseholdTaskLauncher(tk.Tk):
             payload=payload if isinstance(payload, dict) else None,
             stopped=stopped,
             wall_fallback_s=wall_fallback,
+            write_entry=cfg.should_log("household", task),
         )
 
     def _prepare_result_file(self):

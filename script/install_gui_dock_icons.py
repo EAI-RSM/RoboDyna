@@ -40,6 +40,14 @@ def main() -> int:
             wm_class=GUI_WM_CLASS["household"],
             python_exe=py,
         ),
+        install_ubuntu_dock_icon(
+            desktop_id="robodyna-experiment",
+            name="RoboDyna Human Experiment",
+            comment="Human-experiment task launcher",
+            script_path=ROOT / "interactive" / "experiment_gui.py",
+            wm_class=GUI_WM_CLASS["experiment"],
+            python_exe=py,
+        ),
     ]
     for p in paths:
         print(f"installed {p}")

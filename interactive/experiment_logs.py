@@ -1,4 +1,4 @@
-"""Per-user human-experiment logs under ``exp_logs/<user>/``.
+"""Per-user human-experiment logs under ``data/exp_logs/<user>/``.
 
 Used by ``experiment_gui.py`` and by the base / household task GUIs when they
 run in experiment mode (``ROBODYNA_EXPERIMENT=1``).
@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXP_LOGS_DIR = REPO_ROOT / "exp_logs"
+EXP_LOGS_DIR = REPO_ROOT / "data" / "exp_logs"
 
 EXPERIMENT_ENV = "ROBODYNA_EXPERIMENT"
 EXPERIMENT_USER_ENV = "ROBODYNA_EXPERIMENT_USER"
@@ -25,7 +25,8 @@ EXPERIENCE_QUESTIONS = (
     ("robotic_simulators", "Do you have previous experience with robotic simulators?"),
 )
 
-# Base suite: 23 tasks × 4 scenarios. Household: 12 tasks. Tutorial is practice.
+# Base suite: 23 tasks × 4 scenarios. Household: 12 tasks.
+# Tutorial parts are unlimited practice and are never written to these logs.
 BASE_SCENARIO_SLOTS = 23 * 4
 HOUSEHOLD_TASK_SLOTS = 12
 
@@ -121,6 +122,8 @@ def create_user(name: str, experience: dict[str, str]) -> dict[str, Any]:
             for key, _label in EXPERIENCE_QUESTIONS
         },
         "completed_keys": [],
+        "play_counts": {},
+        "success_counts": {},
         "plays": [],
         "log_path": str(path),
     }
@@ -145,7 +148,112 @@ def completed_keys(log: dict[str, Any] | None = None) -> set[str]:
 
 
 def is_completed(suite: str, task: str, scenario: str | None = None) -> bool:
+    """True after at least one SUCCESS/FAILURE. Prefer ``is_slot_locked`` for limits."""
     return play_key(suite, task, scenario) in completed_keys()
+
+
+def _play_matches_slot(play: dict[str, Any], suite: str, task: str, scenario: str | None) -> bool:
+    if str(play.get("suite") or "") != suite:
+        return False
+    if str(play.get("task") or "") != task:
+        return False
+    if suite != "household":
+        if str(play.get("scenario") or "") != str(scenario or ""):
+            return False
+    return True
+
+
+def terminal_play_count(
+    suite: str,
+    task: str,
+    scenario: str | None = None,
+    log: dict[str, Any] | None = None,
+) -> int:
+    """How many SUCCESS/FAILURE plays this slot has (Stop / close do not count)."""
+    data = log if log is not None else load_user_log()
+    if not data:
+        return 0
+    key = play_key(suite, task, scenario)
+    counts = data.get("play_counts") or {}
+    if key in counts:
+        try:
+            return max(0, int(counts[key]))
+        except (TypeError, ValueError):
+            pass
+    n = 0
+    for play in data.get("plays") or []:
+        if not isinstance(play, dict):
+            continue
+        if not _play_matches_slot(play, suite, task, scenario):
+            continue
+        if counts_as_completed(str(play.get("result") or "")):
+            n += 1
+    if n == 0 and key in completed_keys(data):
+        return 1
+    return n
+
+
+def terminal_success_count(
+    suite: str,
+    task: str,
+    scenario: str | None = None,
+    log: dict[str, Any] | None = None,
+) -> int:
+    """How many of this slot's terminal plays were SUCCESS."""
+    data = log if log is not None else load_user_log()
+    if not data:
+        return 0
+    key = play_key(suite, task, scenario)
+    counts = data.get("success_counts") or {}
+    if key in counts:
+        try:
+            return max(0, int(counts[key]))
+        except (TypeError, ValueError):
+            pass
+    n = 0
+    for play in data.get("plays") or []:
+        if not isinstance(play, dict):
+            continue
+        if not _play_matches_slot(play, suite, task, scenario):
+            continue
+        if str(play.get("result") or "") == "SUCCESS":
+            n += 1
+    return n
+
+
+def slot_success_label(
+    suite: str,
+    task: str,
+    scenario: str | None = None,
+    log: dict[str, Any] | None = None,
+) -> str:
+    """``m/n`` successes over terminal plays, for a grayed-out slot."""
+    total = terminal_play_count(suite, task, scenario, log=log)
+    ok = terminal_success_count(suite, task, scenario, log=log)
+    if total <= 0:
+        return "0/0"
+    ok = min(ok, total)
+    return f"{ok}/{total}"
+
+
+def is_slot_locked(
+    suite: str,
+    task: str,
+    scenario: str | None = None,
+    *,
+    max_plays: int | None,
+    log: dict[str, Any] | None = None,
+) -> bool:
+    """True when this slot has used up its SUCCESS/FAILURE play budget."""
+    if max_plays is None:
+        return False
+    try:
+        limit = int(max_plays)
+    except (TypeError, ValueError):
+        return False
+    if limit <= 0:
+        return False
+    return terminal_play_count(suite, task, scenario, log=log) >= limit
 
 
 def result_from_exit_code(exit_code: int | None, *, stopped: bool = False) -> str:
@@ -166,15 +274,67 @@ def counts_as_completed(result: str) -> bool:
     return result in ("SUCCESS", "FAILURE")
 
 
-def progress_counts(log: dict[str, Any] | None = None) -> dict[str, int]:
-    keys = completed_keys(log)
-    base_done = sum(1 for k in keys if k.startswith("base:"))
-    household_done = sum(1 for k in keys if k.startswith("household:"))
+def progress_counts(
+    log: dict[str, Any] | None = None,
+    *,
+    base_task_names: list[str] | None = None,
+    household_task_names: list[str] | None = None,
+    n_scenarios: int = 4,
+    cfg=None,
+) -> dict[str, int]:
+    """Slots that have reached their play limit vs slots that have a limit.
+
+    Unlimited slots (``plays_per_scenario: null``) are omitted from the totals.
+    """
+    try:
+        from experiment_config import (
+            BASE_TASK_TABLE,
+            HOUSEHOLD_TASK_TABLE,
+            load_experiment_config,
+        )
+    except ImportError:
+        from interactive.experiment_config import (
+            BASE_TASK_TABLE,
+            HOUSEHOLD_TASK_TABLE,
+            load_experiment_config,
+        )
+
+    if cfg is None:
+        cfg = load_experiment_config()
+    scenarios = ("default", "opt1", "opt2", "opt1+2")[: max(1, int(n_scenarios))]
+    if base_task_names is None:
+        base_names = [key for _n, key, _label in BASE_TASK_TABLE]
+    else:
+        base_names = list(base_task_names)
+    if household_task_names is None:
+        household_names = [key for _n, key, _label in HOUSEHOLD_TASK_TABLE]
+    else:
+        household_names = list(household_task_names)
+
+    base_done = 0
+    base_total = 0
+    for task in base_names:
+        for scenario in scenarios:
+            limit = cfg.max_plays("base", task, scenario)
+            if limit is None:
+                continue
+            base_total += 1
+            if terminal_play_count("base", task, scenario, log=log) >= int(limit):
+                base_done += 1
+    household_done = 0
+    household_total = 0
+    for task in household_names:
+        limit = cfg.max_plays("household", task)
+        if limit is None:
+            continue
+        household_total += 1
+        if terminal_play_count("household", task, log=log) >= int(limit):
+            household_done += 1
     return {
         "base_done": base_done,
-        "base_total": BASE_SCENARIO_SLOTS,
+        "base_total": base_total,
         "household_done": household_done,
-        "household_total": HOUSEHOLD_TASK_SLOTS,
+        "household_total": household_total,
     }
 
 
@@ -190,8 +350,13 @@ def append_play(
     payload: dict[str, Any] | None = None,
     stopped: bool = False,
     wall_fallback_s: float | None = None,
+    write_entry: bool = True,
 ) -> dict[str, Any] | None:
-    """Append one play to the current experiment user log and save it."""
+    """Record one play. Always bumps ``play_counts`` on SUCCESS/FAILURE.
+
+    When ``write_entry`` is false, skip appending the detailed ``plays`` row
+    (the slot is still counted so play limits work).
+    """
     path_raw = os.environ.get(EXPERIMENT_LOG_ENV, "").strip()
     path = Path(path_raw) if path_raw else None
     if path is None:
@@ -206,6 +371,8 @@ def append_play(
         "created_at": iso_now(),
         "experience": {},
         "completed_keys": [],
+        "play_counts": {},
+        "success_counts": {},
         "plays": [],
         "log_path": str(path),
     }
@@ -247,15 +414,33 @@ def append_play(
             "simulation_steps": time_block.get("simulation_steps"),
         },
     }
-    plays = list(data.get("plays") or [])
-    plays.append(entry)
-    data["plays"] = plays
+    counted = False
     if counts_as_completed(result):
         key = play_key(suite, task, scenario)
+        counts = dict(data.get("play_counts") or {})
+        try:
+            counts[key] = int(counts.get(key, 0) or 0) + 1
+        except (TypeError, ValueError):
+            counts[key] = 1
+        data["play_counts"] = counts
+        if result == "SUCCESS":
+            wins = dict(data.get("success_counts") or {})
+            try:
+                wins[key] = int(wins.get(key, 0) or 0) + 1
+            except (TypeError, ValueError):
+                wins[key] = 1
+            data["success_counts"] = wins
+        counted = True
         done = list(data.get("completed_keys") or [])
         if key not in done:
             done.append(key)
         data["completed_keys"] = done
+    if write_entry:
+        plays = list(data.get("plays") or [])
+        plays.append(entry)
+        data["plays"] = plays
+    elif not counted:
+        return None
     save_user_log(path, data)
     return entry
 
