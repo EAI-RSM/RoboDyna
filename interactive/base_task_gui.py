@@ -617,7 +617,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.record_data = tk.BooleanVar(value=False)
         self.save_video = tk.BooleanVar(value=False)
         self.briefing_check = self._header_tick(
-            self.option_group, "Briefing", self.show_briefing
+            self.option_group, "Instructions", self.show_briefing
         )
         self.record_check = self._header_tick(
             self.option_group, "Record data", self.record_data
@@ -730,7 +730,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self._ui_scale_job = self.after(80, self._apply_ui_scale)
 
     def _header_tick(self, parent, text, variable):
-        """Square checkbox used for Briefing / Record data / Save video."""
+        """Square checkbox used for Instructions / Record data / Save video."""
         btn = tk.Checkbutton(
             parent,
             text=text,
@@ -1436,7 +1436,7 @@ class InteractiveTaskLauncher(tk.Tk):
             briefing["instruction"] = instruction
             if not show_task_briefing(self, briefing):
                 self._set_status(
-                    "Briefing cancelled. Select a tutorial part when ready.",
+                    "Instructions cancelled. Select a tutorial part when ready.",
                     TEXT_SECONDARY,
                     sticky=True,
                 )
@@ -1573,7 +1573,7 @@ class InteractiveTaskLauncher(tk.Tk):
             )
             if not show_task_briefing(self, briefing):
                 self._set_status(
-                    "Briefing cancelled. Select a scenario when ready.",
+                    "Instructions cancelled. Select a scenario when ready.",
                     TEXT_SECONDARY,
                     sticky=True,
                 )

@@ -717,7 +717,7 @@ def _draw_header_wash(canvas: tk.Canvas, width: int, height: int) -> None:
 def show_task_briefing(parent: tk.Tk | tk.Toplevel, briefing: dict) -> bool:
     """Modal briefing screen. Return True to start the task, False to cancel."""
     dialog = tk.Toplevel(parent)
-    dialog.title("Task briefing")
+    dialog.title("Task instructions")
     dialog.configure(bg=PAGE_BG)
     apply_window_icon(dialog)
     dialog.transient(parent)
@@ -759,7 +759,7 @@ def show_task_briefing(parent: tk.Tk | tk.Toplevel, briefing: dict) -> bool:
         hero.create_text(
             pad_x,
             y,
-            text="BRIEFING",
+            text="INSTRUCTIONS",
             anchor="w",
             fill=ACCENT,
             font=("Georgia", 11, "bold"),
