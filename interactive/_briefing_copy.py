@@ -234,7 +234,7 @@ TASK_BRIEFING: dict[str, dict] = {
         "success": "Each apple is in the correct bin, and rotten apples go to the dump.",
         "keyboard": [
             ("Left / Right", "rotate the gate"),
-            ("Up", "open the gate for a spoiled apple"),
+            ("Left + Right", "open the gate for a spoiled apple"),
         ],
     },
     "whack_moles": {

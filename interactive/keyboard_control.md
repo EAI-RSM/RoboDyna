@@ -46,7 +46,7 @@ Control_quality: press left or right or mouse click to trigger (same as before  
 
 drop_ball_hole: Click on the surface of the rotating platform, and then the ball drops on that location, from z_max elevate height
 
-sort_apples_belt: using left and right keys to rotate the gate. press up to open the gate for spoiled apple
+sort_apples_belt: using left and right keys to rotate the gate. press left and right together to open the gate for spoiled apple
 
 whack moles: same as catch cuboid, click on moles and if they are outside, trigger a hit
 
@@ -77,4 +77,5 @@ stop_ball: click on the ball while rolling on the table. earlier click will resu
 clean_table: sponge hovers 5 cm over the table. where clicked on the table by mouse, the sponge makes contact with the table. if over stain cleans as usual
 
 
+task grouping
 

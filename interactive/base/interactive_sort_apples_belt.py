@@ -91,14 +91,14 @@ def _configure_default_task(config_name: str, seed: int, use_robot: bool = False
 
 
 def _update_keyboard_control(env, window):
-    """Map arrow keys to left, right, or dump holds (Up = dump / spoiled)."""
+    """Map arrow keys to left, right, or dump holds (both Left+Right = dump)."""
 
     left_down = window.key_down("left")
     right_down = window.key_down("right")
-    dump_down = window.key_down("up") or window.key_down("down")
-    env._expert_hold = "dump" if dump_down else (
-        "left" if left_down and not right_down else
-        "right" if right_down and not left_down else None
+    env._expert_hold = (
+        "dump" if left_down and right_down else
+        "left" if left_down else
+        "right" if right_down else None
     )
 
 
@@ -128,18 +128,17 @@ def _button_hold_from_mouse(env, viewer):
 
 
 def _update_keyboard_mouse_control(env, viewer):
-    """Arrows or hold-click buttons; Up opens dump for spoiled apples."""
+    """Arrows or hold-click buttons; Left+Right together opens dump for spoiled apples."""
     window = viewer.window
     left_down = window.key_down("left")
     right_down = window.key_down("right")
-    dump_down = window.key_down("up") or window.key_down("down")
-    if dump_down:
+    if left_down and right_down:
         env._expert_hold = "dump"
         return
-    if left_down and not right_down:
+    if left_down:
         env._expert_hold = "left"
         return
-    if right_down and not left_down:
+    if right_down:
         env._expert_hold = "right"
         return
     env._expert_hold = _button_hold_from_mouse(env, viewer)
@@ -550,7 +549,7 @@ def main():
                 "\n"
                 "  Left Arrow        hold to divert left\n"
                 "  Right Arrow       hold to divert right\n"
-                "  Up Arrow          hold dump (spoiled apple hatch)\n"
+                "  Left + Right      hold dump (spoiled apple hatch)\n"
                 "  Mouse             hold click on a button (releases when you let go)\n"
                 "\n"
                 "  Release to let the plank return to rest.\n"
