@@ -1377,25 +1377,10 @@ class InteractiveTaskLauncher(tk.Tk):
                     "Empty table with both arms. Test arm selection (1 / 2 / 3), "
                     "then press V to switch camera views."
                 )
-                instruction = (
-                    "Key figures appear at the top right of the viewer. "
-                    "Press 1, 2, and 3 to select left / right / both arms — each key "
-                    "turns green and stays green once tested. Then press V; it also "
-                    "stays green. After that a smaller strip of all keys stays up: "
-                    "a key only flashes green while you press it. Esc quits."
-                )
             elif index == 1:
                 summary = (
                     "Empty table with both arms. Practice the base teleop keys "
                     "on the selected (green) arm."
-                )
-                instruction = (
-                    "The left arm starts selected. Key figures at the top right "
-                    "walk through: arrow keys (move), E/Q (height — Z min/max is capped), "
-                    "R/T (rotate), F/G (tilt), then Space twice (open and close). "
-                    "Each lesson key turns green and stays green after you press it. "
-                    "After that a smaller strip of all keys stays up: a key only flashes "
-                    "green while you press it. Esc quits."
                 )
             elif index == 2:
                 summary = (
@@ -1403,27 +1388,12 @@ class InteractiveTaskLauncher(tk.Tk):
                     "pick up a cube, hold a spring button, toggle an on/off switch, "
                     "then push a box to a green line."
                 )
-                instruction = (
-                    "The left arm starts selected. Key figures at the top right show "
-                    "which keys to use. Keys flash green while you press them. "
-                    "(1) Grasp the orange cube — Space to close, "
-                    "E to lift. (2) Close with Space, then hold Q on the green button "
-                    "until it goes red, then lift off with E. (3) Close with Space, "
-                    "press the switch ON (stays down, red) then press again to turn it "
-                    "OFF. (4) Close the gripper and push the blue box onto the green line."
-                )
             else:
                 summary = (
                     "Two advanced actions on the left side of the table, one at a time: "
                     "catch a rolling ball, then pick up a mallet."
                 )
-                instruction = (
-                    "The left arm starts selected. Key figures at the top right show "
-                    "which keys to use. (1) Catch the red ball as it rolls toward "
-                    "you — Space to close, E to lift. Touching is fine; it only "
-                    "respawns if it falls off the table. "
-                    "(2) Grasp the mallet handle and lift it. Arms reset between steps."
-                )
+            instruction = "Follow the instructions to complete the tutorial."
             briefing = build_briefing_text(
                 label=f"Tutorial · {label}",
                 task="tutorial_empty",
