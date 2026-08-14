@@ -689,14 +689,14 @@ task_args:
     #   Opt 1 — target_wagon_mode: pick one wagon at random as the drop target; that
     #     wagon is red and the other two are gray; success only in the red wagon.
     #     CLI: --task-arg target_wagon_mode=true   or   --option 1
-    #   Opt 2 — tunnel_enabled: arched tunnel on the far (back) arc (2–4 wagon spans),
-    #     upper half only — same tunnel as before.
+    #   Opt 2 — tunnel_enabled: matching arched tunnels on the far and near arcs
+    #     (2–4 wagon spans; near is a 180° mirror of the far tunnel).
     #     CLI: --task-arg tunnel_enabled=true     or   --option 2
     #     tunnel_enabled: random still samples with tunnel_prob.
-    #   Opt 1+2 — red target wagon + tunnel (set both flags).
+    #   Opt 1+2 — red target wagon + both tunnels (set both flags).
     n_wagons: 3                 # open cargo wagons (plus closed loco); default = 3
     target_wagon_mode: false    # Opt 1: one random red target wagon; others gray
-    tunnel_enabled: false       # Opt 2: back-arc arched tunnel (true|false|random)
+    tunnel_enabled: false       # Opt 2: far+near arched tunnels (true|false|random)
     tunnel_prob: 0.55           # P(tunnel) only when tunnel_enabled=random
     tunnel_n_wagons_min: 2      # Opt 2: tunnel length in wagon-spans (low)
     tunnel_n_wagons_max: 4      # Opt 2: high

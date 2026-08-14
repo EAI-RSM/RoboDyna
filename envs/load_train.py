@@ -25,11 +25,11 @@ class load_train(Base_Task):
         wagon is red and the other two are gray; success only if the ball lands in
         the red wagon.
         CLI: ``--task-arg target_wagon_mode=true`` or ``--option 1``.
-      Opt 2 — ``tunnel_enabled``: arched tunnel on the far (back) arc, 2–4 wagon
-        spans long, upper half only (same as before).
+      Opt 2 — ``tunnel_enabled``: matching arched tunnels on the far and near
+        arcs (2–4 wagon spans; near tunnel is a 180° mirror of the far one).
         CLI: ``--task-arg tunnel_enabled=true`` or ``--option 2``.
         ``tunnel_enabled: random`` still samples with ``tunnel_prob``.
-      Opt 1+2 — target red wagon plus tunnel (both flags together).
+      Opt 1+2 — target red wagon plus both tunnels (both flags together).
 
     Train motion is step-driven in `_update_kinematic_tasks` so plan and render
     passes stay identical. Once the ball is seated in a wagon it is latched and
@@ -90,7 +90,7 @@ class load_train(Base_Task):
     WAGON_COLOR_TARGET = [0.82, 0.22, 0.18, 1.0]   # red (default / target)
     WAGON_COLOR_DISTRACTOR = [0.55, 0.55, 0.58, 1.0]  # gray (non-target under Opt 1)
 
-    # Opt 2 — optional back-side tunnel (covers 2–4 wagons; stays off the robot's near half)
+    # Opt 2 — far-arc tunnel plus a 180° mirror on the near arc (each 2–4 wagons)
     TUNNEL_ENABLED_DEFAULT = False      # true | false | random (Opt 2 when true)
     TUNNEL_PROB_DEFAULT = 0.55
     TUNNEL_N_WAGONS_MIN_DEFAULT = 2
@@ -122,6 +122,7 @@ class load_train(Base_Task):
         self.tunnel_present = False
         self.tunnel_n_wagons = 0
         self.tunnel_center_angle = None
+        self.tunnel_center_angle_near = None
         self.cars = []
         self._car_rigids = []
         self.ball = None
@@ -324,7 +325,7 @@ class load_train(Base_Task):
         self.target_wagon_mode = self._parse_target_wagon_mode(cfg)
         self.target_wagon_idx = None
 
-        # Opt 2 — optional tunnel on the back arc (never on the robot's near / lower half).
+        # Opt 2 — far-arc tunnel + mirrored near-arc tunnel.
         tunnel_cfg = self._parse_tunnel_enabled_cfg(cfg)
         tunnel_prob = float(cfg.get("tunnel_prob", self.TUNNEL_PROB_DEFAULT))
         if isinstance(tunnel_cfg, bool):
@@ -357,6 +358,7 @@ class load_train(Base_Task):
         self.tunnel_overhang = float(cfg.get("tunnel_overhang", self.TUNNEL_OVERHANG_DEFAULT))
         self.tunnel_n_wagons = 0
         self.tunnel_center_angle = None
+        self.tunnel_center_angle_near = None
         self.tunnel_half_angle = 0.0
 
         z0 = 0.74 + self.table_z_bias
@@ -378,7 +380,18 @@ class load_train(Base_Task):
             self.ball_side = "left" if int(np.random.randint(0, 2)) == 0 else "right"
         side_sign = -1.0 if self.ball_side == "left" else 1.0
         # Pass angle: near the robot (-pi/2) biased toward the ball's side.
-        self.pass_angle = -0.5 * np.pi + side_sign * self.pass_angle_offset
+        # With tunnels, drop just outside the near-arc mouth so the ball is not
+        # released through the roof.
+        if self.tunnel_present:
+            self._sample_tunnel_layout()
+            mouth_clear = max(0.10, float(self.pass_angle_offset) * 0.5)
+            self.pass_angle = float(
+                self.tunnel_center_angle_near
+                + side_sign * (self.tunnel_half_angle + mouth_clear)
+            )
+        else:
+            self.pass_angle = -0.5 * np.pi + side_sign * self.pass_angle_offset
+        self.pass_angle = float(np.arctan2(np.sin(self.pass_angle), np.cos(self.pass_angle)))
         self._drop_target_xy = self._xy_on_rail(self.pass_angle)
 
         # Opt 1: pick which open wagon is the drop target (cars[1..] are cargo).
@@ -497,22 +510,19 @@ class load_train(Base_Task):
             is_static=True,
         )
 
-    def _build_tunnel(self):
-        """Static horseshoe tunnel on the back arc (upper half), 2–4 wagon lengths.
+    def _wrap_angle(self, ang):
+        return float(np.arctan2(np.sin(ang), np.cos(ang)))
 
-        Classic railway silhouette: vertical piers + semicircular arch. Centered near
-        12 o'clock with slight L/R jitter; clamped so no segment enters the robot's
-        near / lower half (sin(angle) < 0).
-        """
+    def _sample_tunnel_layout(self):
+        """Sample one 2–4 wagon span; far center near 12 o'clock, near = far + π."""
         n_w = int(np.random.randint(self.tunnel_n_wagons_min, self.tunnel_n_wagons_max + 1))
         arc_len = float(n_w) * float(self.car_arc_spacing)
         half_ang = 0.5 * arc_len / max(self.rail_radius, 1e-6)
-        # Keep a margin inside the upper half [0, pi].
+        # Keep a margin inside the upper half [0, pi] for the far tunnel.
         margin = 0.10
         lo = half_ang + margin
         hi = np.pi - half_ang - margin
         if hi < lo:
-            # Degenerate (huge tunnel on tiny radius) — shrink half-span.
             half_ang = max(0.05, 0.5 * (np.pi - 2.0 * margin))
             lo = half_ang + margin
             hi = np.pi - half_ang - margin
@@ -522,16 +532,26 @@ class load_train(Base_Task):
         center = float(np.clip(center, lo, hi))
         self.tunnel_n_wagons = int(n_w)
         self.tunnel_center_angle = float(center)
+        self.tunnel_center_angle_near = self._wrap_angle(center + np.pi)
         self.tunnel_half_angle = float(half_ang)
 
-        # Clear opening tall enough for loco + cab; cavity covers sleepers + overhang.
+    def _build_tunnel(self):
+        """Two horseshoe tunnels: far arc and a 180° mirror on the near arc."""
+        if self.tunnel_center_angle is None:
+            self._sample_tunnel_layout()
+        n_w = int(self.tunnel_n_wagons)
+        half_ang = float(self.tunnel_half_angle)
+        self._spawn_tunnel_arc(self.tunnel_center_angle, half_ang, n_w, "far")
+        self._spawn_tunnel_arc(self.tunnel_center_angle_near, half_ang, n_w, "near")
+
+    def _spawn_tunnel_arc(self, center, half_ang, n_w, prefix):
+        """Classic railway silhouette: vertical piers + semicircular arch."""
         open_h = max(
             self.tunnel_clearance_z,
             self.engine_body_h + self.engine_cab_h + 0.025,
         )
         z_base = self.rail_surface_z
         cavity_half_w = self.rail_half_w + 0.006 + self.tunnel_overhang
-        # Horseshoe: semicircle of clear radius R on vertical piers of height open_h - R.
         R_clear = float(cavity_half_w)
         pier_h = max(0.012, float(open_h) - R_clear)
         spring_z = z_base + pier_h
@@ -545,7 +565,6 @@ class load_train(Base_Task):
         angs = np.linspace(center - half_ang, center + half_ang, n_seg)
         dtheta = float(angs[1] - angs[0]) if n_seg > 1 else 0.05
         seg_half_len = 0.58 * self.rail_radius * dtheta
-        # Voussoirs around the semicircle (enough for a smooth arch silhouette).
         n_voussoir = 14
         phis = np.linspace(0.0, np.pi, n_voussoir)
         dphi = float(phis[1] - phis[0]) if n_voussoir > 1 else 0.2
@@ -557,7 +576,6 @@ class load_train(Base_Task):
             q_yaw = self._yaw_quat(ang)
             radial = np.array([np.cos(ang), np.sin(ang), 0.0], dtype=np.float64)
             tangent = np.array([-np.sin(ang), np.cos(ang), 0.0], dtype=np.float64)
-            # Vertical piers under the arch springing line.
             for s, tag in ((1.0, "out"), (-1.0, "in")):
                 wxy = xy + s * (R_clear + 0.5 * shell_t) * radial[:2]
                 create_box(
@@ -568,10 +586,9 @@ class load_train(Base_Task):
                     ),
                     half_size=(seg_half_len, 0.5 * shell_t, 0.5 * pier_h),
                     color=pier_color,
-                    name=f"tunnel_pier_{tag}_{i}",
+                    name=f"tunnel_{prefix}_pier_{tag}_{i}",
                     is_static=True,
                 )
-            # Semicircular arch shell (voussoir boxes in the cross-section).
             for j, phi in enumerate(phis):
                 phi = float(phi)
                 arch_out = np.array(
@@ -579,7 +596,6 @@ class load_train(Base_Task):
                     dtype=np.float64,
                 )
                 pos = np.array([xy[0], xy[1], spring_z], dtype=np.float64) + R_mid * arch_out
-                # Local frame: X along track, Z outward from arch center, Y along arch.
                 z_axis = arch_out / max(np.linalg.norm(arch_out), 1e-9)
                 x_axis = tangent
                 y_axis = np.cross(z_axis, x_axis)
@@ -595,11 +611,10 @@ class load_train(Base_Task):
                     pose=sapien.Pose(pos.tolist(), q.tolist()),
                     half_size=(seg_half_len, voussoir_half_arc, 0.5 * shell_t),
                     color=arch_color,
-                    name=f"tunnel_arch_{i}_{j}",
+                    name=f"tunnel_{prefix}_arch_{i}_{j}",
                     is_static=True,
                 )
 
-        # Thicker portal rings at both mouths for a typical tunnel entrance look.
         portal_half_len = max(0.012, 1.6 * seg_half_len)
         for k, ang in enumerate((center - half_ang, center + half_ang)):
             ang = float(ang)
@@ -617,7 +632,7 @@ class load_train(Base_Task):
                     ),
                     half_size=(portal_half_len, 0.5 * shell_t, 0.5 * pier_h),
                     color=portal_color,
-                    name=f"tunnel_portal_pier_{tag}_{k}",
+                    name=f"tunnel_{prefix}_portal_pier_{tag}_{k}",
                     is_static=True,
                 )
             for j, phi in enumerate(phis):
@@ -642,7 +657,7 @@ class load_train(Base_Task):
                     pose=sapien.Pose(pos.tolist(), q.tolist()),
                     half_size=(portal_half_len, voussoir_half_arc, 0.5 * shell_t),
                     color=portal_color,
-                    name=f"tunnel_portal_arch_{k}_{j}",
+                    name=f"tunnel_{prefix}_portal_arch_{k}_{j}",
                     is_static=True,
                 )
 
@@ -1313,6 +1328,11 @@ class load_train(Base_Task):
                 None
                 if getattr(self, "tunnel_center_angle", None) is None
                 else float(self.tunnel_center_angle)
+            ),
+            "tunnel_center_angle_near": (
+                None
+                if getattr(self, "tunnel_center_angle_near", None) is None
+                else float(self.tunnel_center_angle_near)
             ),
             "option_label": self._option_label(),
         }

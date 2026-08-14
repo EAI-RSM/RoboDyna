@@ -1078,7 +1078,7 @@
           "config_keys": [
             "tunnel_enabled"
           ],
-          "what_it_does": "tunnel_enabled=true — arched back-arc tunnel (or tunnel_enabled=random → Bernoulli(tunnel_prob))"
+          "what_it_does": "tunnel_enabled=true — matching far+near arched tunnels (or tunnel_enabled=random → Bernoulli(tunnel_prob))"
         },
         {
           "name": "opt1+2",
@@ -1110,7 +1110,7 @@
         },
         {
           "param": "tunnel_present / tunnel length / center",
-          "how": "if tunnel_enabled=random: P(tunnel_prob); n_wagons U(min,max); center π/2 ± tunnel_center_jitter",
+          "how": "if tunnel_enabled=random: P(tunnel_prob); n_wagons U(min,max); far center π/2 ± tunnel_center_jitter; near center = far+π",
           "config_key": "tunnel_enabled, tunnel_prob, tunnel_n_wagons_min/max, tunnel_center_jitter",
           "notes": "opt2"
         },

@@ -7,9 +7,9 @@ Conditions (5 episodes each):
   opt1    : target_wagon_mode=true,  tunnel_enabled=false
             (one random red target wagon; others gray; success only in red)
   opt2    : target_wagon_mode=false, tunnel_enabled=true
-            (far-arc arched tunnel; drop into ANY open wagon)
+            (matching far+near arched tunnels; drop into ANY open wagon)
   opt1+2  : target_wagon_mode=true,  tunnel_enabled=true
-            (red target wagon + tunnel; success only in the red wagon)
+            (red target wagon + both tunnels; success only in the red wagon)
 
 Success:
   - Default / Opt 2: ball seated in any open cargo wagon
