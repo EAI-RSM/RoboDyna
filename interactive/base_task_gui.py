@@ -36,6 +36,7 @@ from experiment_logs import (  # noqa: E402
     append_play,
     experiment_mode,
     is_slot_locked,
+    load_user_assignment,
     log_controller_tag,
     session_control_mode,
     slot_success_label,
@@ -517,6 +518,7 @@ class InteractiveTaskLauncher(tk.Tk):
         self.card_index_labels: list[tk.Label] = []
         self.card_title_labels: list[tk.Label] = []
         self.card_badge_labels: list[tk.Label] = []
+        self.category_header_labels: list[tk.Label] = []
         self._preview_resize_job: str | None = None
         self._ui_scale_job: str | None = None
         self._preview_width = self.IMAGE_SIZE[0]
@@ -528,10 +530,18 @@ class InteractiveTaskLauncher(tk.Tk):
         self.tutorial_buttons: list[RoundedButton] = []
         self._visible_task_indices: list[int] = list(range(len(TASKS)))
         self._experiment_cfg = load_experiment_config() if experiment_mode() else None
+        self._assignment = load_user_assignment() if self._experiment_cfg is not None else None
         if self._experiment_cfg is not None:
-            self._visible_task_indices = self._experiment_cfg.visible_indices(
-                "base", len(TASKS)
+            assignment = self._assignment or {}
+            grouped = self._experiment_cfg.grouped_visible_indices(
+                "base",
+                len(TASKS),
+                assigned=assignment.get("base_tasks"),
+                picks=assignment.get("base_picks"),
             )
+            self._visible_task_indices = [
+                index for _label, idxs in grouped for index in idxs
+            ]
         self._idle_status = (
             f"Tutorial (4 parts)  ·  {len(self._visible_task_indices)} tasks  |  "
             "Hover a scenario key for its README description."
@@ -727,9 +737,24 @@ class InteractiveTaskLauncher(tk.Tk):
         self.canvas.bind_all("<Button-5>", lambda _event: self.canvas.yview_scroll(3, "units"))
 
         self._add_tutorial_section()
-        for index in self._visible_task_indices:
-            label, task = TASKS[index]
-            self._add_task_card(index, label, task)
+        if self._experiment_cfg is not None:
+            assignment = self._assignment or {}
+            grouped = self._experiment_cfg.grouped_visible_indices(
+                "base",
+                len(TASKS),
+                assigned=assignment.get("base_tasks"),
+                picks=assignment.get("base_picks"),
+            )
+            for section, idxs in grouped:
+                if section:
+                    self._add_category_header(section)
+                for index in idxs:
+                    label, task = TASKS[index]
+                    self._add_task_card(index, label, task)
+        else:
+            for index in self._visible_task_indices:
+                label, task = TASKS[index]
+                self._add_task_card(index, label, task)
 
     @staticmethod
     def _scaled_font(size: float, weight: str = "", scale: float = 1.0) -> tuple:
@@ -875,6 +900,8 @@ class InteractiveTaskLauncher(tk.Tk):
             )
         for label in self.card_badge_labels:
             label.configure(font=self._scaled_font(12, "bold", s))
+        for label in self.category_header_labels:
+            label.configure(font=self._scaled_font(16, "bold", s))
 
         btn_h = self._px(70, s)
         btn_radius = self._px(26, s)
@@ -1138,6 +1165,18 @@ class InteractiveTaskLauncher(tk.Tk):
                 label.configure(image=photo, text="", width=0, height=0)
         self.tutorial_photos = photos
 
+    def _add_category_header(self, title: str):
+        header = tk.Label(
+            self.page,
+            text=title,
+            bg=PAGE_BG,
+            fg=TEXT_PRIMARY,
+            anchor="w",
+            font=("Sans", 16, "bold"),
+        )
+        header.pack(fill="x", padx=self.CARD_PAD, pady=(18, 2))
+        self.category_header_labels.append(header)
+
     def _add_tutorial_section(self):
         """Same four-column card as other base tasks; index 00."""
         card = tk.Frame(
@@ -1315,9 +1354,15 @@ class InteractiveTaskLauncher(tk.Tk):
             font=("Sans", 27, "bold"),
         )
         title_label.pack(side="left", fill="x", expand=True)
+        badge_text = "4 SCENARIOS"
+        cfg = self._experiment_cfg
+        if cfg is not None:
+            cats = cfg.categories_for_number(index + 1)
+            if len(cats) > 1:
+                badge_text = "4 SCENARIOS · also " + " · ".join(cats[1:])
         badge_label = tk.Label(
             card_header,
-            text="4 SCENARIOS",
+            text=badge_text,
             bg=CARD_BG,
             fg="#7fb6dc",
             font=("Sans", 12, "bold"),

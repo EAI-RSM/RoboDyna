@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,29 @@ DEFAULT_HOUSEHOLD_TASKS = [n for n, key, _ in HOUSEHOLD_TASK_TABLE if key not in
     "cook_food",
 )]
 
+# 1-based base card numbers. Task 15 (marble_shelf_maze) is in two groups.
+# (key, display label, task numbers)
+DEFAULT_BASE_TASK_CATEGORIES: tuple[tuple[str, str, tuple[int, ...]], ...] = (
+    ("motion_prediction", "Motion prediction", (2, 6, 12, 15)),
+    ("state_transition", "State transition", (8, 16, 17, 22)),
+    ("dynamic_pattern", "Dynamic pattern", (1, 3, 21, 23)),
+    ("dynamic_avoidance", "Dynamic avoidance", (9, 13, 14, 18)),
+    ("spatial_reasoning", "Spatial reasoning", (4, 10, 15, 19)),
+)
+
+DEFAULT_HOUSEHOLD_TASK_CATEGORIES: tuple[tuple[str, str, tuple[int, ...]], ...] = (
+    ("easy", "Easy", (2, 4, 6, 11, 12)),
+    ("hard", "Hard", (1, 7, 8, 9, 10)),
+)
+
+_CATEGORY_LABELS = {
+    key: label
+    for key, label, _nums in (
+        *DEFAULT_BASE_TASK_CATEGORIES,
+        *DEFAULT_HOUSEHOLD_TASK_CATEGORIES,
+    )
+}
+
 _SCENARIO_ALIASES = {
     "default": "default",
     "opt1": "opt1",
@@ -82,6 +106,112 @@ _SCENARIO_ALIASES = {
 }
 
 
+def _as_positive_int(value, default: int) -> int:
+    if value is None or value == "":
+        return int(default)
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    if number <= 0:
+        return int(default)
+    return number
+
+
+def pick_lowest_count(pool: list[int], counts: dict[int, int], rng) -> int | None:
+    """Uniform choice among pool members that currently have the lowest count."""
+    values = [int(n) for n in pool]
+    if not values:
+        return None
+    min_count = min(int(counts.get(n, 0) or 0) for n in values)
+    lowest = [n for n in values if int(counts.get(n, 0) or 0) == min_count]
+    return int(rng.choice(lowest))
+
+
+def _choose_n(items: list, scores: list[int], n: int, rng) -> list:
+    remaining = list(zip(items, scores))
+    chosen = []
+    while remaining and len(chosen) < n:
+        min_score = min(score for _item, score in remaining)
+        tied = [item for item, score in remaining if score == min_score]
+        pick = rng.choice(tied)
+        chosen.append(pick)
+        remaining = [(item, score) for item, score in remaining if item is not pick]
+    return chosen
+
+
+def sample_category_assignment(
+    *,
+    categories: list[tuple[str, str, tuple[int, ...]]],
+    eligible: set[int],
+    counts: dict[int, int],
+    n: int,
+    rng=None,
+) -> list[dict[str, Any]]:
+    """Sample ``n`` task numbers, one per category when possible.
+
+    Within a category, tasks with the lowest usage count are equally likely.
+    Already-picked tasks are skipped so a dual-listed task (15) is used once.
+    Extra slots beyond the category count take another lowest-count task from
+    remaining category pools, then from any leftover eligible numbers.
+    """
+    rng = rng or random.SystemRandom()
+    need = max(0, int(n))
+    eligible_set = {int(x) for x in eligible}
+    picked: list[dict[str, Any]] = []
+    used: set[int] = set()
+
+    def pool_for(numbers) -> list[int]:
+        return [int(x) for x in numbers if int(x) in eligible_set and int(x) not in used]
+
+    cats = list(categories)
+    progressed = True
+    while need > 0 and progressed:
+        progressed = False
+        available = []
+        scores = []
+        for key, label, numbers in cats:
+            pool = pool_for(numbers)
+            if not pool:
+                continue
+            available.append((key, label, numbers, pool))
+            scores.append(min(int(counts.get(n, 0) or 0) for n in pool))
+        if not available:
+            break
+        take = min(need, len(available))
+        chosen = _choose_n(available, scores, take, rng)
+        for key, label, _numbers, pool in chosen:
+            choice = pick_lowest_count(pool, counts, rng)
+            if choice is None:
+                continue
+            picked.append(
+                {
+                    "category": key,
+                    "category_label": label,
+                    "task": int(choice),
+                }
+            )
+            used.add(int(choice))
+            need -= 1
+            progressed = True
+
+    leftover = [n for n in sorted(eligible_set) if n not in used]
+    while need > 0 and leftover:
+        choice = pick_lowest_count(leftover, counts, rng)
+        if choice is None:
+            break
+        picked.append(
+            {"category": "other", "category_label": "Other", "task": int(choice)}
+        )
+        used.add(int(choice))
+        leftover = [n for n in leftover if n != choice]
+        need -= 1
+    return picked
+
+
+sample_base_assignment = sample_category_assignment
+
+
 def _as_bool(value, default: bool = False) -> bool:
     if value is None:
         return default
@@ -93,6 +223,37 @@ def _as_bool(value, default: bool = False) -> bool:
     if text in ("0", "false", "no", "off", "none"):
         return False
     return default
+
+
+def _category_label(key: str) -> str:
+    text = str(key or "").strip()
+    if not text:
+        return ""
+    slug = text.lower().replace(" ", "_").replace("-", "_")
+    if slug in _CATEGORY_LABELS:
+        return _CATEGORY_LABELS[slug]
+    return text.replace("_", " ").strip().title()
+
+
+def _as_category_list(
+    value,
+    default: tuple[tuple[str, str, tuple[int, ...]], ...] = DEFAULT_BASE_TASK_CATEGORIES,
+) -> list[tuple[str, str, tuple[int, ...]]]:
+    """Parse a category map from yaml. Empty / missing → ``default``."""
+    if value is None:
+        return [tuple(item) for item in default]
+    if not isinstance(value, dict) or not value:
+        return [tuple(item) for item in default]
+    out: list[tuple[str, str, tuple[int, ...]]] = []
+    for raw_key, raw_nums in value.items():
+        key = str(raw_key or "").strip().lower().replace(" ", "_").replace("-", "_")
+        if not key:
+            continue
+        numbers = _as_int_list(raw_nums, [])
+        if not numbers:
+            continue
+        out.append((key, _category_label(str(raw_key)), tuple(numbers)))
+    return out or [tuple(item) for item in default]
 
 
 def _as_int_list(value, default: list[int]) -> list[int]:
@@ -439,6 +600,14 @@ class ExperimentConfig:
     seeds: list[int] = field(default_factory=list)
     base_tasks: list[int] = field(default_factory=lambda: list(DEFAULT_BASE_TASKS))
     household_tasks: list[int] = field(default_factory=lambda: list(DEFAULT_HOUSEHOLD_TASKS))
+    base_task_categories: list[tuple[str, str, tuple[int, ...]]] = field(
+        default_factory=lambda: [tuple(item) for item in DEFAULT_BASE_TASK_CATEGORIES]
+    )
+    household_task_categories: list[tuple[str, str, tuple[int, ...]]] = field(
+        default_factory=lambda: [tuple(item) for item in DEFAULT_HOUSEHOLD_TASK_CATEGORIES]
+    )
+    base_scenarios_per_experiment: int = 5
+    household_scenarios_per_experiment: int = 2
     path: Path = CONFIG_PATH
 
     @property
@@ -472,15 +641,130 @@ class ExperimentConfig:
             return ""
         return ",".join(str(seed) for seed in self.seeds)
 
-    def visible_indices(self, suite: str, n_tasks: int) -> list[int]:
+    def visible_indices(
+        self,
+        suite: str,
+        n_tasks: int,
+        assigned: list[int] | None = None,
+    ) -> list[int]:
         """0-based TASKS indices that should appear in the given suite GUI."""
-        ones = self.base_tasks if suite == "base" else self.household_tasks
+        if assigned is not None:
+            ones = assigned
+        elif suite == "base":
+            ones = self.base_tasks
+        else:
+            ones = self.household_tasks
         out: list[int] = []
+        seen: set[int] = set()
         for number in ones:
             index = int(number) - 1
-            if 0 <= index < n_tasks:
-                out.append(index)
+            if index in seen or not (0 <= index < n_tasks):
+                continue
+            seen.add(index)
+            out.append(index)
         return out
+
+    def eligible_base_numbers(self) -> set[int]:
+        return self._eligible_numbers(self.base_tasks, self.base_task_categories)
+
+    def eligible_household_numbers(self) -> set[int]:
+        return self._eligible_numbers(self.household_tasks, self.household_task_categories)
+
+    @staticmethod
+    def _eligible_numbers(
+        allowed_list: list[int],
+        categories: list[tuple[str, str, tuple[int, ...]]],
+    ) -> set[int]:
+        """Candidate 1-based cards: category members that are also in the pool."""
+        allowed = {int(n) for n in allowed_list}
+        out: set[int] = set()
+        for _key, _label, numbers in categories:
+            for number in numbers:
+                if int(number) in allowed:
+                    out.add(int(number))
+        return out
+
+    def suite_categories(self, suite: str) -> list[tuple[str, str, tuple[int, ...]]]:
+        if suite == "household":
+            return list(self.household_task_categories)
+        return list(self.base_task_categories)
+
+    def categories_for_number(self, number: int, suite: str = "base") -> list[str]:
+        """Display labels for every category that includes this 1-based card."""
+        labels: list[str] = []
+        seen: set[str] = set()
+        for _key, label, numbers in self.suite_categories(suite):
+            if int(number) in numbers and label not in seen:
+                seen.add(label)
+                labels.append(label)
+        return labels
+
+    def grouped_visible_indices(
+        self,
+        suite: str,
+        n_tasks: int,
+        assigned: list[int] | None = None,
+        picks: list[dict] | None = None,
+    ) -> list[tuple[str | None, list[int]]]:
+        """Visible 0-based indices grouped by category (first match wins).
+
+        When ``picks`` from a participant assignment is given, grouping follows
+        the sampled category rather than first-match. Leftover visible tasks go
+        under ``Other``.
+        """
+        visible = self.visible_indices(suite, n_tasks, assigned=assigned)
+        categories = self.suite_categories(suite)
+        if not categories:
+            return [(None, visible)]
+        if picks:
+            groups: list[tuple[str | None, list[int]]] = []
+            used: set[int] = set()
+            by_cat: dict[str, list[int]] = {}
+            labels: dict[str, str] = {
+                key: label for key, label, _nums in categories
+            }
+            labels.setdefault("other", "Other")
+            for pick in picks:
+                if not isinstance(pick, dict):
+                    continue
+                try:
+                    number = int(pick.get("task"))
+                except (TypeError, ValueError):
+                    continue
+                index = number - 1
+                if index not in visible or index in used:
+                    continue
+                key = str(pick.get("category") or "other")
+                by_cat.setdefault(key, []).append(index)
+                used.add(index)
+                if key not in labels:
+                    labels[key] = str(pick.get("category_label") or _category_label(key))
+            for key, _label, _nums in categories:
+                idxs = by_cat.get(key) or []
+                if idxs:
+                    groups.append((labels.get(key, _label), idxs))
+            if by_cat.get("other"):
+                groups.append((labels["other"], by_cat["other"]))
+            leftover = [index for index in visible if index not in used]
+            if leftover:
+                groups.append(("Other", leftover))
+            return groups or [(None, visible)]
+        visible_set = set(visible)
+        used = set()
+        groups = []
+        for _key, label, numbers in categories:
+            idxs = [
+                n - 1
+                for n in numbers
+                if 0 <= n - 1 < n_tasks and (n - 1) in visible_set and (n - 1) not in used
+            ]
+            if idxs:
+                groups.append((label, idxs))
+                used.update(idxs)
+        leftover = [index for index in visible if index not in used]
+        if leftover:
+            groups.append(("Other", leftover))
+        return groups or [(None, visible)]
 
     def task_names(self, suite: str) -> list[str]:
         table = BASE_TASK_TABLE if suite == "base" else HOUSEHOLD_TASK_TABLE
@@ -536,4 +820,25 @@ def load_experiment_config(path: Path | None = None) -> ExperimentConfig:
         cfg.base_tasks = _as_int_list(raw.get("base_tasks"), DEFAULT_BASE_TASKS)
     if "household_tasks" in raw:
         cfg.household_tasks = _as_int_list(raw.get("household_tasks"), DEFAULT_HOUSEHOLD_TASKS)
+    cfg.base_task_categories = _as_category_list(raw.get("base_task_categories"))
+    cfg.household_task_categories = _as_category_list(
+        raw.get("household_task_categories"),
+        DEFAULT_HOUSEHOLD_TASK_CATEGORIES,
+    )
+    if "base_scenarios_per_experiment" in raw:
+        cfg.base_scenarios_per_experiment = _as_positive_int(
+            raw.get("base_scenarios_per_experiment"), 5
+        )
+    elif "base_tasks_per_experiment" in raw:
+        cfg.base_scenarios_per_experiment = _as_positive_int(
+            raw.get("base_tasks_per_experiment"), 5
+        )
+    if "household_scenarios_per_experiment" in raw:
+        cfg.household_scenarios_per_experiment = _as_positive_int(
+            raw.get("household_scenarios_per_experiment"), 2
+        )
+    elif "household_tasks_per_experiment" in raw:
+        cfg.household_scenarios_per_experiment = _as_positive_int(
+            raw.get("household_tasks_per_experiment"), 2
+        )
     return cfg

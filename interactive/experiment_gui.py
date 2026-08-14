@@ -36,8 +36,10 @@ from experiment_logs import (  # noqa: E402
     EXPERIMENT_USER_ENV,
     child_experiment_env,
     create_user,
+    delete_experiment_logs,
     ensure_controller_log,
     find_user,
+    load_user_assignment,
     load_user_log,
     log_controller_tag,
     progress_counts,
@@ -428,6 +430,20 @@ class ExperimentLauncher(tk.Tk):
             cursor="hand2",
         )
         self.switch_user.pack(anchor="w", pady=(14, 0))
+        self.delete_logs = tk.Button(
+            self.suite_screen,
+            text="Delete this participant's logs",
+            command=self._delete_current_logs,
+            bg=PAGE_BG,
+            fg=GUI_MUTED,
+            activebackground=PAGE_BG,
+            activeforeground=GUI_INK,
+            bd=0,
+            highlightthickness=0,
+            font=("Sans", 12, "underline"),
+            cursor="hand2",
+        )
+        self.delete_logs.pack(anchor="w", pady=(6, 0))
 
     def _suite_card(self, parent, *, title: str, blurb: str, command) -> tk.Frame:
         card = self._card(parent)
@@ -596,8 +612,13 @@ class ExperimentLauncher(tk.Tk):
 
     def _protocol_task_names(self) -> tuple[list[str], list[str]]:
         cfg = load_experiment_config()
-        base_idx = cfg.visible_indices("base", len(BASE_TASKS))
-        household_idx = cfg.visible_indices("household", len(HOUSEHOLD_TASKS))
+        assignment = load_user_assignment()
+        assigned_base = (assignment or {}).get("base_tasks")
+        assigned_hh = (assignment or {}).get("household_tasks")
+        base_idx = cfg.visible_indices("base", len(BASE_TASKS), assigned=assigned_base)
+        household_idx = cfg.visible_indices(
+            "household", len(HOUSEHOLD_TASKS), assigned=assigned_hh
+        )
         return (
             [BASE_TASKS[i][1] for i in base_idx],
             [HOUSEHOLD_TASKS[i][1] for i in household_idx],
@@ -663,12 +684,16 @@ class ExperimentLauncher(tk.Tk):
         household_total = counts["household_total"]
         self.base_card._blurb.configure(
             text=(
-                f"{len(base_names)} dynamic table tasks, each with "
-                "Default / Opt 1 / Opt 2 / Opt 1+2."
+                f"{len(base_names)} sampled dynamic-table tasks "
+                f"(one from each skill group, {cfg.base_scenarios_per_experiment} total), "
+                "each with Default / Opt 1 / Opt 2 / Opt 1+2."
             )
         )
         self.household_card._blurb.configure(
-            text=f"{len(household_names)} kitchen / office tasks with per-episode randomization."
+            text=(
+                f"{len(household_names)} sampled kitchen / office tasks "
+                f"(1 easy + 1 hard, {cfg.household_scenarios_per_experiment} total)."
+            )
         )
         base_left = max(0, int(base_total) - int(counts["base_done"]))
         household_left = max(0, int(household_total) - int(counts["household_done"]))
@@ -769,6 +794,28 @@ class ExperimentLauncher(tk.Tk):
         self.name_status.configure(text="")
         self._show_screen("name")
 
+    def _delete_current_logs(self):
+        if self.child is not None:
+            messagebox.showinfo("Task still running", "Close the task window before deleting logs.")
+            return
+        data = self.user_data or {}
+        display = str(data.get("user_name") or data.get("user_id") or "").strip()
+        slug = str(data.get("user_id") or slugify_user_name(display))
+        if not slug:
+            return
+        ok = messagebox.askyesno(
+            "Delete this participant's logs?",
+            (
+                f"This permanently deletes data/exp_logs/{slug}/ including "
+                "plays and the sampled task assignment. Usage counts for those "
+                "tasks will drop so they can be sampled again."
+            ),
+        )
+        if not ok:
+            return
+        delete_experiment_logs(slug)
+        self._switch_user()
+
     def _on_root_configure(self, event):
         if event.widget is not self:
             return
@@ -826,6 +873,7 @@ class ExperimentLauncher(tk.Tk):
             card._progress.configure(font=font(13, "bold"))
             card._button.configure(font=font(16, "bold"), width=px(180), height=px(60), radius=px(26))
         self.switch_user.configure(font=font(12, "underline"))
+        self.delete_logs.configure(font=font(12, "underline"))
 
     def _stop_child(self):
         child = self.child

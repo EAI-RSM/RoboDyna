@@ -66,6 +66,7 @@ from experiment_logs import (  # noqa: E402
     append_play,
     experiment_mode,
     is_slot_locked,
+    load_user_assignment,
     log_controller_tag,
     session_control_mode,
     slot_success_label,
@@ -325,6 +326,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.tutorial_buttons: list[RoundedButton] = []
         self.card_index_labels: list[tk.Label] = []
         self.card_title_labels: list[tk.Label] = []
+        self.category_header_labels: list[tk.Label] = []
         self._preview_resize_job: str | None = None
         self._ui_scale_job: str | None = None
         self._preview_width = self.IMAGE_SIZE[0]
@@ -332,10 +334,18 @@ class HouseholdTaskLauncher(tk.Tk):
         self._header_layout_key: tuple | None = None
         self._visible_task_indices: list[int] = list(range(len(TASKS)))
         self._experiment_cfg = load_experiment_config() if experiment_mode() else None
+        self._assignment = load_user_assignment() if self._experiment_cfg is not None else None
         if self._experiment_cfg is not None:
-            self._visible_task_indices = self._experiment_cfg.visible_indices(
-                "household", len(TASKS)
+            assignment = self._assignment or {}
+            grouped = self._experiment_cfg.grouped_visible_indices(
+                "household",
+                len(TASKS),
+                assigned=assignment.get("household_tasks"),
+                picks=assignment.get("household_picks"),
             )
+            self._visible_task_indices = [
+                index for _label, idxs in grouped for index in idxs
+            ]
         self._idle_status = (
             f"Tutorial (4 parts)  ·  {len(self._visible_task_indices)} tasks  |  "
             "Hover a task for its README description."
@@ -532,9 +542,23 @@ class HouseholdTaskLauncher(tk.Tk):
         self.canvas.bind_all("<Button-5>", lambda event: self.canvas.yview_scroll(3, "units"))
 
         self._add_tutorial_section()
-        vis = self._visible_task_indices
-        for row_start in range(0, len(vis), self.COLUMNS):
-            self._add_task_row(vis[row_start : row_start + self.COLUMNS])
+        if self._experiment_cfg is not None:
+            assignment = self._assignment or {}
+            grouped = self._experiment_cfg.grouped_visible_indices(
+                "household",
+                len(TASKS),
+                assigned=assignment.get("household_tasks"),
+                picks=assignment.get("household_picks"),
+            )
+            for section, idxs in grouped:
+                if section:
+                    self._add_category_header(section)
+                for row_start in range(0, len(idxs), self.COLUMNS):
+                    self._add_task_row(idxs[row_start : row_start + self.COLUMNS])
+        else:
+            vis = self._visible_task_indices
+            for row_start in range(0, len(vis), self.COLUMNS):
+                self._add_task_row(vis[row_start : row_start + self.COLUMNS])
 
     @staticmethod
     def _scaled_font(size: float, weight: str = "", scale: float = 1.0) -> tuple:
@@ -706,6 +730,8 @@ class HouseholdTaskLauncher(tk.Tk):
             )
         for label in self.card_title_labels:
             label.configure(font=self._scaled_font(15, "bold", s))
+        for label in getattr(self, "category_header_labels", []):
+            label.configure(font=self._scaled_font(16, "bold", s))
         if getattr(self, "tutorial_index_label", None) is not None:
             self.tutorial_index_label.configure(
                 font=self._scaled_font(17, "bold", s),
@@ -1096,6 +1122,18 @@ class HouseholdTaskLauncher(tk.Tk):
         height = max(1, int(round(width / aspect)))
         image = source.resize((width, height), Image.Resampling.LANCZOS)
         return ImageTk.PhotoImage(image)
+
+    def _add_category_header(self, title: str):
+        header = tk.Label(
+            self.page,
+            text=title,
+            bg=PAGE_BG,
+            fg=TEXT_PRIMARY,
+            anchor="w",
+            font=("Sans", 16, "bold"),
+        )
+        header.pack(fill="x", padx=self.CARD_PAD, pady=(18, 2))
+        self.category_header_labels.append(header)
 
     def _add_task_row(self, indices):
         """One card holding up to four household tasks, matching the base GUI grid."""

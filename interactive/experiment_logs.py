@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -99,6 +100,18 @@ def _iter_user_log_files(folder: Path):
     legacy = folder / "user.json"
     if legacy.is_file():
         yield "legacy", legacy
+
+
+ASSIGNMENT_FILENAME = "assignment.json"
+USAGE_FILENAME = "base_task_usage.json"
+
+
+def assignment_path(name_or_slug: str) -> Path:
+    return user_dir(name_or_slug) / ASSIGNMENT_FILENAME
+
+
+def usage_path() -> Path:
+    return EXP_LOGS_DIR / USAGE_FILENAME
 
 
 def iso_now() -> str:
@@ -203,6 +216,11 @@ def ensure_controller_log(
     if existing:
         existing["controller"] = tag
         existing["log_path"] = str(path)
+        assignment = _ensure_user_assignment(
+            slug,
+            display=str(existing.get("user_name") or display or slug),
+        )
+        _attach_assignment(existing, assignment)
         return existing
 
     legacy = folder / "user.json"
@@ -214,6 +232,11 @@ def ensure_controller_log(
                 data["controller"] = tag
                 data["log_path"] = str(path)
                 save_user_log(path, data)
+                assignment = _ensure_user_assignment(
+                    slug,
+                    display=str(data.get("user_name") or display or slug),
+                )
+                _attach_assignment(data, assignment)
                 return data
 
     source = template
@@ -237,6 +260,8 @@ def ensure_controller_log(
         experience=exp,
         created_at=(source or {}).get("created_at"),
     )
+    assignment = _ensure_user_assignment(slug, display=str(display_name))
+    _attach_assignment(data, assignment)
     save_user_log(path, data)
     return data
 
@@ -257,6 +282,299 @@ def create_user(
         experience=answers,
         controller=controller,
     )
+
+
+def _attach_assignment(log: dict[str, Any], assignment: dict[str, Any] | None) -> None:
+    if not assignment:
+        return
+    log["sampled_base_tasks"] = list(assignment.get("base_tasks") or [])
+    log["sampled_base_picks"] = list(assignment.get("base_picks") or [])
+    log["sampled_household_tasks"] = list(assignment.get("household_tasks") or [])
+    log["sampled_household_picks"] = list(assignment.get("household_picks") or [])
+    log["assignment_path"] = str(assignment.get("path") or "")
+
+
+def _parse_task_numbers(raw) -> list[int]:
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[int] = []
+    seen: set[int] = set()
+    for item in raw:
+        if isinstance(item, dict):
+            item = item.get("task")
+        try:
+            number = int(item)
+        except (TypeError, ValueError):
+            continue
+        if number in seen:
+            continue
+        seen.add(number)
+        out.append(number)
+    return out
+
+
+def load_assignment_file(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    tasks = _parse_task_numbers(data.get("base_tasks") or data.get("sampled_base_tasks"))
+    picks = data.get("base_picks") or data.get("sampled_base_picks") or []
+    household_tasks = _parse_task_numbers(
+        data.get("household_tasks") or data.get("sampled_household_tasks")
+    )
+    household_picks = data.get("household_picks") or data.get("sampled_household_picks") or []
+    if not tasks and isinstance(picks, list):
+        tasks = _parse_task_numbers(picks)
+    if not household_tasks and isinstance(household_picks, list):
+        household_tasks = _parse_task_numbers(household_picks)
+    if not tasks and not household_tasks:
+        return None
+    data["base_tasks"] = tasks
+    data["base_picks"] = [p for p in picks if isinstance(p, dict)] if isinstance(picks, list) else []
+    data["household_tasks"] = household_tasks
+    data["household_picks"] = (
+        [p for p in household_picks if isinstance(p, dict)]
+        if isinstance(household_picks, list)
+        else []
+    )
+    data["path"] = str(path)
+    return data
+
+
+def load_user_assignment(name_or_slug: str | None = None) -> dict[str, Any] | None:
+    """Load this participant's sampled base tasks, or the current session user."""
+    slug = str(name_or_slug or "").strip()
+    if not slug:
+        slug = os.environ.get(EXPERIMENT_USER_ENV, "").strip()
+    if slug:
+        data = load_assignment_file(assignment_path(slug))
+        if data:
+            return data
+        folder = user_dir(slug)
+        for _tag, path in _iter_user_log_files(folder):
+            log = load_user_log(path)
+            base_tasks = _parse_task_numbers((log or {}).get("sampled_base_tasks"))
+            base_picks = (log or {}).get("sampled_base_picks") or []
+            household_tasks = _parse_task_numbers((log or {}).get("sampled_household_tasks"))
+            household_picks = (log or {}).get("sampled_household_picks") or []
+            if base_tasks or household_tasks:
+                return {
+                    "user_id": slug,
+                    "base_tasks": base_tasks,
+                    "base_picks": [p for p in base_picks if isinstance(p, dict)] if isinstance(base_picks, list) else [],
+                    "household_tasks": household_tasks,
+                    "household_picks": [p for p in household_picks if isinstance(p, dict)] if isinstance(household_picks, list) else [],
+                    "path": str(folder / ASSIGNMENT_FILENAME),
+                }
+    log = load_user_log()
+    if log:
+        base_tasks = _parse_task_numbers(log.get("sampled_base_tasks"))
+        base_picks = log.get("sampled_base_picks") or []
+        household_tasks = _parse_task_numbers(log.get("sampled_household_tasks"))
+        household_picks = log.get("sampled_household_picks") or []
+        if base_tasks or household_tasks:
+            return {
+                "user_id": str(log.get("user_id") or ""),
+                "base_tasks": base_tasks,
+                "base_picks": [p for p in base_picks if isinstance(p, dict)] if isinstance(base_picks, list) else [],
+                "household_tasks": household_tasks,
+                "household_picks": [p for p in household_picks if isinstance(p, dict)] if isinstance(household_picks, list) else [],
+                "path": str(log.get("assignment_path") or ""),
+            }
+    return None
+
+
+def iter_user_assignments() -> list[dict[str, Any]]:
+    """One assignment per participant folder (robot + keyboard share a sample)."""
+    if not EXP_LOGS_DIR.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for folder in sorted(EXP_LOGS_DIR.iterdir()):
+        if not folder.is_dir():
+            continue
+        data = load_assignment_file(folder / ASSIGNMENT_FILENAME)
+        if data is None:
+            data = load_user_assignment(folder.name)
+        if data and (data.get("base_tasks") or data.get("household_tasks")):
+            data["user_id"] = data.get("user_id") or folder.name
+            out.append(data)
+    return out
+
+
+def task_usage_counts(suite: str = "base") -> dict[int, int]:
+    """How many live experiment logs currently include each 1-based task."""
+    key = "base_tasks" if suite != "household" else "household_tasks"
+    counts: dict[int, int] = {}
+    for assignment in iter_user_assignments():
+        seen: set[int] = set()
+        for number in _parse_task_numbers(assignment.get(key)):
+            if number in seen:
+                continue
+            seen.add(number)
+            counts[number] = counts.get(number, 0) + 1
+    return counts
+
+
+def base_task_usage_counts() -> dict[int, int]:
+    return task_usage_counts("base")
+
+
+def household_task_usage_counts() -> dict[int, int]:
+    return task_usage_counts("household")
+
+
+def write_usage_snapshot(cfg=None) -> dict[str, Any]:
+    """Rewrite ``data/exp_logs/base_task_usage.json`` from remaining logs."""
+    try:
+        from experiment_config import load_experiment_config
+    except ImportError:
+        from interactive.experiment_config import load_experiment_config
+
+    cfg = cfg or load_experiment_config()
+    base_counts = task_usage_counts("base")
+    household_counts = task_usage_counts("household")
+
+    def by_category(categories, counts):
+        return {
+            key: {str(n): int(counts.get(int(n), 0)) for n in numbers}
+            for key, _label, numbers in categories
+        }
+
+    payload = {
+        "updated_at": iso_now(),
+        "participants": len(iter_user_assignments()),
+        "counts": {str(n): int(c) for n, c in sorted(base_counts.items())},
+        "by_category": by_category(cfg.base_task_categories, base_counts),
+        "base": {
+            "counts": {str(n): int(c) for n, c in sorted(base_counts.items())},
+            "by_category": by_category(cfg.base_task_categories, base_counts),
+        },
+        "household": {
+            "counts": {str(n): int(c) for n, c in sorted(household_counts.items())},
+            "by_category": by_category(cfg.household_task_categories, household_counts),
+        },
+    }
+    EXP_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    path = usage_path()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return payload
+
+
+def _save_assignment(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(data)
+    payload["updated_at"] = iso_now()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=_json_default) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def _sample_suite(cfg, suite: str) -> tuple[list[int], list[dict[str, Any]]]:
+    try:
+        from experiment_config import sample_category_assignment
+    except ImportError:
+        from interactive.experiment_config import sample_category_assignment
+
+    if suite == "household":
+        categories = list(cfg.household_task_categories)
+        eligible = cfg.eligible_household_numbers()
+        n = int(cfg.household_scenarios_per_experiment)
+        fallback = list(cfg.household_tasks)
+        counts = task_usage_counts("household")
+    else:
+        categories = list(cfg.base_task_categories)
+        eligible = cfg.eligible_base_numbers()
+        n = int(cfg.base_scenarios_per_experiment)
+        fallback = list(cfg.base_tasks)
+        counts = task_usage_counts("base")
+    picks = sample_category_assignment(
+        categories=categories,
+        eligible=eligible,
+        counts=counts,
+        n=n,
+    )
+    tasks = _parse_task_numbers(picks)
+    if not tasks:
+        tasks = fallback[:n]
+    return tasks, picks
+
+
+def _ensure_user_assignment(
+    name_or_slug: str,
+    *,
+    display: str | None = None,
+    cfg=None,
+) -> dict[str, Any] | None:
+    """Create sampled base + household sets for a new participant, or return existing.
+
+    Usage counts are derived from remaining assignment files, so deleting a
+    participant folder automatically lowers those tasks' counts. Older
+    assignments that only have base tasks get a household sample filled in.
+    """
+    try:
+        from experiment_config import load_experiment_config
+    except ImportError:
+        from interactive.experiment_config import load_experiment_config
+
+    slug = slugify_user_name(name_or_slug)
+    path = assignment_path(slug)
+    cfg = cfg or load_experiment_config()
+    existing = load_assignment_file(path)
+    if existing:
+        changed = False
+        if not existing.get("base_tasks"):
+            tasks, picks = _sample_suite(cfg, "base")
+            existing["base_tasks"] = tasks
+            existing["base_picks"] = picks
+            changed = True
+        if not existing.get("household_tasks"):
+            tasks, picks = _sample_suite(cfg, "household")
+            existing["household_tasks"] = tasks
+            existing["household_picks"] = picks
+            changed = True
+        if changed:
+            existing["path"] = str(path)
+            _save_assignment(path, existing)
+            write_usage_snapshot(cfg)
+        return existing
+
+    base_tasks, base_picks = _sample_suite(cfg, "base")
+    household_tasks, household_picks = _sample_suite(cfg, "household")
+    data = {
+        "user_id": slug,
+        "user_name": display or slug,
+        "created_at": iso_now(),
+        "base_tasks": base_tasks,
+        "base_picks": base_picks,
+        "household_tasks": household_tasks,
+        "household_picks": household_picks,
+        "path": str(path),
+    }
+    _save_assignment(path, data)
+    write_usage_snapshot(cfg)
+    return load_assignment_file(path) or data
+
+
+def delete_experiment_logs(name_or_slug: str) -> bool:
+    """Remove a participant folder and refresh usage counts from remaining logs."""
+    slug = slugify_user_name(name_or_slug)
+    folder = user_dir(slug)
+    if not folder.is_dir():
+        write_usage_snapshot()
+        return False
+    shutil.rmtree(folder)
+    write_usage_snapshot()
+    return True
 
 
 def play_key(suite: str, task: str, scenario: str | None = None) -> str:
