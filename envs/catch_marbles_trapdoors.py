@@ -706,6 +706,45 @@ class catch_marbles_trapdoors(Base_Task):
         # Bottom edge of the tile is above box_y once slide > half_y.
         return float(self._door_slide[idx]) >= (0.85 * float(self._door_half_y))
 
+    def _door_cycle_active(self) -> bool:
+        """True while any trapdoor is open or still sliding (drop still possible)."""
+        n = len(getattr(self, "door_tiles", []) or [])
+        for i in range(n):
+            if (
+                bool(self._door_open[i])
+                or float(self._door_slide[i]) > 1e-4
+                or float(self._door_target_slide[i]) > 1e-4
+            ):
+                return True
+        return False
+
+    def _marble_below_trap_floor(self, marble) -> bool:
+        if marble is None:
+            return False
+        z = float(np.array(marble.get_pose().p, dtype=np.float64)[2])
+        return z < float(self._upper_box_floor_z) - 1e-4
+
+    def _distractor_through_any(self) -> bool:
+        """True if the distractor left the upper lane through a trapdoor."""
+        if not self.enable_distractor or self.distractor is None:
+            return False
+        dropped = self._distractor_mode != "track"
+        inside = bool(self._distractor_in_lower_box())
+        below = bool(self._marble_below_trap_floor(self.distractor))
+        return bool(
+            (dropped and (self._distractor_drop_door_idx >= 0 or inside or below))
+            or inside
+            or below
+        )
+
+    def _distractor_drop_still_possible(self) -> bool:
+        """Target catch is not final while an open door can still swallow the distractor."""
+        if not self.enable_distractor or self.distractor is None:
+            return False
+        if self._distractor_mode != "track":
+            return False
+        return self._door_cycle_active()
+
     def _marble_in_box(self, marble, z_lo: float, z_hi: float):
         if marble is None:
             return False
@@ -1121,14 +1160,7 @@ class catch_marbles_trapdoors(Base_Task):
         used_wrong = bool(ball_dropped and self._ball_drop_door_idx >= 0 and not used_matching)
         if used_wrong:
             return
-        if self.enable_distractor and self._distractor_in_lower_box():
-            return
-        if (
-            self.enable_distractor
-            and self.distractor is not None
-            and self._distractor_mode != "track"
-            and self._distractor_drop_door_idx >= 0
-        ):
+        if self._distractor_through_any() or self._distractor_drop_still_possible():
             return
         self._success_latched = True
 
@@ -1341,6 +1373,13 @@ class catch_marbles_trapdoors(Base_Task):
             if self.save_freq and (i % self.save_freq == 0):
                 self._take_picture()
             if self._ball_mode != "track":
+                extra = 0
+                while self._distractor_drop_still_possible() and extra < wait_steps:
+                    self._update_kinematic_tasks()
+                    self.scene.step()
+                    extra += 1
+                    if self.save_freq and ((i + extra) % self.save_freq == 0):
+                        self._take_picture()
                 self._dwell(self.ball_drop_settle_steps)
                 return
         self._dwell(self.final_dwell_steps)
@@ -1385,6 +1424,8 @@ class catch_marbles_trapdoors(Base_Task):
           - matching door never opened
           - target went through a differently colored trapdoor
           - distractor (if present) went through any trapdoor into the lower box
+          - a door is still open/sliding while the distractor is on the upper lane
+            (drop window not closed yet — do not score success early)
         """
         target_valid = 0 <= self.target_button_idx < len(self._door_open)
         ball_dropped = bool(self._ball_mode != "track")
@@ -1399,9 +1440,8 @@ class catch_marbles_trapdoors(Base_Task):
             and self._distractor_mode != "track"
         )
         distractor_inside = bool(self._distractor_in_lower_box())
-        distractor_through_any = bool(
-            distractor_dropped and (self._distractor_drop_door_idx >= 0 or distractor_inside)
-        ) or bool(self.enable_distractor and distractor_inside)
+        distractor_through_any = bool(self._distractor_through_any())
+        distractor_drop_pending = bool(self._distractor_drop_still_possible())
 
         opened_door_indices = [int(i) for i, is_open in enumerate(self._door_open) if is_open]
         wrong_door_opened = bool(
@@ -1438,6 +1478,7 @@ class catch_marbles_trapdoors(Base_Task):
         self.info["target_door_opened"] = target_door_opened
         self.info["distractor_through_any"] = distractor_through_any
         self.info["distractor_in_lower_box"] = distractor_inside
+        self.info["distractor_drop_pending"] = distractor_drop_pending
         self.info["door_open_once"] = bool(self.door_open_once)
         self.info["door_open_max"] = int(self.door_open_max)
         self.info["door_open_limit"] = int(self._door_open_limit)
@@ -1450,7 +1491,13 @@ class catch_marbles_trapdoors(Base_Task):
         self.info["success_latched"] = bool(self._success_latched)
 
         # Prefer latch: marble may bounce back above the trapdoor after a real drop.
-        if self._success_latched and not self._mutex_violation and not distractor_through_any:
+        # Do not score while an open door can still take the distractor.
+        if (
+            self._success_latched
+            and not self._mutex_violation
+            and not distractor_through_any
+            and not distractor_drop_pending
+        ):
             return True
         return bool(
             target_valid
@@ -1459,6 +1506,7 @@ class catch_marbles_trapdoors(Base_Task):
             and not used_wrong_door
             and not distractor_through_any
             and not distractor_inside
+            and not distractor_drop_pending
             and not self._mutex_violation
         )
 

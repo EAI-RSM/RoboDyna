@@ -228,7 +228,10 @@ def main():
                     break
                 continue
             mode = str(getattr(env, "_ball_mode", "track"))
-            if mode != "track":
+            drop_pending = bool(
+                getattr(env, "_distractor_drop_still_possible", lambda: False)()
+            )
+            if mode != "track" and not drop_pending:
                 if left_track_since is None:
                     left_track_since = time.perf_counter()
                 elif time.perf_counter() - left_track_since >= settle_s:
