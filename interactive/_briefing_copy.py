@@ -174,7 +174,7 @@ TASK_BRIEFING: dict[str, dict] = {
         "instruction": (
             "Pack red and green apples from the belts into their matching baskets."
         ),
-        "success": "Matching apples are in matching baskets; distractors (if present) are not packed.",
+        "success": "Matching apples are in matching baskets; no black distractor is in any basket.",
         "keyboard": [
             ("mouse click", "on a fruit, then on a basket"),
         ],

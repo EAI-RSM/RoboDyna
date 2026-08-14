@@ -2,7 +2,8 @@
 """Interactive sandbox for ``pack_fruits``.
 
 Pack red apples into the left basket and green apples into the right
-(when both colors are present). Opt2 black distractors are never packed.
+(when both colors are present). Opt2 black distractors can be click-dropped
+the same way; they still do not count toward success.
 
 Keyboard+mouse: click a fruit (highlights lighter), then click a basket.
 Robot: physical pinch grasp (no teleport / no EE weld).
@@ -93,18 +94,42 @@ def _lighter_rgb(rgb):
 
 
 class FruitClickController:
-    """Click fruit (highlight) then click a basket to pack it there."""
+    """Click fruit (highlight) then click a basket to drop it there.
+
+    Colored apples and Opt2 black distractors share this path. Black fruit
+    still does not count toward ``check_success``.
+    """
 
     def __init__(self, env, viewer):
         self.env = env
         self.viewer = viewer
-        self.selected = None
-        self._dropping = {}  # idx -> steps remaining
+        self.selected = None  # ("item", idx) or ("dist", slot)
+        self._dropping = {}  # key -> steps remaining
         self._basket_ids = {}
         for ftype, basket in (getattr(env, "baskets", {}) or {}).items():
             sid = actor_scene_id(basket)
             if sid is not None:
                 self._basket_ids[int(sid)] = str(ftype)
+
+    def _actor(self, key):
+        kind, i = key
+        if kind == "dist":
+            return self.env.distractors[i]
+        return self.env.items[i]
+
+    def _rigid(self, key):
+        kind, i = key
+        if kind == "dist":
+            comps = getattr(self.env, "_distractor_comps", [])
+            return comps[i] if i < len(comps) else None
+        comps = getattr(self.env, "_item_comps", [])
+        return comps[i] if i < len(comps) else None
+
+    def _label(self, key) -> str:
+        kind, i = key
+        if kind == "dist":
+            return f"black_{i}"
+        return f"{self.env.item_types[i]}_{i}"
 
     def _fruit_ids(self):
         ids = {}
@@ -113,30 +138,54 @@ class FruitClickController:
                 not self.env._spawned_mask[idx]
                 or self.env._packed[idx]
                 or self.env._missed[idx]
-                or idx in self._dropping
+                or ("item", idx) in self._dropping
             ):
                 continue
             sid = actor_scene_id(self.env.items[idx])
             if sid is not None:
-                ids[int(sid)] = int(idx)
+                ids[int(sid)] = ("item", int(idx))
+        for slot in range(int(getattr(self.env, "n_distractor_slots", 0) or 0)):
+            if ("dist", slot) in self._dropping:
+                continue
+            # Hidden / not yet spawned: parked at HIDE_Z with no belt y.
+            if self.env._distractor_y[slot] is None:
+                p = np.array(self.env.distractors[slot].get_pose().p, dtype=float)
+                if float(p[2]) < 0.0:
+                    continue
+            sid = actor_scene_id(self.env.distractors[slot])
+            if sid is not None:
+                ids[int(sid)] = ("dist", int(slot))
         return ids
 
-    def _restore_color(self, idx):
-        ftype = self.env.item_types[idx]
-        self.env._recolor(self.env.items[idx], self.env._type_rgb(ftype))
+    def _restore_color(self, key):
+        kind, i = key
+        if kind == "dist":
+            self.env._recolor(self.env.distractors[i], self.env.distractor_color)
+            return
+        ftype = self.env.item_types[i]
+        self.env._recolor(self.env.items[i], self.env._type_rgb(ftype))
 
-    def _highlight(self, idx):
-        ftype = self.env.item_types[idx]
-        self.env._recolor(self.env.items[idx], _lighter_rgb(self.env._type_rgb(ftype)))
+    def _highlight(self, key):
+        kind, i = key
+        if kind == "dist":
+            self.env._recolor(
+                self.env.distractors[i], _lighter_rgb(self.env.distractor_color)
+            )
+            return
+        ftype = self.env.item_types[i]
+        self.env._recolor(self.env.items[i], _lighter_rgb(self.env._type_rgb(ftype)))
 
-    def _select(self, idx):
-        if self.selected is not None and self.selected != idx:
-            if not self.env._packed[self.selected] and not self.env._missed[self.selected]:
+    def _select(self, key):
+        if self.selected is not None and self.selected != key:
+            kind, i = self.selected
+            busy = False
+            if kind == "item":
+                busy = self.env._packed[i] or self.env._missed[i]
+            if not busy and self.selected not in self._dropping:
                 self._restore_color(self.selected)
-        self.selected = int(idx)
-        self._highlight(idx)
-        ftype = self.env.item_types[idx]
-        print(f"Selected {ftype}_{idx} — click a basket to pack it.")
+        self.selected = key
+        self._highlight(key)
+        print(f"Selected {self._label(key)} — click a basket to pack it.")
 
     def _drop_xy(self, basket_type: str, pixel_x, pixel_y):
         """World XY over the basket mouth (click if inside, else center)."""
@@ -156,67 +205,130 @@ class FruitClickController:
         y = float(np.clip(y, c[1] - half_y + r, c[1] + half_y - r))
         return x, y
 
+    def _enable_drop_gravity(self, key):
+        rigid = self._rigid(key)
+        if rigid is None:
+            return
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+            rigid.set_linear_damping(4.0)
+            rigid.set_angular_damping(16.0)
+        except Exception:
+            pass
+
+    def _calm(self, key, damping=(4.0, 16.0)):
+        rigid = self._rigid(key)
+        if rigid is None:
+            return
+        try:
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+            rigid.set_linear_damping(float(damping[0]))
+            rigid.set_angular_damping(float(damping[1]))
+        except Exception:
+            pass
+
     def _pack_into(self, basket_type: str, pixel_x, pixel_y):
-        idx = self.selected
-        if idx is None:
+        key = self.selected
+        if key is None:
             print("Select a fruit first.")
             return
-        if self.env._packed[idx] or self.env._missed[idx] or idx in self._dropping:
+        kind, i = key
+        if kind == "item" and (self.env._packed[i] or self.env._missed[i]):
+            self.selected = None
+            return
+        if key in self._dropping:
             self.selected = None
             return
         x, y = self._drop_xy(basket_type, pixel_x, pixel_y)
-        # Release above the rim so the apple falls in; do not snap to a seated pose.
         z = float(self.env.basket_top_z[basket_type]) + float(self.env.fruit_r) + 0.04
-        self.env._item_y[idx] = None
-        self.env._grasping_idxs.add(idx)  # keep orphan cleanup from reseating mid-drop
-        self.env._set_fruit_collision_enabled(idx, True)
-        self.env._set_fruit_pose(idx, x, y, z)
-        self.env._enable_fruit_gravity(idx)
-        self.env._calm_fruit(idx, damping=(4.0, 16.0))
-        self._restore_color(idx)
-        self._dropping[idx] = int(DROP_SETTLE_STEPS)
-        want = self.env.item_types[idx]
-        print(
-            f"Dropping {want}_{idx} into the {basket_type} basket…"
-            + ("" if basket_type == want else " (wrong color).")
-        )
+        if kind == "item":
+            self.env._item_y[i] = None
+            self.env._grasping_idxs.add(i)
+            self.env._set_fruit_collision_enabled(i, True)
+            self.env._set_fruit_pose(i, x, y, z)
+        else:
+            # Leave the belt stream so _advance_distractors does not yank it back.
+            self.env._distractor_y[i] = None
+            self.env._set_distractor_pose(i, x, y, z)
+        self._enable_drop_gravity(key)
+        self._restore_color(key)
+        self._dropping[key] = int(DROP_SETTLE_STEPS)
+        extra = ""
+        if kind == "item" and basket_type != self.env.item_types[i]:
+            extra = " (wrong color)."
+        elif kind == "dist":
+            extra = " (distractor, not counted)."
+        print(f"Dropping {self._label(key)} into the {basket_type} basket…{extra}")
         self.selected = None
 
+    def _in_any_basket(self, key) -> bool:
+        p = np.array(self._actor(key).get_pose().p, dtype=float)
+        return any(
+            self.env._xy_inside_basket(p[:2], btype) for btype in self.env.baskets
+        )
+
+    def _finish_drop(self, key):
+        kind, i = key
+        if kind == "item":
+            self.env._grasping_idxs.discard(i)
+            if self.env._fruit_in_basket(i):
+                self.env._mark_packed(i, freeze=False)
+                print(f"Packed {self._label(key)} into the matching basket.")
+                return
+            if self._in_any_basket(key):
+                self.env._mark_packed(i, freeze=False)
+                print(f"{self._label(key)} landed in the wrong basket.")
+                return
+            if self.env._fruit_over_belt(i) is not None:
+                self.env._reseat_on_belt(i)
+                print(f"{self._label(key)} missed — back on the belt.")
+                return
+            self.env._mark_table_rest(i)
+            print(f"{self._label(key)} left on the table.")
+            return
+
+        if self._in_any_basket(key):
+            print(f"{self._label(key)} landed in a basket — that fails the task.")
+            return
+        p = np.array(self.env.distractors[i].get_pose().p, dtype=float)
+        over = None
+        try:
+            # Reuse colored-fruit belt XY test with a temporary pose check.
+            over = None
+            for side, cx in self.env.belt_cx.items():
+                if abs(float(p[0]) - float(cx)) <= self.env.BELT_HALF_WID + 0.03:
+                    if self.env.BELT_Y_NEAR - 0.03 <= float(p[1]) <= self.env.BELT_Y_FAR + 0.03:
+                        over = side
+                        break
+        except Exception:
+            over = None
+        if over is not None:
+            self.env._spawn_distractor(slot=i, side=over, prefer_behind_colored=False)
+            print(f"{self._label(key)} missed — back on the belt.")
+            return
+        print(f"{self._label(key)} left on the table.")
+
     def update(self) -> None:
-        for idx in list(self._dropping):
-            left = self._dropping[idx] - 1
+        for key in list(self._dropping):
+            left = self._dropping[key] - 1
             if left > DROP_SETTLE_STEPS - 12:
-                self.env._calm_fruit(idx, damping=(4.0, 16.0))
+                self._calm(key, damping=(4.0, 16.0))
             if left > 0:
-                self._dropping[idx] = left
+                self._dropping[key] = left
                 continue
-            del self._dropping[idx]
-            self.env._grasping_idxs.discard(idx)
-            if self.env._fruit_in_basket(idx):
-                self.env._mark_packed(idx, freeze=False)
-                print(f"Packed {self.env.item_types[idx]}_{idx} into the matching basket.")
-                continue
-            p = np.array(self.env.items[idx].get_pose().p, dtype=float)
-            in_any = any(
-                self.env._xy_inside_basket(p[:2], btype) for btype in self.env.baskets
-            )
-            if in_any:
-                self.env._mark_packed(idx, freeze=False)
-                print(f"{self.env.item_types[idx]}_{idx} landed in the wrong basket.")
-                continue
-            if self.env._fruit_over_belt(idx) is not None:
-                self.env._reseat_on_belt(idx)
-                print(f"{self.env.item_types[idx]}_{idx} missed — back on the belt.")
-                continue
-            self.env._mark_table_rest(idx)
-            print(f"{self.env.item_types[idx]}_{idx} left on the table.")
+            del self._dropping[key]
+            self._finish_drop(key)
 
     def on_click(self, viewer, pixel_x, pixel_y):
         fruit_hit = click_hits_actor_map(
             viewer, pixel_x, pixel_y, self._fruit_ids()
         )
         if fruit_hit is not None:
-            self._select(int(fruit_hit))
+            self._select(fruit_hit)
             return True
         basket_hit = click_hits_actor_map(
             viewer, pixel_x, pixel_y, self._basket_ids
@@ -443,8 +555,8 @@ def main():
                 f"Mode: {args.control}  |  config: {args.config}  |  seed: {args.seed}"
                 + (f"  |  scenario: {args.scenario}" if args.scenario else ""),
                 goal,
-                "Click a fruit to select (highlights lighter), then click a basket to drop it in.",
-                "Never pack black distractors (Opt2).",
+                "Click a fruit (including black) to select, then click a basket to drop it in.",
+                "Black apples can be dropped; leaving one in a basket fails the task.",
                 "Esc — quit",
             ],
         )

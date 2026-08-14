@@ -399,15 +399,15 @@
     <h3><code>pack_fruits</code> — Pack Fruits</h3>
     <span class="pill basic">basic</span>
   </header>
-  <p class="summary">Every fruit item is in its correct matching basket.</p>
+  <p class="summary">Every colored fruit is in its matching basket; no black distractor is in any basket.</p>
   <div class="cols">
     <div>
       <h4>Requires</h4>
-      <ul><li>For all items i: _fruit_in_basket(i)</li></ul>
+      <ul><li>For all items i: _fruit_in_basket(i)</li><li>No distractor in any basket</li></ul>
     </div>
     <div>
       <h4>Fails if</h4>
-      <ul class="fail"><li>Any fruit wrong/missing basket</li></ul>
+      <ul class="fail"><li>Any colored fruit wrong/missing basket</li><li>Any black apple in any basket</li></ul>
     </div>
   </div>
   <p class="src">Source: <code>envs/pack_fruits.py</code> → <code>check_success()</code></p>

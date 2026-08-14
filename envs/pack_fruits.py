@@ -21,7 +21,7 @@ class pack_fruits(Base_Task):
       side. Each color independently has **2–3** apples (counts need not
       match). Still only one colored apple at a time (no dual grasp).
     - **Opt 2** (``distractor_enabled``): same as default, plus ≥1 black
-      distractor apple (never packed); 30% chance of a second black apple.
+      distractor apple (must not end in a basket); 30% chance of a second black apple.
       Black fruit may ride with a colored apple (same belt behind it, or the
       other belt).
     - **Opt 1+2**: two colors, dedicated belts (2–3 each color), ≥1 black
@@ -29,7 +29,8 @@ class pack_fruits(Base_Task):
       co-appear).
 
     Success requires every colored apple to rest in its color-matched basket
-    (red → left basket, green → right). Default / Opt 2 still spawn the
+    (red → left basket, green → right), and no black distractor in any basket.
+    Default / Opt 2 still spawn the
     single color on either belt; two-color scenarios pin each color to its
     basket-side belt so the matching arm never reaches across.
 
@@ -1224,15 +1225,30 @@ class pack_fruits(Base_Task):
             key=lambda k: float(np.linalg.norm(t - self.basket_centers[k])),
         )
 
-    def _fruit_in_basket(self, idx):
-        ftype = self.item_types[idx]
-        p = np.array(self.items[idx].get_pose().p, dtype=np.float64)
+    def _pose_in_basket(self, p, ftype):
+        """True when world pose ``p`` sits in ``ftype``'s basket volume."""
         in_xy = self._xy_inside_basket(p[:2], ftype)
         above = p[2] >= (self.basket_base_z[ftype] - 0.02)
-        # Tall enough for a small stack of apples (not only a single layer).
         stack_h = 0.18 + 2.2 * float(self.fruit_r) * max(1, int(self.n_items) - 1)
         below = p[2] <= (self.basket_base_z[ftype] + stack_h)
         return bool(in_xy and above and below)
+
+    def _fruit_in_basket(self, idx):
+        ftype = self.item_types[idx]
+        p = np.array(self.items[idx].get_pose().p, dtype=np.float64)
+        return self._pose_in_basket(p, ftype)
+
+    def _distractor_in_any_basket(self, slot):
+        """True when a visible black apple rests in any spawned basket."""
+        if slot < 0 or slot >= len(getattr(self, "distractors", []) or []):
+            return False
+        p = np.array(self.distractors[slot].get_pose().p, dtype=np.float64)
+        if float(p[2]) < 0.0:
+            return False
+        for ftype in getattr(self, "baskets", {}) or {}:
+            if self._pose_in_basket(p, ftype):
+                return True
+        return False
 
     def _mark_packed(self, idx, freeze=False):
         """Resolve a fruit. Keep it dynamic in the basket so later apples can
@@ -2633,7 +2649,12 @@ class pack_fruits(Base_Task):
 
     # ------------------------------------------------------------- success
     def check_success(self):
-        return all(self._fruit_in_basket(i) for i in range(self.n_items))
+        if not all(self._fruit_in_basket(i) for i in range(self.n_items)):
+            return False
+        n_dist = int(getattr(self, "n_distractor_slots", 0) or 0)
+        if any(self._distractor_in_any_basket(s) for s in range(n_dist)):
+            return False
+        return True
 
     def get_obs(self):
         obs = super().get_obs()
