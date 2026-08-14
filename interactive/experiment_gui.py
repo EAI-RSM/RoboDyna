@@ -109,6 +109,70 @@ class ExperimentLauncher(tk.Tk):
         self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
 
+    def _yes_no_choice(self, parent, var: tk.StringVar, value: str, text: str) -> tk.Frame:
+        """Clickable Yes/No control with a large custom radio dot (Tk's is tiny on Linux)."""
+        wrap = tk.Frame(parent, bg=CARD_BG, cursor="hand2")
+        size = 28
+        canvas = tk.Canvas(
+            wrap,
+            width=size,
+            height=size,
+            bg=CARD_BG,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        canvas.pack(side="left")
+        label = tk.Label(
+            wrap,
+            text=text,
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+            activebackground=CARD_BG,
+            activeforeground=TEXT_PRIMARY,
+            font=("Sans", 16, "bold"),
+            cursor="hand2",
+        )
+        label.pack(side="left", padx=(10, 0))
+
+        def paint(*_args):
+            canvas.delete("all")
+            outer = int(wrap._dot_size)
+            canvas.configure(width=outer, height=outer)
+            pad = max(2, outer // 12)
+            ring = max(2, outer // 12)
+            canvas.create_oval(
+                pad,
+                pad,
+                outer - pad,
+                outer - pad,
+                outline="#d7e4ef",
+                width=ring,
+            )
+            if var.get() == value:
+                inset = max(pad + ring + 1, outer // 4)
+                canvas.create_oval(
+                    inset,
+                    inset,
+                    outer - inset,
+                    outer - inset,
+                    fill=PLAY_BLUE,
+                    outline=PLAY_BLUE,
+                )
+
+        def select(_event=None):
+            var.set(value)
+
+        wrap._dot_size = size
+        wrap._dot_canvas = canvas
+        wrap._dot_label = label
+        wrap._dot_paint = paint
+        for widget in (wrap, canvas, label):
+            widget.bind("<Button-1>", select)
+        var.trace_add("write", paint)
+        paint()
+        return wrap
+
     def _card(self, parent) -> tk.Frame:
         card = tk.Frame(
             parent,
@@ -225,6 +289,7 @@ class ExperimentLauncher(tk.Tk):
         pad.pack(fill="both", expand=True, padx=28, pady=24)
         self.exp_vars: dict[str, tk.StringVar] = {}
         self.exp_question_labels: list[tk.Label] = []
+        self.exp_choice_rows: list[tk.Frame] = []
         for key, question in EXPERIENCE_QUESTIONS:
             var = tk.StringVar(value="")
             self.exp_vars[key] = var
@@ -243,20 +308,9 @@ class ExperimentLauncher(tk.Tk):
             row = tk.Frame(pad, bg=CARD_BG)
             row.pack(anchor="w", pady=(0, 18))
             for value, text in (("yes", "Yes"), ("no", "No")):
-                tk.Radiobutton(
-                    row,
-                    text=text,
-                    value=value,
-                    variable=var,
-                    bg=CARD_BG,
-                    fg=TEXT_PRIMARY,
-                    activebackground=CARD_BG,
-                    activeforeground=TEXT_PRIMARY,
-                    selectcolor="#1a2430",
-                    highlightthickness=0,
-                    font=("Sans", 14, "bold"),
-                    cursor="hand2",
-                ).pack(side="left", padx=(0, 18))
+                choice = self._yes_no_choice(row, var, value, text)
+                choice.pack(side="left", padx=(0, 22))
+                self.exp_choice_rows.append(choice)
         self.exp_continue = RoundedButton(
             pad,
             text="Continue",
@@ -755,6 +809,10 @@ class ExperimentLauncher(tk.Tk):
         self.exp_subtitle.configure(font=font(14), wraplength=max(360, width - 80))
         for label in self.exp_question_labels:
             label.configure(font=font(15, "bold"), wraplength=max(360, width - 100))
+        for choice in self.exp_choice_rows:
+            choice._dot_size = px(28)
+            choice._dot_label.configure(font=font(16, "bold"))
+            choice._dot_paint()
         self.exp_continue.configure(font=font(16, "bold"), width=px(220), height=px(64), radius=px(26))
         self.suite_title.configure(font=font(30, "bold"))
         self.suite_subtitle.configure(font=font(14), wraplength=max(280, width - 240))
