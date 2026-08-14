@@ -327,10 +327,15 @@ class dispense_gummy(Base_Task):
             if self.belt_continuous_motion:
                 self._belt_key_latched[side] = pressed
             else:
-                if side in triggered or (
-                    expert == side
-                    and not self._belt_key_latched.get(f"_expert_{side}", False)
-                ):
+                # Keyboard/mouse sets `_expert_belt_hold` and also `set_forced`,
+                # so the spring would fire a second hop a few frames later.
+                # Take the expert edge immediately; use `triggered` only for
+                # a real arm press (expert is None).
+                expert_edge = expert == side and not self._belt_key_latched.get(
+                    f"_expert_{side}", False
+                )
+                physical_edge = side in triggered and expert != side
+                if expert_edge or physical_edge:
                     self._request_bowl_station(-1 if side == "left" else 1)
                 self._belt_key_latched[side] = pressed
                 if expert == side:
