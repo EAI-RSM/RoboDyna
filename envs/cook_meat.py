@@ -44,8 +44,9 @@ class cook_meat(Base_Task):
           ``--task-arg cook_button_enabled=true`` / ``--option 1``.
       Opt 2 — dual setup  →  ``dual_setup_enabled`` (**default: false**)
           Mirror a second station with ≥10 cm clearance; both arms cook.
+          Either steak past the upper doneness bound fails the episode.
           CLI: ``--task-arg dual_setup_enabled=true`` or ``--option 2``.
-      Opt 1+2 — dual stations with hold-to-cook keys.
+      Opt 1+2 — dual stations with hold-to-cook keys. Same overcook fail.
 
     ``max_episode_steps`` (default 15000) caps eval ``step_lim`` and collection
     length for every scenario (default / Opt1 / Opt2 / Opt1+2).
@@ -1182,6 +1183,10 @@ class cook_meat(Base_Task):
 
     def _key_tip_pressing(self, station: dict[str, Any]) -> bool:
         """True when a gripper tip is pressing this station's key (force proxy)."""
+        if bool(getattr(self, "_interactive_arms_removed", False)):
+            return False
+        if not bool(getattr(self, "_interactive_robot_mode", True)):
+            return False
         bank = getattr(self, "_reactive_buttons", None)
         if bank is None:
             return False
@@ -1781,16 +1786,41 @@ class cook_meat(Base_Task):
         return None
 
     # ------------------------------------------------------------- success
-    def _doneness_in_target_range(self, doneness: float) -> bool:
-        """Return whether doneness is inside the configured inclusive success range."""
-
+    def _doneness_range_bounds(self) -> tuple[float, float]:
+        """Inclusive [low, high] success band for doneness."""
         target_range = getattr(self, "target_doneness_range", None)
         if target_range is not None:
-            low, high = map(float, target_range)
-            return low <= float(doneness) <= high
-        # Backward compatibility for old configs and lightweight unit-test tasks.
+            return float(target_range[0]), float(target_range[1])
         tol = float(getattr(self, "cook_doneness_tol", self.COOK_DONENESS_TOL_DEFAULT))
-        return abs(float(doneness) - float(self.target_doneness)) <= tol
+        t = float(self.target_doneness)
+        return t - tol, t + tol
+
+    def _doneness_in_target_range(self, doneness: float) -> bool:
+        """Return whether doneness is inside the configured inclusive success range."""
+        low, high = self._doneness_range_bounds()
+        return low <= float(doneness) <= high
+
+    def _station_overcooked(self, station: dict[str, Any]) -> bool:
+        """True once this steak has gone past the upper doneness bound."""
+        _, high = self._doneness_range_bounds()
+        vals = [
+            float(station.get("doneness", 0.0)),
+            float(station.get("max_doneness", 0.0)),
+        ]
+        g = station.get("grasp_doneness")
+        if g is not None:
+            vals.append(float(g))
+        return any(v > high for v in vals)
+
+    def any_station_overcooked(self) -> bool:
+        """True if any steak (dual or single) has exceeded the success band."""
+        stations = getattr(self, "stations", None)
+        if not stations:
+            _, high = self._doneness_range_bounds()
+            d = float(getattr(self, "doneness", 0.0))
+            g = getattr(self, "_grasp_doneness", None)
+            return bool(d > high or (g is not None and float(g) > high))
+        return any(self._station_overcooked(st) for st in stations)
 
     def _station_success(self, station: dict[str, Any]) -> bool:
         """Return whether one steak was shut off inside the doneness range.
@@ -1801,6 +1831,8 @@ class cook_meat(Base_Task):
         remain on the pan — board return is not required. Dual episodes call
         this once per steak, and both must pass.
         """
+        if self._station_overcooked(station):
+            return False
         if station.get("grasp_doneness") is None:
             return False
         # Cooking must be stopped: latch OFF, or hold key released / phase done.
@@ -1818,9 +1850,13 @@ class cook_meat(Base_Task):
 
         Key must be up (latch OFF, or hold mode's first release) with
         ``grasp_doneness`` in ``target_doneness_range``. Dual: both steaks must
-        pass. Hold mode never succeeds or fails while the key is still held.
+        pass. Any steak past the upper bound is an immediate fail (do not wait
+        for the other station to shut off). Hold mode never succeeds while a
+        key is still held, but overcooking still fails.
         """
         stations = getattr(self, "stations", None)
+        if self.any_station_overcooked():
+            return False
         if not stations:
             # Unit-test path that builds a bare task without load_actors.
             if self._grasp_doneness is None:

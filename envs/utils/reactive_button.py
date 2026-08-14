@@ -208,7 +208,10 @@ class ReactivePushButtons:
 
         Prefer the teleop command EE while a key is held so Q/E tracks without
         link lag; otherwise use the measured EE (same as fill_coffee_jar).
+        Keyboard+mouse buries the arms; their leftover EE pose must not press keys.
         """
+        if bool(getattr(self.env, "_interactive_arms_removed", False)):
+            return None
         side = str(side)
         cmd = getattr(self.env, "_interactive_cmd_pose", None)
         if isinstance(cmd, dict) and side in cmd:
@@ -236,6 +239,8 @@ class ReactivePushButtons:
 
     def _contact_force(self, idx: int) -> float:
         """Optional PhysX contact force against this keycap (fill_coffee style)."""
+        if bool(getattr(self.env, "_interactive_arms_removed", False)):
+            return 0.0
         entity = self.actors[idx]
         try:
             btn_name = str(entity.get_name() or "")

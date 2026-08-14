@@ -46,7 +46,6 @@ from _interactive_common import (  # noqa: E402
 CONTROLS_KEYBOARD = """
   Space             single-station cook key (press ON / press again OFF; hold mode: hold Space)
   Left / Right      dual-station cook keys (left/right station)
-  Meat starts on the pan(s).
 """
 
 CONTROLS_ROBOT = """
@@ -168,7 +167,7 @@ def _snap_steaks_to_boards(env):
 
 
 class KeyboardState:
-    """Space (single) or Left/Right (dual) drive cook keys; meat starts on pan."""
+    """Space (single) or Left/Right arrows (dual) drive cook keys."""
 
     def __init__(self):
         self._prev = {}
@@ -224,14 +223,10 @@ def _station_cook_finished(env, st):
 
 
 def _episode_done(env):
-    """Finish after all keys shut off (latch OFF, or hold's confirmed first release)."""
+    """Finish after all keys shut off, or immediately if any steak overcooks."""
     stations = getattr(env, "stations", None) or []
     if not stations:
         return False, None
-    # Hold mode: never terminate while any cook key is still engaged.
-    if getattr(env, "use_hold_cook", False):
-        if any(env._button_is_pressed_station(st) for st in stations):
-            return False, None
     doneness = [round(float(st["doneness"]), 2) for st in stations]
     grasps = [
         None if st.get("grasp_doneness") is None else round(float(st["grasp_doneness"]), 2)
@@ -242,6 +237,12 @@ def _episode_done(env):
         f"target={float(env.target_doneness_range[0]):.2f}-"
         f"{float(env.target_doneness_range[1]):.2f}"
     )
+    if bool(getattr(env, "any_station_overcooked", lambda: False)()):
+        return True, detail + " overcooked"
+    # Hold mode: never succeed while any cook key is still engaged.
+    if getattr(env, "use_hold_cook", False):
+        if any(env._button_is_pressed_station(st) for st in stations):
+            return False, None
     if all(_station_cook_finished(env, st) for st in stations):
         return True, detail
     return False, None

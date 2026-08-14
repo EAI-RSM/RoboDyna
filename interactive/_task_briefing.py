@@ -731,6 +731,7 @@ def build_briefing_text(
     if is_robot:
         # Full shared teleop key bindings; no task-specific robot tips.
         controls = "\n".join(_normalize_control_lines(_SHARED_ROBOT))
+        display_mode = "robot"
     else:
         kb = spec.get("keyboard")
         controls = (
@@ -738,6 +739,13 @@ def build_briefing_text(
             if kb
             else load_task_controls(script_path, control_mode)
         )
+        has_mouse = any(
+            isinstance(row, (list, tuple))
+            and len(row) >= 1
+            and _is_mouse_click_key(str(row[0]))
+            for row in (kb or [])
+        )
+        display_mode = "keyboard+mouse" if has_mouse else "keyboard"
 
     return {
         "title": label,
@@ -753,7 +761,7 @@ def build_briefing_text(
         "objectives": [],
         "controls": controls or "No control help found for this launcher.",
         "notes": notes,
-        "control_mode": control_mode,
+        "control_mode": display_mode,
     }
 
 
