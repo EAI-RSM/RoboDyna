@@ -39,7 +39,8 @@ class pick_ripe_apple(Base_Task):
               inward toward trunk/bark for BOTH stem and apple together:
                 hang_x = tip - apple_side * U(0, jitter)
     Basket:   076_breadbasket in front; BASKET_Q = packing upright then +90° Z;
-              sample model_id ∈ {0,1,2} (exclude 3 and 4); keep original asset appearance.
+              sample model_id ∈ {0,1,2,3,4}; hollow (nonconvex) collision
+              (base3/base4 use rebuilt open-cup collision); original appearance.
     Do NOT revisit Rx±90° hang quats, tip-only X, or dual boards/bowls.
     ========================================================================
     FROZEN CONTROL / GRASPING — DO NOT CHANGE (user-locked)
@@ -103,7 +104,7 @@ class pick_ripe_apple(Base_Task):
     # Packing upright [0.5,0.5,0.5,0.5] then +90° about world Z.
     BASKET_Q = [0.0, 0.0, 0.70710678, 0.70710678]
     BASKET_MODEL = "076_breadbasket"
-    BASKET_IDS = [0, 1, 2]  # exclude base3 (bad mesh) and base4 (closed/slit collision)
+    BASKET_IDS = [0, 1, 2, 3, 4]
     COLOR_STOPS = [
         (0.0, [0.20, 0.62, 0.18]),     # unripe: green
         (0.8, [0.92, 0.10, 0.08]),     # ripe: vivid red (aligned with red_window mean)
@@ -329,8 +330,10 @@ class pick_ripe_apple(Base_Task):
             ),
             modelname=self.BASKET_MODEL,
             model_id=self.basket_id,
-            convex=True,
-            is_static=not self.basket_move_enabled,
+            # Triangle mesh: a convex hull caps the opening so the apple
+            # hits an invisible lid and bounces out.
+            convex=False,
+            is_static=True,
             scale_mult=self.basket_scale,
         )
         self._basket_rigid = next(
@@ -569,12 +572,9 @@ class pick_ripe_apple(Base_Task):
             pass
 
     def _apple_resting_in_basket(self, apple_p, basket_x):
-        """True if the good apple is roughly seated in the basket opening."""
-        xy_close = (abs(float(apple_p[0]) - float(basket_x)) < 0.12
-                    and abs(float(apple_p[1]) - float(self.basket_y)) < 0.12)
-        z_ok = (float(apple_p[2]) > (0.60 + self.table_z_bias)
-                and float(apple_p[2]) < (self.basket_top_z + 0.06))
-        return bool(xy_close and z_ok)
+        """True if the good apple is seated in the basket (center below the rim)."""
+        return self._pose_in_basket(
+            apple_p, np.array([float(basket_x), float(self.basket_y)], dtype=np.float64))
 
     def _advance_basket_motion(self):
         """Opt 2: ping-pong basket X between branch-tip bounds (never pauses)."""
@@ -727,7 +727,7 @@ class pick_ripe_apple(Base_Task):
     # After detach: slide outward away from the trunk/branch, then lift.
     CLEAR_LATERAL = 0.08
     CLEAR_LIFT_Z = 0.10
-    DROP_SETTLE_STEPS = 80
+    DROP_SETTLE_STEPS = 200
     GRASP_SETTLE_STEPS = 25
 
     def _apple_grasp_center(self, apple=None):
@@ -961,12 +961,29 @@ class pick_ripe_apple(Base_Task):
 
     # ------------------------------------------------------------- success
     def _pose_in_basket(self, apple_p, basket_xy):
-        """Geometric in-basket test (same thresholds as check_success)."""
+        """True when the apple center is inside the basket volume, below the rim.
+
+        A bounce on the lip or an invisible convex lid sits at/above ``basket_top_z``
+        and must not count as packed.
+        """
         ap = np.asarray(apple_p, dtype=np.float64)
-        xy_close = float(np.linalg.norm(ap[:2] - basket_xy)) < 0.12
-        not_floor = float(ap[2]) > (0.60 + self.table_z_bias)
-        settled = float(ap[2]) < (self.basket_top_z + 0.06)
-        return bool(xy_close and settled and not_floor)
+        xy_close = float(np.linalg.norm(ap[:2] - basket_xy)) < 0.09
+        above_floor = float(ap[2]) > (float(self.basket_base_z) + 0.005)
+        below_rim = float(ap[2]) < (float(self.basket_top_z) - 0.01)
+        return bool(xy_close and above_floor and below_rim)
+
+    def _actor_speed(self, actor) -> float:
+        if actor is None:
+            return 0.0
+        try:
+            body = next(
+                (c for c in actor.actor.get_components()
+                 if isinstance(c, sapien.physx.PhysxRigidDynamicComponent)), None)
+            if body is None:
+                return 0.0
+            return float(np.linalg.norm(body.get_linear_velocity()))
+        except Exception:
+            return 0.0
 
     def _apple_held_by_gripper(self, apple) -> bool:
         """True while either gripper still contacts ``apple``."""
@@ -997,7 +1014,8 @@ class pick_ripe_apple(Base_Task):
         table_z = float(getattr(self, "_z0", 0.74 + float(self.table_z_bias)))
         # Near tabletop (resting) — not still mid-air above the basket lip.
         z = float(ap[2])
-        if z > float(self.basket_top_z) + 0.04:
+        # Still falling / bouncing above the rim — wait until it lands.
+        if z > float(self.basket_top_z) + 0.08:
             return False
         if z < table_z - 0.08:
             # Fell off the table entirely — still a miss.
@@ -1012,7 +1030,12 @@ class pick_ripe_apple(Base_Task):
         self.basket_center = basket_xy
 
         ap = np.array(self.apple.get_pose().p)
-        good_in = bool(self._pose_in_basket(ap, basket_xy) and (self.r_grasp is not None))
+        settled = (
+            self._pose_in_basket(ap, basket_xy)
+            and (not self._apple_held_by_gripper(self.apple))
+            and (self._actor_speed(self.apple) < 0.12)
+        )
+        good_in = bool(settled and (self.r_grasp is not None))
         ripeness_ok = self._grasp_in_red_window()
         on_table = bool(self._good_apple_dropped_on_table())
 

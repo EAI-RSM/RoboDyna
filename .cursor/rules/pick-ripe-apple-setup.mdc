@@ -16,7 +16,7 @@ The hang/tree/basket layout **and** the expert grasp/control strategy in `envs/p
 - **Drop / Y**: `APPLE_DROP_BELOW_BRANCH` so ~half the black stem shows; Y offset via `APPLE_MESH_CENTER_Y * APPLE_Y_CENTER_FRAC` so mesh bbox center sits on branch/stem Y.
 - **Hang X**: outer bound = branch tip; sample up to `APPLE_X_JITTER` (2 cm) **inward toward trunk/bark** for stem and apple together:
   `hang_x = tip - apple_side * Uniform(0, jitter)`.
-- **Basket**: `076_breadbasket` (convex collision; packing upright then +90° Z); sample `model_id ∈ {0,1,2}` per episode (exclude 3 and 4); original asset appearance (no recolor).
+- **Basket**: `076_breadbasket` (hollow/nonconvex collision so fruit can fall in; packing upright then +90° Z); sample `model_id ∈ {0,1,2,3,4}` per episode. Variants 3 and 4 use rebuilt open-cup `collision/base{3,4}.glb` (original visual). No recolor.
 
 ## Locked control / grasping
 
