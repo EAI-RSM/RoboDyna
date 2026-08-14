@@ -75,7 +75,8 @@ class pack_fruits(Base_Task):
     _APPLE_CENTER_Y = 0.03814048367178239
     _APPLE_EXTENT_Y = 0.0919138697184135
     FRUIT_R = 0.026                   # approx half-extent at FRUIT_SCALE
-    FRUIT_MASS = 0.05
+    FRUIT_MASS = 0.12                 # ~small apple; too-light shells explode on contact
+    # Cap PhysX depenetration so overlapping fruit in the basket cannot launch.
     # orientation that exposes a top-down contact frame (see pick_ripe_apple);
     # rotates local +y -> world +z, so mesh center offset affects ride height
     FRUIT_Q = [0.707, 0.707, 0.0, 0.0]
@@ -142,6 +143,27 @@ class pack_fruits(Base_Task):
                 rigid.set_inertia([inertia, inertia, inertia])
             except Exception:
                 pass
+
+    def _stabilize_fruit_rigid(self, rigid):
+        """Keep stacked apples from contact-exploding (still fully dynamic)."""
+        if rigid is None:
+            return
+        try:
+            rigid.set_linear_damping(5.0)
+            rigid.set_angular_damping(20.0)
+            rigid.set_sleep_threshold(0.08)
+            rigid.set_max_depenetration_velocity(0.4)
+            rigid.set_max_linear_velocity(1.5)
+            rigid.set_max_angular_velocity(12.0)
+            rigid.set_solver_position_iterations(8)
+            rigid.set_solver_velocity_iterations(4)
+            for s in rigid.get_collision_shapes():
+                m = s.get_physical_material()
+                m.set_static_friction(4.0)
+                m.set_dynamic_friction(4.0)
+                m.set_restitution(0.0)
+        except Exception:
+            pass
 
     def setup_demo(self, **kwags):
         self._cfg = dict(kwags.get("task_args", {}).get("pack_fruits", {}) or {})
@@ -361,7 +383,9 @@ class pack_fruits(Base_Task):
                 ),
                 modelname="076_breadbasket",
                 model_id=self.basket_id,
-                convex=True,
+                # Triangle mesh: a convex hull fills the bowl and squeezes
+                # stacked apples until they explode out of the basket.
+                convex=False,
                 is_static=True,
                 scale_mult=self.basket_scale,
             )
@@ -473,16 +497,7 @@ class pack_fruits(Base_Task):
                 if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
                     comp = c
                     self._apply_fruit_mass_properties(c)
-                    try:
-                        c.set_linear_damping(5.0)
-                        c.set_angular_damping(20.0)
-                        for s in c.get_collision_shapes():
-                            m = s.get_physical_material()
-                            m.set_static_friction(4.0)
-                            m.set_dynamic_friction(4.0)
-                            m.set_restitution(0.0)
-                    except Exception:
-                        pass
+                    self._stabilize_fruit_rigid(c)
                     c.set_kinematic(True)
                     c.set_disable_gravity(True)
             self.items.append(fruit)
@@ -542,16 +557,7 @@ class pack_fruits(Base_Task):
                 if isinstance(c, sapien.physx.PhysxRigidDynamicComponent):
                     d_comp = c
                     self._apply_fruit_mass_properties(c)
-                    try:
-                        c.set_linear_damping(5.0)
-                        c.set_angular_damping(20.0)
-                        for sh in c.get_collision_shapes():
-                            m = sh.get_physical_material()
-                            m.set_static_friction(4.0)
-                            m.set_dynamic_friction(4.0)
-                            m.set_restitution(0.0)
-                    except Exception:
-                        pass
+                    self._stabilize_fruit_rigid(c)
                     c.set_kinematic(True)
                     c.set_disable_gravity(True)
             self.distractors.append(distractor)
@@ -958,7 +964,14 @@ class pack_fruits(Base_Task):
         self._weld_offset[idx] = None
         self._set_fruit_collision_enabled(idx, True)
         self._enable_fruit_gravity(idx)
-        self._calm_fruit(idx, damping=(2.5, 12.0))
+        self._calm_fruit(idx, damping=(4.0, 16.0))
+        rigid = self._item_comps[idx]
+        if rigid is not None:
+            try:
+                rigid.set_max_depenetration_velocity(0.4)
+                rigid.set_max_linear_velocity(1.5)
+            except Exception:
+                pass
 
     def _fruit_over_belt(self, idx, margin=0.03):
         """Return belt side if fruit XY sits on a conveyor slab, else None."""
@@ -1221,11 +1234,9 @@ class pack_fruits(Base_Task):
         below = p[2] <= (self.basket_base_z[ftype] + stack_h)
         return bool(in_xy and above and below)
 
-    def _mark_packed(self, idx, freeze=True):
-        """Resolve a fruit; ``freeze`` pins it (used for fruit inside a basket).
-
-        Interactive packing uses ``freeze=False`` so later apples can stack on
-        earlier ones under real dynamics instead of bouncing off a kinematic pin.
+    def _mark_packed(self, idx, freeze=False):
+        """Resolve a fruit. Keep it dynamic in the basket so later apples can
+        stack on contact instead of exploding off a kinematic pin.
         """
         ftype = self.item_types[idx]
         if not self._packed[idx]:
@@ -1247,10 +1258,15 @@ class pack_fruits(Base_Task):
                 rigid.set_disable_gravity(True)
                 self._calm_fruit(idx, damping=(5.0, 20.0))
             else:
-                # Keep normal fruit↔fruit / fruit↔basket contacts so apples stack.
+                # Keep fruit↔fruit / fruit↔basket contacts so apples stack.
                 rigid.set_kinematic(False)
                 rigid.set_disable_gravity(False)
-                self._calm_fruit(idx, damping=(1.2, 6.0))
+                self._calm_fruit(idx, damping=(8.0, 24.0))
+                try:
+                    rigid.set_max_depenetration_velocity(0.4)
+                    rigid.set_max_linear_velocity(1.5)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1837,7 +1853,7 @@ class pack_fruits(Base_Task):
                 np.array(fruit.get_pose().p, dtype=float)[:2],
                 self._basket_for_target(target_xy),
             )
-            self._mark_packed(idx, freeze=bool(landed))
+            self._mark_packed(idx, freeze=False)
             if dbg:
                 print(f"[pack_fruits]  mis-packed {self.item_types[idx]}_{idx} "
                       f"p={np.round(fruit.get_pose().p, 3)} "
