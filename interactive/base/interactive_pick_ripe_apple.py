@@ -33,6 +33,7 @@ from _interactive_common import (  # noqa: E402
     print_banner,
     print_episode_condition,
     print_instructions,
+    release_dynamic,
     run_viewer_loop,
 )
 
@@ -133,7 +134,7 @@ class KeyboardAppleController:
         label = "good" if abs(side - float(self.env.apple_side)) < 0.5 else "spoiled"
         print(
             f"Picked {label} apple — hovering over basket. "
-            "Space or click the apple again to release."
+            "Space or click again to release."
         )
         return True
 
@@ -142,28 +143,38 @@ class KeyboardAppleController:
             return False
         side = self.held_side
         rigid = (getattr(self.env, "_apple_rigids", {}) or {}).get(side)
+        if rigid is None:
+            rigid = getattr(self.env, "_apple_rigid", None)
         self.env._dampen_apple_for_basket_drop(rigid=rigid)
         self.env._enable_held_apple_gravity(rigid=rigid)
+        release_dynamic(rigid)
         self.held_side = None
         print("Released apple — dropping under gravity.")
         return True
 
+    def poll_space(self, window) -> None:
+        """Release on Space. Called from on_step and after_render (0-physics frames)."""
+        if self.held_side is None:
+            return
+        if edge_pressed(window, "space", self._prev):
+            self._release()
+
     def on_click(self, viewer, pixel_x, pixel_y):
+        # While carrying, any click releases. The hover pose sits over the basket,
+        # so a second click often hits the basket mesh instead of the apple.
+        if self.held_side is not None:
+            self._release()
+            return True
         hit = click_hits_actor_map(viewer, pixel_x, pixel_y, self._apple_ids)
         if hit is None:
             return False
-        side = float(hit)
-        if self.held_side is not None and abs(self.held_side - side) < 0.5:
-            self._release()
-            return True
-        self._pick(side)
+        self._pick(float(hit))
         return True
 
     def update(self, window):
         if self.held_side is not None:
             _set_apple_hover(self.env, self.held_side)
-            if edge_pressed(window, "space", self._prev):
-                self._release()
+            self.poll_space(window)
             return
         if edge_pressed(window, "left", self._prev):
             for side in (getattr(self.env, "apples", {}) or {}):
@@ -175,6 +186,44 @@ class KeyboardAppleController:
                 if float(side) > 0:
                     self._pick(float(side))
                     break
+
+
+class _AppleSpacePlugin:
+    """Poll Space during viewer.render so taps are not lost on 0-physics frames."""
+
+    def __init__(self, controller: KeyboardAppleController):
+        self.controller = controller
+        self.viewer = None
+
+    def init(self, viewer):
+        self.viewer = viewer
+
+    def notify_scene_change(self):
+        pass
+
+    def notify_selected_entity_change(self):
+        pass
+
+    def notify_window_focus_change(self, focused):
+        pass
+
+    def get_ui_windows(self):
+        return []
+
+    def before_render(self):
+        pass
+
+    def after_render(self):
+        window = getattr(self.viewer, "window", None)
+        if window is None:
+            return
+        self.controller.poll_space(window)
+
+    def close(self):
+        pass
+
+    def clear_scene(self):
+        pass
 
 
 class ApplePinchMonitor:
@@ -293,11 +342,13 @@ def main():
 
     pinch = ApplePinchMonitor(env) if use_robot else None
     clicker = None
+    extra_plugins = None
     if not use_robot:
         viewer = env.viewer
         if viewer is None:
             raise SystemExit("Viewer was not created.")
         clicker = KeyboardAppleController(env, viewer)
+        extra_plugins = [_AppleSpacePlugin(clicker)]
         viewer.register_click_handler(clicker.on_click)
         print_instructions(
             "Left/Right or click an apple to pick; Space or click again to release."
@@ -376,7 +427,9 @@ def main():
             return True, "apple overripe (black) without a grasp"
         return False
 
-    run_viewer_loop(env, on_step, is_done=is_done, max_steps=30000)
+    run_viewer_loop(
+        env, on_step, is_done=is_done, max_steps=30000, extra_plugins=extra_plugins,
+    )
 
 
 if __name__ == "__main__":
