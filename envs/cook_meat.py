@@ -18,6 +18,7 @@ from ._base_task import Base_Task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils.action import ArmTag
 from .utils.create_actor import UnStableError, create_actor, create_box
+from .utils.key_symbol import attach_key_symbol, sync_key_symbol
 from .utils.rand_create_actor import rand_pose
 from .utils.reactive_button import ReactivePushButtons
 
@@ -807,6 +808,10 @@ class cook_meat(Base_Task):
         key_xy = (key_x, key_y)
         key_top_z = float(bz + 2.0 * base_hz + 2.0 * cap_hz)
         key_home_pose = key_home
+        symbol_kind = "push" if self.use_hold_cook else "on_off"
+        symbol_parts, symbol_locals = attach_key_symbol(
+            self, cook_key, self.KEY_HALF, symbol_kind, f"cook_key_symbol_{tag}"
+        )
         avoid.append(self._expand_aabb(key_aabb, key_gap))
         self.add_prohibit_area(cook_key_base, padding=0.02)
         self.add_prohibit_area(cook_key, padding=0.02)
@@ -843,6 +848,8 @@ class cook_meat(Base_Task):
             "key_xy": key_xy,
             "key_top_z": key_top_z,
             "key_home_pose": key_home_pose if cook_key is not None else None,
+            "key_symbol_parts": symbol_parts,
+            "key_symbol_locals": symbol_locals,
             "key_shapes": key_shapes,
             "_key_color_down": None,  # force first color sync to green
             "steak_shapes": steak_shapes,
@@ -1238,6 +1245,12 @@ class cook_meat(Base_Task):
                 bank.set_forced(tag, forced)
 
         triggered = set(bank.update())
+        for st in stations:
+            sync_key_symbol(
+                st.get("key_symbol_parts"),
+                st.get("key_symbol_locals"),
+                st.get("cook_key"),
+            )
 
         if not hold:
             for st in stations:
