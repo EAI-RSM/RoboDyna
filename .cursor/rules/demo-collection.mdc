@@ -36,7 +36,7 @@ python script/bench_script/record_demo.py <task>
 
 - Base stems are usually `default_sidebyside`, `opt1_sidebyside`, `opt2_sidebyside`, `opt1+2_sidebyside` (exceptions in `run_basic_test_and_demos.SCENARIO_STEMS`).
 - Household publish pattern: on mixed results → 1 success + 1 failure; all-pass → 2 successes (prefer distinct seeds).
-- GUI card snapshots: `python script/bench_script/publish_gui_snapshots.py` (`--household-only` when needed).
+- GUI card snapshots: `python script/bench_script/publish_gui_snapshots.py` (`--household-only` / `--keyboard-only` when needed). Keyboard+mouse cards use `scene_snapshot_kb_*.png`.
 
 ## Training trajectories (not demos)
 

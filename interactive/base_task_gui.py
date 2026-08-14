@@ -36,6 +36,7 @@ from experiment_logs import (  # noqa: E402
     append_play,
     experiment_mode,
     is_slot_locked,
+    log_controller_tag,
     session_control_mode,
     slot_success_label,
     stamp_child_env,
@@ -106,6 +107,13 @@ TUTORIAL_PARTS = (
     ("Basic control", "tutorial_part2", "Move with arrows, E/Q, R/T, F/G, then Space."),
     ("Basic actions", "tutorial_part3", "Grasp, hold-button, switch, then push a box."),
     ("Advance actions", "tutorial_part4", "Catch a rolling ball, then pick up a mallet."),
+)
+
+KEYBOARD_TUTORIAL_PARTS = (
+    ("Buttons", "tutorial_kb_buttons", "Number keys, arrows+bowl, on/off, then push — keyboard then mouse."),
+    ("Placement", "tutorial_kb_placement", "Click to place a cup on the green pad, then pack an apple in the box."),
+    ("Base", "tutorial_kb_base", "Move the bowl, open a two-key gate, then aim the stick."),
+    ("Household", "tutorial_kb_household", "Household keyboard tutorial — open the household GUI."),
 )
 
 SCENARIOS = ("default", "opt1", "opt2", "opt1+2")
@@ -552,6 +560,7 @@ class InteractiveTaskLauncher(tk.Tk):
             self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
             self._apply_experiment_protocol()
             self._apply_completed_locks()
+            self._refresh_tutorial_mode()
         self.bind("<Configure>", self._on_root_configure)
         self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
@@ -686,6 +695,7 @@ class InteractiveTaskLauncher(tk.Tk):
         )
         self.control.set("robot")
         self.control.pack(pady=(4, 0))
+        self.control.bind("<<ComboboxSelected>>", self._on_control_change)
         self._style_control_menu(("Sans", 13, "bold"))
         self._control_groups = (self.option_group, self.seed_group, self.control_group)
 
@@ -1019,10 +1029,18 @@ class InteractiveTaskLauncher(tk.Tk):
         if event.delta:
             self.canvas.yview_scroll(-int(event.delta / 120), "units")
 
-    @staticmethod
-    def _preview_path(task: str, scenario: str = "default") -> Path | None:
+    def _preview_path(self, task: str, scenario: str = "default") -> Path | None:
         directory = DEMO_DIR / task
+        kb = self._keyboard_tutorial()
         names = (
+            *(
+                (
+                    f"scene_snapshot_kb_{scenario}.png",
+                    "scene_snapshot_kb.png" if scenario == "default" else None,
+                )
+                if kb
+                else ()
+            ),
             f"scene_snapshot_{scenario}.png",
             "scene_snapshot.png" if scenario == "default" else None,
             "default_sidebyside.gif" if scenario == "default" else None,
@@ -1073,7 +1091,12 @@ class InteractiveTaskLauncher(tk.Tk):
 
     def _tutorial_snapshot_path(self, part_index: int | None = None) -> Path | None:
         names: list[str] = []
+        kb = self._keyboard_tutorial()
         if part_index is not None:
+            if kb:
+                stems = ("buttons", "placement", "base", "household")
+                names.append(f"scene_snapshot_kb_{stems[part_index]}.png")
+                names.append(f"scene_snapshot_kb_part{part_index + 1}.png")
             names.append(f"scene_snapshot_part{part_index + 1}.png")
         names.append("scene_snapshot.png")
         directories = (TUTORIAL_DIR, DEMO_DIR / "tutorial_empty")
@@ -1205,6 +1228,57 @@ class InteractiveTaskLauncher(tk.Tk):
             )
             button.pack(fill="x")
             self.tutorial_buttons.append(button)
+
+    def _keyboard_tutorial(self) -> bool:
+        return log_controller_tag(str(self.control.get() or "robot")) == "keyboard"
+
+    def _tutorial_parts(self):
+        return KEYBOARD_TUTORIAL_PARTS if self._keyboard_tutorial() else TUTORIAL_PARTS
+
+    def _tutorial_part_locked(self, index: int) -> bool:
+        if not self._keyboard_tutorial():
+            return False
+        # Base GUI: Household is listed but not playable.
+        return index == 3
+
+    def _reload_task_preview_sources(self) -> None:
+        sources: list[list[Image.Image | None]] = []
+        for orig in self._visible_task_indices:
+            task = TASKS[orig][1]
+            sources.append(
+                [self._load_preview_source(task, scenario) for scenario in SCENARIOS]
+            )
+        self.preview_sources = sources
+
+    def _on_control_change(self, _event=None):
+        if self.child is not None:
+            return
+        self._reload_task_preview_sources()
+        self._refresh_tutorial_mode()
+        self._apply_preview_width(self._preview_width)
+
+    def _refresh_tutorial_mode(self):
+        parts = self._tutorial_parts()
+        self.tutorial_sources = [
+            self._load_tutorial_source(index) for index in range(len(parts))
+        ]
+        for index, button in enumerate(self.tutorial_buttons):
+            label, _script, hint = parts[index]
+            locked = self._tutorial_part_locked(index)
+            button.configure(
+                text=label,
+                state="disabled" if locked else "normal",
+                bg=LOCKED_GRAY if locked else PLAY_BLUE,
+                activebackground=LOCKED_GRAY if locked else PLAY_BLUE_ACTIVE,
+                disabledbackground=LOCKED_GRAY,
+                disabledforeground="#b4bac2",
+            )
+            if index < len(self.tutorial_preview_labels):
+                # Rebind hint via a fresh enter callback by storing on the button.
+                button._on_enter_cb = lambda h=hint, l=label, lk=locked: self._show_tutorial_hint(
+                    l, "Not available in the base GUI." if lk else h
+                )
+        self._refresh_tutorial_previews()
 
     def _show_tutorial_hint(self, label: str, hint: str):
         if self.child is not None:
@@ -1361,6 +1435,13 @@ class InteractiveTaskLauncher(tk.Tk):
         self._start_task(index, scenario)
 
     def play_or_stop_tutorial(self, index: int):
+        if self._tutorial_part_locked(index) and self.child is None:
+            self._set_status(
+                "Household keyboard tutorial is only in the household GUI.",
+                "#e6a15c",
+                sticky=True,
+            )
+            return
         if self.child is not None:
             if self.active_selection == ("tutorial", index):
                 self._stop_task("Tutorial stopped. Select a part or task when ready.")
@@ -1385,7 +1466,7 @@ class InteractiveTaskLauncher(tk.Tk):
             button.configure(state="normal" if is_active else "disabled")
 
     def _start_tutorial(self, index: int):
-        label, script_stem, hint = TUTORIAL_PARTS[index]
+        label, script_stem, hint = self._tutorial_parts()[index]
         script = TUTORIAL_DIR / f"{script_stem}.py"
         if not script.exists():
             messagebox.showerror("Tutorial unavailable", f"Missing launcher:\n{script}")
@@ -1398,37 +1479,61 @@ class InteractiveTaskLauncher(tk.Tk):
             return
 
         control_mode = str(self.control.get() or "robot")
+        kb = self._keyboard_tutorial()
         if bool(self.show_briefing.get()):
-            if index == 0:
+            if kb:
+                summaries = (
+                    "1-1/1-2: three colored keys with lamps (numbers, then mouse). "
+                    "2-1/2-2: move the bowl over both red circles (arrows, then mouse). "
+                    "3-1/3-2: on/off key. 4-1/4-2: hold the push button.",
+                    "Click the green pad to move the cup fully onto it, then click the apple "
+                    "and the box to pack it (same pick-and-place as pack fruits).",
+                    "Move the bowl onto a red circle with arrows plus Space, then with the mouse. "
+                    "Next, hold both arrow keys to open the gate. Then click the green circle "
+                    "to place the stick tip and rotate with the arrows.",
+                    "Open the household GUI for this part.",
+                )
+                summary = summaries[index]
+                task_name = "tutorial_keyboard"
+                script_for_brief = TUTORIAL_DIR / "_kb_run.py"
+            elif index == 0:
                 summary = (
                     "Empty table with both arms. Test arm selection (1 / 2 / 3), "
                     "then press V to switch camera views."
                 )
+                task_name = "tutorial_empty"
+                script_for_brief = TUTORIAL_DIR / "_run.py"
             elif index == 1:
                 summary = (
                     "Empty table with both arms. Practice the base teleop keys "
                     "on the selected (green) arm."
                 )
+                task_name = "tutorial_empty"
+                script_for_brief = TUTORIAL_DIR / "_run.py"
             elif index == 2:
                 summary = (
                     "Four basic actions on the left side of the table, one at a time: "
                     "pick up a cube, hold a spring button, toggle an on/off switch, "
                     "then push a box to a green line."
                 )
+                task_name = "tutorial_empty"
+                script_for_brief = TUTORIAL_DIR / "_run.py"
             else:
                 summary = (
                     "Two advanced actions on the left side of the table, one at a time: "
                     "catch a rolling ball, then pick up a mallet."
                 )
+                task_name = "tutorial_empty"
+                script_for_brief = TUTORIAL_DIR / "_run.py"
             instruction = "Follow the instructions to complete the tutorial."
             briefing = build_briefing_text(
                 label=f"Tutorial · {label}",
-                task="tutorial_empty",
+                task=task_name,
                 scenario_label=label,
                 scenario_desc=hint,
                 summary=summary,
                 control_mode=control_mode,
-                script_path=TUTORIAL_DIR / "_run.py",
+                script_path=script_for_brief,
             )
             briefing["instruction"] = instruction
             if not show_task_briefing(self, briefing):
@@ -1736,11 +1841,12 @@ class InteractiveTaskLauncher(tk.Tk):
         for index, button in enumerate(self.tutorial_buttons):
             button.configure(
                 state="normal",
-                text=TUTORIAL_PARTS[index][0],
+                text=self._tutorial_parts()[index][0],
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
             )
         self._apply_completed_locks()
+        self._refresh_tutorial_mode()
 
     def _resolve_launch_seed(self, suite: str, task: str, scenario: str | None = None) -> int:
         """Protocol seed list/int, else the (locked) seed field / random."""

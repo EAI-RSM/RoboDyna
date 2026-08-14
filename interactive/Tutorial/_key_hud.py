@@ -16,18 +16,20 @@ from _keycaps import (
     draw_advanced_stage,
     draw_arm_keys,
     draw_control_stage,
+    draw_kb_stage,
     draw_part2_play_keys,
     draw_play_keys,
     draw_view_key,
 )
 
-_DISPLAY_WIDTH = 480
+_DISPLAY_WIDTH = 400
+_MAX_DISPLAY_H = 380
 _HALF_H = 0.12
 _STAGE_ORIGIN_STEP = 4.0
 # ImGui title bar + window padding; keep this larger than the picture so
 # the instruction line is visible without a vertical scrollbar.
-_WINDOW_PAD_W = 32
-_WINDOW_PAD_H = 88
+_WINDOW_PAD_W = 36
+_WINDOW_PAD_H = 112
 _FLASH_SECONDS = 0.22
 
 
@@ -147,6 +149,10 @@ class TutorialKeyHud(Plugin):
         width, height = size
         pic_w = self.pic_w
         pic_h = max(1, int(round(self.pic_w * height / float(width))))
+        if pic_h > _MAX_DISPLAY_H:
+            scale = _MAX_DISPLAY_H / float(pic_h)
+            pic_w = max(1, int(round(pic_w * scale)))
+            pic_h = int(_MAX_DISPLAY_H)
         return pic_w, pic_h
 
     def update_texture(self, name: str, img: Image.Image) -> None:
@@ -325,6 +331,10 @@ def build_staged_hud(
         materials[name] = mat
         entities[name] = ent
         sizes[name] = img.size
+        try:
+            cam.take_picture()
+        except Exception:
+            pass
     hud = TutorialKeyHud(
         cameras,
         textures,
@@ -381,5 +391,14 @@ def build_part4_key_hud(scene, stages=None) -> TutorialKeyHud:
     hud.flash_drawer = lambda pressed=None, **kwargs: draw_advanced_stage(
         hud.stage, pressed, **hud.flash_kwargs
     )
+    hud.flash_enabled = True
+    return hud
+
+
+def build_keyboard_tutorial_hud(scene, stages) -> TutorialKeyHud:
+    """Overlays for keyboard tutorial stages (keys vs mouse)."""
+    images = {name: draw_kb_stage(name) for name in stages}
+    hud = build_staged_hud(scene, images, start_stage=stages[0], window_pad_h=120)
+    hud.flash_drawer = lambda pressed=None, **kwargs: draw_kb_stage(hud.stage, pressed)
     hud.flash_enabled = True
     return hud

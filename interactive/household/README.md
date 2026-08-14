@@ -16,7 +16,8 @@ that the viewer was closed before a result, so another task can be launched.
 
 Each interactive scenario has a head-camera expert demo
 under `final_task_demos/<task>/`. The GUI prefers the head-camera `scene_snapshot.png`
-for the card preview, falling back to `default_sidebyside.gif`.
+for robot-control card previews (or `scene_snapshot_kb.png` when Control is
+keyboard+mouse), falling back to `default_sidebyside.gif`.
 
 | Task | Demo |
 |---|---|

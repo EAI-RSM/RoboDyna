@@ -10,7 +10,14 @@ Suite (base interactive) tasks write four condition stills::
 
 plus ``scene_snapshot.png`` (copy of default) for compatibility.
 
-Household GUI tasks write a single ``scene_snapshot.png``.
+Keyboard+mouse GUI cards get a parallel set with arms stripped::
+
+    final_task_demos/<task>/scene_snapshot_kb_default.png
+    ...
+    final_task_demos/<task>/scene_snapshot_kb.png   (copy of kb default)
+
+Household GUI tasks write ``scene_snapshot.png`` (robot) and
+``scene_snapshot_kb.png`` (keyboard+mouse).
 
 Each still is a single ``head_camera`` frame (no top-down montage).
 
@@ -19,8 +26,11 @@ Usage (repo root, robodyna env, headless Vulkan)::
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json; unset DISPLAY
     python script/bench_script/publish_gui_snapshots.py
     python script/bench_script/publish_gui_snapshots.py cook_meat catch_cuboid
+    python script/bench_script/publish_gui_snapshots.py --keyboard-only
     python script/bench_script/publish_gui_snapshots.py --tutorial
+    python script/bench_script/publish_gui_snapshots.py --tutorial-keyboard
     python script/bench_script/publish_gui_snapshots.py tutorial_empty
+    python script/bench_script/publish_gui_snapshots.py tutorial_keyboard
 """
 from __future__ import annotations
 
@@ -50,6 +60,13 @@ FINAL = os.path.join(ROOT, "final_task_demos")
 TUTORIAL_DIR = os.path.join(ROOT, "interactive", "Tutorial")
 # Opening setup for each GUI card. Parts 1–2 are empty-table; 3 = cube; 4 = ball.
 TUTORIAL_PART_STAGES = {1: None, 2: None, 3: "grasp", 4: "ball"}
+# First stage of each keyboard+mouse tutorial card (arms stripped).
+KEYBOARD_TUTORIAL_CARDS = (
+    ("buttons", "num_keys"),
+    ("placement", "cup_place"),
+    ("base", "gummy_keys"),
+    ("household", "stop_ball"),
+)
 # Upscale head stills for crisp GUI cards (native D435 is typically 640×480).
 SNAPSHOT_MAX_WIDTH = 1280
 SETTLE_STEPS = 8
@@ -180,9 +197,17 @@ def capture_snapshot(
     return out_path
 
 
-def publish_suite_task(task_name: str, seed: int = 0) -> None:
+def _strip_arms_after_setup(task) -> None:
+    from interactive._interactive_common import strip_interactive_arms
+
+    strip_interactive_arms(task)
+
+
+def publish_suite_task(task_name: str, seed: int = 0, *, keyboard: bool = False) -> None:
     if task_name not in SCENARIO_OVERRIDES:
         raise KeyError(f"No SCENARIO_OVERRIDES for suite task {task_name}")
+    prefix = "scene_snapshot_kb_" if keyboard else "scene_snapshot_"
+    after = _strip_arms_after_setup if keyboard else None
     for scenario in SCENARIOS:
         overrides = SCENARIO_OVERRIDES[task_name][scenario]
         out = capture_snapshot(
@@ -190,17 +215,25 @@ def publish_suite_task(task_name: str, seed: int = 0) -> None:
             seed=seed,
             scenario=scenario,
             task_arg_overrides=_overrides_to_cli(overrides),
-            out_name=f"scene_snapshot_{scenario}.png",
+            out_name=f"{prefix}{scenario}.png",
+            after_setup=after,
         )
         if scenario == "default":
-            # Keep the legacy single-file name in sync with Default.
-            legacy = os.path.join(FINAL, task_name, "scene_snapshot.png")
+            # Keep the single-file name in sync with Default (robot or keyboard).
+            legacy_name = "scene_snapshot_kb.png" if keyboard else "scene_snapshot.png"
+            legacy = os.path.join(FINAL, task_name, legacy_name)
             shutil.copy2(out, legacy)
             print(f"  WROTE [legacy] {legacy}", flush=True)
 
 
-def publish_household_task(task_name: str, seed: int = 0) -> None:
-    capture_snapshot(task_name, seed=seed, out_name="scene_snapshot.png")
+def publish_household_task(task_name: str, seed: int = 0, *, keyboard: bool = False) -> None:
+    out_name = "scene_snapshot_kb.png" if keyboard else "scene_snapshot.png"
+    capture_snapshot(
+        task_name,
+        seed=seed,
+        out_name=out_name,
+        after_setup=_strip_arms_after_setup if keyboard else None,
+    )
 
 
 def publish_tutorial_snapshots(seed: int = 0, parts: list[int] | None = None) -> None:
@@ -218,6 +251,35 @@ def publish_tutorial_snapshots(seed: int = 0, parts: list[int] | None = None) ->
         print(f"\n=== tutorial part {part} (stage={stage or 'empty'}) ===", flush=True)
         path = capture_snapshot(
             "tutorial_empty",
+            seed=seed,
+            after_setup=_after,
+            out_name=out_name,
+        )
+        tutorial_copy = os.path.join(TUTORIAL_DIR, out_name)
+        shutil.copy2(path, tutorial_copy)
+        print(f"  WROTE [tutorial] {tutorial_copy}", flush=True)
+
+
+def publish_keyboard_tutorial_snapshots(
+    seed: int = 0, stems: list[str] | None = None
+) -> None:
+    """Head-camera stills for keyboard+mouse Tutorial GUI cards."""
+    from interactive._interactive_common import strip_interactive_arms
+
+    os.makedirs(TUTORIAL_DIR, exist_ok=True)
+    wanted = set(stems) if stems else {stem for stem, _stage in KEYBOARD_TUTORIAL_CARDS}
+    for stem, stage in KEYBOARD_TUTORIAL_CARDS:
+        if stem not in wanted:
+            continue
+        out_name = f"scene_snapshot_kb_{stem}.png"
+
+        def _after(task, spawn_stage=stage):
+            strip_interactive_arms(task)
+            task.tutorial_set_stage(spawn_stage)
+
+        print(f"\n=== tutorial keyboard {stem} (stage={stage}) ===", flush=True)
+        path = capture_snapshot(
+            "tutorial_keyboard",
             seed=seed,
             after_setup=_after,
             out_name=out_name,
@@ -247,31 +309,58 @@ def main() -> int:
     parser.add_argument(
         "--tutorial",
         action="store_true",
-        help="Publish Tutorial GUI stills (part 3 = cube, part 4 = rolling ball).",
+        help="Publish robot and keyboard Tutorial GUI stills.",
+    )
+    parser.add_argument(
+        "--tutorial-keyboard",
+        action="store_true",
+        help="Publish keyboard+mouse Tutorial GUI stills only.",
     )
     parser.add_argument(
         "--tutorial-part",
         type=int,
         nargs="*",
         choices=(1, 2, 3, 4),
-        help="Tutorial part numbers to snapshot (default: all parts).",
+        help="Robot tutorial part numbers to snapshot (default: all parts).",
+    )
+    parser.add_argument(
+        "--keyboard-only",
+        action="store_true",
+        help="Publish keyboard+mouse task stills only (skip robot-control stills).",
+    )
+    parser.add_argument(
+        "--skip-keyboard",
+        action="store_true",
+        help="Skip keyboard+mouse task stills (robot-control stills only).",
     )
     ns = parser.parse_args()
+    if ns.keyboard_only and ns.skip_keyboard:
+        parser.error("use either --keyboard-only or --skip-keyboard, not both")
     only = set(ns.tasks) if ns.tasks else None
     want_tutorial = (
         bool(ns.tutorial)
         or bool(ns.tutorial_part)
         or (only is not None and "tutorial_empty" in only)
     )
+    want_kb_tutorial = (
+        bool(ns.tutorial)
+        or bool(ns.tutorial_keyboard)
+        or (only is not None and "tutorial_keyboard" in only)
+    )
+    do_robot = not ns.keyboard_only
+    do_keyboard = not ns.skip_keyboard
 
     suite = [] if ns.household_only else _suite_tasks()
     household = [] if ns.suite_only else _household_gui_tasks()
     # Avoid double-publishing tasks that appear in both lists.
     household = [t for t in household if t not in set(suite)]
-    if (ns.tutorial or ns.tutorial_part) and only is None:
-        suite = []
-        household = []
-    elif want_tutorial and only == {"tutorial_empty"}:
+    tutorial_only = (
+        (ns.tutorial or ns.tutorial_part or ns.tutorial_keyboard)
+        and only is None
+    ) or (
+        only is not None and only <= {"tutorial_empty", "tutorial_keyboard"}
+    )
+    if tutorial_only:
         suite = []
         household = []
 
@@ -279,22 +368,32 @@ def main() -> int:
     for task in suite:
         if only and task not in only:
             continue
-        print(f"\n=== {task} (4 scenarios) ===", flush=True)
-        try:
-            publish_suite_task(task, seed=0)
-        except Exception as exc:
-            print(f"FAILED {task}: {exc}", flush=True)
-            failed.append(task)
+        for keyboard, tag in ((False, "4 scenarios"), (True, "4 keyboard scenarios")):
+            if keyboard and not do_keyboard:
+                continue
+            if not keyboard and not do_robot:
+                continue
+            print(f"\n=== {task} ({tag}) ===", flush=True)
+            try:
+                publish_suite_task(task, seed=0, keyboard=keyboard)
+            except Exception as exc:
+                print(f"FAILED {task}{' [kb]' if keyboard else ''}: {exc}", flush=True)
+                failed.append(f"{task}{'[kb]' if keyboard else ''}")
 
     for task in household:
         if only and task not in only:
             continue
-        print(f"\n=== {task} ===", flush=True)
-        try:
-            publish_household_task(task, seed=0)
-        except Exception as exc:
-            print(f"FAILED {task}: {exc}", flush=True)
-            failed.append(task)
+        for keyboard, tag in ((False, "robot"), (True, "keyboard")):
+            if keyboard and not do_keyboard:
+                continue
+            if not keyboard and not do_robot:
+                continue
+            print(f"\n=== {task} ({tag}) ===", flush=True)
+            try:
+                publish_household_task(task, seed=0, keyboard=keyboard)
+            except Exception as exc:
+                print(f"FAILED {task}{' [kb]' if keyboard else ''}: {exc}", flush=True)
+                failed.append(f"{task}{'[kb]' if keyboard else ''}")
 
     if want_tutorial:
         print("\n=== tutorial_empty (GUI parts) ===", flush=True)
@@ -304,6 +403,14 @@ def main() -> int:
         except Exception as exc:
             print(f"FAILED tutorial_empty: {exc}", flush=True)
             failed.append("tutorial_empty")
+
+    if want_kb_tutorial:
+        print("\n=== tutorial_keyboard (GUI parts) ===", flush=True)
+        try:
+            publish_keyboard_tutorial_snapshots(seed=0)
+        except Exception as exc:
+            print(f"FAILED tutorial_keyboard: {exc}", flush=True)
+            failed.append("tutorial_keyboard")
 
     if failed:
         print("\nFailed tasks:", ", ".join(failed), flush=True)

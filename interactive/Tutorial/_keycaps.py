@@ -163,21 +163,87 @@ def _draw_centered_lines(draw, lines: list[str], font, y: int, canvas_w: int, fi
         y += th + 4
 
 
+def _measure_lines_h(lines: list[str], font, draw) -> int:
+    total = 0
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        total += (bbox[3] - bbox[1]) + 4
+    return total
+
+
+def _overlay_canvas(
+    width: int,
+    body_h: int,
+    instruction: str = "",
+    title: str = "",
+    *,
+    font_size: int = 26,
+    title_size: int = 28,
+):
+    """Canvas with optional title above the keys and instruction below."""
+    probe = Image.new("RGBA", (max(8, width), 8), _CANVAS)
+    draw = ImageDraw.Draw(probe)
+    title_font = _font(title_size)
+    title_lines = _wrap_text(title, title_font, draw, width - CANVAS_PAD * 2) if title else []
+    title_h = _measure_lines_h(title_lines, title_font, draw) if title_lines else 0
+    inst_font = _font(font_size)
+    inst_lines = (
+        _wrap_text(instruction, inst_font, draw, width - CANVAS_PAD * 2) if instruction else []
+    )
+    inst_h = _measure_lines_h(inst_lines, inst_font, draw) if inst_lines else 0
+    title_band = (CANVAS_PAD + title_h + 10) if title else 0
+    bottom = (16 + inst_h + 12) if instruction else CANVAS_PAD
+    height = title_band + int(body_h) + bottom
+    canvas = Image.new("RGBA", (width, int(height)), _CANVAS)
+    title_y = CANVAS_PAD
+    body_y = title_band
+    inst_y = title_band + int(body_h) + 8
+    return (
+        canvas,
+        ImageDraw.Draw(canvas),
+        title_lines,
+        title_font,
+        title_y,
+        inst_lines,
+        inst_font,
+        inst_y,
+        body_y,
+    )
+
+
+def _paint_overlay_text(
+    d,
+    width: int,
+    title_lines,
+    title_font,
+    title_y: int,
+    inst_lines,
+    inst_font,
+    inst_y: int,
+) -> None:
+    if title_lines:
+        _draw_centered_lines(d, title_lines, title_font, title_y, width, _INSTRUCTION)
+    if inst_lines:
+        _draw_centered_lines(d, inst_lines, inst_font, inst_y, width, _INSTRUCTION)
+
+
 def draw_key_row(
     labels: tuple[str, ...],
     pressed: set[str] | None = None,
     *,
     sublabels: tuple[str, ...] | None = None,
     instruction: str = "",
+    title: str = "",
 ) -> Image.Image:
     pressed = pressed or set()
-    width, height = cluster_size()
-    canvas = Image.new("RGBA", (width, height), _CANVAS)
-    d = ImageDraw.Draw(canvas)
+    width = cluster_size()[0]
+    body_h = KEY_SIZE + (SUBLABEL_H if sublabels else 10)
+    canvas, d, title_lines, title_font, title_y, lines, inst_font, inst_y, y0 = _overlay_canvas(
+        width, body_h, instruction, title=title
+    )
     n = len(labels)
     row_w = n * KEY_SIZE + max(0, n - 1) * GAP
     x0 = (width - row_w) // 2
-    y0 = CANVAS_PAD
     sub_font = _font(28)
     for i, label in enumerate(labels):
         cap = draw_keycap(label, pressed=label in pressed)
@@ -190,12 +256,7 @@ def draw_key_row(
             tx = x + (KEY_SIZE - tw) / 2 - bbox[0]
             ty = y0 + KEY_SIZE + 4 - bbox[1]
             d.text((tx, ty), hint, font=sub_font, fill=_SUBLABEL)
-    if instruction:
-        inst_font = _font(26)
-        max_w = width - CANVAS_PAD * 2
-        lines = _wrap_text(instruction, inst_font, d, max_w)
-        inst_y = y0 + KEY_SIZE + (SUBLABEL_H if sublabels else 10) + 4
-        _draw_centered_lines(d, lines, inst_font, inst_y, width, _INSTRUCTION)
+    _paint_overlay_text(d, width, title_lines, title_font, title_y, lines, inst_font, inst_y)
     return canvas
 
 
@@ -893,6 +954,259 @@ def draw_force_key_stage(
         d, lines, inst_font, y_bar + FORCE_BAR_H + 2, width, _INSTRUCTION
     )
     return canvas
+
+
+def draw_left_right_arrows(
+    instruction: str,
+    pressed: set[str] | None = None,
+    *,
+    title: str = "",
+) -> Image.Image:
+    pressed = pressed or set()
+    width = cluster_size()[0]
+    body_h = KEY_SIZE
+    canvas, d, title_lines, title_font, title_y, lines, inst_font, inst_y, y0 = _overlay_canvas(
+        width, body_h, instruction, title=title
+    )
+    gap = GAP * 2
+    row_w = KEY_SIZE * 2 + gap
+    x0 = (width - row_w) // 2
+    canvas.alpha_composite(
+        draw_arrow_keycap("left", pressed="left" in pressed),
+        (x0, y0),
+    )
+    canvas.alpha_composite(
+        draw_arrow_keycap("right", pressed="right" in pressed),
+        (x0 + KEY_SIZE + gap, y0),
+    )
+    _paint_overlay_text(d, width, title_lines, title_font, title_y, lines, inst_font, inst_y)
+    return canvas
+
+
+def draw_space_instruction(
+    instruction: str,
+    pressed: bool = False,
+    *,
+    title: str = "",
+) -> Image.Image:
+    width = cluster_size()[0]
+    body_h = KEY_SIZE
+    canvas, d, title_lines, title_font, title_y, lines, inst_font, inst_y, y0 = _overlay_canvas(
+        width, body_h, instruction, title=title
+    )
+    cap = draw_wide_keycap("Space", pressed=pressed)
+    x0 = (width - cap.width) // 2
+    canvas.alpha_composite(cap, (x0, y0))
+    _paint_overlay_text(d, width, title_lines, title_font, title_y, lines, inst_font, inst_y)
+    return canvas
+
+
+def draw_arrows_and_space(
+    instruction: str,
+    pressed: set[str] | None = None,
+    *,
+    title: str = "",
+) -> Image.Image:
+    pressed = pressed or set()
+    width = cluster_size()[0]
+    gap = GAP * 2
+    space_cap = draw_wide_keycap("Space", pressed="Space" in pressed)
+    body_h = KEY_SIZE + 16 + space_cap.height
+    canvas, d, title_lines, title_font, title_y, lines, inst_font, inst_y, y0 = _overlay_canvas(
+        width, body_h, instruction, title=title
+    )
+    row_w = KEY_SIZE * 2 + gap
+    x0 = (width - row_w) // 2
+    canvas.alpha_composite(draw_arrow_keycap("left", pressed="left" in pressed), (x0, y0))
+    canvas.alpha_composite(
+        draw_arrow_keycap("right", pressed="right" in pressed),
+        (x0 + KEY_SIZE + gap, y0),
+    )
+    sx = (width - space_cap.width) // 2
+    canvas.alpha_composite(space_cap, (sx, y0 + KEY_SIZE + 16))
+    _paint_overlay_text(d, width, title_lines, title_font, title_y, lines, inst_font, inst_y)
+    return canvas
+
+
+def draw_mouse_click(
+    instruction: str = "",
+    *,
+    highlight_left: bool = True,
+    title: str = "",
+) -> Image.Image:
+    """Mouse with the left button highlighted, optional title above."""
+    width = cluster_size()[0]
+    body_w, mouse_h = 168, 220
+    body_h = mouse_h + 8
+    canvas, d, title_lines, title_font, title_y, lines, inst_font, inst_y, y0 = _overlay_canvas(
+        width, body_h, instruction, title=title
+    )
+    x0 = (width - body_w) // 2
+    d.rounded_rectangle(
+        [x0 + 6, y0 + 8, x0 + body_w + 6, y0 + mouse_h + 8],
+        radius=70,
+        fill=(0, 0, 0, 80),
+    )
+    d.rounded_rectangle(
+        [x0, y0, x0 + body_w, y0 + mouse_h],
+        radius=70,
+        fill=_FILL,
+        outline=_OUTLINE,
+        width=4,
+    )
+    mid = x0 + body_w // 2
+    split_y = y0 + 78
+    left_fill = _FILL_INNER_DONE if highlight_left else _FILL_INNER
+    left_outline = _OUTLINE_DONE if highlight_left else _INNER_OUTLINE
+    d.rounded_rectangle(
+        [x0 + 10, y0 + 10, mid - 4, split_y],
+        radius=22,
+        fill=left_fill,
+        outline=left_outline,
+        width=3,
+    )
+    d.rounded_rectangle(
+        [mid + 4, y0 + 10, x0 + body_w - 10, split_y],
+        radius=22,
+        fill=_FILL_INNER,
+        outline=_INNER_OUTLINE,
+        width=3,
+    )
+    d.ellipse(
+        [mid - 10, y0 + 28, mid + 10, y0 + 62],
+        fill=_INNER_OUTLINE,
+        outline=_OUTLINE,
+        width=2,
+    )
+    _paint_overlay_text(d, width, title_lines, title_font, title_y, lines, inst_font, inst_y)
+    return canvas
+
+
+def draw_mouse_and_arrows(
+    instruction: str,
+    pressed: set[str] | None = None,
+    *,
+    title: str = "",
+) -> Image.Image:
+    pressed = pressed or set()
+    mouse = draw_mouse_click("", highlight_left=True)
+    arrows = draw_left_right_arrows("", pressed)
+    width = cluster_size()[0]
+    arrow_h = KEY_SIZE
+    mouse_h = 228
+    body_h = arrow_h + 12 + mouse_h
+    canvas, d, title_lines, title_font, title_y, lines, inst_font, inst_y, y0 = _overlay_canvas(
+        width, body_h, instruction, title=title
+    )
+    arrow_body = arrows.crop((0, 0, arrows.width, KEY_SIZE + 4))
+    canvas.alpha_composite(arrow_body, ((width - arrow_body.width) // 2, y0))
+    canvas.alpha_composite(mouse, ((width - mouse.width) // 2, y0 + arrow_h + 12))
+    _paint_overlay_text(d, width, title_lines, title_font, title_y, lines, inst_font, inst_y)
+    return canvas
+
+
+def draw_kb_stage(stage: str, pressed: set[str] | None = None) -> Image.Image:
+    pressed = pressed or set()
+    if stage == "num_keys":
+        return draw_key_row(
+            ("1", "2", "3"),
+            pressed,
+            title="Turn on the lights",
+            instruction="Press 1, 2, and 3.",
+        )
+    if stage == "num_mouse":
+        return draw_mouse_click(
+            "Click the buttons.",
+            title="Turn off the lights",
+        )
+    if stage == "bowl_keys":
+        return draw_left_right_arrows(
+            "Press the arrow keys.",
+            pressed,
+            title="Move the bowl to the red areas",
+        )
+    if stage == "bowl_mouse":
+        return draw_mouse_click(
+            "Click the arrow buttons.",
+            title="Move the bowl to the red areas",
+        )
+    if stage == "switch_keys":
+        return draw_space_instruction(
+            "Press Space.",
+            pressed="Space" in pressed,
+            title="Turn on and off the key",
+        )
+    if stage == "switch_mouse":
+        return draw_mouse_click(
+            "Click the key.",
+            title="Turn on and off the key",
+        )
+    if stage == "push_keys":
+        return draw_space_instruction(
+            "Hold Space.",
+            pressed="Space" in pressed,
+            title="Press and hold the key to turn on the lamp",
+        )
+    if stage == "push_mouse":
+        return draw_mouse_click(
+            "Hold the left mouse button on the key.",
+            title="Press and hold the key to turn on the lamp",
+        )
+    if stage in ("place_click", "place_drop"):
+        return draw_mouse_click(
+            "Click the red circles.",
+            title="Move the cube onto the circles",
+        )
+    if stage == "cup_place":
+        return draw_mouse_click(
+            "Click the green region.",
+            title="Place the cup on the green area",
+        )
+    if stage == "apple_box":
+        return draw_mouse_click(
+            "Click the apple, then the box.",
+            title="Move the apple inside the box",
+        )
+    if stage == "gummy_keys":
+        return draw_arrows_and_space(
+            "Arrows move the bowl. Space triggers.",
+            pressed,
+            title="Move the bowl to the red area, then press the trigger",
+        )
+    if stage == "gummy_mouse":
+        return draw_mouse_click(
+            "Click the arrows, then the trigger.",
+            title="Move the bowl to the red area, then press the trigger",
+        )
+    if stage == "dual_gate":
+        return draw_left_right_arrows(
+            "Press both arrow keys at the same time.",
+            pressed,
+            title="Open the gate",
+        )
+    if stage == "cue_aim":
+        return draw_mouse_and_arrows(
+            "Click the circle, then use the arrows.",
+            pressed,
+            title="Place the stick tip and rotate",
+        )
+    if stage == "stop_ball":
+        return draw_mouse_click(
+            "Click the ball.",
+            title="Click the moving ball to stop it",
+        )
+    if stage == "knob_lamp":
+        return draw_mouse_click(
+            "Click the stove knob.",
+            title="Turn the knob on, then off",
+        )
+    if stage == "board_tilt":
+        return draw_mouse_and_arrows(
+            "Click the circle, then use the arrows.",
+            pressed,
+            title="Place the board and tilt it",
+        )
+    raise ValueError(f"Unknown keyboard tutorial stage: {stage}")
 
 
 def draw_advanced_stage(

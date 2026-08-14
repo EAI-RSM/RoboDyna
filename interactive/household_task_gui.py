@@ -66,6 +66,7 @@ from experiment_logs import (  # noqa: E402
     append_play,
     experiment_mode,
     is_slot_locked,
+    log_controller_tag,
     session_control_mode,
     slot_success_label,
     stamp_child_env,
@@ -94,8 +95,16 @@ TUTORIAL_PARTS = (
     ("Advance actions", "tutorial_part4", "Stove knob on/off, then multi-stage force key."),
 )
 
+KEYBOARD_TUTORIAL_PARTS = (
+    ("Buttons", "tutorial_kb_buttons", "Number keys, arrows+bowl, on/off, then push — keyboard then mouse."),
+    ("Placement", "tutorial_kb_placement", "Click to place a cup on the green pad, then pack an apple in the box."),
+    ("Base", "tutorial_kb_base", "Base keyboard tutorial — open the base GUI."),
+    ("Household", "tutorial_kb_household", "Stop a ball, toggle a lamp, then tilt the board."),
+)
+
 PLAY_BLUE = "#3182bd"
 PLAY_BLUE_ACTIVE = "#4295d0"
+LOCKED_GRAY = "#59616b"
 PAGE_BG = GUI_PAGE_BG
 HEADER_BG = GUI_PAGE_BG
 HEADER_FG = GUI_INK
@@ -183,6 +192,8 @@ class RoundedButton(tk.Canvas):
         self.command = command
         self.normal_color = bg
         self.active_color = activebackground
+        self.disabled_color = "#59616b"
+        self.disabled_text = "#b4bac2"
         self.button_state = "normal"
         self.radius = radius
         self._shape = None
@@ -209,7 +220,12 @@ class RoundedButton(tk.Canvas):
         self.delete("all")
         width = max(2, self.winfo_width())
         height = max(2, self.winfo_height())
-        color = self.normal_color if self.button_state == "normal" else "#59616b"
+        if self.button_state == "normal":
+            color = self.normal_color
+            text_fill = "white"
+        else:
+            color = self.disabled_color
+            text_fill = self.disabled_text
         self._shape = self.create_polygon(
             self._rounded_polygon(width, height),
             smooth=True,
@@ -221,7 +237,7 @@ class RoundedButton(tk.Canvas):
             width / 2,
             height / 2,
             text=self._text,
-            fill="white" if self.button_state == "normal" else "#b4bac2",
+            fill=text_fill,
             font=self._font,
             width=max(8, width - 16),
             justify="center",
@@ -252,6 +268,10 @@ class RoundedButton(tk.Canvas):
             self.normal_color = options.pop("bg")
         if "activebackground" in options:
             self.active_color = options.pop("activebackground")
+        if "disabledbackground" in options:
+            self.disabled_color = options.pop("disabledbackground")
+        if "disabledforeground" in options:
+            self.disabled_text = options.pop("disabledforeground")
         if "state" in options:
             self.button_state = options.pop("state")
         if "font" in options:
@@ -344,6 +364,7 @@ class HouseholdTaskLauncher(tk.Tk):
             self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
             self._apply_experiment_protocol()
             self._apply_completed_locks()
+            self._refresh_tutorial_mode()
         self.bind("<Configure>", self._on_root_configure)
         self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
@@ -478,6 +499,7 @@ class HouseholdTaskLauncher(tk.Tk):
         )
         self.control.set("robot")
         self.control.pack(pady=(4, 0))
+        self.control.bind("<<ComboboxSelected>>", self._on_control_change)
         self._style_control_menu(("Sans", 13, "bold"))
         self._control_groups = (self.option_group, self.seed_group, self.control_group)
 
@@ -850,6 +872,10 @@ class HouseholdTaskLauncher(tk.Tk):
         names: list[str] = []
         if part_index is not None:
             part_n = part_index + 1
+            if getattr(self, "_keyboard_tutorial", lambda: False)():
+                stems = ("buttons", "placement", "base", "household")
+                names.append(f"scene_snapshot_kb_{stems[part_index]}.png")
+                names.append(f"scene_snapshot_kb_part{part_n}.png")
             # Household Part 4 opens on the stove; prefer a dedicated still.
             if part_n == 4:
                 names.append("scene_snapshot_part4_household.png")
@@ -983,16 +1009,65 @@ class HouseholdTaskLauncher(tk.Tk):
             )
             button.pack(fill="x")
             self.tutorial_buttons.append(button)
+        self._refresh_tutorial_mode()
+
+    def _keyboard_tutorial(self) -> bool:
+        return log_controller_tag(str(self.control.get() or "robot")) == "keyboard"
+
+    def _tutorial_parts(self):
+        return KEYBOARD_TUTORIAL_PARTS if self._keyboard_tutorial() else TUTORIAL_PARTS
+
+    def _tutorial_part_locked(self, index: int) -> bool:
+        if not self._keyboard_tutorial():
+            return False
+        return index == 2
+
+    def _reload_task_preview_sources(self) -> None:
+        sources: list[Image.Image | None] = []
+        for orig in self._visible_task_indices:
+            task = TASKS[orig][1]
+            sources.append(self._load_preview_source(task))
+        self.preview_sources = sources
+
+    def _on_control_change(self, _event=None):
+        if self.child is not None:
+            return
+        self._reload_task_preview_sources()
+        self._refresh_tutorial_mode()
+        self._apply_preview_width(self._preview_width)
+
+    def _refresh_tutorial_mode(self):
+        parts = self._tutorial_parts()
+        self.tutorial_sources = [
+            self._load_tutorial_source(index) for index in range(len(parts))
+        ]
+        for index, button in enumerate(self.tutorial_buttons):
+            label, _script, hint = parts[index]
+            locked = self._tutorial_part_locked(index)
+            button.configure(
+                text=label,
+                state="disabled" if locked else "normal",
+                bg=LOCKED_GRAY if locked else PLAY_BLUE,
+                activebackground=LOCKED_GRAY if locked else PLAY_BLUE_ACTIVE,
+                disabledbackground=LOCKED_GRAY,
+                disabledforeground="#b4bac2",
+            )
+            button._on_enter_cb = lambda h=hint, l=label, lk=locked: self._show_tutorial_hint(
+                l, "Not available in the household GUI." if lk else h
+            )
+        self._refresh_tutorial_previews()
 
     def _show_tutorial_hint(self, label: str, hint: str):
         if self.child is not None:
             return
         self.status.configure(text=f"Tutorial · {label}: {hint}", fg=HINT_FG)
 
-    @staticmethod
-    def _preview_path(task):
+    def _preview_path(self, task):
         directory = DEMO_DIR / task
-        for name in ("scene_snapshot.png", "default_sidebyside.gif"):
+        names = ("scene_snapshot.png", "default_sidebyside.gif")
+        if self._keyboard_tutorial():
+            names = ("scene_snapshot_kb.png",) + names
+        for name in names:
             preferred = directory / name
             if preferred.exists():
                 return preferred
@@ -1155,6 +1230,13 @@ class HouseholdTaskLauncher(tk.Tk):
         self._start_task(index)
 
     def play_or_stop_tutorial(self, index: int):
+        if self._tutorial_part_locked(index) and self.child is None:
+            self._set_status(
+                "Base keyboard tutorial is only in the base GUI.",
+                "#e6a15c",
+                sticky=True,
+            )
+            return
         if self.child is not None:
             if self.active_tutorial == index:
                 self._stop_task("Tutorial stopped. Select a part or task when ready.")
@@ -1178,7 +1260,7 @@ class HouseholdTaskLauncher(tk.Tk):
             button.configure(state="normal" if is_active else "disabled")
 
     def _start_tutorial(self, index: int):
-        label, script_stem, hint = TUTORIAL_PARTS[index]
+        label, script_stem, hint = self._tutorial_parts()[index]
         script = TUTORIAL_DIR / f"{script_stem}.py"
         if not script.exists():
             messagebox.showerror("Tutorial unavailable", f"Missing launcher:\n{script}")
@@ -1191,38 +1273,62 @@ class HouseholdTaskLauncher(tk.Tk):
             return
 
         control_mode = str(self.control.get() or "robot")
+        kb = self._keyboard_tutorial()
         if bool(self.show_briefing.get()):
-            if index == 0:
+            if kb:
+                summaries = (
+                    "1-1/1-2: three colored keys with lamps (numbers, then mouse). "
+                    "2-1/2-2: move the bowl over both red circles (arrows, then mouse). "
+                    "3-1/3-2: on/off key. 4-1/4-2: hold the push button.",
+                    "Click the green pad to move the cup fully onto it, then click the apple "
+                    "and the box to pack it (same pick-and-place as pack fruits).",
+                    "Open the base GUI for this part.",
+                    "Click the moving ball to stop it, click the stove knob to turn "
+                    "the lamp on then off, then click the green zone and tilt the board "
+                    "with the arrow keys.",
+                )
+                summary = summaries[index]
+                task_name = "tutorial_keyboard"
+                script_for_brief = TUTORIAL_DIR / "_kb_run.py"
+            elif index == 0:
                 summary = (
                     "Empty table with both arms. Test arm selection (1 / 2 / 3), "
                     "then press V to switch camera views."
                 )
+                task_name = "tutorial_empty"
+                script_for_brief = TUTORIAL_DIR / "_run.py"
             elif index == 1:
                 summary = (
                     "Empty table with both arms. Practice the base teleop keys "
                     "on the selected (green) arm."
                 )
+                task_name = "tutorial_empty"
+                script_for_brief = TUTORIAL_DIR / "_run.py"
             elif index == 2:
                 summary = (
                     "Four basic actions on the left side of the table, one at a time: "
                     "pick up a cube, hold a spring button, toggle an on/off switch, "
                     "then push a box to a green line."
                 )
+                task_name = "tutorial_empty"
+                script_for_brief = TUTORIAL_DIR / "_run.py"
             else:
                 summary = (
                     "Two advanced household actions on the left side of the table, "
                     "one at a time: twist a stove knob, then press a multi-stage "
                     "force key."
                 )
+                task_name = "tutorial_empty"
+                script_for_brief = TUTORIAL_DIR / "_run.py"
             instruction = "Follow the instructions to complete the tutorial."
             briefing = build_briefing_text(
                 label=f"Tutorial · {label}",
-                task="tutorial_empty",
+                task=task_name,
                 scenario_label=label,
                 scenario_desc=hint,
                 summary=summary,
                 control_mode=control_mode,
-                script_path=TUTORIAL_DIR / "_run.py",
+                script_path=script_for_brief,
             )
             briefing["instruction"] = instruction
             if not show_task_briefing(self, briefing):
@@ -1453,11 +1559,12 @@ class HouseholdTaskLauncher(tk.Tk):
         for index, button in enumerate(self.tutorial_buttons):
             button.configure(
                 state="normal",
-                text=TUTORIAL_PARTS[index][0],
+                text=self._tutorial_parts()[index][0],
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
             )
         self._apply_completed_locks()
+        self._refresh_tutorial_mode()
 
     def _resolve_launch_seed(self, suite: str, task: str, scenario: str | None = None) -> int:
         """Protocol seed list/int, else the (locked) seed field / random."""

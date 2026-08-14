@@ -11,7 +11,10 @@ Two interactive suites share SAPIEN 3.0.3 + dual-UR5 (`ur5-wsg`) and `task_confi
 
 GUI: `interactive/base_task_gui.py`. Sweep list: `script_exp/_sweep_basic_success.TASKS`.
 
-Top of the base GUI is task **00 Tutorial** (`envs/tutorial_empty.py`, launchers in `interactive/Tutorial/`): empty table + dual UR5, four parts in one row like other base cards. Not in the 23-task sweep.
+Top of the base GUI is task **00 Tutorial** (not in the 23-task sweep).
+
+- **Robot control:** `envs/tutorial_empty.py`, launchers `interactive/Tutorial/tutorial_part*.py` — Selection / Basic control / Basic actions / Advance actions.
+- **Keyboard+mouse control:** `envs/tutorial_keyboard.py`, launchers `tutorial_kb_*.py` — Buttons / Placement / Base / Household. Household is grayed out in the base GUI; Base is grayed out in the household GUI.
 
 `catch_marbles_trapdoors`, `catch_ramp_ball`, `catch_cuboid`, `catch_shelf_marble`, `catch_valley_ball`, `stop_valley_ball`, `cook_meat`, `cook_meat_timer`, `put_cup_belt`, `dispense_gummy`, `punch_dual_holes`, `save_goal`, `hit_target`, `load_train`, `marble_shelf_maze`, `pack_fruits`, `pick_ripe_apple`, `place_block_belt`, `play_billiard`, `control_quality`, `drop_ball_hole`, `sort_apples_belt`, `whack_moles`
 
