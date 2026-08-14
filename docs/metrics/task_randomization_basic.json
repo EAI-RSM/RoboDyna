@@ -696,7 +696,7 @@
             "blue_curtains_enabled",
             "blue_curtain_dynamic_enabled"
           ],
-          "what_it_does": "static curtains + dynamic sway"
+          "what_it_does": "mix of static and moving curtains (center static; left or right strip sways)"
         }
       ],
       "randomized_params": [
@@ -719,10 +719,10 @@
           "notes": "when curtains on"
         },
         {
-          "param": "curtain_phase / belt_dir / slot_start",
-          "how": "phase U(0,2π); dir ±1; slot_start U(±belt_motion_limit)",
-          "config_key": "curtain_freq, curtain_amp, belt_range",
-          "notes": null
+          "param": "curtain_phase / belt_dir / slot_start / moving_strip_idx",
+          "how": "phase U(0,2π); dir ±1; slot_start U(±belt_motion_limit); opt1+2: choice(left,right) side strip",
+          "config_key": "curtain_freq, curtain_amp, belt_range, moving_curtain_idx",
+          "notes": "moving_curtain_idx / moving_curtain_side can force the swaying strip"
         },
         {
           "param": "cup_x / cup_y",

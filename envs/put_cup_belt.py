@@ -22,8 +22,9 @@ class put_cup_belt(Base_Task):
           (collidable; touching a strip fails the attempt). When enabled, the policy must
           also wait for a curtain gap over the yellow-stick corridor. Strip half-size is
           sampled each episode as nominal × U(1±curtain_size_jitter) (default ±20%).
-      blue_curtain_dynamic_enabled / opt2 — if true (and opt1 is on), the blue curtains
-          sway laterally; if false, curtains are static.
+      blue_curtain_dynamic_enabled / opt2 — if true without opt1, the blue curtains
+          sway as a group. If both opt1 and opt2 are on, the center strip stays
+          static and one side strip (left or right, sampled each episode) sways.
       belt_speed / belt_speed_jitter — nominal yellow-stick speed; each episode samples
           U((1−j)·nom, (1+j)·nom) with j default 0.20.
 
@@ -89,6 +90,8 @@ class put_cup_belt(Base_Task):
         # bodies. Invalidate stale kinematic-body handles now so the per-step hook is a no-op until
         # load_actors recreates them -- otherwise set_kinematic_target on a freed body segfaults.
         self.curtain_strips = []
+        self.curtain_single_side_motion = False
+        self.moving_strip_idx = -1
         self.belt_pegs = []
         self.belt_plate = None
         self._attempt_active = False
@@ -139,6 +142,9 @@ class put_cup_belt(Base_Task):
         )
         self.blue_curtain_dynamic_enabled = bool(opt2)
         self.blue_curtains_enabled = bool(opt1 or opt2)
+        # opt1+2: center strip fixed; one of the two side strips sways.
+        # opt2 alone: the whole curtain group sways together.
+        self.curtain_single_side_motion = bool(opt1 and opt2)
         self.lift_off_only_after_place = bool(
             c.get("lift_off_only_after_place", self.LIFT_OFF_ONLY_AFTER_PLACE_DEFAULT)
         )
@@ -248,13 +254,39 @@ class put_cup_belt(Base_Task):
         self.curtain_strips = []
         n = self.N_STRIPS
         strip_offsets = [(i - (n - 1) / 2.0) * self.strip_spacing for i in range(n)]
+        self.curtain_center_idx = int((n - 1) // 2)
+        side_idxs = [i for i in range(n) if i != self.curtain_center_idx]
+        moving_cfg = c.get("moving_curtain_idx", c.get("moving_curtain_side", None))
+        if moving_cfg is None:
+            self.moving_strip_idx = int(np.random.choice(side_idxs)) if side_idxs else 0
+        else:
+            if isinstance(moving_cfg, str):
+                key = moving_cfg.strip().lower()
+                if key in ("left", "l", "0"):
+                    self.moving_strip_idx = int(side_idxs[0]) if side_idxs else 0
+                elif key in ("right", "r"):
+                    self.moving_strip_idx = int(side_idxs[-1]) if side_idxs else 0
+                else:
+                    self.moving_strip_idx = int(side_idxs[0]) if side_idxs else 0
+            else:
+                idx = int(moving_cfg)
+                self.moving_strip_idx = idx if idx in side_idxs else int(side_idxs[0] if side_idxs else 0)
         curtain_half_span_x = (
             (max(abs(off) for off in strip_offsets) + self.strip_half[0]) if strip_offsets else 0.0
         )
-        self.curtain_motion_limit = max(
+        group_limit = max(
             0.0,
             min(self.curtain_amp, self.belt_plate_half_size[0] - curtain_half_span_x),
         )
+        # Single-side sway must not drive a side strip through the static center strip.
+        inward_clear = max(
+            0.0,
+            float(self.strip_spacing) - 2.0 * float(self.strip_half[0]) - 0.004,
+        )
+        if self.curtain_single_side_motion:
+            self.curtain_motion_limit = max(0.0, min(self.curtain_amp, inward_clear))
+        else:
+            self.curtain_motion_limit = group_limit
         if self.blue_curtains_enabled:
             # Park curtains just in front of the belt so the near-zone grasp is clear.
             belt_front_y = self.belt_y - self.belt_plate_half_size[1] - self.strip_half[1] - 0.012
@@ -353,6 +385,15 @@ class put_cup_belt(Base_Task):
             return 0.0
         return amp * np.sin(2 * np.pi * self.curtain_freq * t + self.curtain_phase)
 
+    def _strip_offset(self, strip_idx, t=None):
+        """Lateral offset for one curtain strip at time t."""
+        if not getattr(self, "blue_curtain_dynamic_enabled", False):
+            return 0.0
+        if getattr(self, "curtain_single_side_motion", False):
+            if int(strip_idx) != int(getattr(self, "moving_strip_idx", -1)):
+                return 0.0
+        return self._curtain_offset(t)
+
     def _belt_offset(self, t=None):
         """Triangle-wave travel of the yellow sticks on the fixed plate; never freezes."""
         if t is None:
@@ -373,8 +414,23 @@ class put_cup_belt(Base_Task):
         return self._slot_base_x + self._belt_offset(t)
 
     def gap_center_x(self, t=None):
-        """World x of the curtain gap (the STRIP_GAP_IDX-th inter-strip gap)."""
-        if not self.blue_curtains_enabled or len(self._strip_base_x) <= self.STRIP_GAP_IDX + 1:
+        """World x of the curtain gap used for timing.
+
+        Group sway (opt2): the STRIP_GAP_IDX-th inter-strip gap, translated with the group.
+        Single-side sway (opt1+2): the gap between the static center strip and the moving side.
+        """
+        if not self.blue_curtains_enabled or len(self._strip_base_x) < 2:
+            return float(self.curtain_center_x)
+        if getattr(self, "curtain_single_side_motion", False):
+            i0 = int(getattr(self, "curtain_center_idx", self.STRIP_GAP_IDX))
+            i1 = int(getattr(self, "moving_strip_idx", i0 + 1))
+            if i0 > i1:
+                i0, i1 = i1, i0
+            if i1 >= len(self._strip_base_x):
+                return float(self.curtain_center_x)
+            rest = 0.5 * (self._strip_base_x[i0] + self._strip_base_x[i1])
+            return rest + 0.5 * self._curtain_offset(t)
+        if len(self._strip_base_x) <= self.STRIP_GAP_IDX + 1:
             return float(self.curtain_center_x)
         i = self.STRIP_GAP_IDX
         rest = 0.5 * (self._strip_base_x[i] + self._strip_base_x[i + 1])
@@ -416,11 +472,12 @@ class put_cup_belt(Base_Task):
         """Push step-driven targets onto kinematic bodies.
 
         Belt plate stays fixed. Only yellow sticks (and optional swaying curtains) translate.
+        opt1+2 moves a single side strip; opt2 moves the whole curtain group.
         """
         if self.blue_curtains_enabled and self.blue_curtain_dynamic_enabled:
-            co = self._curtain_offset()
             for i, strip in enumerate(self.curtain_strips):
                 p = strip.get_pose()
+                co = self._strip_offset(i)
                 self._set_body(strip,
                                sapien.Pose([self._strip_base_x[i] + co, p.p[1], p.p[2]], p.q),
                                initial=initial)
@@ -823,6 +880,8 @@ class put_cup_belt(Base_Task):
             "placement_score": float(self.placement_score()),
             "blue_curtains_enabled": bool(self.blue_curtains_enabled),
             "blue_curtain_dynamic_enabled": bool(getattr(self, "blue_curtain_dynamic_enabled", False)),
+            "curtain_single_side_motion": bool(getattr(self, "curtain_single_side_motion", False)),
+            "moving_strip_idx": int(getattr(self, "moving_strip_idx", -1)),
             "moving_component_spacing": float(self.slot_spacing),
             "lift_off_only_after_place": bool(self.lift_off_only_after_place),
             "mirrored": bool(getattr(self, "mirrored", False)),
