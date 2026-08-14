@@ -19,28 +19,22 @@ _STAGES: tuple[tuple[str, tuple[tuple[str, str], ...], str], ...] = (
     (
         "grasp",
         _PRESS_KEYS,
-        "Pick up the orange cube: arrows to move, E/Q for height, Space to close, then lift.",
+        "Pick the cube: arrows to move, E/Q for height, Space to close, then lift.",
     ),
     (
         "hold",
         _PRESS_KEYS,
-        "Hold-to-press: arrows onto the green button, Space to close, Q to hold, E to lift off.",
+        "Press the button: arrows onto it, Space to close, Q to hold, E to lift off.",
     ),
     (
         "switch",
         _PRESS_KEYS,
-        "On/off switch: arrows onto it, Space to close, Q to turn ON (red), Q again to turn OFF.",
+        "Turn key on/off: arrows onto it, Space to close, Q to turn ON (red), Q again OFF.",
     ),
     (
         "push",
-        (
-            ("space", "Space"),
-            ("left", "left"),
-            ("right", "right"),
-            ("up", "up"),
-            ("down", "down"),
-        ),
-        "Close the gripper (Space) and push the blue box onto the green line.",
+        _PRESS_KEYS,
+        "Push the box over the line: close gripper, lower arm, and push.",
     ),
 )
 

@@ -17,6 +17,7 @@ from ._kitchens_base_task import KitchenS_base_task
 from .utils.actor_utils import Actor
 from .utils.create_actor import create_box, create_sphere, preprocess
 from .utils.reactive_button import ReactivePushButtons, add_key_base_border
+from .utils.key_symbol import attach_key_symbol, sync_key_symbol
 
 
 class _ForceKeyBank(ReactivePushButtons):
@@ -158,6 +159,9 @@ class tutorial_empty(Base_Task):
         self._bezel_table_poses = []
         self._key_shapes = []
         self._key_color_down = None
+        self._key_symbol_parts = []
+        self._key_symbol_locals = []
+        self._key_symbol_kind = None
         self._hold_was_pressed = False
         self._hold_press_steps = 0
         self._hold_release_steps = 0
@@ -313,6 +317,7 @@ class tutorial_empty(Base_Task):
         if stage == "switch" and prev == "hold" and self._key_actor is not None:
             self._init_key_bank("switch")
             self._set_key_color(False)
+            self._attach_key_symbol("on_off")
             return
         if stage == "push" and prev in ("hold", "switch") and self._key_actor is not None:
             self._show_push_box()
@@ -526,6 +531,7 @@ class tutorial_empty(Base_Task):
         self._hide_obj(self._cube, 0)
         self._hide_obj(self._key_actor, 1)
         self._hide_obj(self._key_bezel, 2)
+        self._hide_key_symbols()
         self._hide_obj(self._push_box, 8)
         self._hide_obj(self._push_goal, 9)
         if not getattr(self, "_defer_hide_ball", False):
@@ -571,6 +577,7 @@ class tutorial_empty(Base_Task):
             return
         self._hide_obj(self._key_actor, 1)
         self._hide_obj(self._key_bezel, 2)
+        self._hide_key_symbols()
         self._defer_hide_key = False
 
     def _park_ball_safe(self) -> None:
@@ -621,6 +628,12 @@ class tutorial_empty(Base_Task):
         self._init_key_bank(button_id)
         self._key_color_down = None
         self._set_key_color(False)
+        if button_id == "hold":
+            self._attach_key_symbol("push")
+        elif button_id == "switch":
+            self._attach_key_symbol("on_off")
+        else:
+            self._hide_key_symbols()
 
     def _show_push_box(self) -> None:
         dx = self._dx_for(self.PROP_X)
@@ -648,6 +661,31 @@ class tutorial_empty(Base_Task):
             xy_tol=float(self.KEY_XY_TOL),
         )
         self._reactive_buttons.set_tops_z([float(live.p[2]) + hz])
+
+    def _hide_key_symbols(self) -> None:
+        for i, part in enumerate(self._key_symbol_parts or []):
+            self._hide_entity(part, 40 + i)
+        self._key_symbol_parts = []
+        self._key_symbol_locals = []
+        self._key_symbol_kind = None
+
+    def _attach_key_symbol(self, kind: str) -> None:
+        if self._key_symbol_kind == kind and self._key_symbol_parts:
+            return
+        self._hide_key_symbols()
+        if self._key_actor is None:
+            return
+        parts, locals_ = attach_key_symbol(
+            self, self._key_actor, self.KEY_HALF, kind, f"tutorial_key_symbol_{kind}"
+        )
+        self._key_symbol_parts = parts
+        self._key_symbol_locals = locals_
+        self._key_symbol_kind = kind
+
+    def _sync_key_symbol(self) -> None:
+        sync_key_symbol(
+            self._key_symbol_parts, self._key_symbol_locals, self._key_actor
+        )
 
     def _spawn_cube(self) -> None:
         hz = float(self.CUBE_HALF)
@@ -807,6 +845,7 @@ class tutorial_empty(Base_Task):
         bank = self._reactive_buttons
         if bank is None:
             return
+        self._sync_key_symbol()
         stage = self._tutorial_stage
         if self._stage_settle > 0:
             self._stage_settle -= 1

@@ -78,7 +78,7 @@ def _add_hud_camera(scene, img: Image.Image, origin, name: str):
 
 
 class TutorialKeyHud(Plugin):
-    """ImGui window in the top-right showing the current tutorial key overlay."""
+    """ImGui window in the top-left showing the current tutorial key overlay."""
 
     def __init__(
         self,
@@ -288,20 +288,17 @@ class TutorialKeyHud(Plugin):
             self.ui_picture = R.UIPicture().Size(pw, ph)
             self.ui_window = (
                 R.UIWindow()
-                .Label("Keys")
+                .Label("Tutorial keys")
+                .Id("tutorial_keys_tl")
+                .Pos(16, 16)
                 .append(self.ui_picture)
             )
             self._laid_out_stage = None
         self.ui_picture.Size(pw, ph)
         self.ui_window.Size(pw + self.window_pad_w, ph + self.window_pad_h)
-        if self._laid_out_stage != self.stage:
-            self._laid_out_stage = self.stage
-            ww = 1920
-            try:
-                ww = int(self.viewer.window.size[0])
-            except Exception:
-                pass
-            self.ui_window.Pos(max(16, ww - pw - 40), 16)
+        # Force top-left every frame — imgui.ini otherwise restores Keys## on the right.
+        self.ui_window.Pos(16, 16)
+        self._laid_out_stage = self.stage
         self.ui_picture.Picture(cam._internal_renderer, "Color")
         return [self.ui_window]
 

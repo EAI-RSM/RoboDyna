@@ -88,10 +88,10 @@ TASKS = (
 )
 
 TUTORIAL_PARTS = (
-    ("Part 1", "tutorial_part1", "Select arms (1, 2, 3) then switch camera (V)."),
-    ("Part 2", "tutorial_part2", "Move with arrows, E/Q, R/T, F/G, then Space."),
-    ("Part 3", "tutorial_part3", "Grasp, hold-button, switch, then push a box."),
-    ("Part 4", "tutorial_part4", "Stove knob on/off, then multi-stage force key."),
+    ("Selection", "tutorial_part1", "Select arms (1, 2, 3) then switch camera (V)."),
+    ("Basic control", "tutorial_part2", "Move with arrows, E/Q, R/T, F/G, then Space."),
+    ("Basic actions", "tutorial_part3", "Grasp, hold-button, switch, then push a box."),
+    ("Advance actions", "tutorial_part4", "Stove knob on/off, then multi-stage force key."),
 )
 
 PLAY_BLUE = "#3182bd"
@@ -223,6 +223,8 @@ class RoundedButton(tk.Canvas):
             text=self._text,
             fill="white" if self.button_state == "normal" else "#b4bac2",
             font=self._font,
+            width=max(8, width - 16),
+            justify="center",
         )
 
     def _enter(self, _event):

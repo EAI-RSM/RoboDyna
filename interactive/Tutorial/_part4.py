@@ -23,7 +23,7 @@ _STAGE_BALL = (
         ("space", "Space"),
         *_MOVE_KEYS,
     ),
-    "Catch the rolling ball: move onto it, close (Space), lift (E). "
+    "Pick up the ball: move onto it, close (Space), lift (E). "
     "Touching it is fine — it only respawns if it falls off the table.",
 )
 _STAGE_STOVE = (
@@ -34,7 +34,7 @@ _STAGE_STOVE = (
         ("t", "T"),
         *_MOVE_KEYS,
     ),
-    "Stove knob: arrows + Q/E onto it, close (Space), yaw left (R) to light "
+    "Turn on/off the stove: arrows + Q/E onto the knob, close (Space), yaw left (R) to light "
     "the fire, yaw back (T) to turn it off.",
 )
 _STAGE_MALLET = (
@@ -52,7 +52,7 @@ _STAGE_FORCE = (
         ("up", "up"),
         ("down", "down"),
     ),
-    "Force key: press Q until the bar enters the yellow region (success). "
+    "Press multistep button: press Q until the bar enters the yellow region (success). "
     "Yellow moves — release (E), then press again for the next band, "
     "through full force.",
 )

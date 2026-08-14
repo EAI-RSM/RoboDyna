@@ -12,6 +12,7 @@ GAP = 14
 CANVAS_PAD = 12
 SUBLABEL_H = 38
 INSTRUCTION_H = 78
+TITLE_H = 40
 
 ARM_SUBLABELS = ("left", "right", "both")
 ARM_INSTRUCTION = "Select gripper"
@@ -25,13 +26,21 @@ TILT_SUBLABELS = ("left", "right")
 TILT_INSTRUCTION = "Tilt the gripper left or right"
 SPACE_INSTRUCTION = "Open and close the gripper"
 SPACE_BAR_W = KEY_SIZE * 2 + GAP
+GRASP_TITLE = "Pick the cube"
 GRASP_INSTRUCTION = "Arrows move. E/Q raise and lower. Space closes."
+HOLD_TITLE = "Press the button"
 HOLD_INSTRUCTION = "Arrows to the button. Space closes. Q to hold; E to release."
+SWITCH_TITLE = "Turn key on/off"
 SWITCH_INSTRUCTION = "Arrows to aim. Space closes. Q turns it ON, Q again OFF."
-PUSH_INSTRUCTION = "Close the gripper, then push the box to the green line"
+PUSH_TITLE = "Push the box over the line"
+PUSH_INSTRUCTION = "Close gripper, lower arm and push"
+BALL_TITLE = "Pick up the ball"
 BALL_INSTRUCTION = "Ball rolls toward you. Space closes; E lifts. Falls off → respawns."
+STOVE_TITLE = "Turn on/off the stove"
 STOVE_INSTRUCTION = "Arrows + Q/E to the knob. Space grasp. R/T yaw: left lights fire."
+MALLET_TITLE = "Pick up the mallet"
 MALLET_INSTRUCTION = "Space closes on the handle; E lifts the mallet."
+FORCE_TITLE = "Press multistep button"
 FORCE_INSTRUCTION = (
     "Press Q until the bar enters the yellow band — that counts. "
     "Release, then press again for the next yellow."
@@ -641,16 +650,24 @@ def draw_arrows_eq_keys(instruction: str, pressed: set[str] | None = None) -> Im
 def draw_grasp_keys(
     pressed: set[str] | None = None,
     instruction: str = GRASP_INSTRUCTION,
+    title: str = GRASP_TITLE,
 ) -> Image.Image:
-    """Arrows + E/Q height + Space (grasp, hold button, on/off switch)."""
+    """Title, then arrows + E/Q + Space, then the instruction line."""
     pressed = pressed or set()
     k, g, pad = PLAY2_KEY, PLAY2_GAP, PLAY2_PAD
     aw, ah = _play2_arrow_block()
+    title_h = TITLE_H if title else 0
+    inst_h = INSTRUCTION_H if instruction else 8
     width = pad + aw + PLAY2_GROUP + k + pad
-    height = pad + ah + g + k + pad + INSTRUCTION_H
+    height = pad + title_h + ah + g + k + pad + inst_h
     canvas = Image.new("RGBA", (width, height), _CANVAS)
     d = ImageDraw.Draw(canvas)
-    x0 = y0 = pad
+    x0 = pad
+    y0 = pad + title_h
+    if title:
+        title_font = _font(24)
+        lines = _wrap_text(title, title_font, d, width - pad * 2)
+        _draw_centered_lines(d, lines, title_font, pad + 4, width, _INSTRUCTION)
     _composite_arrows_eq(canvas, pressed, x0=x0, y0=y0, k=k, g=g)
     sy = y0 + ah + g
     space_w = aw + PLAY2_GROUP + k
@@ -658,63 +675,24 @@ def draw_grasp_keys(
         draw_wide_keycap("Space", pressed="Space" in pressed, width=space_w, height=k),
         (x0, sy),
     )
-    inst_font = _font(22)
-    lines = _wrap_text(instruction, inst_font, d, width - pad * 2)
-    _draw_centered_lines(d, lines, inst_font, sy + k + 8, width, _INSTRUCTION)
+    if instruction:
+        inst_font = _font(22)
+        lines = _wrap_text(instruction, inst_font, d, width - pad * 2)
+        _draw_centered_lines(d, lines, inst_font, sy + k + 8, width, _INSTRUCTION)
     return canvas
 
 
 def draw_hold_keys(pressed: set[str] | None = None) -> Image.Image:
-    return draw_grasp_keys(pressed, HOLD_INSTRUCTION)
+    return draw_grasp_keys(pressed, instruction=HOLD_INSTRUCTION, title=HOLD_TITLE)
 
 
 def draw_switch_keys(pressed: set[str] | None = None) -> Image.Image:
-    return draw_grasp_keys(pressed, SWITCH_INSTRUCTION)
+    return draw_grasp_keys(pressed, instruction=SWITCH_INSTRUCTION, title=SWITCH_TITLE)
 
 
 def draw_push_keys(pressed: set[str] | None = None) -> Image.Image:
-    """Space bar above the arrow cluster for the push-box stage."""
-    pressed = pressed or set()
-    arrow_w, _arrow_h = arrow_cluster_size()
-    width = arrow_w
-    height = (
-        CANVAS_PAD
-        + KEY_SIZE
-        + GAP
-        + KEY_SIZE * 2
-        + GAP
-        + INSTRUCTION_H
-        + CANVAS_PAD
-    )
-    canvas = Image.new("RGBA", (width, height), _CANVAS)
-    d = ImageDraw.Draw(canvas)
-    space = draw_wide_keycap("Space", pressed="Space" in pressed)
-    x0 = (width - space.width) // 2
-    y0 = CANVAS_PAD
-    canvas.alpha_composite(space, (x0, y0))
-    ay = y0 + KEY_SIZE + GAP
-    canvas.alpha_composite(
-        draw_arrow_keycap("up", pressed="up" in pressed),
-        (CANVAS_PAD + KEY_SIZE + GAP, ay),
-    )
-    canvas.alpha_composite(
-        draw_arrow_keycap("left", pressed="left" in pressed),
-        (CANVAS_PAD, ay + KEY_SIZE + GAP),
-    )
-    canvas.alpha_composite(
-        draw_arrow_keycap("down", pressed="down" in pressed),
-        (CANVAS_PAD + KEY_SIZE + GAP, ay + KEY_SIZE + GAP),
-    )
-    canvas.alpha_composite(
-        draw_arrow_keycap("right", pressed="right" in pressed),
-        (CANVAS_PAD + 2 * (KEY_SIZE + GAP), ay + KEY_SIZE + GAP),
-    )
-    inst_font = _font(26)
-    max_w = width - CANVAS_PAD * 2
-    lines = _wrap_text(PUSH_INSTRUCTION, inst_font, d, max_w)
-    inst_y = ay + KEY_SIZE * 2 + GAP + 8
-    _draw_centered_lines(d, lines, inst_font, inst_y, width, _INSTRUCTION)
-    return canvas
+    """Same keys as pick (including Q/E) with the push-box caption."""
+    return draw_grasp_keys(pressed, instruction=PUSH_INSTRUCTION, title=PUSH_TITLE)
 
 
 def draw_action_stage(stage: str, pressed: set[str] | None = None) -> Image.Image:
@@ -731,26 +709,7 @@ def draw_action_stage(stage: str, pressed: set[str] | None = None) -> Image.Imag
 
 
 def draw_ball_keys(pressed: set[str] | None = None) -> Image.Image:
-    """Same compact arrows + E/Q + Space layout as part-3 grasp."""
-    pressed = pressed or set()
-    k, g, pad = PLAY2_KEY, PLAY2_GAP, PLAY2_PAD
-    aw, ah = _play2_arrow_block()
-    width = pad + aw + PLAY2_GROUP + k + pad
-    height = pad + ah + g + k + pad + INSTRUCTION_H
-    canvas = Image.new("RGBA", (width, height), _CANVAS)
-    d = ImageDraw.Draw(canvas)
-    x0 = y0 = pad
-    _composite_arrows_eq(canvas, pressed, x0=x0, y0=y0, k=k, g=g)
-    sy = y0 + ah + g
-    space_w = aw + PLAY2_GROUP + k
-    canvas.alpha_composite(
-        draw_wide_keycap("Space", pressed="Space" in pressed, width=space_w, height=k),
-        (x0, sy),
-    )
-    inst_font = _font(22)
-    lines = _wrap_text(BALL_INSTRUCTION, inst_font, d, width - pad * 2)
-    _draw_centered_lines(d, lines, inst_font, sy + k + 8, width, _INSTRUCTION)
-    return canvas
+    return draw_grasp_keys(pressed, instruction=BALL_INSTRUCTION, title=BALL_TITLE)
 
 
 def draw_stove_keys(pressed: set[str] | None = None) -> Image.Image:
@@ -760,11 +719,16 @@ def draw_stove_keys(pressed: set[str] | None = None) -> Image.Image:
     aw, ah = _play2_arrow_block()
     # arrows | E Q | R T  (letter pairs sit on the arrow bottom row)
     letters_w = 2 * (2 * k + g) + PLAY2_GROUP
+    title_h = TITLE_H
     width = pad + aw + PLAY2_GROUP + letters_w + pad
-    height = pad + ah + g + k + pad + INSTRUCTION_H
+    height = pad + title_h + ah + g + k + pad + INSTRUCTION_H
     canvas = Image.new("RGBA", (width, height), _CANVAS)
     d = ImageDraw.Draw(canvas)
-    x0 = y0 = pad
+    x0 = pad
+    y0 = pad + title_h
+    title_font = _font(24)
+    lines = _wrap_text(STOVE_TITLE, title_font, d, width - pad * 2)
+    _draw_centered_lines(d, lines, title_font, pad + 4, width, _INSTRUCTION)
     canvas.alpha_composite(
         draw_arrow_keycap("up", pressed="up" in pressed, size=k),
         (x0 + k + g, y0),
@@ -817,26 +781,7 @@ def draw_stove_keys(pressed: set[str] | None = None) -> Image.Image:
 
 
 def draw_mallet_keys(pressed: set[str] | None = None) -> Image.Image:
-    """Reuse the compact part-3 grasp layout with a mallet caption."""
-    pressed = pressed or set()
-    k, g, pad = PLAY2_KEY, PLAY2_GAP, PLAY2_PAD
-    aw, ah = _play2_arrow_block()
-    width = pad + aw + PLAY2_GROUP + k + pad
-    height = pad + ah + g + k + pad + INSTRUCTION_H
-    canvas = Image.new("RGBA", (width, height), _CANVAS)
-    d = ImageDraw.Draw(canvas)
-    x0 = y0 = pad
-    _composite_arrows_eq(canvas, pressed, x0=x0, y0=y0, k=k, g=g)
-    sy = y0 + ah + g
-    space_w = aw + PLAY2_GROUP + k
-    canvas.alpha_composite(
-        draw_wide_keycap("Space", pressed="Space" in pressed, width=space_w, height=k),
-        (x0, sy),
-    )
-    inst_font = _font(22)
-    lines = _wrap_text(MALLET_INSTRUCTION, inst_font, d, width - pad * 2)
-    _draw_centered_lines(d, lines, inst_font, sy + k + 8, width, _INSTRUCTION)
-    return canvas
+    return draw_grasp_keys(pressed, instruction=MALLET_INSTRUCTION, title=MALLET_TITLE)
 
 
 def _force_bar_colors():
@@ -863,11 +808,16 @@ def draw_force_key_stage(
     pressed = pressed or set()
     k, g, pad = PLAY2_KEY, PLAY2_GAP, PLAY2_PAD
     aw, ah = _play2_arrow_block()
+    title_h = TITLE_H
     width = pad + aw + PLAY2_GROUP + k + pad
-    height = pad + ah + g + FORCE_BAR_H + pad + INSTRUCTION_H
+    height = pad + title_h + ah + g + FORCE_BAR_H + pad + INSTRUCTION_H
     canvas = Image.new("RGBA", (width, height), _CANVAS)
     d = ImageDraw.Draw(canvas)
-    x0 = y0 = pad
+    x0 = pad
+    y0 = pad + title_h
+    title_font = _font(24)
+    lines = _wrap_text(FORCE_TITLE, title_font, d, width - pad * 2)
+    _draw_centered_lines(d, lines, title_font, pad + 4, width, _INSTRUCTION)
     _composite_arrows_eq(canvas, pressed, x0=x0, y0=y0, k=k, g=g)
     y_bar = y0 + ah + g
     bar_w = aw + PLAY2_GROUP + k

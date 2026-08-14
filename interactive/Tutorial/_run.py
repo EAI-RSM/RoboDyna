@@ -21,10 +21,10 @@ from _interactive_common import (  # noqa: E402
 bootstrap_repo()
 
 PART_TITLES = {
-    1: "Part 1 — Arm selection and camera",
-    2: "Part 2 — Base controls",
-    3: "Part 3 — Basic actions",
-    4: "Part 4 — Advanced actions",
+    1: "Selection",
+    2: "Basic control",
+    3: "Basic actions",
+    4: "Advance actions",
 }
 
 CONTROLS_KEYBOARD = """
@@ -132,9 +132,9 @@ def main(part: int | None = None) -> int:
         return run_part3(env)
 
     if suite == "household":
-        part4_line = "Top-right overlay: stove knob, then multi-stage force key."
+        part4_line = "Top-left overlay: turn on/off the stove, then press the multistep button."
     else:
-        part4_line = "Top-right overlay: catch a rolling ball, then pick up a mallet."
+        part4_line = "Top-left overlay: pick up the ball, then pick up the mallet."
     print_banner(
         f"Tutorial {title}",
         [
