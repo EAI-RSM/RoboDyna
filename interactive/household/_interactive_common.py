@@ -26,6 +26,9 @@ if str(ROOT) not in sys.path:
 BENCH = ROOT / "script" / "bench_script"
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
+from sapien import internal_renderer as R  # noqa: E402
+from sapien.utils.viewer.plugin import Plugin  # noqa: E402
+
 from interactive._interactive_common import (  # noqa: E402
     RealtimePhysicsPacer,
     action_failed,
@@ -65,6 +68,39 @@ PROFILES = {
     "stop_ball": ("envs.stop_ball", "stop_ball", "demo_dynamic", None),
     "clean_table": ("envs.clean_table", "clean_table", "demo_dynamic", "sponge"),
 }
+
+
+class FillTargetHud(Plugin):
+    """Top-right overlay showing the episode's required jar fill level."""
+
+    _WINDOW_W = 220
+    _WINDOW_H = 56
+
+    def __init__(self, env, task: str):
+        self.env = env
+        self.task = task
+        self.ui_window = None
+
+    def _required_pct(self) -> str:
+        tgt = 100.0 * float(getattr(self.env, "target_fill", 0.0))
+        return f"Required fill: {tgt:.0f}%"
+
+    def get_ui_windows(self):
+        if self.ui_window is None:
+            self.ui_window = (
+                R.UIWindow()
+                .Label("Fill target")
+                .append(R.UIDisplayText().Bind(self._required_pct))
+            )
+        ww = 1280
+        try:
+            ww = int(self.viewer.window.size[0])
+        except Exception:
+            pass
+        pw, ph = self._WINDOW_W, self._WINDOW_H
+        self.ui_window.Size(pw, ph)
+        self.ui_window.Pos(max(16, ww - pw - 24), 16)
+        return [self.ui_window]
 
 
 def _rigid(actor):
@@ -1220,6 +1256,17 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
             cw.register_click_handler(controller.on_click)
             controller._click_via_handler = True
     views = make_viewer_view_toggle(env, viewer)
+    # Append after declutter so this HUD stays visible (stock ImGui is hidden).
+    if task in ("measure_ingredient", "fill_coffee_jar"):
+        hud = FillTargetHud(env, task)
+        try:
+            hud.init(viewer)
+        except Exception:
+            pass
+        try:
+            viewer.plugins.append(hud)
+        except Exception:
+            pass
     rendered_frames = 0
     terminal_result = None  # True=success, False=failure, None=manual close/smoke
     terminal_started_at = None
