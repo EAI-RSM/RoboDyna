@@ -120,6 +120,8 @@ class marble_shelf_maze(Base_Task):
         self._sliding_shelf_idx = -1
         self._sliding_dir = 0
         self._sliding_start_local_x = 0.0
+        self._sliding_local_x = 0.0
+        self._sliding_last_p = None
         self._sliding_release_angle = 0.0  # signed deg actually used for this tilt (gap-limited)
         self.bowl = None
         self.bowl_side = "left"
@@ -270,10 +272,14 @@ class marble_shelf_maze(Base_Task):
             if not is_static
             else sapien.physx.PhysxRigidStaticComponent()
         )
+        # Slippery glass: a kinematic untilt must not drag the marble back up the slope.
+        glass_phys = sapien.physx.PhysxMaterial(
+            static_friction=0.12, dynamic_friction=0.08, restitution=0.0,
+        )
         rigid.attach(
             sapien.physx.PhysxCollisionShapeBox(
                 half_size=half_size,
-                material=scene.default_physical_material,
+                material=glass_phys,
             )
         )
         render = sapien.render.RenderBodyComponent()
@@ -436,6 +442,9 @@ class marble_shelf_maze(Base_Task):
                 try:
                     rigid.set_disable_gravity(True)
                     rigid.set_kinematic(True)
+                    rigid.set_kinematic_target(
+                        sapien.Pose([self.shelf_centers_x[i], self.maze_y, self.shelf_z[i]])
+                    )
                 except Exception:
                     pass
             self.shelves.append(shelf)
@@ -513,6 +522,8 @@ class marble_shelf_maze(Base_Task):
         self._ball_mode = "resting"
         self._sliding_shelf_idx = -1
         self._sliding_dir = 0
+        self._sliding_local_x = 0.0
+        self._sliding_last_p = None
         self._pending_active_shelf = None
         self._hold_tilt_shelf_idx = None
         self._hold_dir = None
@@ -717,14 +728,26 @@ class marble_shelf_maze(Base_Task):
         return None
 
     # --------------------------------------------------------- kinematic scene motion
-    def _set_shelf_pose(self, idx: int, angle_deg: float):
+    def _set_shelf_pose(self, idx: int, angle_deg: float, *, initial: bool = False):
         """Rotate shelf `idx` about its own centre (its y axis) so the +x (right) end dips when
-        angle_deg > 0 and the -x (left) end dips when angle_deg < 0."""
+        angle_deg > 0 and the -x (left) end dips when angle_deg < 0.
+
+        After the first pose, drive with ``set_kinematic_target`` so PhysX sees a real surface
+        velocity (``set_pose`` teleports a zero-vel kinematic and drags contacting marbles).
+        """
         cx = self.shelf_centers_x[idx]
         cz = self.shelf_z[idx]
         phi = np.deg2rad(angle_deg)      # sign convention: +angle => right edge goes down
         quat = t3d.quaternions.axangle2quat([0.0, 1.0, 0.0], phi)
-        self.shelves[idx].actor.set_pose(sapien.Pose([cx, self.maze_y, cz], quat))
+        pose = sapien.Pose([cx, self.maze_y, cz], quat)
+        rigid = self._get_rigid(self.shelves[idx])
+        if initial or rigid is None:
+            self.shelves[idx].actor.set_pose(pose)
+        if rigid is not None:
+            try:
+                rigid.set_kinematic_target(pose)
+            except Exception:
+                self.shelves[idx].actor.set_pose(pose)
         self._shelf_cur_angle[idx] = float(angle_deg)
 
     def _max_tilt_deg_for_shelf(self, idx: int) -> float:
@@ -761,15 +784,8 @@ class marble_shelf_maze(Base_Task):
                 hi = mid
         return float(max(lo, 1.0))  # keep a tiny tilt so the marble still rolls off
 
-    def _shelf_ball_local_point(self, idx: int, angle_deg: float, dir_sign: float, start_local_x: float = 0.0):
-        """World position of the marble while it rides shelf `idx`'s top surface as the shelf tilts
-        toward dir_sign (+1 right, -1 left): slides from wherever it started (start_local_x, the
-        shelf's centre unless continuous_ball_motion left it off-centre) toward the down-hill edge in
-        lock-step with the tilt fraction, staying ball_radius above the (rotating) surface."""
-        release_abs = abs(float(getattr(self, "_sliding_release_angle", 0.0))) or abs(self.tilt_angle_deg)
-        frac = float(np.clip(abs(angle_deg) / max(release_abs, 1e-6), 0.0, 1.0))
-        edge_x = dir_sign * self.shelf_half_len
-        local_x = start_local_x + (edge_x - start_local_x) * frac
+    def _ball_pose_on_shelf(self, idx: int, angle_deg: float, local_x: float):
+        """World position of the marble sitting ``local_x`` along shelf ``idx``'s top surface."""
         local_z = self.shelf_half_thick + self.ball_radius
         phi = -np.deg2rad(angle_deg)
         cphi, sphi = np.cos(phi), np.sin(phi)
@@ -778,6 +794,89 @@ class marble_shelf_maze(Base_Task):
         cx = self.shelf_centers_x[idx]
         cz = self.shelf_z[idx]
         return np.array([cx + wx, self.maze_y, cz + wz], dtype=np.float64)
+
+    def _desired_slide_local_x(self, angle_deg: float, dir_sign: float, start_local_x: float = 0.0):
+        """Lock-step along-shelf coordinate for the *increasing* tilt (never used to reverse)."""
+        release_abs = abs(float(getattr(self, "_sliding_release_angle", 0.0))) or abs(self.tilt_angle_deg)
+        frac = float(np.clip(abs(angle_deg) / max(release_abs, 1e-6), 0.0, 1.0))
+        edge_x = dir_sign * self.shelf_half_len
+        return float(start_local_x + (edge_x - start_local_x) * frac)
+
+    def _shelf_ball_local_point(self, idx: int, angle_deg: float, dir_sign: float, start_local_x: float = 0.0):
+        """World position while riding shelf `idx`; along-shelf x is monotonic toward the edge."""
+        local_x = float(getattr(self, "_sliding_local_x", start_local_x))
+        return self._ball_pose_on_shelf(idx, angle_deg, local_x)
+
+    def _advance_sliding_local_x(self, angle_deg: float):
+        """Move the scripted marble downhill with tilt; never slide it back toward the centre."""
+        dir_sign = float(self._sliding_dir)
+        desired = self._desired_slide_local_x(
+            angle_deg, dir_sign, float(self._sliding_start_local_x)
+        )
+        cur = float(getattr(self, "_sliding_local_x", self._sliding_start_local_x))
+        if dir_sign >= 0.0:
+            cur = max(cur, desired)
+            cur = min(cur, dir_sign * self.shelf_half_len)
+        else:
+            cur = min(cur, desired)
+            cur = max(cur, dir_sign * self.shelf_half_len)
+        self._sliding_local_x = float(cur)
+
+    def _set_ball_friction(self, static_f: float, dynamic_f: float):
+        if self._ball_rigid is None:
+            return
+        try:
+            mat = sapien.physx.PhysxMaterial(
+                static_friction=float(static_f),
+                dynamic_friction=float(dynamic_f),
+                restitution=0.0,
+            )
+            for shape in self._ball_rigid.get_collision_shapes():
+                shape.set_physical_material(mat)
+        except Exception:
+            pass
+
+    def _unglue_sliding_ball(self, idx: int):
+        """Shelf is returning before release — keep along-shelf inertia, stop parenting."""
+        if self._ball_rigid is None or str(self._ball_mode) != "sliding":
+            return
+        angle = float(self._shelf_cur_angle[idx])
+        p = self._ball_pose_on_shelf(idx, angle, float(self._sliding_local_x))
+        dt = max(float(self.scene.get_timestep()), 1e-6)
+        last = getattr(self, "_sliding_last_p", None)
+        if last is not None:
+            v = (p - np.asarray(last, dtype=np.float64)) / dt
+        else:
+            v = np.array([float(self._sliding_dir) * self._effective_roll_off_speed(), 0.0, 0.0])
+        speed = float(np.linalg.norm(v))
+        if speed > 1.5:
+            v = v * (1.5 / speed)
+        try:
+            self.ball.set_pose(sapien.Pose(p.tolist()))
+            self._ball_rigid.set_kinematic(False)
+            self._ball_rigid.set_disable_gravity(False)
+            self._ball_rigid.set_linear_velocity(v.tolist())
+            omega_y = float(v[0]) / max(float(self.ball_radius), 1e-6)
+            self._ball_rigid.set_angular_velocity([0.0, omega_y, 0.0])
+            if self.continuous_ball_motion:
+                self._ball_rigid.set_linear_damping(self.CONTINUOUS_LINEAR_DAMPING)
+                self._ball_rigid.set_angular_damping(self.CONTINUOUS_ANGULAR_DAMPING)
+            else:
+                self._ball_rigid.set_linear_damping(0.05)
+                self._ball_rigid.set_angular_damping(0.5)
+            # Don't let contact with the untilting shelf reverse downhill speed.
+            self._set_ball_friction(0.08, 0.05)
+        except Exception:
+            pass
+        near_edge = abs(float(self._sliding_local_x)) >= (self.shelf_half_len * 0.72)
+        toward_edge = float(v[0]) * float(self._sliding_dir) > 0.03
+        if near_edge or toward_edge:
+            self._ball_mode = "falling"
+        else:
+            self._ball_mode = "resting"
+            self._sliding_shelf_idx = -1
+            self._sliding_dir = 0
+        self._sliding_last_p = None
 
     def _advance_shelf_tilts(self):
         dt = float(self.scene.get_timestep())
@@ -788,6 +887,14 @@ class marble_shelf_maze(Base_Task):
         for idx in range(self.n_shelves):
             cur = self._shelf_cur_angle[idx]
             tgt = self._shelf_target_angle[idx]
+            returning = abs(tgt) + 1e-3 < abs(cur)
+            if (
+                returning
+                and idx == self._sliding_shelf_idx
+                and self._ball_mode == "sliding"
+            ):
+                # Unglue at the current (pre-untilt) pose so velocity is downhill, not reversed.
+                self._unglue_sliding_ball(idx)
             if abs(cur - tgt) <= 1e-3:
                 # Already at target: if this is the sliding shelf holding at full tilt, release.
                 if (
@@ -804,7 +911,9 @@ class marble_shelf_maze(Base_Task):
                 cur = max(cur - step, tgt)
             self._set_shelf_pose(idx, cur)
             if idx == self._sliding_shelf_idx and self._ball_mode == "sliding":
-                p = self._shelf_ball_local_point(idx, cur, self._sliding_dir, self._sliding_start_local_x)
+                self._advance_sliding_local_x(cur)
+                p = self._ball_pose_on_shelf(idx, cur, float(self._sliding_local_x))
+                self._sliding_last_p = p.copy()
                 if self._ball_rigid is not None:
                     try:
                         self._ball_rigid.set_kinematic_target(sapien.Pose(p.tolist()))
@@ -884,10 +993,27 @@ class marble_shelf_maze(Base_Task):
         if self._ball_on_table():
             self._mark_ball_missed()
             return
-        # Opt 1: while waiting for the next press, rolling off the shelf is already a miss —
-        # do not wait until it hits the table to stop the scenario.
+        # Opt 1: a slow roll-off while waiting for the next press is a miss. Leftover
+        # downhill speed after a cancelled tilt is a real drop — switch to falling.
         if self.continuous_ball_motion and mode == "resting" and self._ball_left_active_shelf():
+            speed = 0.0
+            if self._ball_rigid is not None:
+                try:
+                    vel = self._ball_rigid.get_linear_velocity()
+                    speed = float(np.linalg.norm(vel))
+                except Exception:
+                    speed = 0.0
+            if speed > 0.04:
+                self._ball_mode = "falling"
+                if int(getattr(self, "_sliding_shelf_idx", -1)) < 0:
+                    self._sliding_shelf_idx = int(getattr(self, "active_shelf_idx", -1))
+                return
             self._mark_ball_missed()
+            return
+        if (not self.continuous_ball_motion) and mode == "resting" and self._ball_left_active_shelf():
+            self._ball_mode = "falling"
+            if int(getattr(self, "_sliding_shelf_idx", -1)) < 0:
+                self._sliding_shelf_idx = int(getattr(self, "active_shelf_idx", -1))
 
     def _release_ball(self, idx: int, dir_sign: float):
         if self._ball_rigid is None or self._ball_mode != "sliding":
@@ -906,13 +1032,16 @@ class marble_shelf_maze(Base_Task):
             else:
                 self._ball_rigid.set_linear_damping(0.05)
                 self._ball_rigid.set_angular_damping(0.5)
+            self._set_ball_friction(0.08, 0.05)
         except Exception:
             pass
         self._ball_mode = "falling"
+        self._sliding_last_p = None
         # Expert path eases the shelf back immediately; interactive hold-to-tilt keeps it
-        # tilted until the key is released (see `_sync_hold_tilt`).
+        # tilted until the key is released (see `_sync_hold_tilt`). The marble is already
+        # dynamic here, so untilt must not kinematically parent it back up the slope.
         if not self._interactive_controls_enabled():
-            self._shelf_target_angle[idx] = 0.0   # ease the fired shelf back to flat once it's done its job
+            self._shelf_target_angle[idx] = 0.0
 
     def _freeze_ball_on_shelf(self, idx: int, *, advance_active: bool = True):
         if self._ball_rigid is None:
@@ -932,6 +1061,7 @@ class marble_shelf_maze(Base_Task):
                 self._ball_rigid.set_kinematic(False)
                 self._ball_rigid.set_linear_damping(self.CONTINUOUS_LINEAR_DAMPING)
                 self._ball_rigid.set_angular_damping(self.CONTINUOUS_ANGULAR_DAMPING)
+                self._set_ball_friction(self.CONTINUOUS_STATIC_FRICTION, self.CONTINUOUS_DYNAMIC_FRICTION)
             except Exception:
                 pass
         else:
@@ -1131,6 +1261,8 @@ class marble_shelf_maze(Base_Task):
             except Exception:
                 pass
         self._sliding_start_local_x = float(cur_p[0]) - self.shelf_centers_x[idx]
+        self._sliding_local_x = float(self._sliding_start_local_x)
+        self._sliding_last_p = None
         self._sliding_release_angle = release_angle
         self._sliding_shelf_idx = idx
         self._sliding_dir = dir_sign
@@ -1208,7 +1340,7 @@ class marble_shelf_maze(Base_Task):
                 and abs(float(self._shelf_target_angle[idx])) < 1e-3
                 and abs(float(self._shelf_cur_angle[idx])) < 1e-2
             ):
-                self._restore_ball_after_cancelled_tilt(idx)
+                self._unglue_sliding_ball(idx)
             return
         if mode != "falling":
             return
@@ -1414,6 +1546,8 @@ class marble_shelf_maze(Base_Task):
             except Exception:
                 pass
         self._sliding_start_local_x = float(cur_p[0]) - self.shelf_centers_x[idx]
+        self._sliding_local_x = float(self._sliding_start_local_x)
+        self._sliding_last_p = None
 
         max_tilt = self._max_tilt_deg_for_shelf(idx)
         self._sliding_release_angle = dir_sign * max_tilt
