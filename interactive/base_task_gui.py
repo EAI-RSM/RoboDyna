@@ -1570,6 +1570,8 @@ class InteractiveTaskLauncher(tk.Tk):
                 summary=task_summary(task),
                 control_mode=control_mode,
                 script_path=script,
+                scenario=scenario,
+                seed=seed,
             )
             if not show_task_briefing(self, briefing):
                 self._set_status(

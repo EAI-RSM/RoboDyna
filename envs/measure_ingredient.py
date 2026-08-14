@@ -732,7 +732,7 @@ class measure_ingredient(KitchenS_base_task):
             self.jar_xy[0] = side_x
             self.arm = ArmTag("left" if side_x <= 0 else "right")
 
-        self.target_fill = self._resolve_target_fill(cfg, rng)
+        self.target_fill = self._resolve_target_fill(cfg, self._layout_rng(202))
 
     def _configure_observer_camera(self):
         cams = getattr(self, "cameras", None)

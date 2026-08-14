@@ -12,6 +12,12 @@ import sys
 import tkinter as tk
 from pathlib import Path
 
+from _briefing_copy import (
+    TASK_BRIEFING,
+    episode_amount,
+    fill_amount_placeholders,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTRUCTION_DIR = REPO_ROOT / "description" / "task_instruction"
 # Same Robo/Dyna stamp mark as control_quality tiles (cropped + upright).
@@ -247,6 +253,8 @@ _GRIPPER_TOGGLE_HELP = "Space — open / close selected gripper(s)"
 _VIEW_HELP = "V — cycle view: head_camera ↔ gripper(s)"
 _ESCAPE_HELP = "Escape — close the viewer"
 
+_NOTE_RED = "#c0392b"
+
 
 def load_task_instruction(task: str) -> str:
     """Return the task's full instruction text from ``description/task_instruction``."""
@@ -336,6 +344,10 @@ def _looks_like_key_binding(line: str) -> bool:
     """True for control rows like ``Space — …`` / ``Arrow keys    …``."""
     s = line.strip()
     if re.match(r"^Tip\b", s, re.IGNORECASE):
+        return True
+    if re.match(r"^mouse\s+click\b", s, re.IGNORECASE):
+        return True
+    if re.match(r"^Note\b", s, re.IGNORECASE):
         return True
     # Known teleop / viewer keys (and a few task-specific tokens like "(hit)").
     return bool(
@@ -650,6 +662,28 @@ def load_task_controls(script_path: Path, mode: str) -> str:
     return "\n".join(core + extras)
 
 
+def _is_mouse_click_key(key: str) -> bool:
+    k = re.sub(r"\s+", " ", key.strip().lower())
+    return k in {"mouse click", "mouse"} or k.startswith("mouse click")
+
+
+def _format_catalog_controls(rows: list) -> str:
+    lines: list[str] = []
+    for row in rows or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            continue
+        key, desc = str(row[0]).strip(), str(row[1]).strip()
+        if _is_mouse_click_key(key):
+            key = "mouse click"
+            low = desc.lower()
+            if low.startswith("mouse click"):
+                desc = desc[len("mouse click") :].lstrip(" —-")
+            elif low.startswith("click "):
+                pass
+        lines.append(f"{key} — {desc}" if desc else key)
+    return "\n".join(lines)
+
+
 def build_briefing_text(
     *,
     label: str,
@@ -659,26 +693,66 @@ def build_briefing_text(
     summary: str | None,
     control_mode: str,
     script_path: Path,
+    scenario: str | None = None,
+    seed: int | None = None,
 ) -> dict[str, object]:
-    """Assemble instruction / objective / controls sections for the dialog."""
-    instruction = load_task_instruction(task)
-    objectives: list[str] = []
-    if summary:
-        objectives.append(str(summary).strip())
-    if scenario_label and scenario_desc:
-        objectives.append(f"{scenario_label}: {scenario_desc.strip()}")
-    elif scenario_desc:
-        objectives.append(str(scenario_desc).strip())
-    if not objectives:
-        objectives.append("Complete the task successfully before the episode ends.")
-    controls = load_task_controls(script_path, control_mode)
+    """Assemble instruction / controls / notes / tips for the dialog."""
+    del summary  # Objectives removed; README summary is not shown.
+    spec = TASK_BRIEFING.get(task) or {}
+    amount = episode_amount(task, seed)
+
+    def _amt(text: str) -> str:
+        return fill_amount_placeholders(str(text or ""), amount)
+
+    instruction = _amt(str(spec.get("instruction") or "").strip() or load_task_instruction(task))
+    option_heading = str(scenario_label or scenario or "").strip()
+    option_body = _amt(str(scenario_desc or "").strip())
+    success_line = ""
+    if spec.get("success"):
+        success_line = _amt(spec["success"]).strip()
+
+    mode_raw = str(control_mode or "").strip().lower().replace("_", "+").replace(" ", "")
+    is_robot = mode_raw == "robot"
+
+    notes: list = []
+    if not is_robot:
+        extra_notes = list(spec.get("notes") or [])
+        extra_tips = list(spec.get("tips") or [])
+        for item in extra_notes + extra_tips:
+            if isinstance(item, dict):
+                notes.append({
+                    **item,
+                    "text": _amt(item.get("text") or ""),
+                    "red": list(item.get("red") or []) + ([amount] if amount else []),
+                })
+            else:
+                notes.append(_amt(item))
+
+    if is_robot:
+        # Full shared teleop key bindings; no task-specific robot tips.
+        controls = "\n".join(_normalize_control_lines(_SHARED_ROBOT))
+    else:
+        kb = spec.get("keyboard")
+        controls = (
+            _format_catalog_controls(kb)
+            if kb
+            else load_task_controls(script_path, control_mode)
+        )
+
     return {
         "title": label,
         "task": task,
         "scenario_label": scenario_label or "",
         "instruction": instruction or "No written instruction found for this task.",
-        "objectives": objectives,
+        "option_heading": option_heading,
+        "option_body": option_body,
+        "option_line": (
+            f"{option_heading}: {option_body}".strip(": ") if option_body else ""
+        ),
+        "success_line": success_line,
+        "objectives": [],
         "controls": controls or "No control help found for this launcher.",
+        "notes": notes,
         "control_mode": control_mode,
     }
 
@@ -736,13 +810,14 @@ def show_task_briefing(parent: tk.Tk | tk.Toplevel, briefing: dict) -> bool:
     scenario = str(briefing.get("scenario_label") or "")
     mode = str(briefing.get("control_mode") or "robot")
     instruction = str(briefing.get("instruction") or "")
-    objectives = briefing.get("objectives") or []
-    if isinstance(objectives, str):
-        objectives = [
-            ln.lstrip("• ").strip()
-            for ln in objectives.splitlines()
-            if ln.strip()
-        ]
+    option_heading = str(briefing.get("option_heading") or "").strip()
+    option_body = str(briefing.get("option_body") or "").strip()
+    if not option_body:
+        option_body = str(briefing.get("option_line") or "").strip()
+        if option_body.lower().startswith("option ") and ":" in option_body:
+            option_body = option_body.split(":", 1)[-1].strip()
+    success_line = str(briefing.get("success_line") or "").strip()
+    notes = briefing.get("notes") or []
     control_lines = _normalize_control_lines(str(briefing.get("controls") or ""))
 
     # ---- Hero ----
@@ -857,31 +932,57 @@ def show_task_briefing(parent: tk.Tk | tk.Toplevel, briefing: dict) -> bool:
     content = tk.Frame(inner, bg=PAGE_BG)
     content.pack(fill="both", expand=True, padx=40, pady=(22, 12))
 
-    def _section(parent_frame: tk.Frame, index: str, heading: str) -> tk.Frame:
+    def _section(parent_frame: tk.Frame, heading: str) -> tk.Frame:
         block = tk.Frame(parent_frame, bg=PAGE_BG)
         block.pack(fill="x", pady=(0, 26))
         head = tk.Frame(block, bg=PAGE_BG)
         head.pack(fill="x", pady=(0, 10))
         tk.Label(
             head,
-            text=index,
-            bg=PAGE_BG,
-            fg=ACCENT,
-            font=("Georgia", 14, "bold"),
-        ).pack(side="left")
-        tk.Label(
-            head,
             text=heading.upper(),
             bg=PAGE_BG,
             fg=MUTED,
             font=("Sans", 11, "bold"),
-        ).pack(side="left", padx=(10, 0), pady=(3, 0))
-        # Hairline under the section title.
+        ).pack(side="left")
         tk.Frame(block, bg=LINE, height=1).pack(fill="x", pady=(0, 12))
         return block
 
-    # Instruction — one clear paragraph, no card chrome.
-    instr = _section(content, "01", "Instruction")
+    def _pack_highlighted(parent_frame: tk.Frame, text: str, red_phrases: list[str]) -> None:
+        row = tk.Frame(parent_frame, bg=PAGE_BG)
+        row.pack(anchor="w", fill="x")
+        remaining = text
+        font = ("Sans", 13)
+        while remaining:
+            hit_at = None
+            hit_phrase = ""
+            low = remaining.lower()
+            for phrase in red_phrases or []:
+                p = str(phrase).strip()
+                if not p:
+                    continue
+                idx = low.find(p.lower())
+                if idx >= 0 and (hit_at is None or idx < hit_at):
+                    hit_at = idx
+                    hit_phrase = remaining[idx : idx + len(p)]
+            if hit_at is None:
+                tk.Label(
+                    row, text=remaining, bg=PAGE_BG, fg=INK, font=font,
+                    justify="left", wraplength=860, anchor="w",
+                ).pack(side="left")
+                break
+            if hit_at:
+                tk.Label(
+                    row, text=remaining[:hit_at], bg=PAGE_BG, fg=INK, font=font,
+                    justify="left", anchor="w",
+                ).pack(side="left")
+            tk.Label(
+                row, text=hit_phrase, bg=PAGE_BG, fg=_NOTE_RED,
+                font=("Sans", 13, "bold"), justify="left", anchor="w",
+            ).pack(side="left")
+            remaining = remaining[hit_at + len(hit_phrase) :]
+
+    # Instruction
+    instr = _section(content, "Instruction")
     tk.Label(
         instr,
         text=instruction,
@@ -893,39 +994,56 @@ def show_task_briefing(parent: tk.Tk | tk.Toplevel, briefing: dict) -> bool:
         anchor="w",
     ).pack(anchor="w", fill="x")
 
-    # Objectives — soft panel with numbered goals.
-    obj = _section(content, "02", "Objectives")
-    panel = tk.Frame(obj, bg=PANEL_BG)
-    panel.pack(fill="x")
-    for i, line in enumerate(objectives, start=1):
-        row = tk.Frame(panel, bg=PANEL_BG)
-        row.pack(fill="x", padx=18, pady=(14 if i == 1 else 6, 14 if i == len(objectives) else 6))
+    if success_line:
+        success_body = success_line
+        if success_body.lower().startswith("success condition:"):
+            success_body = success_body.split(":", 1)[-1].strip()
+        succ = _section(content, "Success condition")
         tk.Label(
-            row,
-            text=f"{i:02d}",
-            bg=PANEL_BG,
-            fg=ACCENT,
-            font=("Georgia", 13, "bold"),
-            width=3,
-            anchor="w",
-        ).pack(side="left")
-        tk.Label(
-            row,
-            text=str(line),
-            bg=PANEL_BG,
+            succ,
+            text=success_body,
+            bg=PAGE_BG,
             fg=INK,
-            font=("Sans", 14),
+            font=("Georgia", 16),
             justify="left",
-            wraplength=780,
+            wraplength=860,
             anchor="w",
-        ).pack(side="left", fill="x", expand=True)
+        ).pack(anchor="w", fill="x")
+
+    if option_body:
+        opt = _section(content, "Option")
+        if option_heading:
+            tk.Label(
+                opt,
+                text=option_heading,
+                bg=PAGE_BG,
+                fg=ACCENT,
+                font=("Sans", 13, "bold"),
+                justify="left",
+                anchor="w",
+            ).pack(anchor="w", fill="x")
+        tk.Label(
+            opt,
+            text=option_body,
+            bg=PAGE_BG,
+            fg=INK,
+            font=("Georgia", 16),
+            justify="left",
+            wraplength=860,
+            anchor="w",
+        ).pack(anchor="w", fill="x", pady=(4 if option_heading else 0, 0))
 
     # Controls — key chips + descriptions.
-    ctrl = _section(content, "03", "Controls")
+    ctrl = _section(content, "Controls")
     grid = tk.Frame(ctrl, bg=PAGE_BG)
     grid.pack(fill="x")
     for line in control_lines:
         key, desc = _split_control_line(line)
+        if _is_mouse_click_key(key):
+            key = "mouse click"
+            low = desc.lower()
+            if low.startswith("mouse click"):
+                desc = desc[len("mouse click") :].lstrip(" —-")
         row = tk.Frame(grid, bg=PAGE_BG)
         row.pack(fill="x", pady=4)
         key_lbl = tk.Label(
@@ -949,6 +1067,25 @@ def show_task_briefing(parent: tk.Tk | tk.Toplevel, briefing: dict) -> bool:
                 wraplength=700,
                 anchor="w",
             ).pack(side="left", padx=(12, 0), fill="x", expand=True)
+
+    if notes:
+        note_sec = _section(content, "Notes")
+        for item in notes:
+            if isinstance(item, dict):
+                _pack_highlighted(
+                    note_sec, str(item.get("text") or ""), list(item.get("red") or [])
+                )
+            else:
+                tk.Label(
+                    note_sec,
+                    text=str(item),
+                    bg=PAGE_BG,
+                    fg=INK,
+                    font=("Sans", 13),
+                    justify="left",
+                    wraplength=860,
+                    anchor="w",
+                ).pack(anchor="w", fill="x")
 
     # ---- Footer ----
     footer_wrap = tk.Frame(dialog, bg=PAGE_BG)
