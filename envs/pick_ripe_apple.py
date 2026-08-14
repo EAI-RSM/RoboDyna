@@ -39,7 +39,7 @@ class pick_ripe_apple(Base_Task):
               inward toward trunk/bark for BOTH stem and apple together:
                 hang_x = tip - apple_side * U(0, jitter)
     Basket:   076_breadbasket in front; BASKET_Q = packing upright then +90° Z;
-              sample model_id ∈ {0..4}; keep original asset appearance.
+              sample model_id ∈ {0,1,2,4} (exclude 3); keep original asset appearance.
     Do NOT revisit Rx±90° hang quats, tip-only X, or dual boards/bowls.
     ========================================================================
     FROZEN CONTROL / GRASPING — DO NOT CHANGE (user-locked)
@@ -103,7 +103,7 @@ class pick_ripe_apple(Base_Task):
     # Packing upright [0.5,0.5,0.5,0.5] then +90° about world Z.
     BASKET_Q = [0.0, 0.0, 0.70710678, 0.70710678]
     BASKET_MODEL = "076_breadbasket"
-    BASKET_IDS = [0, 1, 2, 3, 4]
+    BASKET_IDS = [0, 1, 2, 4]  # exclude base3
     COLOR_STOPS = [
         (0.0, [0.20, 0.62, 0.18]),     # unripe: green
         (0.8, [0.92, 0.10, 0.08]),     # ripe: vivid red (aligned with red_window mean)

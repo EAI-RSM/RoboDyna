@@ -1344,7 +1344,7 @@
         },
         {
           "param": "basket_id",
-          "how": "choice({0..4})",
+          "how": "choice({0,1,2,4}); exclude 3",
           "config_key": "basket_scale",
           "notes": null
         }
