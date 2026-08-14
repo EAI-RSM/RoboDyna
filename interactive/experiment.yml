@@ -1,15 +1,14 @@
 # Human-experiment GUI protocol (same folder as experiment_gui.py).
 #
-# Edit this file to set recording, play limits, controller, seed, and which
-# tasks appear. Task lists use 1-based card numbers (the 01, 02, … badges).
+# Edit this file to set recording, play limits, seed, and which tasks appear.
+# Task lists use 1-based card numbers (the 01, 02, … badges).
 # Tutorial is 00 and is always shown; it is not part of these lists.
 # Tutorial parts can be replayed unlimited times and are not written to exp_logs.
 #
+# Controller (robot vs keyboard+mouse) is chosen in the experiment GUI after
+# login. Logs live in data/exp_logs/<user>/user_robot.json or user_keyboard.json.
+#
 # Override path with ROBODYNA_EXPERIMENT_CONFIG=/path/to/file.yml if needed.
-
-# Logs live in data/exp_logs/<user>/user_robot.json or user_keyboard.json
-# (separate progress for robot vs keyboard / keyboard+mouse).
-controller: robot           # robot | keyboard+mouse  (keyboard is an alias)
 
 # Seed for each play (0–500).
 #   null        → a new random seed every play

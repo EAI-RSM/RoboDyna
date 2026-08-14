@@ -128,15 +128,6 @@ def _as_seed(value) -> int | None:
     return min(seed, 500)
 
 
-def _as_controller(value) -> str:
-    text = str(value or "robot").strip().lower().replace("_", "+").replace(" ", "")
-    if text in ("keyboard", "keyboard+mouse", "keyboardmouse", "key+mouse", "keymouse", "km"):
-        return "keyboard+mouse"
-    if text == "robot":
-        return "robot"
-    return "robot"
-
-
 def _is_unlimited(value) -> bool:
     if value is None:
         return True
@@ -445,7 +436,6 @@ class ExperimentConfig:
     save_video_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(False))
     log_plays_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(True))
     plays_policy: SlotPolicy = field(default_factory=lambda: parse_int_policy(1))
-    controller: str = "robot"
     seeds: list[int] = field(default_factory=list)
     base_tasks: list[int] = field(default_factory=lambda: list(DEFAULT_BASE_TASKS))
     household_tasks: list[int] = field(default_factory=lambda: list(DEFAULT_HOUSEHOLD_TASKS))
@@ -541,7 +531,6 @@ def load_experiment_config(path: Path | None = None) -> ExperimentConfig:
     cfg.log_plays_policy = parse_bool_policy(log_raw, True)
     if "plays_per_scenario" in raw:
         cfg.plays_policy = parse_int_policy(raw.get("plays_per_scenario"), 1)
-    cfg.controller = _as_controller(raw.get("controller", "robot"))
     cfg.seeds = _as_seeds(raw.get("seed"))
     if "base_tasks" in raw:
         cfg.base_tasks = _as_int_list(raw.get("base_tasks"), DEFAULT_BASE_TASKS)

@@ -36,6 +36,7 @@ from experiment_logs import (  # noqa: E402
     append_play,
     experiment_mode,
     is_slot_locked,
+    session_control_mode,
     slot_success_label,
     stamp_child_env,
     terminal_play_count,
@@ -260,6 +261,8 @@ SCENARIO_OVERRIDES = {
 
 PLAY_BLUE = "#3182bd"
 PLAY_BLUE_ACTIVE = "#4295d0"
+LOCKED_GRAY = "#59616b"
+GATED_RED = "#e34a33"
 PAGE_BG = GUI_PAGE_BG
 HEADER_BG = GUI_PAGE_BG
 HEADER_FG = GUI_INK
@@ -377,6 +380,8 @@ class RoundedButton(tk.Canvas):
         self.command = command
         self.normal_color = bg
         self.active_color = activebackground
+        self.disabled_color = "#59616b"
+        self.disabled_text = "#b4bac2"
         self.button_state = "normal"
         self.radius = radius
         self._text = text
@@ -402,7 +407,12 @@ class RoundedButton(tk.Canvas):
         self.delete("all")
         width = max(2, self.winfo_width())
         height = max(2, self.winfo_height())
-        color = self.normal_color if self.button_state == "normal" else "#59616b"
+        if self.button_state == "normal":
+            color = self.normal_color
+            text_fill = "white"
+        else:
+            color = self.disabled_color
+            text_fill = self.disabled_text
         self._shape = self.create_polygon(
             self._rounded_polygon(width, height),
             smooth=True,
@@ -414,7 +424,7 @@ class RoundedButton(tk.Canvas):
             width / 2,
             height / 2,
             text=self._text,
-            fill="white" if self.button_state == "normal" else "#b4bac2",
+            fill=text_fill,
             font=self._font,
         )
 
@@ -443,6 +453,10 @@ class RoundedButton(tk.Canvas):
             self.normal_color = options.pop("bg")
         if "activebackground" in options:
             self.active_color = options.pop("activebackground")
+        if "disabledbackground" in options:
+            self.disabled_color = options.pop("disabledbackground")
+        if "disabledforeground" in options:
+            self.disabled_text = options.pop("disabledforeground")
         if "state" in options:
             self.button_state = options.pop("state")
         if "font" in options:
@@ -521,7 +535,10 @@ class InteractiveTaskLauncher(tk.Tk):
             self.title(title)
             self.title_label.configure(text=title)
             self.subtitle_label.configure(
-                text="Play each scenario once. Finished scenarios stay gray and cannot be replayed."
+                text=(
+                    "Play Default, Opt 1, and Opt 2 first. Opt 1+2 unlocks after those "
+                    "are finished. Finished scenarios stay gray and cannot be replayed."
+                )
             )
             self.exit_button.configure(text="Back")
             n_vis = len(self._visible_task_indices)
@@ -1314,7 +1331,15 @@ class InteractiveTaskLauncher(tk.Tk):
         self.status.configure(text=self._idle_status, fg=self._idle_status_fg)
 
     def play_or_stop(self, index: int, scenario: str):
-        if experiment_mode() and self._slot_locked("base", TASKS[index][1], scenario):
+        task = TASKS[index][1]
+        if experiment_mode() and self._combo_gated(task, scenario):
+            self._set_status(
+                "Finish Default, Opt 1, and Opt 2 before Opt 1+2.",
+                "#e6a15c",
+                sticky=True,
+            )
+            return
+        if experiment_mode() and self._slot_locked("base", task, scenario):
             self._set_status(
                 "Play limit reached. Choose another remaining scenario.",
                 "#e6a15c",
@@ -1703,6 +1728,8 @@ class InteractiveTaskLauncher(tk.Tk):
                     text=SCENARIO_LABELS[scenario],
                     bg=PLAY_BLUE,
                     activebackground=PLAY_BLUE_ACTIVE,
+                    disabledbackground=LOCKED_GRAY,
+                    disabledforeground="#b4bac2",
                 )
         for index, button in enumerate(self.tutorial_buttons):
             button.configure(
@@ -1730,12 +1757,12 @@ class InteractiveTaskLauncher(tk.Tk):
         return resolve_seed(self.seed_entry.get())
 
     def _apply_experiment_protocol(self):
-        """Lock record / video / controller / seed from interactive/experiment.yml."""
+        """Lock record / video / controller / seed from the experiment protocol."""
         cfg = self._experiment_cfg or load_experiment_config()
         self._experiment_cfg = cfg
         self.record_data.set(bool(cfg.record_data))
         self.save_video.set(bool(cfg.save_video))
-        self.control.set(cfg.controller)
+        self.control.set(session_control_mode())
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="normal")
         self.seed_entry.delete(0, "end")
@@ -1755,6 +1782,26 @@ class InteractiveTaskLauncher(tk.Tk):
             task,
             scenario,
             max_plays=cfg.max_plays(suite, task, scenario),
+        )
+
+    def _slot_finished(self, suite: str, task: str, scenario: str | None = None) -> bool:
+        """Play budget used up, or at least one terminal play if the slot is unlimited."""
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
+        limit = cfg.max_plays(suite, task, scenario)
+        if is_slot_locked(suite, task, scenario, max_plays=limit):
+            return True
+        if limit is None:
+            return terminal_play_count(suite, task, scenario) >= 1
+        return False
+
+    def _combo_gated(self, task: str, scenario: str | None) -> bool:
+        """Opt 1+2 stays closed until Default, Opt 1, and Opt 2 are finished."""
+        if not experiment_mode() or scenario != "opt1+2":
+            return False
+        return not all(
+            self._slot_finished("base", task, prereq)
+            for prereq in ("default", "opt1", "opt2")
         )
 
     def _slot_button_text(self, suite: str, task: str, default_text: str, scenario: str | None = None) -> str:
@@ -1784,8 +1831,20 @@ class InteractiveTaskLauncher(tk.Tk):
                     button.configure(
                         state="disabled",
                         text=slot_success_label("base", task, scenario),
-                        bg="#59616b",
-                        activebackground="#59616b",
+                        bg=LOCKED_GRAY,
+                        activebackground=LOCKED_GRAY,
+                        disabledbackground=LOCKED_GRAY,
+                        disabledforeground="#b4bac2",
+                    )
+                    continue
+                if self._combo_gated(task, scenario):
+                    button.configure(
+                        state="disabled",
+                        text=SCENARIO_LABELS[scenario],
+                        bg=GATED_RED,
+                        activebackground=GATED_RED,
+                        disabledbackground=GATED_RED,
+                        disabledforeground="white",
                     )
                     continue
                 if keep_active:
@@ -1797,6 +1856,8 @@ class InteractiveTaskLauncher(tk.Tk):
                     ),
                     bg=PLAY_BLUE,
                     activebackground=PLAY_BLUE_ACTIVE,
+                    disabledbackground=LOCKED_GRAY,
+                    disabledforeground="#b4bac2",
                 )
 
     def _record_experiment_play(self, run_meta, payload, *, exit_code=None, stopped=False):

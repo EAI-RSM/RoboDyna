@@ -70,18 +70,13 @@ def log_controller_tag(value) -> str:
     return "robot"
 
 
+def session_control_mode() -> str:
+    """Canonical play mode for the GUI / ``ROBODYNA_CONTROL``: ``robot`` or ``keyboard+mouse``."""
+    return "keyboard+mouse" if log_controller_tag(os.environ.get("ROBODYNA_CONTROL")) == "keyboard" else "robot"
+
+
 def current_controller() -> str:
-    env = os.environ.get("ROBODYNA_CONTROL", "").strip()
-    if env:
-        return log_controller_tag(env)
-    try:
-        from experiment_config import load_experiment_config
-    except ImportError:
-        from interactive.experiment_config import load_experiment_config
-    try:
-        return log_controller_tag(load_experiment_config().controller)
-    except Exception:
-        return "robot"
+    return log_controller_tag(os.environ.get("ROBODYNA_CONTROL", "robot"))
 
 
 def user_log_filename(controller: str | None = None) -> str:
@@ -414,7 +409,7 @@ def progress_counts(
     household_task_names: list[str] | None = None,
     n_scenarios: int = 4,
     cfg=None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Slots that have reached their play limit vs slots that have a limit.
 
     Unlimited slots (``plays_per_scenario: null``) are omitted from the totals.
@@ -444,6 +439,8 @@ def progress_counts(
     else:
         household_names = list(household_task_names)
 
+    scenario_done = {name: 0 for name in scenarios}
+    scenario_total = {name: 0 for name in scenarios}
     base_done = 0
     base_total = 0
     for task in base_names:
@@ -452,8 +449,10 @@ def progress_counts(
             if limit is None:
                 continue
             base_total += 1
+            scenario_total[scenario] += 1
             if terminal_play_count("base", task, scenario, log=log) >= int(limit):
                 base_done += 1
+                scenario_done[scenario] += 1
     household_done = 0
     household_total = 0
     for task in household_names:
@@ -468,6 +467,8 @@ def progress_counts(
         "base_total": base_total,
         "household_done": household_done,
         "household_total": household_total,
+        "scenario_done": scenario_done,
+        "scenario_total": scenario_total,
     }
 
 

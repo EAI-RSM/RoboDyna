@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 _INTERACTIVE_DIR = Path(__file__).resolve().parent
 if str(_INTERACTIVE_DIR) not in sys.path:
@@ -52,6 +52,19 @@ CARD_BG = "#202c38"
 CARD_BORDER = "#405367"
 TEXT_PRIMARY = "#f4f8fb"
 TEXT_SECONDARY = "#aebdca"
+
+CONTROLLER_DISPLAY = ("Robot", "Keyboard + mouse")
+CONTROLLER_MODE = {
+    "Robot": "robot",
+    "Keyboard + mouse": "keyboard+mouse",
+}
+MODE_DISPLAY = {mode: label for label, mode in CONTROLLER_MODE.items()}
+SCENARIO_REMAINING_LABELS = (
+    ("default", "Default"),
+    ("opt1", "Opt 1"),
+    ("opt2", "Opt 2"),
+    ("opt1+2", "Opt 1+2"),
+)
 
 
 class ExperimentLauncher(tk.Tk):
@@ -297,6 +310,39 @@ class ExperimentLauncher(tk.Tk):
             font=("Sans", 14),
         )
         self.suite_subtitle.pack(anchor="w", pady=(4, 0))
+        control_row = tk.Frame(inner, bg=HEADER_BG)
+        control_row.pack(anchor="w", fill="x", pady=(12, 0))
+        self.controller_caption = tk.Label(
+            control_row,
+            text="Controller",
+            bg=HEADER_BG,
+            fg=GUI_MUTED,
+            anchor="w",
+            font=("Sans", 13, "bold"),
+        )
+        self.controller_caption.pack(side="left")
+        self.controller_combo = ttk.Combobox(
+            control_row,
+            values=CONTROLLER_DISPLAY,
+            state="readonly",
+            width=22,
+            font=("Sans", 13, "bold"),
+        )
+        self.controller_combo.set("Robot")
+        self.controller_combo.pack(side="left", padx=(10, 0))
+        self.controller_combo.bind("<<ComboboxSelected>>", self._on_controller_change)
+
+        self.remaining_stats = tk.Label(
+            self.suite_screen,
+            text="",
+            bg=PAGE_BG,
+            fg=GUI_INK,
+            anchor="w",
+            justify="left",
+            wraplength=820,
+            font=("Sans", 13, "bold"),
+        )
+        self.remaining_stats.pack(fill="x", pady=(0, 12))
 
         grid = tk.Frame(self.suite_screen, bg=PAGE_BG)
         grid.pack(fill="both", expand=True)
@@ -430,17 +476,39 @@ class ExperimentLauncher(tk.Tk):
         self._activate_user(data)
         self._show_screen("suite")
 
+    def _selected_control_mode(self) -> str:
+        label = str(self.controller_combo.get() or "Robot").strip()
+        return CONTROLLER_MODE.get(label, "robot")
+
     def _session_controller(self) -> str:
-        cfg = load_experiment_config()
-        return log_controller_tag(cfg.controller)
+        return log_controller_tag(self._selected_control_mode())
+
+    def _set_controller_combo(self, mode_or_tag: str | None):
+        tag = log_controller_tag(mode_or_tag or "robot")
+        mode = "keyboard+mouse" if tag == "keyboard" else "robot"
+        self.controller_combo.set(MODE_DISPLAY.get(mode, "Robot"))
+
+    def _on_controller_change(self, _event=None):
+        if self.child is not None:
+            messagebox.showinfo(
+                "Task still running",
+                "Close the task window before switching controllers.",
+            )
+            tag = str((self.user_data or {}).get("controller") or "robot")
+            self._set_controller_combo(tag)
+            return
+        if self.user_data is None:
+            return
+        self._bind_session_log(self.user_data)
+        self._refresh_suite_progress()
 
     def _bind_session_log(self, data: dict | None = None) -> dict:
         """Point this session at ``user_robot.json`` or ``user_keyboard.json``."""
         source = data if data is not None else self.user_data or {}
         display = str(source.get("user_name") or source.get("user_id") or "user")
         slug = str(source.get("user_id") or slugify_user_name(display))
-        cfg = load_experiment_config()
-        tag = log_controller_tag(cfg.controller)
+        mode = self._selected_control_mode()
+        tag = log_controller_tag(mode)
         log = ensure_controller_log(
             slug,
             display=display,
@@ -450,23 +518,25 @@ class ExperimentLauncher(tk.Tk):
         )
         os.environ[EXPERIMENT_ENV] = "1"
         os.environ[EXPERIMENT_USER_ENV] = display
-        os.environ["ROBODYNA_CONTROL"] = str(cfg.controller)
+        os.environ["ROBODYNA_CONTROL"] = mode
         os.environ[EXPERIMENT_LOG_ENV] = str(log.get("log_path") or "")
         self.user_data = log
         return log
 
     def _activate_user(self, data: dict):
+        self._set_controller_combo(str((data or {}).get("controller") or "robot"))
         log = self._bind_session_log(data)
         display = str(log.get("user_name") or log.get("user_id") or "user")
         tag = str(log.get("controller") or self._session_controller())
-        control_label = "Robot" if tag == "robot" else "Keyboard"
-        remaining = self._remaining_summary(log)
+        control_label = MODE_DISPLAY.get(
+            "keyboard+mouse" if tag == "keyboard" else "robot",
+            "Robot",
+        )
         self.suite_title.configure(text=f"Welcome back, {display}" if log.get("plays") else f"Hello, {display}")
         self.suite_subtitle.configure(
             text=(
                 f"{control_label} session — progress is stored in user_{tag}.json. "
-                "Finished items stay gray after you close this window.  "
-                f"{remaining}"
+                "Finished items stay gray after you close this window."
             )
         )
 
@@ -479,21 +549,46 @@ class ExperimentLauncher(tk.Tk):
             [HOUSEHOLD_TASKS[i][1] for i in household_idx],
         )
 
-    def _remaining_summary(self, data: dict | None = None) -> str:
+    def _remaining_summary(self, data: dict | None = None, counts: dict | None = None) -> str:
         log = data if data is not None else load_user_log()
         cfg = load_experiment_config()
-        base_names, household_names = self._protocol_task_names()
-        counts = progress_counts(
-            log,
-            base_task_names=base_names,
-            household_task_names=household_names,
-            n_scenarios=len(SCENARIOS),
-            cfg=cfg,
-        )
-        return (
-            f"Base {counts['base_done']}/{counts['base_total']} scenarios  ·  "
-            f"Household {counts['household_done']}/{counts['household_total']} tasks"
-        )
+        if counts is None:
+            base_names, household_names = self._protocol_task_names()
+            counts = progress_counts(
+                log,
+                base_task_names=base_names,
+                household_task_names=household_names,
+                n_scenarios=len(SCENARIOS),
+                cfg=cfg,
+            )
+        parts: list[str] = []
+        all_done = True
+        any_slot = False
+        scenario_done = counts.get("scenario_done") or {}
+        scenario_total = counts.get("scenario_total") or {}
+        for key, label in SCENARIO_REMAINING_LABELS:
+            total = int(scenario_total.get(key, 0) or 0)
+            done = int(scenario_done.get(key, 0) or 0)
+            if total <= 0:
+                continue
+            any_slot = True
+            left = max(0, total - done)
+            if left:
+                all_done = False
+            parts.append(f"{label} {left} left ({done}/{total})")
+        household_total = int(counts.get("household_total") or 0)
+        household_done = int(counts.get("household_done") or 0)
+        if household_total > 0:
+            any_slot = True
+            left = max(0, household_total - household_done)
+            if left:
+                all_done = False
+            parts.append(f"Household {left} left ({household_done}/{household_total})")
+        if not any_slot:
+            return "No limited scenarios in this protocol."
+        if all_done:
+            return "All protocol scenarios are complete for this controller."
+        return "  ·  ".join(parts)
 
     def _refresh_suite_progress(self):
         if self.user_data:
@@ -521,26 +616,37 @@ class ExperimentLauncher(tk.Tk):
         self.household_card._blurb.configure(
             text=f"{len(household_names)} kitchen / office tasks with per-episode randomization."
         )
+        base_left = max(0, int(base_total) - int(counts["base_done"]))
+        household_left = max(0, int(household_total) - int(counts["household_done"]))
         self.base_card._progress.configure(
-            text=f"{counts['base_done']} / {base_total} scenarios completed"
+            text=(
+                f"{counts['base_done']} / {base_total} scenarios completed"
+                + (f"  ·  {base_left} left" if base_total else "")
+            )
         )
         self.household_card._progress.configure(
-            text=f"{counts['household_done']} / {household_total} tasks completed"
+            text=(
+                f"{counts['household_done']} / {household_total} tasks completed"
+                + (f"  ·  {household_left} left" if household_total else "")
+            )
         )
+        remaining = self._remaining_summary(log, counts=counts)
+        self.remaining_stats.configure(text=remaining)
         display = ""
         if self.user_data:
             display = str(self.user_data.get("user_name") or "")
-        remaining = self._remaining_summary(log)
         if display:
             plays = bool((log or {}).get("plays"))
             tag = str((log or {}).get("controller") or self._session_controller())
-            control_label = "Robot" if tag == "robot" else "Keyboard"
+            control_label = MODE_DISPLAY.get(
+                "keyboard+mouse" if tag == "keyboard" else "robot",
+                "Robot",
+            )
             self.suite_title.configure(text=f"Welcome back, {display}" if plays else f"Hello, {display}")
             self.suite_subtitle.configure(
                 text=(
                     f"{control_label} session — progress is stored in user_{tag}.json. "
-                    "Finished items stay gray after you close this window.  "
-                    f"{remaining}"
+                    "Finished items stay gray after you close this window."
                 )
             )
         if counts["base_done"] >= base_total > 0:
@@ -627,6 +733,7 @@ class ExperimentLauncher(tk.Tk):
             self.name_subtitle.configure(wraplength=wrap)
             self.exp_subtitle.configure(wraplength=wrap)
             self.suite_subtitle.configure(wraplength=max(280, wrap - 160))
+            self.remaining_stats.configure(wraplength=max(360, width - 80))
             return
         self._ui_scale = scale
 
@@ -651,6 +758,9 @@ class ExperimentLauncher(tk.Tk):
         self.exp_continue.configure(font=font(16, "bold"), width=px(220), height=px(64), radius=px(26))
         self.suite_title.configure(font=font(30, "bold"))
         self.suite_subtitle.configure(font=font(14), wraplength=max(280, width - 240))
+        self.controller_caption.configure(font=font(13, "bold"))
+        self.controller_combo.configure(font=font(13, "bold"))
+        self.remaining_stats.configure(font=font(13, "bold"), wraplength=max(360, width - 80))
         self.suite_exit.configure(font=font(16, "bold"), width=px(140), height=px(64), radius=px(26))
         for card in (self.base_card, self.household_card):
             card._title.configure(font=font(22, "bold"))

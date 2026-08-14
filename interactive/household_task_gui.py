@@ -66,6 +66,7 @@ from experiment_logs import (  # noqa: E402
     append_play,
     experiment_mode,
     is_slot_locked,
+    session_control_mode,
     slot_success_label,
     stamp_child_env,
     terminal_play_count,
@@ -1473,12 +1474,12 @@ class HouseholdTaskLauncher(tk.Tk):
         return resolve_seed(self.seed_entry.get())
 
     def _apply_experiment_protocol(self):
-        """Lock record / video / controller / seed from interactive/experiment.yml."""
+        """Lock record / video / controller / seed from the experiment protocol."""
         cfg = self._experiment_cfg or load_experiment_config()
         self._experiment_cfg = cfg
         self.record_data.set(bool(cfg.record_data))
         self.save_video.set(bool(cfg.save_video))
-        self.control.set(cfg.controller)
+        self.control.set(session_control_mode())
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="normal")
         self.seed_entry.delete(0, "end")
