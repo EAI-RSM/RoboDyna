@@ -70,8 +70,8 @@ class catch_cuboid(Base_Task):
         self._cuboid_auto_motion = []
         self._cuboid_pop_target_z = []
         self._cuboid_hidden_z = []
-        self._cuboid_pin_pose = []
-        self._cuboid_stop_at_hidden = []
+        self._counted_catches = set()
+        self._jaw_links_by_id = {}
         super()._init_task_env_(**kwags)
         self._configure_observer_camera()
 
@@ -272,14 +272,10 @@ class catch_cuboid(Base_Task):
             self._cuboid_auto_motion.append("rising")
             self._cuboid_pop_target_z.append(float(raised_z))
             self._cuboid_hidden_z.append(float(hidden_pose[2]))
-            self._cuboid_pin_pose.append(None)
-            self._cuboid_stop_at_hidden.append(False)
         else:
             self._cuboid_auto_motion.append(False)
             self._cuboid_pop_target_z.append(0.0)
             self._cuboid_hidden_z.append(0.0)
-            self._cuboid_pin_pose.append(None)
-            self._cuboid_stop_at_hidden.append(False)
         self.cuboids.append(cuboid)
         self._cuboid_rigids.append(rigid)
         self._cuboid_holes.append(int(hole_idx))
@@ -300,8 +296,8 @@ class catch_cuboid(Base_Task):
         self._cuboid_auto_motion = []
         self._cuboid_pop_target_z = []
         self._cuboid_hidden_z = []
-        self._cuboid_pin_pose = []
-        self._cuboid_stop_at_hidden = []
+        self._counted_catches = set()
+        self._jaw_links_by_id = {}
         self.catches = 0
         self.appearances_done = 0
         self._grab_offsets = []
@@ -422,19 +418,8 @@ class catch_cuboid(Base_Task):
                 target_p[2] = next_z
                 rigid.set_kinematic_target(sapien.Pose(p=target_p, q=current_pose.q))
                 if reached:
-                    if i < len(getattr(self, "_cuboid_stop_at_hidden", []) or []) and self._cuboid_stop_at_hidden[i]:
-                        self._cuboid_auto_motion[i] = False
-                        self._cuboid_raised[i] = False
-                    else:
-                        self._cuboid_auto_motion[i] = "rising"
-                        self._cuboid_raised[i] = False
-                return
-            if motion == "pinned":
-                pins = getattr(self, "_cuboid_pin_pose", None) or []
-                pin = pins[i] if i < len(pins) else None
-                if pin is None:
-                    pin = current_pose
-                rigid.set_kinematic_target(pin)
+                    self._cuboid_auto_motion[i] = "rising"
+                    self._cuboid_raised[i] = False
                 return
             print_c(f"cuboid auto motion[{i}]: {motion}", "red")
             return
@@ -450,8 +435,126 @@ class catch_cuboid(Base_Task):
         self._global_step = getattr(self, "_global_step", 0) + 1
         if not getattr(self, "_cuboid_rigids", None) or not getattr(self, "holes", None):
             return
+        self._release_pinched_cuboids()
         for i in range(len(self._cuboid_rigids)):
             self._step_one_cuboid(i)
+
+    # -------------------------------------------------------- jaw pinch
+    def _jaw_link_map(self):
+        """Map jaw link scene ids to ``(side, jaw)``.
+
+        Gripper link names repeat across the two arms, so the key is the link
+        entity's per-scene id; the jaw side comes from the link-name suffix.
+        """
+        cached = getattr(self, "_jaw_links_by_id", None)
+        if cached:
+            return cached
+        robot = getattr(self, "robot", None)
+        if robot is None:
+            return {}
+        jaw_names = set(getattr(robot, "gripper_name", []) or [])
+        mapping = {}
+        for side in ("left", "right"):
+            entity = getattr(robot, f"{side}_entity", None)
+            if entity is None:
+                continue
+            for link in entity.get_links():
+                name = str(link.get_name() or "")
+                if name not in jaw_names:
+                    continue
+                if name.endswith("_left"):
+                    jaw = "a"
+                elif name.endswith("_right"):
+                    jaw = "b"
+                else:
+                    continue
+                try:
+                    mapping[int(link.entity.per_scene_id)] = (side, jaw)
+                except Exception:
+                    continue
+        self._jaw_links_by_id = mapping
+        return mapping
+
+    def _jaws_pinching(self, contacts, names):
+        """Cuboids whose both jaws are physically touching them: ``{name: side}``.
+
+        This is the policy-agnostic grasp trigger: any controller (expert,
+        teleop, learned policy) that closes the fingers onto the cuboid
+        satisfies it.
+        """
+        jaw_map = self._jaw_link_map()
+        if not jaw_map or not names:
+            return {}
+        touched = {}
+        for contact in contacts:
+            body_a, body_b = contact.bodies[0], contact.bodies[1]
+            name_a, name_b = body_a.entity.name, body_b.entity.name
+            if name_a in names:
+                name, other = name_a, body_b
+            elif name_b in names:
+                name, other = name_b, body_a
+            else:
+                continue
+            if not contact.points:
+                continue
+            try:
+                jaw = jaw_map.get(int(other.entity.per_scene_id))
+            except Exception:
+                jaw = None
+            if jaw is None:
+                continue
+            side, which = jaw
+            touched.setdefault(name, {}).setdefault(side, set()).add(which)
+        pinched = {}
+        for name, sides in touched.items():
+            for side, jaws in sides.items():
+                if {"a", "b"} <= jaws:
+                    pinched[name] = side
+                    break
+        return pinched
+
+    def _count_catch(self, cuboid_idx, arm_tag):
+        """Score a catch once per cuboid, whoever detected it first."""
+        counted = getattr(self, "_counted_catches", None)
+        if counted is None:
+            counted = set()
+            self._counted_catches = counted
+        if cuboid_idx in counted:
+            return False
+        counted.add(cuboid_idx)
+        self.catches += 1
+        self._grab_offsets.append(
+            min(self._grasp_offset(cuboid_idx, arm_tag), self.grasp_tol))
+        return True
+
+    def _release_pinched_cuboids(self):
+        """Hand a cuboid over to dynamics as soon as both jaws grip it.
+
+        Only exposed, still-kinematic cuboids are candidates, so the contact
+        scan is skipped entirely while everything is inside the board.
+        """
+        candidates = {}
+        board_top = float(self.board_top_z)
+        for i, rigid in enumerate(self._cuboid_rigids):
+            if rigid is None:
+                continue
+            cuboid_top = float(self.cuboids[i].get_pose().p[2]) + float(self.cuboid_half[2])
+            if cuboid_top < board_top:
+                continue
+            candidates[self._cuboid_names[i]] = i
+        if not candidates:
+            return
+        pinched = self._jaws_pinching(self.scene.get_contacts(), set(candidates))
+        for name, side in pinched.items():
+            # Only a genuinely closing gripper counts; open jaws that merely
+            # graze the cuboid while the arm descends must not release it. This
+            # keeps each arm independent — the left closing never releases the
+            # right's (still-open) cuboid, and vice versa.
+            if not self._gripper_closed(ArmTag(side)):
+                continue
+            i = candidates[name]
+            self._count_catch(i, ArmTag(side))
+            self._release_cuboid(i)
 
     # ------------------------------------------------------------- dwell
     def _dwell(self, steps):
@@ -462,24 +565,6 @@ class catch_cuboid(Base_Task):
             self.scene.step()
             if self.save_freq and (self._global_step % self.save_freq == 0):
                 self._take_picture()
-
-    def _pin_cuboid(self, cuboid_idx=0):
-        """Stop the pop-up drive and hold the cuboid at its current pose."""
-        rigid = self._cuboid_rigids[cuboid_idx] if cuboid_idx < len(self._cuboid_rigids) else None
-        if rigid is None:
-            return False
-        pose = rigid.entity.get_pose()
-        pins = getattr(self, "_cuboid_pin_pose", None)
-        if pins is None:
-            pins = [None] * len(self._cuboid_rigids)
-            self._cuboid_pin_pose = pins
-        while len(pins) <= cuboid_idx:
-            pins.append(None)
-        pins[cuboid_idx] = pose
-        self._cuboid_auto_motion[cuboid_idx] = "pinned"
-        self._cuboid_raised[cuboid_idx] = True
-        rigid.set_kinematic_target(pose)
-        return True
 
     def _release_cuboid(self, cuboid_idx=0):
         # turn the cuboid into a free dynamic body so the gripper can carry it off
@@ -493,9 +578,6 @@ class catch_cuboid(Base_Task):
                 rigid.set_kinematic(False)
                 self._cuboid_rigids[cuboid_idx] = None
                 self._cuboid_auto_motion[cuboid_idx] = False
-                pins = getattr(self, "_cuboid_pin_pose", None)
-                if pins is not None and cuboid_idx < len(pins):
-                    pins[cuboid_idx] = None
                 if cuboid_idx == 0:
                     self._cuboid_rigid = None
             except Exception:
@@ -574,8 +656,7 @@ class catch_cuboid(Base_Task):
             and offset < self.grasp_tol * 2.5
         )
         if caught:
-            self.catches += 1
-            self._grab_offsets.append(min(offset, self.grasp_tol))
+            self._count_catch(cuboid_idx, arm_tag)
         return caught, offset
 
     # ------------------------------------------------------------- policy
@@ -593,9 +674,13 @@ class catch_cuboid(Base_Task):
         self._wait_for_rising([0])
 
         self.move(self.close_gripper(arm_tag=arm_tag))
-        caught, _ = self._try_catch(0, arm_tag)
-        if caught:
-            self._release_cuboid(0)
+        # Grasp is decided by the shared contact trigger
+        # (_release_pinched_cuboids): the cuboid is handed to dynamics only
+        # once this arm's gripper is closed and both jaws touch it — exactly
+        # the criteria any external policy sees. Give PhysX a few steps to
+        # register the pinch, then lift only if it actually caught.
+        self._dwell(20)
+        if self._cuboid_rigids[0] is None:
             self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.12, move_axis="arm"))
 
         self.info["info"] = {
@@ -639,21 +724,16 @@ class catch_cuboid(Base_Task):
             self.close_gripper(arm_tag=left),
             self.close_gripper(arm_tag=right),
         )
-        # Let PhysX register mesh contacts before judging the grasps.
+        # Grasp/release is owned entirely by the shared contact trigger
+        # (_release_pinched_cuboids): each cuboid is handed to dynamics only
+        # when its own arm's gripper is closed and both jaws touch it, so the
+        # two sides stay independent — the same criteria any policy sees. Give
+        # PhysX a few steps to register the pinches, then lift whichever side
+        # actually caught (rigid == None means the trigger freed it).
         self._dwell(20)
-
-        caught_l, _ = self._try_catch(idx_left, left)
-        caught_r, _ = self._try_catch(idx_right, right)
-        held_l = self._cuboid_in_gripper(self._cuboid_names[idx_left])
-        held_r = self._cuboid_in_gripper(self._cuboid_names[idx_right])
-        # Dual success requires BOTH cuboids; only release/lift if both are held.
-        if caught_l and caught_r and held_l and held_r:
-            self._release_cuboid(idx_left)
-            self._release_cuboid(idx_right)
-            self.move(
-                self.move_by_displacement(arm_tag=left, z=0.12, move_axis="arm"),
-                self.move_by_displacement(arm_tag=right, z=0.12, move_axis="arm"),
-            )
+        for idx, arm in ((idx_left, left), (idx_right, right)):
+            if self._cuboid_rigids[idx] is None:
+                self.move(self.move_by_displacement(arm_tag=arm, z=0.12, move_axis="arm"))
 
         self.info["info"] = {
             "{A}": "cuboid_body_left",
@@ -672,10 +752,12 @@ class catch_cuboid(Base_Task):
         return float(np.mean(vals))
 
     def _cuboid_in_gripper(self, name, arm_tag=None):
-        """True when a closed gripper TCP is around the cuboid (either arm)."""
+        """True when a closed gripper is touching and around the cuboid (either arm)."""
         try:
             cuboid_idx = self._cuboid_names.index(name)
         except (ValueError, AttributeError):
+            return False
+        if not self.get_gripper_actor_contact_position(name):
             return False
         if arm_tag is None:
             if cuboid_idx >= len(getattr(self, "_cuboid_holes", [])):

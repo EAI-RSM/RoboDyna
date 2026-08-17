@@ -32,7 +32,6 @@ from _interactive_common import (  # noqa: E402
     actor_scene_id,
     add_record_data_arg,
     click_hits_actor_map,
-    gripper_width,
     make_viewer_view_toggle,
     print_mode_controls,
     report_task_result,
@@ -47,7 +46,7 @@ CONTROLS_KEYBOARD = """
 """
 
 CONTROLS_ROBOT = """
-  Space             open / close gripper (close around a rising cuboid to catch it, then lift)
+  Space             open / close gripper (both jaws touching a risen cuboid grips it, then lift)
   Arrow keys        move selected arm in XY
   E / Q             move selected arm in Z
 """
@@ -103,116 +102,12 @@ class EdgeKey:
         return edge
 
 
-def _cuboid_rising(env, idx=0):
-    motion = env._cuboid_auto_motion[idx] if idx < len(env._cuboid_auto_motion) else None
-    if motion == "rising":
-        return True
-    return _cuboid_above_board(env, idx)
-
-
 def _cuboid_above_board(env, idx=0):
     """True when any of the cuboid is visibly above the board top."""
     if idx >= len(getattr(env, "cuboids", []) or []):
         return False
     top = float(env.cuboids[idx].get_pose().p[2]) + float(env.cuboid_half[2])
     return top >= float(env.board_top_z) + 0.005
-
-
-def _close_gripper_direct(env, arm_name):
-    """Close without planner (keyboard mode)."""
-    try:
-        env.robot.set_gripper(0.0, arm_name, gripper_eps=0.0)
-    except Exception:
-        pass
-
-
-def _tcp_xyz(env, side):
-    getter = (
-        env.robot.get_left_tcp_pose if side == "left"
-        else env.robot.get_right_tcp_pose
-    )
-    return np.asarray(getter()[:3], dtype=float)
-
-
-def _finger_aabbs(env, side):
-    robot = getattr(env, "robot", None)
-    if robot is None:
-        return []
-    entity = robot.left_entity if side == "left" else robot.right_entity
-    if entity is None:
-        return []
-    boxes = []
-    for link in entity.get_links():
-        name = str(link.get_name() or "")
-        if name not in ("finger_left", "finger_right"):
-            continue
-        try:
-            boxes.append(np.asarray(link.compute_global_aabb_tight(), dtype=float))
-        except Exception:
-            continue
-    return boxes
-
-
-def _aabb_overlap(a, b):
-    return bool(
-        a[0][0] <= b[1][0] and a[1][0] >= b[0][0]
-        and a[0][1] <= b[1][1] and a[1][1] >= b[0][1]
-        and a[0][2] <= b[1][2] and a[1][2] >= b[0][2]
-    )
-
-
-def _cuboid_aabb(env, cuboid_idx):
-    p = np.asarray(env.cuboids[cuboid_idx].get_pose().p, dtype=float)
-    half = np.asarray(env.cuboid_half, dtype=float)
-    return np.stack([p - half, p + half], axis=0)
-
-
-def _cuboid_in_jaws(env, cuboid_idx, side):
-    """True when the selected gripper is around a cuboid that is above the board."""
-    if cuboid_idx >= len(getattr(env, "cuboids", []) or []):
-        return False, 1.0
-    p = np.asarray(env.cuboids[cuboid_idx].get_pose().p, dtype=float)
-    top = float(p[2]) + float(env.cuboid_half[2])
-    if top < float(env.board_top_z) + 0.005:
-        return False, 1.0
-    pinch = _tcp_xyz(env, side)
-    xy = float(np.linalg.norm(pinch[:2] - p[:2]))
-    z_err = abs(float(pinch[2]) - float(p[2]))
-    xy_tol = float(env.cuboid_half[0]) + 0.045
-    z_tol = float(env.cuboid_half[2]) + 0.055
-    near_tcp = xy < xy_tol and z_err < z_tol
-    cuboid_box = _cuboid_aabb(env, cuboid_idx)
-    fingers_on = any(_aabb_overlap(box, cuboid_box) for box in _finger_aabbs(env, side))
-    return bool(near_tcp or fingers_on), xy
-
-
-def _try_latch_catch(env, cuboid_idx, arm):
-    """Stop the pop if the gripper is around the cuboid; release once the pinch can hold."""
-    side = str(arm)
-    in_jaws, offset = _cuboid_in_jaws(env, cuboid_idx, side)
-    if not in_jaws:
-        print(
-            f"Missed {env._cuboid_names[cuboid_idx]} "
-            f"(rising={_cuboid_rising(env, cuboid_idx)}, offset={offset:.3f})."
-        )
-        return False
-    env._pin_cuboid(cuboid_idx)
-    print(
-        f"Caught {env._cuboid_names[cuboid_idx]} (offset={offset:.3f} m); "
-        "gripper is closing — then lift it out."
-    )
-    return True
-
-
-def _cuboid_idx_for_arm(dual: bool, arm_name: str) -> int:
-    if dual:
-        return 0 if arm_name == "left" else 1
-    return 0
-
-
-def _selected_arms(env, fallback=("right",)):
-    selected = tuple(getattr(env, "_interactive_selected_arms", ()) or ())
-    return selected if selected else tuple(fallback)
 
 
 def _cuboid_linear_speed(env, idx):
@@ -233,12 +128,6 @@ def _cuboid_linear_speed(env, idx):
         return float(np.linalg.norm(v) + 0.05 * np.linalg.norm(w))
     except Exception:
         return 0.0
-
-
-def _mark_latch_failure(controller, env, arms, detail="gripper not around cuboid"):
-    """Flash red on a miss; keep the episode open so the next pop can be retried."""
-    action_failed(env, arms, detail=detail)
-    print(f"Latch missed ({detail}). Close around a cuboid that is above the board.")
 
 
 class KeyboardCatchController:
@@ -322,8 +211,10 @@ class KeyboardCatchController:
 
 
 class RobotCatchController:
-    """When the gripper closes near a cuboid, latch it; user teleops the lift.
+    """Watch the env's contact-driven grasp and end the episode on a drop.
 
+    The grasp itself is physics-only: ``catch_cuboid`` hands a cuboid over to
+    dynamics when both jaws touch it, so teleop and any policy behave alike.
     Gripper highlight is owned by UniversalRobotControls (1/2/3) only.
     """
 
@@ -336,11 +227,8 @@ class RobotCatchController:
         if not self.dual:
             hole = env._cuboid_holes[0]
             self.selected = "right" if env.holes[hole][0] > 0 else "left"
-        self._prev_width = {"left": 1.0, "right": 1.0}
         self._latched = set()
-        self._pending = {}
         self._released_at = {}
-        self._missed_pinch = set()
         self.done = False
         self.success = False
         self.fail_detail = None
@@ -355,146 +243,44 @@ class RobotCatchController:
         self.fail_detail = detail
         print(f"Task failed ({detail}).")
 
-    def _park_after_miss(self, idx):
-        """Let the cuboid fall back into the hole and stay there."""
-        stops = getattr(self.env, "_cuboid_stop_at_hidden", None)
-        if stops is None:
-            stops = [False] * len(self.env._cuboid_rigids)
-            self.env._cuboid_stop_at_hidden = stops
-        while len(stops) <= idx:
-            stops.append(False)
-        stops[idx] = True
-        if self.env._cuboid_rigids[idx] is not None:
-            self.env._cuboid_auto_motion[idx] = "falling"
-        pins = getattr(self.env, "_cuboid_pin_pose", None)
-        if pins is not None and idx < len(pins):
-            pins[idx] = None
-        self._missed_pinch.add(idx)
+    def _note_env_releases(self):
+        """Track cuboids the env handed to dynamics after a two-jaw pinch."""
+        rigids = getattr(self.env, "_cuboid_rigids", []) or []
+        for i, rigid in enumerate(rigids):
+            if rigid is not None or i in self._latched:
+                continue
+            self._latched.add(i)
+            self._released_at[i] = time.perf_counter()
+            print(
+                f"{self.env._cuboid_names[i]} is gripped and free of the board drive; "
+                "lift it out of the hole."
+            )
 
     def _check_grasp_failure(self):
-        """End the episode once a missed cuboid has fallen and come to rest."""
+        """End the episode once a grasped cuboid is dropped and comes to rest."""
         if self.done or self.env.check_success():
             return
         now = time.perf_counter()
-        for i, name in enumerate(getattr(self.env, "_cuboid_names", []) or []):
-            if i in self._pending:
+        for i in sorted(self._latched):
+            name = self.env._cuboid_names[i]
+            started = self._released_at.get(i)
+            if started is None or (now - started) < 0.6:
                 continue
-            rigid = (
-                self.env._cuboid_rigids[i]
-                if i < len(self.env._cuboid_rigids) else None
-            )
-            held = False
             try:
-                held = bool(self.env._cuboid_in_gripper(name))
+                if bool(self.env._cuboid_in_gripper(name)):
+                    continue
             except Exception:
-                held = False
-            if i in self._latched:
-                t0 = self._released_at.get(i)
-                if t0 is None or (now - t0) < 0.55:
-                    continue
-                if held:
-                    continue
-                center_z = float(self.env.cuboids[i].get_pose().p[2])
-                in_hole = center_z < float(self.env.board_top_z)
-                if (not in_hole) and _cuboid_linear_speed(self.env, i) > 0.10:
-                    continue
-                self._fail(f"{name} dropped")
-                return
-            if i not in self._missed_pinch:
+                pass
+            if _cuboid_linear_speed(self.env, i) > 0.05:
                 continue
-            if rigid is None:
-                if held or _cuboid_linear_speed(self.env, i) > 0.10:
-                    continue
-                self._fail(f"{name} dropped")
-                return
-            motion = self.env._cuboid_auto_motion[i] if i < len(self.env._cuboid_auto_motion) else False
-            if motion:
-                continue
-            if _cuboid_above_board(self.env, i):
-                continue
-            self._fail(f"{name} fell back into the hole")
+            self._fail(f"{name} dropped")
             return
-
-    def _finish_pending(self):
-        """Release a pinned cuboid once the jaws have had time to close around it."""
-        now = time.perf_counter()
-        for idx, (side, started) in list(self._pending.items()):
-            if idx in self._latched:
-                self._pending.pop(idx, None)
-                continue
-            name = self.env._cuboid_names[idx]
-            in_jaws, _ = _cuboid_in_jaws(self.env, idx, side)
-            contacted = False
-            try:
-                contacted = bool(self.env.get_gripper_actor_contact_position(name))
-            except Exception:
-                contacted = False
-            seated = contacted or (now - started) >= 0.35
-            if not seated:
-                continue
-            if not in_jaws and not contacted:
-                self._park_after_miss(idx)
-                self._pending.pop(idx, None)
-                continue
-            self.env._release_cuboid(idx)
-            self.env.catches = int(getattr(self.env, "catches", 0)) + 1
-            self._latched.add(idx)
-            self._released_at[idx] = time.perf_counter()
-            self._pending.pop(idx, None)
-            print(f"{name} is free in the gripper; lift it out of the hole.")
-
-    def _latch_selected(self, arms):
-        self.busy = True
-        print(f"Gripper closing on {', '.join(arms)}; checking latch…")
-        for side in arms:
-            _close_gripper_direct(self.env, side)
-        caught_any = False
-        missed_sides = []
-        for side in arms:
-            idx = None
-            best_d = 1e9
-            for i in range(len(getattr(self.env, "cuboids", []) or [])):
-                if i in self._latched or i in self._pending:
-                    continue
-                in_jaws, dist = _cuboid_in_jaws(self.env, i, side)
-                if in_jaws and dist < best_d:
-                    idx, best_d = i, dist
-            if idx is None:
-                missed_sides.append(side)
-                continue
-            if _try_latch_catch(self.env, idx, self.ArmTag(side)):
-                self._pending[idx] = (side, time.perf_counter())
-                caught_any = True
-            else:
-                missed_sides.append(side)
-        if missed_sides and not caught_any:
-            _mark_latch_failure(self, self.env, missed_sides)
-        self.busy = False
 
     def update(self, window):
-        if self.done or self.busy:
-            return
-        self._finish_pending()
-        self._check_grasp_failure()
         if self.done:
             return
-        # Do not fall back to a default arm — wait for 1 / 2 / 3.
-        selected = tuple(getattr(self.env, "_interactive_selected_arms", ()) or ())
-        if not selected:
-            return
-        if len(selected) == 1:
-            self.selected = selected[0]
-
-        arms = list(selected)
-        closing = False
-        for side in ("left", "right"):
-            width = gripper_width(self.env, side)
-            prev = self._prev_width.get(side, 1.0)
-            if side in arms and prev > 0.5 and width <= 0.5:
-                closing = True
-            self._prev_width[side] = width
-        if closing:
-            self._latch_selected(arms)
+        self._note_env_releases()
+        self._check_grasp_failure()
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive catch_cuboid viewer")
@@ -601,9 +387,11 @@ def main():
                     cuboid_cycles.extend([0] * (len(motions) - len(cuboid_cycles)))
                 for i, motion in enumerate(motions):
                     was = prev_motion[i] if i < len(prev_motion) else None
-                    # Appearance ends when a fall finishes (hidden, or parked after a miss).
-                    if was == "falling" and motion != "falling" and motion != "pinned":
+                    # Appearance ends when a fall back into the hole finishes.
+                    if was == "falling" and motion != "falling":
                         cuboid_cycles[i] += 1
+            if hasattr(controller, "_note_env_releases"):
+                controller._note_env_releases()
             if hasattr(controller, "_check_grasp_failure"):
                 controller._check_grasp_failure()
             env.scene.update_render()
@@ -618,11 +406,7 @@ def main():
                 continue
 
             latched = getattr(controller, "_latched", set()) or set()
-            pending = getattr(controller, "_pending", {}) or {}
-            uncaught = [
-                i for i in range(len(cuboid_cycles))
-                if i not in latched and i not in pending
-            ]
+            uncaught = [i for i in range(len(cuboid_cycles)) if i not in latched]
             appearances_exhausted = (
                 bool(uncaught)
                 and all(cuboid_cycles[i] >= num_appearances for i in uncaught)
