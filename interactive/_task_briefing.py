@@ -20,17 +20,29 @@ from _briefing_copy import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTRUCTION_DIR = REPO_ROOT / "description" / "task_instruction"
+_TEXTURE_DIR = REPO_ROOT / "assets" / "dyna_textures"
 # Same Robo/Dyna stamp mark as control_quality tiles (cropped + upright).
-APP_ICON_PATH = REPO_ROOT / "assets" / "static" / "robodyna_app_icon.png"
+APP_ICON_PATH = _TEXTURE_DIR / "robodyna_app_icon.png"
 _APP_ICON_SIZES = (16, 32, 48, 64, 128, 256, 512)
 # XDG icon name installed under ~/.local/share/icons/hicolor/.../apps/
 APP_ICON_NAME = "robodyna"
+
+# Per-suite variants (wordmark + suite word in the suite color); regenerate with
+# ``python script/make_gui_app_icons.py``.
+SUITE_ICONS = {
+    "interactive": (_TEXTURE_DIR / "robodyna_app_icon_base.png", "robodyna-base"),
+    "household": (_TEXTURE_DIR / "robodyna_app_icon_hh.png", "robodyna-hh"),
+    "experiment": (_TEXTURE_DIR / "robodyna_app_icon_exp.png", "robodyna-exp"),
+}
+# Set by ``setup_gui_app_icon`` so later windows (briefing dialog) match the suite.
+_active_icon_path = APP_ICON_PATH
+
 # Sampled from robodyna_logo.png corners (RGB 238, 238, 242).
 GUI_PAGE_BG = "#eeeef2"
 GUI_INK = "#002d56"
 GUI_MUTED = "#5a6a7c"
 LOGO_PATHS = (
-    REPO_ROOT / "assets" / "static" / "robodyna_logo.png",
+    REPO_ROOT / "assets" / "dyna_textures" / "robodyna_logo.png",
     REPO_ROOT / "robodyna_logo.png",
 )
 
@@ -50,6 +62,14 @@ def _xdg_data_home() -> Path:
     return Path.home() / ".local" / "share"
 
 
+def suite_icon(suite: str) -> tuple[Path, str]:
+    """Return ``(png path, XDG icon name)`` for a suite, falling back to the stamp."""
+    path, name = SUITE_ICONS.get(suite, (APP_ICON_PATH, APP_ICON_NAME))
+    if not path.is_file():
+        return APP_ICON_PATH, APP_ICON_NAME
+    return path, name
+
+
 def install_ubuntu_dock_icon(
     *,
     desktop_id: str,
@@ -58,13 +78,16 @@ def install_ubuntu_dock_icon(
     script_path: Path,
     wm_class: str,
     python_exe: str | None = None,
+    icon_path: Path | None = None,
+    icon_name: str = APP_ICON_NAME,
 ) -> Path | None:
     """Install the stamp PNG + a .desktop entry so Ubuntu's dock shows it.
 
     GNOME ignores Tk ``iconphoto`` for the dock; it uses ``Icon=`` from a
     matching ``.desktop`` via ``StartupWMClass``.
     """
-    if not APP_ICON_PATH.is_file():
+    source = icon_path or APP_ICON_PATH
+    if not source.is_file():
         return None
     try:
         from PIL import Image
@@ -77,21 +100,21 @@ def install_ubuntu_dock_icon(
     apps_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        master = Image.open(APP_ICON_PATH).convert("RGBA")
+        master = Image.open(source).convert("RGBA")
     except OSError:
         return None
 
     for size in _APP_ICON_SIZES:
         dest_dir = icon_root / f"{size}x{size}" / "apps"
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / f"{APP_ICON_NAME}.png"
+        dest = dest_dir / f"{icon_name}.png"
         master.resize((size, size), Image.Resampling.LANCZOS).save(dest, optimize=True)
 
     exe = python_exe or sys.executable
     script = script_path.resolve()
     desktop_path = apps_dir / f"{desktop_id}.desktop"
     # Absolute Icon= path is the most reliable fallback if the theme cache lags.
-    icon_abs = (icon_root / "256x256" / "apps" / f"{APP_ICON_NAME}.png").resolve()
+    icon_abs = (icon_root / "256x256" / "apps" / f"{icon_name}.png").resolve()
     desktop_path.write_text(
         "\n".join(
             [
@@ -127,16 +150,17 @@ def install_ubuntu_dock_icon(
     return desktop_path
 
 
-def apply_window_icon(window: tk.Misc) -> None:
+def apply_window_icon(window: tk.Misc, icon_path: Path | None = None) -> None:
     """Set the window decoration icon (title bar). Dock icon needs .desktop install."""
-    if not APP_ICON_PATH.is_file():
+    source = icon_path or _active_icon_path
+    if not source.is_file():
         return
     try:
         from PIL import Image, ImageTk
     except ImportError:
         return
     try:
-        master = Image.open(APP_ICON_PATH).convert("RGBA")
+        master = Image.open(source).convert("RGBA")
     except OSError:
         return
     photos: list = []
@@ -164,7 +188,10 @@ def setup_gui_app_icon(
     script_path: Path,
 ) -> None:
     """Install Ubuntu dock branding and apply the in-window icon."""
+    global _active_icon_path
     wm_class = GUI_WM_CLASS.get(suite, "Robodyna")
+    icon_path, icon_name = suite_icon(suite)
+    _active_icon_path = icon_path
     if suite == "household":
         name = "RoboDyna Household Tasks"
         comment = "Household interactive task launcher"
@@ -184,8 +211,10 @@ def setup_gui_app_icon(
         comment=comment,
         script_path=script_path,
         wm_class=wm_class,
+        icon_path=icon_path,
+        icon_name=icon_name,
     )
-    apply_window_icon(window)
+    apply_window_icon(window, icon_path)
 
 
 def apply_gui_logo(label: tk.Label, *, height: int) -> None:
@@ -246,12 +275,12 @@ R / T — yaw gripper CCW / CW (world Z)
 O — return selected arm(s) to original position
 Space — open / close selected gripper(s)
 V — cycle view: head_camera ↔ gripper(s)
-Escape — close the viewer
+Escape — give up (closes the viewer, counts as a failure)
 """
 
 _GRIPPER_TOGGLE_HELP = "Space — open / close selected gripper(s)"
 _VIEW_HELP = "V — cycle view: head_camera ↔ gripper(s)"
-_ESCAPE_HELP = "Escape — close the viewer"
+_ESCAPE_HELP = "Escape — give up (closes the viewer, counts as a failure)"
 
 _NOTE_RED = "#c0392b"
 
