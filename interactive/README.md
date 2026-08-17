@@ -21,7 +21,7 @@ Each `user.json` stores:
 
 - `user_name` / `user_id`
 - pre-experiment answers (`experience`): games, controllers, simulators, teleop, 3D apps, mouse hand
-- post-experiment answers (`post_survey`): overall difficulty, clarity, task ranking (most difficult first), hardest aspect per controller (control vs event prediction), gripper-view usefulness, preferred controller, policy outlook. The **Post-experiment Questionnaire** card stays gray until every assigned task is finished with both controllers; after submit it stays locked. Questionnaire question boxes use a white background with `#1A1A1A` text.
+- post-experiment answers (`post_survey`): overall difficulty, clarity, task ranking (most difficult first), hardest aspect per controller (control vs event prediction), tasks where the gripper view was useful (multi-select over the assigned tasks, or `none`), preferred controller, policy outlook. The **Post-experiment Questionnaire** card stays gray until every assigned task is finished with both controllers; after submit it stays locked. Questionnaire question boxes use a white background with `#1A1A1A` text.
 - `completed_keys` — finished items that stay gray in the task GUIs
 - `plays` — every attempt, including:
 

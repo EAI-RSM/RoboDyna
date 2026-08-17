@@ -35,6 +35,7 @@ _KEYBOARD_ALIASES = {
 
 YES_NO_CHOICES = (("yes", "Yes"), ("no", "No"))
 ASSIGNED_TASKS = "assigned_tasks"
+NONE_CHOICE = ("none", "None")
 
 
 def _survey_item(
@@ -47,6 +48,7 @@ def _survey_item(
     exclusive: str | None = None,
     visible_if=None,
     layout: str = "row",
+    extra_options=(),
 ) -> dict[str, Any]:
     return {
         "key": key,
@@ -57,6 +59,7 @@ def _survey_item(
         "exclusive": exclusive,
         "visible_if": visible_if,
         "layout": "rank" if rank else layout,
+        "extra_options": tuple(extra_options),
     }
 
 
@@ -158,7 +161,7 @@ POST_SURVEY_QUESTIONS = (
     ),
     _survey_item(
         "robot_hardest_aspect",
-        "Using the robot controller, which aspect of performing the task did you find most difficult?",
+        "When using the robot controller, which aspect of performing the task did you find most difficult?",
         (
             ("control", "Control"),
             ("event_prediction", "Event prediction"),
@@ -166,22 +169,19 @@ POST_SURVEY_QUESTIONS = (
     ),
     _survey_item(
         "keyboard_hardest_aspect",
-        "Using the keyboard+mouse controller, which aspect of performing the task did you find most difficult?",
+        "When using the keyboard+mouse controller, which aspect of performing the task did you find most difficult?",
         (
             ("control", "Control"),
             ("event_prediction", "Event prediction"),
         ),
     ),
     _survey_item(
-        "gripper_view_usefulness",
-        "How useful did you find the gripper view?",
-        (
-            ("very_useful", "Very useful"),
-            ("useful", "Useful"),
-            ("neutral", "Neutral"),
-            ("not_useful", "Not useful"),
-            ("not_useful_at_all", "Not useful at all"),
-        ),
+        "gripper_view_useful_tasks",
+        "In which one of the following tasks you found gripper view useful? Multiple options can be selected.",
+        ASSIGNED_TASKS,
+        multi=True,
+        exclusive=NONE_CHOICE[0],
+        extra_options=(NONE_CHOICE,),
     ),
     _survey_item(
         "easier_controller",
@@ -198,7 +198,7 @@ POST_SURVEY_QUESTIONS = (
         (
             ("very_likely", "Very likely"),
             ("likely", "Likely"),
-            ("neither", "Neither"),
+            ("neutral", "Neutral"),
             ("unlikely", "Unlikely"),
             ("very_unlikely", "Very unlikely"),
         ),
@@ -216,7 +216,10 @@ EXPERIENCE_QUESTIONS = tuple(
 def question_choices(question: dict[str, Any], extra_choices: dict[str, Any] | None = None):
     choices = question.get("choices")
     if choices == ASSIGNED_TASKS:
-        return tuple((extra_choices or {}).get(ASSIGNED_TASKS) or ())
+        dynamic = tuple((extra_choices or {}).get(ASSIGNED_TASKS) or ())
+        if not dynamic:
+            return ()
+        return dynamic + tuple(question.get("extra_options") or ())
     return tuple(choices or ())
 
 

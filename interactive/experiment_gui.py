@@ -125,6 +125,7 @@ class ExperimentLauncher(tk.Tk):
     DESIGN_SIZE = (920, 780)
     UI_SCALE_MIN = 0.7
     UI_SCALE_MAX = 1.15
+    CHOICE_GAP = 22
 
     def __init__(self):
         super().__init__(className="Robodynaexperiment")
@@ -573,6 +574,8 @@ class ExperimentLauncher(tk.Tk):
         for child in host.winfo_children():
             child.destroy()
         block["dots"] = []
+        block["rows"] = []
+        block["flow_width"] = None
         question = block["question"]
         var = form["vars"][question["key"]]
         layout = question.get("layout") or "row"
@@ -636,15 +639,77 @@ class ExperimentLauncher(tk.Tk):
                 dot.pack(side="left")
                 block["dots"].append(dot)
             return
-        row = None
-        for index, (value, text) in enumerate(choices):
-            if row is None or index % 3 == 0:
-                row = tk.Frame(host, bg=SURVEY_BG)
-                row.pack(anchor="w", pady=(0, 8))
+        # Rows must exist before the choices so the reflowed choices stay on top.
+        block["rows"] = [tk.Frame(host, bg=SURVEY_BG) for _ in choices]
+        for value, text in choices:
             watch = var[value] if question.get("multi") else var
-            dot = add_dot(row, value, text, watch)
-            dot.pack(side="left", padx=(0, 22))
-            block["dots"].append(dot)
+            block["dots"].append(add_dot(host, value, text, watch))
+        if not block.get("flow_bound"):
+            host.bind("<Configure>", lambda _event, b=block: self._schedule_choice_reflow(b))
+            block["flow_bound"] = True
+        self._reflow_choice_host(block)
+
+    def _schedule_choice_reflow(self, block: dict):
+        """Reflow choices only when the available width actually changed."""
+        width = block["host"].winfo_width()
+        if width == block.get("flow_width"):
+            return
+        job = block.get("flow_job")
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except (ValueError, tk.TclError):
+                pass
+        block["flow_job"] = self.after(40, lambda b=block: self._reflow_choice_host(b))
+
+    def _reflow_choice_host(self, block: dict):
+        """Lay choices out on one line, wrapping only when they do not fit."""
+        block["flow_job"] = None
+        dots = block.get("dots") or []
+        question = block["question"]
+        if not dots or (question.get("layout") or "row") != "row":
+            return
+        host = block["host"]
+        try:
+            host.update_idletasks()
+        except tk.TclError:
+            return
+        block["flow_width"] = host.winfo_width()
+        avail = block["flow_width"]
+        if avail <= 1:
+            avail = max(1, self.winfo_width() - 120)
+        gap = max(8, int(round(self.CHOICE_GAP * self._ui_scale)))
+        lines: list[list[tk.Frame]] = [[]]
+        used = 0
+        for dot in dots:
+            need = max(dot.winfo_reqwidth(), 1)
+            if lines[-1] and used + gap + need > avail:
+                lines.append([dot])
+                used = need
+            else:
+                used += need + (gap if lines[-1] else 0)
+                lines[-1].append(dot)
+        rows = block.get("rows") or []
+        for index, row in enumerate(rows):
+            row.pack_forget()
+            if index < len(lines):
+                row.pack(anchor="w", fill="x", pady=(0, 8))
+        for line, row in zip(lines, rows):
+            for position, dot in enumerate(line):
+                dot.pack_forget()
+                dot.pack(
+                    in_=row,
+                    side="left",
+                    padx=(0, gap if position + 1 < len(line) else 0),
+                )
+                dot.lift()
+
+    def _reflow_all_choices(self):
+        for form in (getattr(self, "pre_form", None), getattr(self, "post_form", None)):
+            if not form:
+                continue
+            for block in form["blocks"]:
+                self._reflow_choice_host(block)
 
     def _populate_survey(self, inner, questions, *, on_change=None) -> dict:
         form = {
@@ -780,16 +845,26 @@ class ExperimentLauncher(tk.Tk):
             if question.get("rank"):
                 self._fill_rank_host(self.post_form, block, choices)
                 continue
-            current = str(self.post_form["vars"][question["key"]].get() or "")
-            allowed = {value for value, _label in choices}
-            self.post_form["vars"][question["key"]] = tk.StringVar(
-                value=current if current in allowed else ""
-            )
+            var = self.post_form["vars"][question["key"]]
+            allowed = [value for value, _label in choices]
+            if question.get("multi"):
+                previous = {
+                    value for value, flag in (var or {}).items() if flag.get()
+                }
+                self.post_form["vars"][question["key"]] = {
+                    value: tk.BooleanVar(value=value in previous) for value in allowed
+                }
+            else:
+                current = str(var.get() or "")
+                self.post_form["vars"][question["key"]] = tk.StringVar(
+                    value=current if current in allowed else ""
+                )
             self._fill_choice_host(self.post_form, block, choices)
             for dot in block["dots"]:
                 dot._dot_size = size
                 dot._dot_label.configure(font=("Sans", font_px, "bold"))
                 dot._dot_paint()
+            self._reflow_choice_host(block)
         self._refresh_survey_visibility(self.post_form, extra_choices=extra)
 
     def _build_experience_screen(self):
@@ -1565,6 +1640,7 @@ class ExperimentLauncher(tk.Tk):
             choice._dot_size = px(28)
             choice._dot_label.configure(font=font(16, "bold"))
             choice._dot_paint()
+        self._reflow_all_choices()
         for form in (getattr(self, "pre_form", None), getattr(self, "post_form", None)):
             if not form:
                 continue
