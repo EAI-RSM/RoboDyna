@@ -31,6 +31,7 @@ from _interactive_common import (  # noqa: E402
     add_robot_motion_arg,
     click_hits_actor_map,
     edge_pressed,
+    escape_quit_requested,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
@@ -209,7 +210,7 @@ def main():
             if n_steps == 0:
                 env.scene.update_render()
                 viewer.render()
-                if viewer.window.key_down("escape"):
+                if escape_quit_requested(env, viewer.window):
                     break
                 if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
                     break
@@ -220,7 +221,7 @@ def main():
                 env.scene.step()
             env.scene.update_render()
             viewer.render()
-            if viewer.window.key_down("escape"):
+            if escape_quit_requested(env, viewer.window):
                 break
 
             if terminal_started_at is not None:

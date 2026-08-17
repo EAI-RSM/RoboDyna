@@ -2800,6 +2800,29 @@ def terminal_hold_should_close(terminal_started_at: float | None) -> bool:
     return time.perf_counter() - terminal_started_at >= TERMINAL_RESULT_HOLD_SECONDS
 
 
+ESCAPE_QUIT_DETAIL = "gave up (Esc)"
+
+
+def escape_quit_requested(
+    env,
+    window,
+    *,
+    report_result: bool = True,
+    detail: str = ESCAPE_QUIT_DETAIL,
+) -> bool:
+    """True when Esc is pressed; first records a terminal result so quitting counts.
+
+    Esc means the participant gave up, which is a FAILURE rather than the
+    "closed before a result" exit code that experiment logs skip. A result that
+    was already reported (success/failure hold) is left untouched.
+    """
+    if window is None or not window.key_down("escape"):
+        return False
+    if report_result and _LAST_TASK_RESULT is None:
+        report_task_result(env, detail)
+    return True
+
+
 def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None,
                     overhead: bool = True, is_done=None, extra_plugins=None,
                     report_result: bool = True):
@@ -2814,8 +2837,9 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
     ``report_result`` is false, e.g. tutorials), then continues
     stepping/rendering for ``TERMINAL_RESULT_HOLD_SECONDS`` wall-clock before
     closing. Returns that bool (or ``None`` if the viewer closed without a
-    result). ``should_stop`` remains a raw break (no auto print / no hold) for
-    backward compatibility.
+    result). Esc reports a terminal result too (FAILURE unless the task already
+    succeeded) so giving up still counts as a play. ``should_stop`` remains a
+    raw break (no auto print / no hold) for backward compatibility.
     Starts on head_camera; press V to cycle head ↔ gripper/wrist view(s).
     ``overhead`` is accepted for API compat but ignored (top-down removed).
     ``extra_plugins`` are appended after the stock ImGui panels are hidden, so
@@ -2853,7 +2877,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
             if n_steps == 0:
                 env.scene.update_render()
                 viewer.render()
-                if viewer.window.key_down("escape"):
+                if escape_quit_requested(env, viewer.window, report_result=report_result):
                     break
                 if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
                     break
@@ -2893,7 +2917,7 @@ def run_viewer_loop(env, on_step, should_stop=None, max_steps: int | None = None
             viewer.render()
             # SAPIEN does not close its window on Escape consistently, so make
             # it an explicit launcher-level exit for every shared task loop.
-            if viewer.window.key_down("escape"):
+            if escape_quit_requested(env, viewer.window, report_result=report_result):
                 break
             if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
                 break

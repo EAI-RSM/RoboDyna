@@ -30,6 +30,7 @@ from sapien import internal_renderer as R  # noqa: E402
 from sapien.utils.viewer.plugin import Plugin  # noqa: E402
 
 from interactive._interactive_common import (  # noqa: E402
+    ESCAPE_QUIT_DETAIL,
     RealtimePhysicsPacer,
     action_failed,
     add_record_data_arg,
@@ -1272,6 +1273,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     terminal_started_at = None
     terminal_fill_detail = ""
     terminal_failure_reason = None
+    escape_quit = False
     # Match interactive/_interactive_common run_viewer_loop: teleop once per display frame, then
     # fixed-dt physics catch-up so 60 Hz / 240 Hz monitors feel the same speed.
     # Success checks every few *physics* steps keep kitchen eval cost down.
@@ -1286,6 +1288,10 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                 env.scene.update_render()
                 viewer.render()
                 if viewer.window.key_down("escape"):
+                    if terminal_result is None:
+                        terminal_result = False
+                        terminal_failure_reason = ESCAPE_QUIT_DETAIL
+                        escape_quit = True
                     break
                 if terminal_started_at is not None and time.perf_counter() - terminal_started_at >= 2.0:
                     print(f"[{task}] closing after 2-second terminal-result display")
@@ -1336,6 +1342,10 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
             if rendered_frames == 1 and not args.smoke_test:
                 controller.start_scenario()
             if viewer.window.key_down("escape"):
+                if terminal_result is None:
+                    terminal_result = False
+                    terminal_failure_reason = ESCAPE_QUIT_DETAIL
+                    escape_quit = True
                 break
             if args.smoke_test and rendered_frames >= 3:
                 print(f"[{task}] smoke test rendered {rendered_frames} frames")
@@ -1351,7 +1361,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                 detail = terminal_failure_reason or terminal_fill_detail or None
             else:
                 detail = terminal_fill_detail or None
-            report_task_result(env, detail=detail)
+            report_task_result(env, detail=detail, ok=False if escape_quit else None)
         finally:
             try:
                 viewer.close()

@@ -30,6 +30,7 @@ from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     actor_scene_id,
     click_hits_actor_map,
+    escape_quit_requested,
     make_viewer_view_toggle,
     add_robot_motion_arg,
     prepare_interactive_control,
@@ -456,7 +457,7 @@ def main():
                 _update_interactive_belt(env)
                 env.scene.update_render()
                 viewer.render()
-                if viewer.window.key_down("escape"):
+                if escape_quit_requested(env, viewer.window):
                     break
                 if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
                     break
@@ -471,7 +472,7 @@ def main():
             env.scene.update_render()
             viewer.render()
 
-            if viewer.window.key_down("escape"):
+            if escape_quit_requested(env, viewer.window):
                 break
 
             if terminal_started_at is not None:

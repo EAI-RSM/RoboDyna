@@ -60,7 +60,7 @@ the same controls as the interactive examples in `interactive/base`:
                            Space opens/closes selected gripper(s)
                            V cycles head_camera ↔ gripper / wrist view(s)
 --control keyboard:        task keys / mouse (no arms; head_camera only)
-Escape                     quit
+Escape                     give up: quit and report FAILURE (exit 10)
 ```
 
 Examples:

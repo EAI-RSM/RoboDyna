@@ -39,6 +39,7 @@ from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     add_record_data_arg,
     declutter_interactive_viewer,
+    escape_quit_requested,
     make_viewer_view_toggle,
     print_instructions,
     print_mode_controls,
@@ -582,7 +583,7 @@ def main():
                 else:
                     env.scene.update_render()
                     viewer.render()
-                if composite_view is None and viewer.window.key_down("escape"):
+                if composite_view is None and escape_quit_requested(env, viewer.window):
                     break
                 if terminal_started_at is not None and terminal_hold_should_close(terminal_started_at):
                     break
@@ -603,7 +604,7 @@ def main():
                 composite_frame = None
             # SAPIEN keeps the window open by default; terminate the launcher
             # explicitly so Escape works consistently across viewer backends.
-            if composite_view is None and viewer.window.key_down("escape"):
+            if composite_view is None and escape_quit_requested(env, viewer.window):
                 break
             if terminal_started_at is not None:
                 if terminal_hold_should_close(terminal_started_at):
