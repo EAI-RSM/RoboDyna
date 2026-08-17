@@ -173,6 +173,17 @@ POST_SURVEY_QUESTIONS = (
         ),
     ),
     _survey_item(
+        "gripper_view_usefulness",
+        "How useful did you find the gripper view?",
+        (
+            ("very_useful", "Very useful"),
+            ("useful", "Useful"),
+            ("neutral", "Neutral"),
+            ("not_useful", "Not useful"),
+            ("not_useful_at_all", "Not useful at all"),
+        ),
+    ),
+    _survey_item(
         "easier_controller",
         "Which controller did you find easier to use?",
         (
