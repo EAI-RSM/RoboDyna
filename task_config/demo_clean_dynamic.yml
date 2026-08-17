@@ -4,9 +4,6 @@ use_seed: false
 save_freq: 15
 embodiment: [aloha-agilex]
 language_num: 100
-use_dynamic: true             # whether to use dynamic motion
-dynamic_level: 1              # dynamic complexity level(1,2,3)
-dynamic_coefficient: 0.1      # dynamic coefficient
 domain_randomization:
   random_background: false
   cluttered_table: false

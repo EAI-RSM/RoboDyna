@@ -90,7 +90,7 @@
           "param": "mug_id",
           "how": "if mug_id<0: rng.randint(0,10) for 039_mug",
           "config_key": "mug_id",
-          "notes": "demo_dynamic -1=random; demo_kitchens fixed 0"
+          "notes": "yaml -1=random"
         },
         {
           "param": "milk_box_xy / mug_xy",
@@ -245,7 +245,7 @@
       "fixed_but_configurable": [
         {
           "param": "shutoff_lead / cook_intensity / skillet_id / skillet_handle_yaw / place_dx|dy / pan_scale / plate_scale / board_scale_mult",
-          "notes": "demo_dynamic shutoff_lead 0.22 vs demo_kitchens 0.04"
+          "notes": "demo_dynamic shutoff_lead 0.22"
         },
         {
           "param": "success_window_sec / target_doneness",

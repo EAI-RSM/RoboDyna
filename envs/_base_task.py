@@ -170,13 +170,19 @@ class Base_Task(gym.Env):
             raise UnStableError(
                 f'Objects is unstable in seed({kwags.get("seed", 0)}), unstable objects: {", ".join(unstable_list)}')
 
-        # Shared cutoff for every task (classic RoboTwin base + household + dynamic).
+        # Shared cutoff for every task. Prefer demo_dynamic.yml ``eval_step_limit``.
         from .utils.household_view import EPISODE_MAX_STEPS
 
-        self._max_episode_steps = int(EPISODE_MAX_STEPS)
+        try:
+            step_limit = int(kwags.get("eval_step_limit", EPISODE_MAX_STEPS))
+        except (TypeError, ValueError):
+            step_limit = int(EPISODE_MAX_STEPS)
+        if step_limit <= 0:
+            step_limit = int(EPISODE_MAX_STEPS)
+        self._max_episode_steps = step_limit
         self._episode_timed_out = False
         if self.eval_mode:
-            self.step_lim = int(EPISODE_MAX_STEPS)
+            self.step_lim = step_limit
 
         # info
         self.info = dict()

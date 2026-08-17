@@ -48,7 +48,7 @@ HOUSEHOLD_TASKS = frozenset(
     }
 )
 
-# Shared episode cutoff for household + base tasks (sim / control steps, not wall-clock).
+# Fallback episode cutoff if yaml ``eval_step_limit`` is missing (sim / control steps).
 EPISODE_MAX_STEPS = 15000
 # Back-compat alias used by record_demo / older callers.
 HOUSEHOLD_MAX_STEPS = EPISODE_MAX_STEPS

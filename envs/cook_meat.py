@@ -122,7 +122,7 @@ class cook_meat(Base_Task):
         self._apply_legacy_option()
         self._ep_seed = int(kwargs.get("seed", 0))
         super()._init_task_env_(**kwargs)
-        # Base eval may overwrite step_lim from _eval_step_limit.yml after
+        # Base eval may overwrite step_lim from yaml ``eval_step_limit`` after
         # load_actors; re-apply the task_args cutoff for every scenario.
         self._apply_max_episode_steps()
 

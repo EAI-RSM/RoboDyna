@@ -4,9 +4,7 @@ use_seed: false
 save_freq: 15
 embodiment: [ur5-wsg, ur5-wsg, 0.6] #[aloha-agilex] #
 language_num: 100
-use_dynamic: false            # static path by default; tasks with a moving element flip this themselves
-dynamic_level: 1              # dynamic complexity level(1,2,3)
-dynamic_coefficient: 0.1      # dynamic coefficient
+eval_step_limit: 15000
 domain_randomization:
   random_background: false
   cluttered_table: false
