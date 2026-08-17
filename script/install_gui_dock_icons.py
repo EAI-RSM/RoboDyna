@@ -22,6 +22,13 @@ from _task_briefing import GUI_WM_CLASS, install_ubuntu_dock_icon, suite_icon  #
 
 GUIS = (
     (
+        "gui",
+        "robodyna-gui",
+        "RoboDyna",
+        "Shared launcher for the base, household, and experiment GUIs",
+        "robodyna_gui.py",
+    ),
+    (
         "interactive",
         "robodyna-interactive-tasks",
         "RoboDyna Base Tasks",

@@ -3,8 +3,10 @@
 
 Each GUI gets its own dock/taskbar icon with three stacked lines at one shared
 font size: ``Robo`` / ``Dyna`` in stamp ink and the suite word in the suite
-accent color (Base teal, HH orange, Exp coral). The cream paper and its grain come
-from the original ``robodyna_app_icon.png`` stamp.
+accent color (Base teal, HH orange, Exp coral). The shared hub launcher
+(``interactive/robodyna_gui.py``) instead gets a two-line ``Robo`` / ``Dyna``
+mark whose letters cycle through the four brand colors. The cream paper and its
+grain come from the original ``robodyna_app_icon.png`` stamp.
 
 Run after changing colors, wording, or layout::
 
@@ -47,6 +49,17 @@ SUITE_ICONS = {
     "experiment": ("Exp", (239, 84, 56), "robodyna_app_icon_exp.png"),
 }
 MARK_LINES = ("Robo", "Dyna")
+
+# Hub launcher icon: no suite word, ``Robo`` in logo navy, and the ``Dyna``
+# letters cycling through the four brand colors position by position.
+HUB_MARK_INK = (4, 43, 76)
+HUB_LETTER_COLORS = (
+    (1, 157, 162),
+    (253, 142, 25),
+    (237, 82, 57),
+    (52, 139, 215),
+)
+HUB_ICON_FILENAME = "robodyna_app_icon_gui.png"
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont:
@@ -168,6 +181,65 @@ def render_icon(
     return icon
 
 
+def _hub_layout(font: ImageFont.FreeTypeFont) -> tuple[list[int], int, float]:
+    """Baselines, block height, and widest line for the two-line hub mark."""
+    cap_h = _cap_height(font)
+    gap = round(cap_h * GAP_RATIO)
+    baselines = [_ascent(font, MARK_LINES[0])]
+    baselines.append(baselines[0] + cap_h + gap + _descent(font, MARK_LINES[0]))
+    block = baselines[-1] + max(_descent(font, text) for text in MARK_LINES)
+    widest = max(font.getlength(text) for text in MARK_LINES) + 2 * STROKE
+    return baselines, block, widest
+
+
+def _fit_hub_font() -> ImageFont.FreeTypeFont:
+    max_w = CANVAS - 2 * SIDE_MARGIN
+    max_h = CANVAS - 2 * EDGE_MARGIN
+    fitted = None
+    for size in range(24, 400):
+        font = _font(size)
+        _, block, widest = _hub_layout(font)
+        if widest > max_w or block > max_h:
+            break
+        fitted = font
+    if fitted is None:
+        raise RuntimeError(f"cannot fit the hub words into {max_w}x{max_h}")
+    return fitted
+
+
+def render_hub_icon(stamp: Image.Image, font: ImageFont.FreeTypeFont) -> Image.Image:
+    """``Robo`` in logo navy over ``Dyna`` with one brand color per letter."""
+    icon = _paper(stamp)
+    baselines, block, _ = _hub_layout(font)
+    block_top = (CANVAS - block) // 2
+    robo, dyna = MARK_LINES
+
+    rng = random.Random(0xB0B0)
+
+    def stamp_text(xy: tuple[float, float], text: str, color: tuple[int, int, int], anchor: str):
+        stencil = Image.new("L", (CANVAS, CANVAS), 0)
+        ImageDraw.Draw(stencil).text(
+            xy,
+            text,
+            font=font,
+            anchor=anchor,
+            fill=255,
+            stroke_width=STROKE,
+            stroke_fill=255,
+        )
+        icon.paste(_speckle(color, rng), (0, 0), stencil)
+
+    stamp_text((CANVAS // 2, block_top + baselines[0]), robo, HUB_MARK_INK, "ms")
+    # Dyna letters are drawn one at a time at their prefix advance so each can
+    # take its own color while keeping the whole-word spacing.
+    baseline = block_top + baselines[1]
+    left = (CANVAS - font.getlength(dyna)) / 2
+    for index, letter in enumerate(dyna):
+        color = HUB_LETTER_COLORS[index % len(HUB_LETTER_COLORS)]
+        stamp_text((left + font.getlength(dyna[:index]), baseline), letter, color, "ls")
+    return icon
+
+
 def main() -> int:
     stamp = Image.open(STAMP_PATH).convert("RGB")
     font = _fit_font()
@@ -180,6 +252,9 @@ def main() -> int:
         dest = TEXTURE_DIR / filename
         render_icon(stamp, word, color, font).save(dest, optimize=True)
         print(f"wrote {dest.relative_to(ROOT)}")
+    hub_dest = TEXTURE_DIR / HUB_ICON_FILENAME
+    render_hub_icon(stamp, _fit_hub_font()).save(hub_dest, optimize=True)
+    print(f"wrote {hub_dest.relative_to(ROOT)}")
     print("Run script/install_gui_dock_icons.py to refresh the Ubuntu dock entries.")
     return 0
 

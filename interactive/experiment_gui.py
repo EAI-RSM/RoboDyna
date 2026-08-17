@@ -207,12 +207,31 @@ class ExperimentLauncher(tk.Tk):
         )
         return card
 
+    def _header_with_exit(self, parent) -> tuple[tk.Frame, tk.Frame, RoundedButton]:
+        """Page header with an Exit button on the right (same chrome on every screen)."""
+        header = tk.Frame(parent, bg=HEADER_BG, highlightbackground="#d4d5db", highlightthickness=1)
+        header.pack(fill="x", pady=(0, 16))
+        top = tk.Frame(header, bg=HEADER_BG)
+        top.pack(fill="x")
+        exit_button = RoundedButton(
+            top,
+            text="Exit",
+            command=self.exit_app,
+            bg="#e34a33",
+            activebackground="#eb6854",
+            font=("Sans", 16, "bold"),
+            width=140,
+            height=64,
+            radius=26,
+        )
+        exit_button.pack(side="right", padx=(8, 18), pady=14)
+        inner = tk.Frame(top, bg=HEADER_BG)
+        inner.pack(side="left", fill="x", expand=True, padx=24, pady=18)
+        return header, inner, exit_button
+
     def _build_name_screen(self):
         self.name_screen = tk.Frame(self.body, bg=PAGE_BG)
-        header = tk.Frame(self.name_screen, bg=HEADER_BG, highlightbackground="#d4d5db", highlightthickness=1)
-        header.pack(fill="x", pady=(0, 16))
-        inner = tk.Frame(header, bg=HEADER_BG)
-        inner.pack(fill="x", padx=24, pady=18)
+        _header, inner, self.name_exit = self._header_with_exit(self.name_screen)
         self.name_title = tk.Label(
             inner,
             text="Human Experiment",
@@ -557,10 +576,7 @@ class ExperimentLauncher(tk.Tk):
 
     def _build_experience_screen(self):
         self.exp_screen = tk.Frame(self.body, bg=PAGE_BG)
-        header = tk.Frame(self.exp_screen, bg=HEADER_BG, highlightbackground="#d4d5db", highlightthickness=1)
-        header.pack(fill="x", pady=(0, 16))
-        inner = tk.Frame(header, bg=HEADER_BG)
-        inner.pack(fill="x", padx=24, pady=18)
+        _header, inner, self.exp_exit = self._header_with_exit(self.exp_screen)
         self.exp_title = tk.Label(
             inner,
             text="A few questions",
@@ -606,10 +622,7 @@ class ExperimentLauncher(tk.Tk):
 
     def _build_post_screen(self):
         self.post_screen = tk.Frame(self.body, bg=PAGE_BG)
-        header = tk.Frame(self.post_screen, bg=HEADER_BG, highlightbackground="#d4d5db", highlightthickness=1)
-        header.pack(fill="x", pady=(0, 16))
-        inner = tk.Frame(header, bg=HEADER_BG)
-        inner.pack(fill="x", padx=24, pady=18)
+        _header, inner, self.post_exit = self._header_with_exit(self.post_screen)
         self.post_title = tk.Label(
             inner,
             text="After the experiment",
@@ -662,24 +675,7 @@ class ExperimentLauncher(tk.Tk):
 
     def _build_suite_screen(self):
         self.suite_screen = tk.Frame(self.body, bg=PAGE_BG)
-        header = tk.Frame(self.suite_screen, bg=HEADER_BG, highlightbackground="#d4d5db", highlightthickness=1)
-        header.pack(fill="x", pady=(0, 16))
-        top = tk.Frame(header, bg=HEADER_BG)
-        top.pack(fill="x")
-        self.suite_exit = RoundedButton(
-            top,
-            text="Exit",
-            command=self.exit_app,
-            bg="#e34a33",
-            activebackground="#eb6854",
-            font=("Sans", 16, "bold"),
-            width=140,
-            height=64,
-            radius=26,
-        )
-        self.suite_exit.pack(side="right", padx=(8, 18), pady=14)
-        inner = tk.Frame(top, bg=HEADER_BG)
-        inner.pack(side="left", fill="x", expand=True, padx=24, pady=18)
+        _header, inner, self.suite_exit = self._header_with_exit(self.suite_screen)
         self.suite_title = tk.Label(
             inner,
             text="Choose a suite",
@@ -1360,6 +1356,9 @@ class ExperimentLauncher(tk.Tk):
         self.controller_combo.configure(font=font(13, "bold"))
         self.remaining_stats.configure(font=font(13, "bold"), wraplength=max(360, width - 80))
         self.suite_exit.configure(font=font(16, "bold"), width=px(140), height=px(64), radius=px(26))
+        self.name_exit.configure(font=font(16, "bold"), width=px(140), height=px(64), radius=px(26))
+        self.exp_exit.configure(font=font(16, "bold"), width=px(140), height=px(64), radius=px(26))
+        self.post_exit.configure(font=font(16, "bold"), width=px(140), height=px(64), radius=px(26))
         for card in (self.questionnaire_card, self.base_card, self.household_card):
             card._title.configure(font=font(22, "bold"))
             card._blurb.configure(font=font(13), wraplength=max(360, width - 100))

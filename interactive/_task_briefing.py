@@ -33,6 +33,8 @@ SUITE_ICONS = {
     "interactive": (_TEXTURE_DIR / "robodyna_app_icon_base.png", "robodyna-base"),
     "household": (_TEXTURE_DIR / "robodyna_app_icon_hh.png", "robodyna-hh"),
     "experiment": (_TEXTURE_DIR / "robodyna_app_icon_exp.png", "robodyna-exp"),
+    # Hub launcher: Robo/Dyna with one brand color per letter.
+    "gui": (_TEXTURE_DIR / "robodyna_app_icon_gui.png", "robodyna-gui"),
 }
 # Set by ``setup_gui_app_icon`` so later windows (briefing dialog) match the suite.
 _active_icon_path = APP_ICON_PATH
@@ -52,6 +54,7 @@ GUI_WM_CLASS = {
     "interactive": "Robodynainteractive",
     "household": "Robodynahousehold",
     "experiment": "Robodynaexperiment",
+    "gui": "Robodynagui",
 }
 
 
@@ -200,6 +203,10 @@ def setup_gui_app_icon(
         name = "RoboDyna Human Experiment"
         comment = "Human-experiment task launcher"
         desktop_id = "robodyna-experiment"
+    elif suite == "gui":
+        name = "RoboDyna"
+        comment = "Shared launcher for the base, household, and experiment GUIs"
+        desktop_id = "robodyna-gui"
     else:
         name = "RoboDyna Base Tasks"
         comment = "Dynamic interactive task launcher"
