@@ -60,11 +60,6 @@ interactive_params:
 # Keep this task_args block in sync with demo_dynamic.yml.
 # ---------------------------------------------------------------------------
 task_args:
-  toast_bread:
-    toast_steps: 300
-    target_doneness: 0.45
-    plate_scale_mult: 0.65
-    steamer_scale_mult: 0.10
   cook_meat:
     cook_steps: 686             # −20% speed vs prior 549; per-ep × U(1±cook_speed_jitter)
     cook_speed_jitter: 0.20
@@ -96,22 +91,6 @@ task_args:
     cook_intensity: 0.70
     timer_radius: 0.045
     timer_n_sections: 24
-  assemble_markers_cylinder:
-    side_cyl_radius: 0.018
-    side_cyl_half_len: 0.10
-    center_cyl_radius: 0.09
-    center_cyl_half_len: 0.10
-    center_x: 0.0
-    center_y: 0.0
-    attach_dist: 0.06
-    attach_z: 0.04
-    dwell_steps: 40
-    side_group_x_offset: 0.18
-    side_group_y_offset: 0.10
-    side_group_x_jitter: 0.02
-    side_group_y_jitter: 0.008
-    center_table_clearance: 0.005
-    rotation_direction: counter_clockwise
   catch_marbles_trapdoors:
     press_hold_steps: 24
     final_dwell_steps: 100
@@ -158,12 +137,6 @@ task_args:
     board_z_lift: 0.06        # play surface ~6 cm above table; compact base sits on table
     board_color: [0.10, 0.45, 0.22]  # billiard-felt green play surface
     board_body_color: [0.18, 0.09, 0.04]  # dark brown walls
-  collect_falling_bowl:
-    num_objects: 4
-    emit_interval: 40
-    fall_steps: 55
-    rim_radius: 0.055
-    pour_every: 3
   put_cup_belt:
     curtain_freq: 0.8
     curtain_amp: 0.05
@@ -296,11 +269,6 @@ task_args:
     keeper_goal_clearance: 0.05
     keeper_pose_tol: 0.03
     keeper_mass: 0.5
-  pick_cup_behind_fan:
-    fan_omega_deg: 2.0
-    gap_frac: 0.40
-    theta_spill: 35.0
-    fan_far_y: 0.12
   pick_ripe_apple:
     # Default: single good apple + static basket.
     # Opt 1 — two_apples_enabled: spoiled yellow→black apple (do not pick)
@@ -490,12 +458,6 @@ task_args:
     basket_y: 0.0
     basket_x: 0.34
     basket_scale: 1.15
-  two_type_sorting_catch:
-    num_objects: 4
-    fall_steps: 90
-    lateral_bias: 0.16
-    center_rate: 0.25
-    catch_tol: 0.07
   catch_ramp_ball:
     # Ramp meets back wall; drop-then-PhysX roll. Opt1 wall bounce, Opt2 blue distractor.
     ramp_angle: 0.24

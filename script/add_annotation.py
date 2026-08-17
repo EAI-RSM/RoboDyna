@@ -289,50 +289,9 @@ from pathlib import Path
 
 def batch(batch_size=5, root="./envs"):
     name_list = [
-        "beat_block_hammer",
-        "blocks_ranking_rgb",
-        "blocks_ranking_size",
-        "dump_bin_bigbin",
-        "grab_roller",
-        "lift_pot",
-        "move_can_pot",
-        "move_playingcard_away",
-        "move_stapler_pad",
-        "place_a2b_left",
-        "place_a2b_right",
-        "place_bread_basket",
-        "place_bread_skillet",
-        "place_can_basket",
-        "place_cylinder_box",
-        "place_fan",
-        "place_medicine_spot",
-        "place_mouse_pad",
-        "place_object_scale",
-        "place_object_stand",
-        "place_phone_stand",
-        "place_remote_storage",
-        "place_object_basket",
-        "put_bottles_dustbin",
-        "rotate_qrcode",
-        "shake_bottle",
-        "shake_bottle_horizontally",
-        "place_shoe",
-        "slide_mouse_pad",
-        "stamp_seal",
-        "handover_block",
-        "stack_blocks_three",
-        "stack_blocks_two",
-        "adjust_bottle",
-        "stack_bowls_three",
-        "stack_bowls_two",
-        "click_alarmclock",
-        "click_bell",
-        "place_container_plate",
-        "pick_diverse_bottles",
-        "pick_dual_bottles",
-        "place_dual_shoes",
-        "place_empty_cup",
-        "place_object_into_plasticbox",
+        p.stem
+        for p in Path(root).glob("*.py")
+        if not p.name.startswith("_") and p.stem != "__init__"
     ]
     process_list = []
     for file in name_list:

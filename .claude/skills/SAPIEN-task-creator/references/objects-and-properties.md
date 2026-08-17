@@ -74,7 +74,7 @@ short script with `trimesh` + `transforms3d`.
 Use a URDF instead: dir contains `mobility.urdf` + `model_data.json`, loaded via
 `create_urdf_obj` / `create_sapien_urdf_obj`, wrapped as `ArticulationActor`. Its points carry a
 `{"matrix":..., "base": "<link_name>"}` so they track a specific link. Joints driven with
-`set_qpos`/`set_qvel`; see `put_object_cabinet.py`.
+`set_qpos`/`set_qvel`; see `_kitchens_base_task.py`.
 
 ### Objaverse pool
 `assets/objects/objaverse/list.json` catalogs the large object pool (used by clutter generation,
@@ -120,8 +120,8 @@ Articulated `ArticulationActor`:
 Tasks branch on `self.use_dynamic`: in static mode objects are spawned `is_static=True` (rock
 solid, deterministic grasp); in dynamic mode they're `is_static=False` with low mass + high damping
 so DOMINO's motion controller can push them and the arm must intercept. This is the single most
-important "property" lever for the benchmark's difficulty. See `click_bell.py` (mass 2.0 + damping
-100) vs `adjust_bottle.py` (mass 0.01 + damping 10).
+important "property" lever for the benchmark's difficulty. See `punch_dual_holes.py` vs
+`catch_ramp_ball.py` for static fixture vs intercept-style mass/damping choices.
 
 ## Quick recipes
 

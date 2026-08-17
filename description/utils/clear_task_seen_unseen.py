@@ -15,6 +15,6 @@ def clear_seen_unseen(task_name):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("task_name", type=str, default="beat_block_hammer")
+    parser.add_argument("task_name", type=str, default="cook_meat")
     args = parser.parse_args()
     clear_seen_unseen(args.task_name)

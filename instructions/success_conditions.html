@@ -105,7 +105,6 @@
   <h2>Index</h2>
   <h3>Basic</h3><ol class="index"><li><a href="#catch_marbles_trapdoors"><code>catch_marbles_trapdoors</code></a> — Catch Marbles Trapdoors</li><li><a href="#catch_ramp_ball"><code>catch_ramp_ball</code></a> — Catch Ramp Ball</li><li><a href="#catch_cuboid"><code>catch_cuboid</code></a> — Catch Cuboid</li><li><a href="#catch_shelf_marble"><code>catch_shelf_marble</code></a> — Catch Shelf Marble</li><li><a href="#catch_valley_ball"><code>catch_valley_ball</code></a> — Catch Valley Ball</li><li><a href="#stop_valley_ball"><code>stop_valley_ball</code></a> — Stop Valley Ball</li><li><a href="#cook_meat"><code>cook_meat</code></a> — Cook Meat</li><li><a href="#cook_meat_timer"><code>cook_meat_timer</code></a> — Cook Meat Timer</li><li><a href="#put_cup_belt"><code>put_cup_belt</code></a> — Put Cup Belt</li><li><a href="#dispense_gummy"><code>dispense_gummy</code></a> — Dispense Gummy</li><li><a href="#punch_dual_holes"><code>punch_dual_holes</code></a> — Punch Dual Holes</li><li><a href="#save_goal"><code>save_goal</code></a> — Save Goal</li><li><a href="#hit_target"><code>hit_target</code></a> — Hit Target</li><li><a href="#load_train"><code>load_train</code></a> — Load Train</li><li><a href="#marble_shelf_maze"><code>marble_shelf_maze</code></a> — Marble Shelf Maze</li><li><a href="#pack_fruits"><code>pack_fruits</code></a> — Pack Fruits</li><li><a href="#pick_ripe_apple"><code>pick_ripe_apple</code></a> — Pick Ripe Apple</li><li><a href="#place_block_belt"><code>place_block_belt</code></a> — Place Block Belt</li><li><a href="#play_billiard"><code>play_billiard</code></a> — Play Billiard</li><li><a href="#control_quality"><code>control_quality</code></a> — Control Quality</li><li><a href="#drop_ball_hole"><code>drop_ball_hole</code></a> — Drop Ball Hole</li><li><a href="#sort_apples_belt"><code>sort_apples_belt</code></a> — Sort Apples Belt</li><li><a href="#whack_moles"><code>whack_moles</code></a> — Whack Moles</li></ol>
   <h3>Household</h3><ol class="index"><li><a href="#trap_bug"><code>trap_bug</code></a> — Trap Bug</li><li><a href="#boil_milk"><code>boil_milk</code></a> — Boil Milk</li><li><a href="#fill_coffee_jar"><code>fill_coffee_jar</code></a> — Fill Coffee Jar</li><li><a href="#pour_beer"><code>pour_beer</code></a> — Pour Beer</li><li><a href="#cook_food"><code>cook_food</code></a> — Cook Food</li><li><a href="#cook_food_timer"><code>cook_food_timer</code></a> — Cook Food Timer</li><li><a href="#measure_ingredient"><code>measure_ingredient</code></a> — Measure Ingredient</li><li><a href="#make_soup"><code>make_soup</code></a> — Make Soup</li><li><a href="#catch_cup"><code>catch_cup</code></a> — Catch Cup</li><li><a href="#catch_mouse_object_drop"><code>catch_mouse_object_drop</code></a> — Catch Mouse Object Drop</li><li><a href="#stop_ball"><code>stop_ball</code></a> — Stop Ball</li><li><a href="#clean_table"><code>clean_table</code></a> — Clean Table</li></ol>
-  <h3>Extras</h3><ol class="index"><li><a href="#serve_dinner"><code>serve_dinner</code></a> — Serve Dinner</li><li><a href="#make_soup_test"><code>make_soup_test</code></a> — Make Soup Test</li><li><a href="#catch_rolling_cup"><code>catch_rolling_cup</code></a> — Catch Rolling Cup</li><li><a href="#empty_bag"><code>empty_bag</code></a> — Empty Bag</li></ol>
 
   <h2 id="basic">Basic tasks</h2>
   
@@ -776,83 +775,10 @@
   <p class="src">Source: <code>envs/clean_table.py</code> → <code>check_success()</code></p>
 </section>
 
-  <h2 id="extra">Extras / aliases</h2>
   
-<section class="task" id="serve_dinner" data-suite="extra" data-name="serve_dinner Serve Dinner">
-  <header>
-    <h3><code>serve_dinner</code> — Serve Dinner</h3>
-    <span class="pill extra">extra</span>
-  </header>
-  <p class="summary">Stove turned off once; all meatballs on the plate; none fallen.</p>
-  <div class="cols">
-    <div>
-      <h4>Requires</h4>
-      <ul><li>turned_off_once and stove off</li><li>All meatballs on plate</li><li>not _balls_fallen</li></ul>
-    </div>
-    <div>
-      <h4>Fails if</h4>
-      <ul class="fail"><li>Stove left on</li><li>Meatball off plate / fallen</li></ul>
-    </div>
-  </div>
-  <p class="src">Source: <code>envs/serve_dinner.py</code> → <code>check_success()</code></p>
-</section>
 
-<section class="task" id="make_soup_test" data-suite="extra" data-name="make_soup_test Make Soup Test">
-  <header>
-    <h3><code>make_soup_test</code> — Make Soup Test</h3>
-    <span class="pill extra">extra</span>
-  </header>
-  <p class="summary">Same as make_soup (alias).</p>
-  <div class="cols">
-    <div>
-      <h4>Requires</h4>
-      <ul><li>All make_soup conditions</li></ul>
-    </div>
-    <div>
-      <h4>Fails if</h4>
-      <ul class="fail"><li>Same as make_soup</li></ul>
-    </div>
-  </div>
-  <p class="src">Source: <code>envs/make_soup_test.py</code> → <code>check_success()</code></p>
-</section>
 
-<section class="task" id="catch_rolling_cup" data-suite="extra" data-name="catch_rolling_cup Catch Rolling Cup">
-  <header>
-    <h3><code>catch_rolling_cup</code> — Catch Rolling Cup</h3>
-    <span class="pill extra">extra</span>
-  </header>
-  <p class="summary">Cup stopped on the table, in bounds, and upright.</p>
-  <div class="cols">
-    <div>
-      <h4>Requires</h4>
-      <ul><li>on_table</li><li>in_xy bounds</li><li>upright</li></ul>
-    </div>
-    <div>
-      <h4>Fails if</h4>
-      <ul class="fail"><li>Still rolling / off table</li><li>Tipped over</li></ul>
-    </div>
-  </div>
-  <p class="src">Source: <code>envs/catch_rolling_cup.py</code> → <code>check_success()</code></p>
-</section>
 
-<section class="task" id="empty_bag" data-suite="extra" data-name="empty_bag Empty Bag">
-  <header>
-    <h3><code>empty_bag</code> — Empty Bag</h3>
-    <span class="pill extra">extra</span>
-  </header>
-  <p class="summary">Bag tipped and apple caught; catcher still near apple; static veggies stay packed near counter.</p>
-  <div class="cols">
-    <div>
-      <h4>Requires</h4>
-      <ul><li>bag tipped and dump released</li><li>Apple caught (_caught)</li><li>Apple at table height; TCP near apple</li><li>Static veggies still packed near counter (not fallen)</li><li>not fell_off</li></ul>
-    </div>
-    <div>
-      <h4>Fails if</h4>
-      <ul class="fail"><li>Apple fallen</li><li>Not caught</li><li>Veggies spilled away</li></ul>
-    </div>
-  </div>
-  <p class="src">Source: <code>envs/empty_bag.py</code> → <code>check_success()</code></p>
-</section>
 </div>
 
 <script>

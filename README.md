@@ -298,7 +298,7 @@ We provide an automated pipeline for data collection. You can collect data by ru
 
 ```bash
 bash collect_data.sh ${task_name} ${task_config} ${gpu_id}
-# Example: bash collect_data.sh adjust_bottle demo_clean_dynamic 0
+# Example: bash collect_data.sh cook_meat demo_dynamic 0
 ```
 
 After collection, the data will be stored under `data/${task_name}/${task_config}` in **HDF5 format**. For the full data collection process and common issues, please refer to the [RoboTwin Data Collection Tutorial](https://robotwin-platform.github.io/doc/usage/collect-data.html).
@@ -327,7 +327,7 @@ To evaluate a trained policy, use the following command. The `task_config` field
 bash eval.sh ${task_name} ${task_config} ${ckpt_setting} ${expert_data_num} ${seed} ${gpu_id}
 
 # Example: Evaluate a policy trained on `demo_clean_dynamic` and tested on `demo_clean_dynamic`
-# bash eval.sh adjust_bottle demo_clean_dynamic demo_clean_dynamic 50 0 0
+# bash eval.sh cook_meat demo_dynamic demo_dynamic 50 0 0
 ```
 
 <details>
@@ -453,8 +453,8 @@ In another terminal, activate your simulation environment (`domino`) and launch 
 ```bash
 conda activate domino
 cd policy/PUMA/examples/Robotwin/eval_files
-# Example: Evaluate on adjust_bottle
-bash eval.sh adjust_bottle demo_clean_dynamic puma_demo 0 0
+# Example: Evaluate on cook_meat
+bash eval.sh cook_meat demo_dynamic puma_demo 0 0
 ```
 
 

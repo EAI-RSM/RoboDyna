@@ -1585,7 +1585,7 @@ class pour_beer(KitchenS_base_task):
         return p + np.array([0.0, 0.0, 0.04], dtype=float)
 
     def _gripper_pressing_bell(self) -> bool:
-        """True when a closed gripper is pressing the bell top (click_bell style)."""
+        """True when a closed gripper is pressing the bell top."""
         if self.bell is None or bool(getattr(self, "_bell_pressed", False)):
             return False
         # Prefer the working arm; also accept the other if it is the one on the bell.
@@ -2396,7 +2396,7 @@ class pour_beer(KitchenS_base_task):
             self._click_finish_bell(arm)
 
     def _click_finish_bell(self, arm: ArmTag) -> bool:
-        """Hover over the finish bell and press down (same pattern as click_bell)."""
+        """Hover over the finish bell and press down."""
         if self.bell is None:
             return False
         self.plan_success = True

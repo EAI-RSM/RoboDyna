@@ -206,21 +206,6 @@ task_args:
     bowl_xy: [0.40, -0.02]
     board_scale_mult: 0.091     # +30% cutting board
     microwave_scale_mult: 1.3   # +30% microwave
-  empty_bag:
-    # Kitchen Large: left bag tips +X; apple rolls right; right arm grasps after exit.
-    scene_id: 0
-    bag_side: left
-    bag_x_abs: 0.16
-    bag_y: -0.02
-    bag_yaw_deg: 0.0
-    bag_scale_mult: 1.0
-    apple_color: random         # green | red | random
-    veg_scale_mult: 0.024
-    table_edge_y: -0.30
-    grasp_tol: 0.08
-    grasp_hover_z: 0.14
-    grasp_tcp_dz: 0.02
-    post_catch_lift: 0.08
   make_soup:
     # KitchenS: no microwave. Burner starts on. Stove slot (current/top-left/
     # top-right), board on lower half, veggies scattered, pot on a front burner.
@@ -262,64 +247,3 @@ task_args:
     glass_x: -0.22
     glass_y: -0.16
     glass_scale: 0.585           # prior 0.45 × 1.3
-  make_soup_test:
-    # Same as make_soup, but flush 4-burner gas cooktop + top-facing knob.
-    scene_id: 0
-    burner: left_front
-    range_xy: [0.18, 0.14]
-    range_x_range: [-0.10, 0.30]
-    range_scale_mult: 1.0
-    randomize_layout: true
-    randomize_background: true
-    clean_background_rate: 0.0
-    water_level: 0.45
-    pot_radius: 0.06786          # prior 0.0754 × 0.9
-    pot_height: 0.0735
-    pot_wall: 0.005
-    board_half: [0.095, 0.052, 0.010]  # y prior 0.065 × 0.8
-    handle_half: [0.022, 0.024, 0.022]
-    board_x: 0.16
-    board_y: -0.14
-    cube_half: 0.012
-    tomato_radius: 0.012         # matched to prior cube half
-    n_veg_min: 2
-    n_veg_max: 4
-    tilt_hold_dot: 0.82
-    tilt_spill_dot: 0.50
-    pour_tip_rad: 0.70
-    knob_contact_radius: 0.06
-    grasp_tcp_tol: 0.045
-    plate_x: -0.18
-    plate_y: -0.08
-    plate_scale: 0.55
-    bread_scale: 1.0
-    wine_x: -0.30
-    wine_y: -0.02
-    wine_scale: 1.0
-    glass_x: -0.22
-    glass_y: -0.16
-    glass_scale: 0.585
-  serve_dinner:
-    # KitchenS: pan with 3–4 meatballs on a lit burner (right-top); plate left-center.
-    # Turn stove off, tip pan so meatballs land on plate. Salad bowl + bottle + cup decor.
-    scene_id: 0
-    burner: left_front
-    range_xy: [0.36, 0.14]
-    plate_x: -0.08
-    plate_y: -0.08
-    pan_scale: 1.0
-    range_scale_mult: 1.0
-    plate_scale: 1.05          # prior 1.5 × 0.7 (−30%)
-    meatball_radius: 0.015
-    tilt_hold_dot: 0.78
-    pour_tip_rad: 1.13           # ~65° tip so balls roll over the rim
-    knob_contact_radius: 0.06
-    salad_x: -0.22
-    salad_y: -0.02
-    bottle_x: -0.32
-    bottle_y: -0.12
-    cup_x: -0.18
-    cup_y: -0.18
-    salad_bowl_scale: 1.15
-    lettuce_scale: 1.35
-    tomato_scale: 1.25

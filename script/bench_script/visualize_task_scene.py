@@ -11,13 +11,13 @@ USAGE:
 
 EXAMPLES:
     # Basic usage with default seed
-    python bench_script/visualize_task_scene.py grab_roller_thing bench_demo_clean
+    python bench_script/visualize_task_scene.py cook_meat bench_demo_clean
 
     # With custom seed
-    python bench_script/visualize_task_scene.py grab_roller_thing bench_demo_clean --seed 42
+    python bench_script/visualize_task_scene.py cook_meat bench_demo_clean --seed 42
 
     # With custom render frequency
-    python bench_script/visualize_task_scene.py grab_roller_thing bench_demo_clean --render-freq 5
+    python bench_script/visualize_task_scene.py cook_meat bench_demo_clean --render-freq 5
 
     # Viewer aligned to a scene camera (see embodiment static_camera_list + bench office_config)
     python bench_script/visualize_task_scene.py put_bottle_in_fridge bench_demo_clean --viewer-camera demo_camera
@@ -37,15 +37,15 @@ EXAMPLES:
     python bench_script/visualize_task_scene.py mouse_on_pad bench_demo_clean --bench-subdir office --rollout --seed 0
 
     # Run headless (no GUI)
-    python bench_script/visualize_task_scene.py grab_roller_thing bench_demo_clean --no-render
-    python bench_script/visualize_task_scene.py grab_roller_thing bench_demo_clean --no-render --rollout
+    python bench_script/visualize_task_scene.py cook_meat bench_demo_clean --no-render
+    python bench_script/visualize_task_scene.py cook_meat bench_demo_clean --no-render --rollout
 
     # Save RGB on first planning failure (move_step = Nth top-level env.move in play_once)
     python bench_script/visualize_task_scene.py move_books_onto_table bench_demo_clean --bench-subdir study \\
         --rollout --save-plan-fail-dir ./plan_fail_debug --plan-fail-camera head_camera
 
 ARGUMENTS:
-    task_name      Task module name from bench_envs (e.g. grab_roller_thing)
+    task_name      Task module name from bench_envs (e.g. cook_meat)
     task_config    Task config name without .yml extension (e.g. bench_demo_clean)
 
 OPTIONS:
@@ -270,8 +270,8 @@ def _install_live_step_renderer(env):
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize a benchmark task scene")
-    # parser.add_argument("scene_name", type=str, help="Task module name (e.g. grab_roller_thing)")
-    parser.add_argument("task_name", type=str, help="Task module name (e.g. grab_roller_thing)")
+    # parser.add_argument("scene_name", type=str, help="Task module name (e.g. cook_meat)")
+    parser.add_argument("task_name", type=str, help="Task module name (e.g. cook_meat)")
     parser.add_argument("task_config", type=str, help="Task config name (e.g. bench_demo_clean)")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed for scene")
     parser.add_argument("--render-freq", type=int, default=3, help="Render every N steps (default 1)")

@@ -27,7 +27,7 @@ class stop_ball(Office_base_task):
     BALL_IDS = [0]  # orange table-tennis (id 1 is hard to see in head cam)
     # Asset has no authored scale; 0.02 × mean(extents) ≈ 4.36 cm diameter.
     BALL_BASE_SCALE = 0.02
-    # Fully-open WSG 50-110 inner gap (URDF ±0.055 m; empty_bag JAW_GAP_TABLE).
+    # Fully-open WSG 50-110 inner gap (URDF ±0.055 m).
     WSG_OPEN_FINGER_GAP = 0.110
     BALL_CATCH_MARGIN = 0.005  # +0.5 cm so the ball cannot pass through open pads
     # 11.5 cm diameter / 4.36 cm base ≈ 2.64×

@@ -633,7 +633,7 @@ class put_cup_belt(Base_Task):
         return self._window_open(t=(self._kin_step + lead_steps) * self.DT)
 
     def _find_cup_grasp(self, arm_tag: ArmTag):
-        # Left-arm grasps: match place_empty_cup (contact 2) — other IDs leave a wrist pose
+        # Left-arm grasps: contact 2 — other IDs leave a wrist pose
         # that cannot finish the forward belt reach.
         if arm_tag == "left":
             candidates = [

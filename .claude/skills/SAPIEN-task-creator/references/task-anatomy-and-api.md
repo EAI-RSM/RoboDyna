@@ -1,7 +1,7 @@
 # Designing a new DOMINO / RoboTwin task
 
 How task authoring actually works in this codebase, derived from reading `envs/_base_task.py`,
-example tasks (`envs/click_bell.py`, `envs/adjust_bottle.py`), `script/collect_data.py`, the
+example tasks (`envs/punch_dual_holes.py`, `envs/catch_ramp_ball.py`), `script/collect_data.py`, the
 object-asset format, and the `code_gen/` LLM pipeline.
 
 ## Mental model
@@ -126,13 +126,13 @@ DOMINO's novelty over RoboTwin is moving objects. A dynamic-aware task adds:
 - `get_dynamic_motion_config()` returning `{target_actor, end_position, table_bounds, ...}`,
 - a `check_success` that (in dynamic mode) also checks displacement/proximity, and often a custom
   `check_stable`.
-See `envs/click_bell.py` and `envs/adjust_bottle.py` for the two canonical patterns. The motion
+See `envs/punch_dual_holes.py` and `envs/catch_ramp_ball.py` for the two canonical patterns. The motion
 itself is parameterized by the config knobs `dynamic_level` (1–3) and `dynamic_coefficient`.
 
 ## Two authoring paths
 
-1. **Manual** (recommended to start): copy the closest existing task (`place_*` for pick-place,
-   `click_*`/`press_*` for contact, `handover_*` for bimanual), swap the object + target + success
+1. **Manual** (recommended to start): copy the closest existing task (`pack_fruits` / `place_block_belt` for pick-place,
+   `punch_dual_holes` / `dispense_gummy` for contact, `cook_meat` / `make_soup` for bimanual), swap the object + target + success
    check, run a 2–3 episode smoke collection, iterate. Fastest way to learn the primitives.
 
 2. **LLM-assisted** (`code_gen/`): RoboTwin's generator (`code_gen/task_generation.py`) writes a

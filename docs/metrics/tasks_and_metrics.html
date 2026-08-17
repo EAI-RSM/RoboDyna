@@ -130,8 +130,6 @@
   <ol class="index"><li><a href="#catch_marbles_trapdoors"><code>catch_marbles_trapdoors</code></a> — Catch Marbles Trapdoors</li><li><a href="#catch_ramp_ball"><code>catch_ramp_ball</code></a> — Catch Ramp Ball</li><li><a href="#catch_cuboid"><code>catch_cuboid</code></a> — Catch Cuboid</li><li><a href="#catch_shelf_marble"><code>catch_shelf_marble</code></a> — Catch Shelf Marble</li><li><a href="#catch_valley_ball"><code>catch_valley_ball</code></a> — Catch Valley Ball</li><li><a href="#stop_valley_ball"><code>stop_valley_ball</code></a> — Stop Valley Ball</li><li><a href="#cook_meat"><code>cook_meat</code></a> — Cook Meat</li><li><a href="#cook_meat_timer"><code>cook_meat_timer</code></a> — Cook Meat Timer</li><li><a href="#put_cup_belt"><code>put_cup_belt</code></a> — Put Cup Belt</li><li><a href="#dispense_gummy"><code>dispense_gummy</code></a> — Dispense Gummy</li><li><a href="#punch_dual_holes"><code>punch_dual_holes</code></a> — Punch Dual Holes</li><li><a href="#save_goal"><code>save_goal</code></a> — Save Goal</li><li><a href="#hit_target"><code>hit_target</code></a> — Hit Target</li><li><a href="#load_train"><code>load_train</code></a> — Load Train</li><li><a href="#marble_shelf_maze"><code>marble_shelf_maze</code></a> — Marble Shelf Maze</li><li><a href="#pack_fruits"><code>pack_fruits</code></a> — Pack Fruits</li><li><a href="#pick_ripe_apple"><code>pick_ripe_apple</code></a> — Pick Ripe Apple</li><li><a href="#place_block_belt"><code>place_block_belt</code></a> — Place Block Belt</li><li><a href="#play_billiard"><code>play_billiard</code></a> — Play Billiard</li><li><a href="#control_quality"><code>control_quality</code></a> — Control Quality</li><li><a href="#drop_ball_hole"><code>drop_ball_hole</code></a> — Drop Ball Hole</li><li><a href="#sort_apples_belt"><code>sort_apples_belt</code></a> — Sort Apples Belt</li><li><a href="#whack_moles"><code>whack_moles</code></a> — Whack Moles</li></ol>
   <h3>Household (GUI)</h3>
   <ol class="index"><li><a href="#trap_bug"><code>trap_bug</code></a> — Trap Bug</li><li><a href="#boil_milk"><code>boil_milk</code></a> — Boil Milk</li><li><a href="#fill_coffee_jar"><code>fill_coffee_jar</code></a> — Fill Coffee Jar</li><li><a href="#pour_beer"><code>pour_beer</code></a> — Pour Beer</li><li><a href="#cook_food"><code>cook_food</code></a> — Cook Food</li><li><a href="#cook_food_timer"><code>cook_food_timer</code></a> — Cook Food Timer</li><li><a href="#measure_ingredient"><code>measure_ingredient</code></a> — Measure Ingredient</li><li><a href="#make_soup"><code>make_soup</code></a> — Make Soup</li><li><a href="#catch_cup"><code>catch_cup</code></a> — Catch Cup</li><li><a href="#catch_mouse_object_drop"><code>catch_mouse_object_drop</code></a> — Catch Mouse Object Drop</li><li><a href="#stop_ball"><code>stop_ball</code></a> — Stop Ball</li><li><a href="#clean_table"><code>clean_table</code></a> — Clean Table</li></ol>
-  <h3>Household extras</h3>
-  <ol class="index"><li><a href="#serve_dinner"><code>serve_dinner</code></a> — Serve Dinner</li><li><a href="#make_soup_test"><code>make_soup_test</code></a> — Make Soup Test</li><li><a href="#catch_rolling_cup"><code>catch_rolling_cup</code></a> — Catch Rolling Cup</li><li><a href="#empty_bag"><code>empty_bag</code></a> — Empty Bag</li></ol>
 
   <h2 id="basic">Basic tasks</h2>
   <p class="muted">Source: <code>interactive/base_task_gui.py</code> TASKS (23).</p>
@@ -559,56 +557,9 @@
       </table>
     </section>
 
-  <h2 id="extras">Household extras / aliases</h2>
-  <p class="muted">Present in demos, <code>HOUSEHOLD_TASKS</code>, or configs but not in the household GUI list.</p>
   
-    <section class="task" id="serve_dinner" data-suite="household" data-name="serve_dinner Serve Dinner">
-      <header>
-        <h3><code>serve_dinner</code> — Serve Dinner</h3>
-        <div class="badges"><span class="pill env">env / eval only</span><span class="pill hh">household</span> <span class="pill cat">Household</span></div>
-      </header>
-      <p class="desc">Turn off a lit stove; tip meatballs from pan onto a plate. (in HOUSEHOLD_TASKS / demos)</p>
-      <table>
-        <thead><tr><th>Metric</th><th>Type</th><th>Meaning</th></tr></thead>
-        <tbody><tr><td><code>success / SR</code></td><td>bool / float</td><td>Binary success; aggregated as Success Rate</td></tr><tr><td><code>manipulation_score (MS)</code></td><td>float</td><td>Route completion × penalties (eval_metrics.py)</td></tr><tr><td><code>route_completion (RC)</code></td><td>float</td><td>0–100 route progress</td></tr><tr><td><code>total_time_sim_s / total_steps</code></td><td>float/int</td><td>Shared timing + eval MS/RC</td></tr></tbody>
-      </table>
-    </section>
 
-    <section class="task" id="make_soup_test" data-suite="household" data-name="make_soup_test Make Soup Test">
-      <header>
-        <h3><code>make_soup_test</code> — Make Soup Test</h3>
-        <div class="badges"><span class="pill env">env / eval only</span><span class="pill hh">household</span> <span class="pill cat">Household</span></div>
-      </header>
-      <p class="desc">Alias of make_soup (legacy name; in HOUSEHOLD_TASKS).</p>
-      <table>
-        <thead><tr><th>Metric</th><th>Type</th><th>Meaning</th></tr></thead>
-        <tbody><tr><td><code>success / SR</code></td><td>bool / float</td><td>Binary success; aggregated as Success Rate</td></tr><tr><td><code>manipulation_score (MS)</code></td><td>float</td><td>Route completion × penalties (eval_metrics.py)</td></tr><tr><td><code>route_completion (RC)</code></td><td>float</td><td>0–100 route progress</td></tr><tr><td><code>total_time_sim_s / total_steps</code></td><td>float/int</td><td>Shared timing + eval MS/RC</td></tr></tbody>
-      </table>
-    </section>
 
-    <section class="task" id="catch_rolling_cup" data-suite="household" data-name="catch_rolling_cup Catch Rolling Cup">
-      <header>
-        <h3><code>catch_rolling_cup</code> — Catch Rolling Cup</h3>
-        <div class="badges"><span class="pill env">env / eval only</span><span class="pill hh">household</span> <span class="pill cat">Household</span></div>
-      </header>
-      <p class="desc">Stop a rolling cup and stand it upright (office demos; not in HOUSEHOLD_TASKS frozenset).</p>
-      <table>
-        <thead><tr><th>Metric</th><th>Type</th><th>Meaning</th></tr></thead>
-        <tbody><tr><td><code>success / SR</code></td><td>bool / float</td><td>Binary success; aggregated as Success Rate</td></tr><tr><td><code>manipulation_score (MS)</code></td><td>float</td><td>Route completion × penalties (eval_metrics.py)</td></tr><tr><td><code>route_completion (RC)</code></td><td>float</td><td>0–100 route progress</td></tr><tr><td><code>total_time_sim_s / total_steps</code></td><td>float/int</td><td>Shared timing + eval MS/RC</td></tr></tbody>
-      </table>
-    </section>
-
-    <section class="task" id="empty_bag" data-suite="household" data-name="empty_bag Empty Bag">
-      <header>
-        <h3><code>empty_bag</code> — Empty Bag</h3>
-        <div class="badges"><span class="pill env">env / eval only</span><span class="pill hh">household</span> <span class="pill cat">Household</span></div>
-      </header>
-      <p class="desc">Tip a grocery bag and catch a rolling apple (KitchenL demos).</p>
-      <table>
-        <thead><tr><th>Metric</th><th>Type</th><th>Meaning</th></tr></thead>
-        <tbody><tr><td><code>success / SR</code></td><td>bool / float</td><td>Binary success; aggregated as Success Rate</td></tr><tr><td><code>manipulation_score (MS)</code></td><td>float</td><td>Route completion × penalties (eval_metrics.py)</td></tr><tr><td><code>route_completion (RC)</code></td><td>float</td><td>0–100 route progress</td></tr><tr><td><code>total_time_sim_s / total_steps</code></td><td>float/int</td><td>Shared timing + eval MS/RC</td></tr></tbody>
-      </table>
-    </section>
 
   <p class="muted" style="margin-top:2rem">
     Generated from GUI task lists, <code>HOUSEHOLD_TASKS</code>, <code>script/eval_metrics.py</code>,

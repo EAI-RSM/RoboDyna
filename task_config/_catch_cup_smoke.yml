@@ -50,22 +50,6 @@ lerobot_task_state_dim: 32
 # blocks are ignored. (debug_dynamic.yml mirrors this block with debug run knobs.)
 # ---------------------------------------------------------------------------
 task_args:
-  assemble_markers_cylinder:
-    side_cyl_radius: 0.018      # m; graspable outer cylinder radius
-    side_cyl_half_len: 0.10     # m; outer cylinder half-length
-    center_cyl_radius: 0.09     # m; rotating center post radius
-    center_cyl_half_len: 0.10   # m; center post half-height
-    center_x: 0.0               # m; center post table x
-    center_y: 0.0               # m; center post table y
-    attach_dist: 0.06           # m; XY weld tolerance to attach target
-    attach_z: 0.04              # m; Z weld tolerance to attach target
-    dwell_steps: 40             # physics steps held at contact before release/weld
-    side_group_x_offset: 0.18   # m; |x| of left/right side-cylinder groups
-    side_group_y_offset: 0.10   # m; y of side-cylinder spawn groups
-    side_group_x_jitter: 0.03   # m; per-ep uniform jitter on side-group x
-    side_group_y_jitter: 0.01   # m; per-ep uniform jitter on side-group y
-    center_table_clearance: 0.005  # m; gap under center post above table
-    rotation_direction: counter_clockwise  # clockwise|cw | counter_clockwise|ccw|anticlockwise
   catch_marbles_trapdoors:
     press_hold_steps: 24        # steps to hold button depressed
     final_dwell_steps: 100      # post-success settle / observe steps
@@ -136,18 +120,6 @@ task_args:
     num_appearances: 3          # how many pop windows per episode
     pop_steps: 90               # sim steps cuboid stays raised per pop
     grasp_tol: 0.05             # m; catch offset scale (success uses ~2.5×)
-  catch_rolling_cup:
-    # Full-width single shelf (+30cm), no drawer/file/plates. Cup tips→rolls;
-    # stop → exterior physical grasp (no weld) → upright on the table.
-    cup_ids: [0, 1, 2, 5, 6, 3]  # 021_cup variants used by this task
-    roll_speed: 0.14            # m/s; shelf + table roll speed (arm pre-positions first)
-    fall_speed_xy: 0.07         # m/s; retained horizontal speed during shelf→table fall
-    tip_duration: 0.90          # s; upright→on-side lean on the shelf
-    table_edge_y: -0.30         # m; near table edge (past this without catch = fail)
-    intercept_frac: 0.65        # fraction along table-roll for the catch
-    catch_shelf_clearance: 0.22 # m; min gap between catch hand and shelf front lip
-    post_grasp_lift: 0.10       # m; lift after grasping the stopped cup
-    upright_hold: 0.30          # s; cup stands on shelf before tipping
   catch_cup:
     # Deep shelf: 2× plant + 021_cup row; one random right-side cup tips/rolls.
     # Closed gripper presses one face of 266_pillow; PhysX force + damping
@@ -167,20 +139,6 @@ task_args:
     pillow_catch_xy_tol: 0.04   # m; XY pad — pillow must cover the landing
     pillow_mass: 0.35           # kg; cushion the gripper shoves across the table
     post_place_dwell: 12        # sim steps after catch/miss before episode ends
-  empty_bag:
-    # Kitchen Large: knock over kraft grocery bag; catch rolling apple.
-    scene_id: 0
-    bag_side: left
-    bag_x_abs: 0.16
-    bag_y: -0.05
-    bag_scale_mult: 1.0
-    apple_color: random
-    veg_scale_mult: 0.035
-    table_edge_y: -0.30
-    grasp_tol: 0.08
-    grasp_hover_z: 0.14
-    grasp_tcp_dz: 0.02
-    post_catch_lift: 0.08
   catch_shelf_marble:
     # Options (independent toggles; Opt 1+2 can both be on):
     #   Default — marble pauses on the top shelf until a bowl key is pressed
@@ -330,12 +288,6 @@ task_args:
     bowl_outer_radius: 0.095
     bowl_height: 0.060
     bowl_mass: 0.35
-  collect_falling_bowl:
-    num_objects: 4              # spheres emitted this episode
-    emit_interval: 40           # physics steps between emissions
-    fall_steps: 55              # steps for one sphere’s kinematic fall curve
-    rim_radius: 0.055           # m; XY catch tolerance around bowl center
-    pour_every: 3               # pour bowl→bin after this many catches
   cook_meat:
     # ---- knobs (change these) ----
     #   cook_button_enabled  ← Opt 1 (default false = contact cook, no key)
@@ -637,11 +589,6 @@ task_args:
     distractor_prob: 0.4        # Opt 2: chance per real spawn-wave that a distractor also spawns
     distractor_color: [0.05, 0.05, 0.05]  # Opt 2: black
     distractor_min_gap_mult: 2.0  # Opt 2: min Y gap vs same-belt real fruit, × fruit diameter
-  pick_cup_behind_fan:
-    fan_omega_deg: 2.0          # deg per physics step (then ×U(0.8,1.3) per ep)
-    gap_frac: 0.40              # fraction of each 120° period that is a safe blade gap
-    theta_spill: 35.0           # deg; cup tilt from vertical → spill fail
-    fan_far_y: 0.12             # unused (compat); cup y is sampled in code
   pick_ripe_apple:
     # Default: single good apple (green→red→black) + static basket.
     # Opt 1 — two_apples_enabled / spoiled_apple_enabled: second yellow→black apple (do not pick)
@@ -775,11 +722,6 @@ task_args:
     #     Both buttons open the two-piece plank into the garbage bin at lowest y.
     color_mode: alternating
     rotten_prob: 0.0
-  toast_bread:
-    toast_steps: 1000           # sim steps on steamer for doneness 0→1 (longer = slower toast)
-    target_doneness: 0.45       # lift-off target in [0,1]; ~0.45 = golden
-    plate_scale_mult: 0.65      # uniform scale for serving plate asset
-    steamer_scale_mult: 0.10    # uniform scale for steamer (raw asset is huge)
   trap_bug:
     # Office wall-shelf scene; a cockroach, spider, or ant emerges from under
     # the bookshelf and scurries left/right with its head facing travel.
@@ -793,12 +735,6 @@ task_args:
     trap_wall: 0.004            # m; wall / lid thickness
     trap_mass: 0.35             # kg while held; trap is kinematic-anchored once seated
     release_clearance: 0.05     # m; drop height above the seated trap
-  two_type_sorting_catch:
-    num_objects: 4              # total objects emitted
-    fall_steps: 90              # physics steps for one curved descent
-    lateral_bias: 0.16          # m; |x| drift toward owning side at landing
-    center_rate: 0.25           # fraction of near-center (ambiguous) spawns
-    catch_tol: 0.07             # m; bowl XY catch tolerance
   whack_moles:
     num_moles: 2                # default: 2 moles; cosine bob, speed in [60%, 100%] of pop_speed
     # Opt 1 — rabbit distractor (avoid; touching fails). Combinable with Opt 2.
@@ -942,23 +878,3 @@ task_args:
     glass_x: -0.22
     glass_y: -0.16
     glass_scale: 0.45
-  serve_dinner:
-    # KitchenS: pan with meatballs on lit burner (right-top); serve onto plate (left-center).
-    scene_id: 0
-    burner: left_front
-    range_xy: [0.34, 0.18]
-    plate_x: 0.00
-    plate_y: -0.06
-    pan_scale: 1.0
-    range_scale_mult: 1.05
-    plate_scale: 1.05          # prior 1.5 × 0.7 (−30%)
-    meatball_radius: 0.015
-    tilt_hold_dot: 0.78
-    pour_tip_rad: 1.05
-    knob_contact_radius: 0.06
-    salad_x: -0.24
-    salad_y: 0.08
-    bottle_x: -0.30
-    bottle_y: -0.08
-    cup_x: -0.20
-    cup_y: -0.16

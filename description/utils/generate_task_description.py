@@ -100,7 +100,7 @@ def generate_task_description(task_name, instruction_num):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("task_name", type=str, default="beat_block_hammer")
+    parser.add_argument("task_name", type=str, default="cook_meat")
     parser.add_argument("instruction_num", type=int, default=11)
     usr_args = parser.parse_args()
     task_name = usr_args.task_name

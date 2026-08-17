@@ -17,12 +17,10 @@ FINAL = os.path.join(ROOT, "final_task_demos")
 # Matches interactive/household_task_gui.py + README extras.
 HOUSEHOLD_TASKS = (
     "trap_bug",
-    "catch_rolling_cup",
     "catch_cup",
     "catch_mouse_object_drop",
     "stop_ball",
     "clean_table",
-    "empty_bag",
     "fill_coffee_jar",
     "pour_beer",
     "boil_milk",
@@ -30,7 +28,6 @@ HOUSEHOLD_TASKS = (
     "cook_food_timer",
     "make_soup",
     "measure_ingredient",
-    "serve_dinner",
 )
 
 # Optional per-task overrides passed to record_demo (task_arg_overrides list).

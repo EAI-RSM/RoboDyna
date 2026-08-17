@@ -27,7 +27,7 @@ fries carton). So a new asset was sourced: a CC0 low-poly steak from Poly Pizza
   (bake a plain PBR material) — then `set_base_color` fully controls the appearance, which is exactly
   what a cooking color needs.
 Both are handled by `scripts/integrate_object.py --strip-texture`. The pan reused `106_skillet`
-(already annotated; used by `place_bread_skillet.py`).
+(already annotated; skillet asset `106_skillet`).
 
 ## The task structure (`envs/cook_meat.py`)
 
@@ -42,7 +42,7 @@ Both are handled by `scripts/integrate_object.py --strip-texture`. The pan reuse
   - `_cook_idle()` — loop `_update_kinematic_tasks(); scene.step()` and `_take_picture()` every
     `save_freq` steps, until `doneness >= target_doneness`. (Records the browning into the video;
     `delay()` would not, because it disables capture.)
-- `play_once` → `_play_once_static` (and an optional `_play_once_dynamic` mirroring `adjust_bottle`):
+- `play_once` → `_play_once_static` (and an optional `_play_once_dynamic` intercept path):
   grasp steak → lift → place on pan → `_cook_idle` → grasp off → lift.
 - `check_success` — reached target doneness on the pan AND steak lifted clear of the pan.
 - `get_obs` override records `cooking/doneness` per frame into the HDF5.
@@ -55,7 +55,7 @@ Both are handled by `scripts/integrate_object.py --strip-texture`. The pan reuse
 2. **`place_actor(functional_point_id=0)` → unreachable pose.** Passing `functional_point_id` aligned
    the steak's authored bottom-frame orientation to the pan, producing a bad gripper pose. Fix: drop
    `functional_point_id`, use `constrain="free"` and the pan's `get_functional_point(0)` as
-   `target_pose` (the pattern in `place_object_scale.py`).
+   `target_pose` (the pattern in `pack_fruits.py` / `place_block_belt.py`).
 3. **Gripper descending into the pan → rim collision.** Fix: release slightly above (`pre_dis=0.08`,
    `dis=0.03`) so the steak drops the last bit instead of the gripper diving in.
 4. **Color change too subtle / too short.** Widened the palette to full light-red→black, raised

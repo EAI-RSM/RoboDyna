@@ -52,22 +52,6 @@ interactive_params:
   max_lead: 0.0528
   max_joint_speed: 4.8
 task_args:
-  assemble_markers_cylinder:
-    side_cyl_radius: 0.018
-    side_cyl_half_len: 0.1
-    center_cyl_radius: 0.09
-    center_cyl_half_len: 0.1
-    center_x: 0.0
-    center_y: 0.0
-    attach_dist: 0.06
-    attach_z: 0.04
-    dwell_steps: 40
-    side_group_x_offset: 0.18
-    side_group_y_offset: 0.1
-    side_group_x_jitter: 0.03
-    side_group_y_jitter: 0.01
-    center_table_clearance: 0.005
-    rotation_direction: counter_clockwise
   catch_marbles_trapdoors:
     press_hold_steps: 24
     final_dwell_steps: 100
@@ -130,22 +114,6 @@ task_args:
     num_appearances: 3
     pop_steps: 90
     grasp_tol: 0.05
-  catch_rolling_cup:
-    cup_ids:
-    - 0
-    - 1
-    - 2
-    - 5
-    - 6
-    - 3
-    roll_speed: 0.14
-    fall_speed_xy: 0.07
-    tip_duration: 0.9
-    table_edge_y: -0.3
-    intercept_frac: 0.65
-    catch_shelf_clearance: 0.22
-    post_grasp_lift: 0.1
-    upright_hold: 0.3
   stop_ball:
     ball_ids:
     - 0
@@ -207,19 +175,6 @@ task_args:
     basket_start_y_span: 0.1
     catch_xy_tol: 0.035
     post_place_dwell: 14
-  empty_bag:
-    scene_id: 0
-    bag_side: left
-    bag_x_abs: 0.16
-    bag_y: -0.05
-    bag_scale_mult: 1.0
-    apple_color: random
-    veg_scale_mult: 0.035
-    table_edge_y: -0.3
-    grasp_tol: 0.08
-    grasp_hover_z: 0.14
-    grasp_tcp_dz: 0.02
-    post_catch_lift: 0.08
   catch_shelf_marble:
     n_shelves_min: 4
     n_shelves_max: 7
@@ -405,12 +360,6 @@ task_args:
     bowl_outer_radius: 0.095
     bowl_height: 0.06
     bowl_mass: 0.35
-  collect_falling_bowl:
-    num_objects: 4
-    emit_interval: 40
-    fall_steps: 55
-    rim_radius: 0.055
-    pour_every: 3
   cook_meat:
     cook_steps: 2747
     cook_speed_jitter: 0.2
@@ -665,11 +614,6 @@ task_args:
     - 0.05
     - 0.05
     distractor_min_gap_mult: 2.0
-  pick_cup_behind_fan:
-    fan_omega_deg: 2.0
-    gap_frac: 0.4
-    theta_spill: 35.0
-    fan_far_y: 0.12
   pick_ripe_apple:
     ripen_steps: 2500
     red_window_min: 0.48
@@ -778,11 +722,6 @@ task_args:
     gate_default_left: true
     color_mode: alternating
     rotten_prob: 0.0
-  toast_bread:
-    toast_steps: 1000
-    target_doneness: 0.45
-    plate_scale_mult: 0.65
-    steamer_scale_mult: 0.1
   trap_bug:
     bug_type: random
     bug_types:
@@ -801,12 +740,6 @@ task_args:
     trap_wall: 0.004
     trap_mass: 2.5
     release_clearance: 0.05
-  two_type_sorting_catch:
-    num_objects: 4
-    fall_steps: 90
-    lateral_bias: 0.16
-    center_rate: 0.25
-    catch_tol: 0.07
   whack_moles:
     num_moles: 2
     distractor_enabled: false
@@ -1162,69 +1095,4 @@ task_args:
     glass_x: -0.22
     glass_y: -0.16
     glass_scale: 0.585
-  make_soup_test:
-    scene_id: 0
-    burner: left_front
-    range_xy:
-    - 0.18
-    - 0.14
-    range_scale_mult: 1.0
-    microwave_scale_mult: 1.3
-    water_level: 0.45
-    pot_radius: 0.06786
-    pot_height: 0.0735
-    pot_wall: 0.005
-    board_half:
-    - 0.095
-    - 0.052
-    - 0.01
-    handle_half:
-    - 0.022
-    - 0.024
-    - 0.022
-    board_x: 0.16
-    board_y: -0.14
-    cube_half: 0.012
-    tomato_radius: 0.012
-    n_veg_min: 2
-    n_veg_max: 4
-    tilt_hold_dot: 0.82
-    tilt_spill_dot: 0.5
-    pour_tip_rad: 0.7
-    knob_contact_radius: 0.06
-    grasp_tcp_tol: 0.045
-    plate_x: -0.18
-    plate_y: -0.08
-    plate_scale: 0.55
-    bread_scale: 1.0
-    wine_x: -0.3
-    wine_y: -0.02
-    wine_scale: 1.0
-    glass_x: -0.22
-    glass_y: -0.16
-    glass_scale: 0.585
-  serve_dinner:
-    scene_id: 0
-    burner: left_front
-    range_xy:
-    - 0.36
-    - 0.14
-    plate_x: -0.08
-    plate_y: -0.08
-    pan_scale: 1.0
-    range_scale_mult: 1.0
-    plate_scale: 1.05
-    meatball_radius: 0.015
-    tilt_hold_dot: 0.78
-    pour_tip_rad: 1.13
-    knob_contact_radius: 0.06
-    salad_x: -0.22
-    salad_y: -0.02
-    bottle_x: -0.32
-    bottle_y: -0.12
-    cup_x: -0.18
-    cup_y: -0.18
-    salad_bowl_scale: 1.15
-    lettuce_scale: 1.35
-    tomato_scale: 1.25
 save_failed_cases: true

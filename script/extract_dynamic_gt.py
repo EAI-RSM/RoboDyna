@@ -37,44 +37,8 @@ import yaml
 
 SUPPORTED_TRAJECTORY_TYPES = {"velocity", "trajectory", "segmented"}
 
-# Keep in sync with policy/openvla-oft/preprocess_aloha.sh DEFAULT_TASKS.
-DEFAULT_35_TASKS = [
-    "adjust_bottle",
-    "beat_block_hammer",
-    "click_alarmclock",
-    "click_bell",
-    "dump_bin_bigbin",
-    "grab_roller",
-    "handover_block",
-    "handover_mic",
-    "hanging_mug",
-    "move_can_pot",
-    "move_pillbottle_pad",
-    "move_playingcard_away",
-    "move_stapler_pad",
-    "place_a2b_left",
-    "place_a2b_right",
-    "place_bread_basket",
-    "place_bread_skillet",
-    "place_can_basket",
-    "place_container_plate",
-    "place_empty_cup",
-    "place_fan",
-    "place_mouse_pad",
-    "place_object_basket",
-    "place_object_scale",
-    "place_object_stand",
-    "place_phone_stand",
-    "place_shoe",
-    "press_stapler",
-    "put_bottles_dustbin",
-    "put_object_cabinet",
-    "rotate_qrcode",
-    "scan_object",
-    "shake_bottle",
-    "shake_bottle_horizontally",
-    "stamp_seal",
-]
+# Pass --task_name / --task_names; no default RoboTwin leftover list.
+DEFAULT_35_TASKS = []
 
 
 def ensure_repo_root() -> Path:
@@ -390,12 +354,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract dynamic GT via raw seed replay (single or batch)")
 
     # Task selection
-    parser.add_argument("--task_name", type=str, default="", help="Single task name, e.g. adjust_bottle")
+    parser.add_argument("--task_name", type=str, default="", help="Single task name, e.g. cook_meat")
     parser.add_argument(
         "--task_names",
         type=str,
         default="",
-        help="Comma-separated task names, e.g. adjust_bottle,click_bell",
+        help="Comma-separated task names, e.g. cook_meat,catch_ramp_ball",
     )
     parser.add_argument(
         "--all_35tasks",

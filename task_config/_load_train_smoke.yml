@@ -50,11 +50,6 @@ lerobot_task_state_dim: 32
 # blocks are ignored. (debug_dynamic.yml mirrors this block with debug run knobs.)
 # ---------------------------------------------------------------------------
 task_args:
-  toast_bread:
-    toast_steps: 1000
-    target_doneness: 0.45
-    plate_scale_mult: 0.65
-    steamer_scale_mult: 0.10
   cook_meat:
     cook_steps: 5000            # nominal steps for doneness 0→1.0
     cook_speed_jitter: 0.20     # Default: per-ep cook_steps ~ U(nom×(1±jitter))
@@ -64,22 +59,6 @@ task_args:
     target_doneness_max: 0.55
     place_dx: 0.0             # nudge from the measured bowl center (mirrored on the left pan)
     place_dy: 0.0             # nudge from the measured bowl center (+y = away from robot)
-  assemble_markers_cylinder:
-    side_cyl_radius: 0.018
-    side_cyl_half_len: 0.10
-    center_cyl_radius: 0.09
-    center_cyl_half_len: 0.10
-    center_x: 0.0
-    center_y: 0.0
-    attach_dist: 0.06
-    attach_z: 0.04
-    dwell_steps: 40
-    side_group_x_offset: 0.18
-    side_group_y_offset: 0.10
-    side_group_x_jitter: 0.03
-    side_group_y_jitter: 0.01
-    center_table_clearance: 0.005
-    rotation_direction: counter_clockwise
   catch_marbles_trapdoors:
     press_hold_steps: 24
     final_dwell_steps: 100
@@ -149,12 +128,6 @@ task_args:
     table_height_bias: 0.05   # raise table (+board) 5 cm
     board_z_lift: 0.06        # play surface ~6 cm above table; compact base sits on table
     board_color: [0.98, 0.82, 0.05]  # yellow
-  collect_falling_bowl:
-    num_objects: 4
-    emit_interval: 40
-    fall_steps: 55
-    rim_radius: 0.055
-    pour_every: 3
   put_cup_belt:
     curtain_freq: 0.5
     curtain_amp: 0.05
@@ -246,11 +219,6 @@ task_args:
     keeper_x: 0.16
     keeper_goal_clearance: 0.05
     keeper_pose_tol: 0.03
-  pick_cup_behind_fan:
-    fan_omega_deg: 2.0
-    gap_frac: 0.40
-    theta_spill: 35.0
-    fan_far_y: 0.12
   pick_ripe_apple:
     ripen_steps: 2500   # slow ripening: apple stays ~red through the grasp
     red_window_min: 0.48   # per-episode red target band (like cook_meat doneness)
@@ -373,12 +341,6 @@ task_args:
     pair_stagger_enabled: true  # pair waves ("parallel"/"random" modes): give one fruit a small head start so they don't ride in perfect lockstep
     pair_stagger_y: 0.045      # m; how much of a head start (kept well inside pick-window tolerances)
     single_wave_any_belt: true  # "random" mode: a single-fruit wave may appear on either belt (not just its color's dedicated one); pack_fruits arm/basket stay color-matched
-  two_type_sorting_catch:
-    num_objects: 4
-    fall_steps: 90
-    lateral_bias: 0.16
-    center_rate: 0.25
-    catch_tol: 0.07
   catch_ramp_ball:
     # Ramp meets back wall; drop-then-PhysX roll. Opt1 wall bounce, Opt2 blue distractor.
     ramp_angle: 0.24

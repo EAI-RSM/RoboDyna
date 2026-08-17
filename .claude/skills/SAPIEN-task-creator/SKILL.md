@@ -47,10 +47,10 @@ class name, and the CLI task arg must all match**.
 ## Step 1 — Scope and pick a template
 
 Read 1–2 existing tasks closest to your goal and mirror their structure:
-- pick-and-place onto a target → `envs/place_object_scale.py`, `envs/place_bread_skillet.py`
-- press/click/contact → `envs/click_bell.py`, `envs/press_stapler.py`
-- bimanual / handover → `envs/handover_block.py`
-- moving-object intercept (DOMINO "dynamic") → `envs/adjust_bottle.py`
+- pick-and-place onto a target → `envs/pack_fruits.py`, `envs/place_block_belt.py`
+- press/click/contact → `envs/punch_dual_holes.py`, `envs/dispense_gummy.py`
+- bimanual → `envs/cook_meat.py`, `envs/make_soup.py`
+- moving-object intercept → `envs/catch_ramp_ball.py`, `envs/catch_cup.py`
 
 For the API surface (the four methods, the motion primitives, the per-step hooks, contact detection,
 and how the collector drives an episode) read `references/task-anatomy-and-api.md`.
@@ -118,7 +118,7 @@ class my_task(Base_Task):
   x). Pick the arm by the object's x-sign (`ArmTag("right" if pose.p[0] > 0 else "left")`). You may
   keep spawn positions fully random *within* a side, but never split a single-arm task's objects
   across the centerline. If the task inherently needs both sides, it must be bimanual (one object per
-  arm, brought together near the middle — see `handover_*` / `place_bread_skillet`).
+  arm, brought together near the middle — see `cook_meat` / `make_soup`).
 - **Big objects don't both fit on one half.** A side is only ~0.35 m wide, so two large surfaces
   (e.g. a 0.30 m pan + a 0.23 m plate) can't coexist there without overlap. Shrink one (author a
   smaller-scale variant) or drop it; don't fight the geometry with tighter spawn ranges.

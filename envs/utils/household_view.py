@@ -40,11 +40,9 @@ HOUSEHOLD_TASKS = frozenset(
         "cook_food_timer",
         "fill_coffee_jar",
         "make_soup",
-        "make_soup_test",
         "measure_ingredient",
         "catch_mouse_object_drop",
         "pour_beer",
-        "serve_dinner",
         "stop_ball",
         "trap_bug",
     }
