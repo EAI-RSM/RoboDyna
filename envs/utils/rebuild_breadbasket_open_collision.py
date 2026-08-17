@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import trimesh
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "assets/objects/076_breadbasket/collision"
 RX = trimesh.transformations.rotation_matrix(np.pi / 2.0, [1, 0, 0])
 

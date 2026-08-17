@@ -12,8 +12,8 @@ This script offscreen-renders top-down + 3/4 views for:
 
 Run (robotwin_bench / domino env + Vulkan):
   export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json; unset DISPLAY
-  python scripts/preview_mug_coffee.py --mug-id 0
-  python scripts/preview_mug_coffee.py --mug-id 0 --all-ids
+  python envs/utils/preview_mug_coffee.py --mug-id 0
+  python envs/utils/preview_mug_coffee.py --mug-id 0 --all-ids
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ import transforms3d.quaternions as tq
 import trimesh
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MUG_DIR = ROOT / "assets" / "objects" / "039_mug"
 MUG_UPRIGHT_Q = [0.70710678, 0.70710678, 0.0, 0.0]
 VERTICAL_CYL_Q = [0.70710678, 0.0, 0.70710678, 0.0]

@@ -6,7 +6,7 @@ those slices into the standard monolithic meta files that stock lerobot loads. I
 concatenation + count aggregation — no data is read or rewritten, and episode_index / frame index
 were pre-allocated per task so nothing needs reindexing.
 
-Usage:  python scripts/merge_lerobot_meta.py --root data_lerobot/domino_suite
+Usage:  python envs/utils/merge_lerobot_meta.py --root data_lerobot/domino_suite
 """
 import argparse
 import glob

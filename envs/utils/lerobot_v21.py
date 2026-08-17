@@ -13,7 +13,7 @@ Layout (BEHAVIOR-1K style; both this and the default `chunk-` template load with
 
 Each DOMINO task owns a fixed task_index == episode_chunk; episodes are pre-allocated
 episode_index = task_index*chunks_size + local, so parallel per-task jobs never collide and the
-merge (scripts/merge_lerobot_meta.py) is pure concatenation — no reindexing, no data copy.
+merge (envs/utils/merge_lerobot_meta.py) is pure concatenation — no reindexing, no data copy.
 """
 import os
 import json
