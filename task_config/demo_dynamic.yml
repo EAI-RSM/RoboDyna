@@ -233,65 +233,11 @@ task_args:
     key_y: -0.13                # m; both keys’ y
     layout_pad_from_key: 0.20   # m; shelves+belt in [key_left−pad, key_right+pad] (+5 cm/side vs 0.15)
     max_stack_span: 0.65        # m; soft cap on shelf-centre span (fits the wider pad window)
-  catch_valley_ball_v1:
-    # Options (independent toggles):
-    #   Default — red ball goes straight to the exit edge
-    #   Opt 1 — wall_bounce_enabled: red ball rebounds off a side rail mid-run
-    #   Opt 2 — enable_distractor: black distractor on a separate straight lane
-    #            (exit points ≥ one ball diameter apart; catching black fails)
-    # Means below are episode-sampled at ±param_jitter (default ±10%).
-    # Mirror — random_mirror / mirrored: x→−x; left arm places catcher when mirrored.
-    param_jitter: 0.10          # ± fraction around non-length means
-    length_jitter: 0.05         # ± fraction around down_run / up_run
-    ramp_half_width: 0.125      # m; valley track half-width (y extent of plates)
-    ramp_thickness: 0.012       # m; plate thickness
-    ramp_center_y: 0.08         # m; valley fixture y
-    ramp_valley_x: -0.14        # m; valley low-point (left)
-    ramp_valley_height: 0.025   # m; valley floor height above table
-    down_run: 0.324             # m; entry-side horizontal run mean
-    down_rise: 0.094            # m; downhill vertical rise
-    up_run: 0.2592              # m; catching-side run mean (20% shorter than 0.324)
-    up_rise: 0.085              # m; exit lip rise
-    curve_segments: 16          # segments approximating curved plates
-    rail_height: 0.055          # m; side-rail height
-    rail_thickness: 0.006       # m; side-rail thickness
-    ball_radius: 0.018          # m; ball radius (fixed)
-    ball_mass: 0.50             # kg; 500 g (fixed)
-    drop_height: 0.14           # m; release height above valley entry
-    drop_time: 0.60             # s; kinematic drop onto track
-    wall_bounce_enabled: false  # Opt 1
-    enable_distractor: false    # Opt 2
-    mirrored: null              # Mirror: null=random (if random_mirror); true=left/−x; false=right/+x
-    random_mirror: true         # Mirror: when mirrored is null, randomly flip layout per episode
-    ball_path_mode: straight    # compat; overridden by wall_bounce_enabled
-    angled_path_min_deg: 15.0   # deg; |wall rebound angle| low (Opt 1)
-    angled_path_max_deg: 25.0   # deg; high
-    drop_forward_angle_min_deg: -8.0  # deg; forward aim jitter low
-    drop_forward_angle_max_deg: 12.0  # high
-    # On-ramp roll is kinematic: average speed = initial_forward_speed
-    initial_forward_speed: 0.105 # m/s; along-track roll speed mean
-    physics_max_steps: 1200     # cap on physics-driven track phase
-    red_line_gap: 0.05          # m; red line just past ramp exit
-    landing_gap: 0.15           # m; ball landing past red line (~15 cm)
-    roll_time_min: 4.0          # unused when speed-based roll is on (kept for compat)
-    roll_time_max: 7.0          # unused when speed-based roll is on (kept for compat)
-    roll_acceleration: 0.25     # along-track accel factor mean
-    launch_speed: 0.385         # m/s; exit-speed seed mean (retuned to landing_gap)
-    idle_time_min: 1.0          # s; idle before grasp low
-    idle_time_max: 2.0          # s; high
-    settle_steps: 150           # post-catch settle steps
-    catcher_model: 021_cup
-    bowl_id: 1                  # 021_cup instance base1
-    bowl_scale_mult: 1.0        # cup asset scale
-    bowl_inner_radius: 0.042    # m; catch success half-width
-    bowl_outer_radius: 0.052    # m; outer rim reference
-    bowl_height: 0.080          # m; catcher height used in checks
-    bowl_mass: 0.25             # kg
   catch_valley_ball:
-    # Same valley / ball physics as catch_valley_ball_v1, but the catcher is a
-    # procedural open box (~48% of 062_plasticbox base1). The robot *pushes*
-    # it into place (catch_cup-style closed-gripper slide); no end teleport.
-    # Opt 1 wall_bounce_enabled / Opt 2 enable_distractor / mirror — same as parent.
+    # Valley / ball physics plus a procedural open-box catcher (~48% of
+    # 062_plasticbox base1). The robot *pushes* it into place (catch_cup-style
+    # closed-gripper slide); no end teleport.
+    # Opt 1 wall_bounce_enabled / Opt 2 enable_distractor / mirror.
     param_jitter: 0.10
     length_jitter: 0.05
     ramp_half_width: 0.1625     # 0.125 * 1.3; platform y-width +30%
@@ -344,7 +290,7 @@ task_args:
     bowl_mass: 0.12             # kg
     push_step: 0.045            # m; closed-gripper shove chunk size
   stop_valley_ball:
-    # Same valley ramp as catch_valley_ball_v1, but grasp a ping-pong bat and hold
+    # Same valley ramp as catch_valley_ball, but grasp a ping-pong bat and hold
     # it mid-air so the red ball hits the red circular head (table catch unused).
     # Wider track (+30% y), faster ball. Success: head contact before table.
     # Opt 1 wall_bounce_enabled / Opt 2 enable_distractor / mirror — same as parent.

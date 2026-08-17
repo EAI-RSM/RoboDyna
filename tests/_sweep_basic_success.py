@@ -21,7 +21,7 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "script"), os.path.join(ROOT, "script/b
 from script.bench_script.record_demo import build_args  # noqa: E402
 from script.collect_data import class_decorator  # noqa: E402
 
-# Same suite as the prior default 10-seed sweep (includes catch_valley_ball_v1).
+# Same suite as the GUI 23-task sweep.
 TASKS = (
     "catch_marbles_trapdoors",
     "catch_ramp_ball",
@@ -48,7 +48,7 @@ TASKS = (
     "whack_moles",
 )
 
-# Mirrors base_task_gui.SCENARIO_OVERRIDES (+ catch_valley_ball_v1 = valley).
+# Mirrors base_task_gui.SCENARIO_OVERRIDES.
 SCENARIO_OVERRIDES = {
     "catch_marbles_trapdoors": {
         "default": {"door_open_once": False, "enable_distractor": False},

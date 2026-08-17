@@ -481,54 +481,6 @@ task_args:
     settle_steps: 100
     physics_max_steps: 2500
     cup_fwd_clearance: 0.025
-  catch_valley_ball_v1:
-    # Default: straight exit. Opt1 wall_bounce_enabled. Opt2 enable_distractor.
-    # Means sampled ±param_jitter; run lengths ±length_jitter; up_run −20%.
-    param_jitter: 0.10
-    length_jitter: 0.05
-    ramp_half_width: 0.125
-    ramp_thickness: 0.012
-    ramp_center_y: 0.08
-    ramp_valley_x: -0.14
-    ramp_valley_height: 0.025
-    down_run: 0.324
-    down_rise: 0.094
-    up_run: 0.2592
-    up_rise: 0.085
-    curve_segments: 16
-    rail_height: 0.055
-    rail_thickness: 0.006
-    ball_radius: 0.018
-    ball_mass: 0.50
-    drop_height: 0.14
-    drop_time: 0.60
-    wall_bounce_enabled: false
-    enable_distractor: false
-    mirrored: null
-    random_mirror: true
-    ball_path_mode: straight
-    angled_path_min_deg: 15.0
-    angled_path_max_deg: 25.0
-    drop_forward_angle_min_deg: -8.0
-    drop_forward_angle_max_deg: 12.0
-    initial_forward_speed: 0.105
-    physics_max_steps: 1200
-    red_line_gap: 0.05
-    landing_gap: 0.15
-    roll_time_min: 4.0
-    roll_time_max: 7.0
-    roll_acceleration: 0.25
-    launch_speed: 0.385
-    idle_time_min: 1.0
-    idle_time_max: 2.0
-    settle_steps: 150
-    catcher_model: 021_cup
-    bowl_id: 1
-    bowl_scale_mult: 1.0
-    bowl_inner_radius: 0.042
-    bowl_outer_radius: 0.052
-    bowl_height: 0.080
-    bowl_mass: 0.25
   catch_valley_ball:
     # Push procedural open box (~48% of 062_plasticbox) under landing; no teleport.
     param_jitter: 0.10
@@ -581,7 +533,7 @@ task_args:
     bowl_mass: 0.12
     push_step: 0.045
   stop_valley_ball:
-    # Mid-air ping-pong bat stop (based on catch_valley_ball_v1).
+    # Mid-air ping-pong bat stop (based on catch_valley_ball).
     # Wider track (+30% y), faster ball. Success: red head contact before table.
     param_jitter: 0.10
     ramp_half_width: 0.1625

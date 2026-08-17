@@ -412,7 +412,7 @@
           "param": "ramp geometry means",
           "how": "each mean × U(1±param_jitter): ramp_half_width, thickness, valley_x/height, rises, rails, drop_height/time, speeds, gaps, etc.",
           "config_key": "param_jitter",
-          "notes": "default ±10%; inherits catch_valley_ball_v1.load_actors"
+          "notes": "default ±10%; inherits catch_valley_ball._load_valley_actors"
         },
         {
           "param": "down_run / up_run",
@@ -510,7 +510,7 @@
         },
         {
           "param": "ramp + ball kinematics",
-          "how": "same param_jitter / angle sampling as catch_valley_ball_v1.load_actors",
+          "how": "same param_jitter / angle sampling as catch_valley_ball._load_valley_actors",
           "config_key": "param_jitter, angled_path_*, drop_forward_angle_*, initial_forward_speed, launch_speed, ...",
           "notes": "uses stop_valley_ball task_args; length_jitter not listed in yml (falls back to parent default if used)"
         },

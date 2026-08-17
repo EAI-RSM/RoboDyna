@@ -23,7 +23,6 @@ catch_marbles_trapdoors: 15000
 catch_ramp_ball: 15000
 catch_shelf_marble: 15000
 catch_valley_ball: 15000
-catch_valley_ball_v1: 15000
 control_quality: 15000
 dispense_gummy: 15000
 drop_ball_hole: 15000

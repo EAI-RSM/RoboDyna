@@ -1,4 +1,4 @@
-from .catch_valley_ball_v1 import catch_valley_ball_v1
+from .catch_valley_ball import catch_valley_ball
 from .utils import *
 import numpy as np
 import sapien
@@ -6,10 +6,10 @@ import sapien.physx
 import transforms3d as t3d
 
 
-class stop_valley_ball(catch_valley_ball_v1):
+class stop_valley_ball(catch_valley_ball):
     """Hold a small ping-pong bat in the air to stop a red ball leaving the valley ramp.
 
-    Same curved valley / launch setup as ``catch_valley_ball_v1``, but the expert grasps a
+    Same curved valley / launch setup as ``catch_valley_ball``, but the expert grasps a
     ping-pong bat (circular head + handle) from a facing-ramp holder and holds it
     mid-flight so the ball hits the red circular head. Success is ball–head contact;
     handle contact does not count, and the ball landing on the table before a head
@@ -24,9 +24,12 @@ class stop_valley_ball(catch_valley_ball_v1):
         the bat.
     """
 
-    # Wider track (+30% y) and faster ball than catch_valley_ball_v1.
+    # Wider track (+30% y) and faster ball than the valley loader defaults.
     RAMP_HALF_WIDTH_DEFAULT = 0.1625  # 0.125 * 1.3
-    # No start hold — ball drops immediately (same as catch_valley_ball_v1).
+    # No start hold — ball drops immediately.
+    # Mesh catcher is spawned then hidden; do not inherit the procedural box model.
+    CATCHER_MODEL_DEFAULT = "062_plasticbox"
+    BOWL_ID_DEFAULT = 1
     START_FREEZE_S_DEFAULT = 0.0
     INITIAL_FORWARD_SPEED_DEFAULT = 0.11  # was 0.22 (−50%)
     LAUNCH_SPEED_DEFAULT = 0.40  # was 0.80 (−50%)
@@ -56,6 +59,9 @@ class stop_valley_ball(catch_valley_ball_v1):
         self._loaded = False
         self._ball_phase = None
         self._distractor_phase = None
+        self._ball_freeze_armed = False
+        self._start_freeze_pending = 0
+        self._freeze_i = 0
         self._expert_demo = False
         self._bowl_ready = False
         self._bowl_welded = False
@@ -72,9 +78,7 @@ class stop_valley_ball(catch_valley_ball_v1):
         self.panel = None
         self.bat_holder_parts = []
         self.intercept = None
-        # Skip parent's post-init ball start; call Base_Task init via grandparent path.
-        # catch_valley_ball_v1.setup_demo starts ball motion — we need our cfg first, so
-        # invoke _init_task_env_ directly then start motion.
+        # Skip parent's post-init ball start; we need stop_valley_ball cfg first.
         from ._base_task import Base_Task
 
         Base_Task._init_task_env_(self, **kwags)
@@ -351,8 +355,9 @@ class stop_valley_ball(catch_valley_ball_v1):
         self.holder_height = float(np.clip(self.holder_height, 0.015, 0.05))
         self.panel_mass = max(float(self.panel_mass), 0.05)
 
-        # Build the valley / ball / (hidden) bowl from the parent task.
-        super().load_actors()
+        # Valley / ball / temp mesh catcher only — not the parent's box swap or
+        # on-lane ball start (this task keeps the aerial drop).
+        self._load_valley_actors()
         self._hide_bowl()
 
         y_lo = float(c.get("panel_spawn_y_min", self.PANEL_SPAWN_Y_MIN_DEFAULT))
@@ -485,7 +490,8 @@ class stop_valley_ball(catch_valley_ball_v1):
             self._distractor_panel_hit = True
 
     def _update_kinematic_tasks(self):
-        super()._update_kinematic_tasks()
+        # Bat is welded to the EE; do not use the parent's box (no-weld) update.
+        self._update_valley_kinematics(weld_bowl=True)
         if not getattr(self, "_loaded", False):
             return
         self._update_panel_hits()

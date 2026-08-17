@@ -30,5 +30,3 @@ Files (side-by-side GIF is the README deliverable):
   opt1+2_sidebyside.gif / .mp4
 Also: <tag>_head.mp4, <tag>_topdown.mp4
 
-Note: the former cup-place task is archived as catch_valley_ball_v1
-(final_task_demos/catch_valley_ball_v1/).

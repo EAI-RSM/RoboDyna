@@ -33,7 +33,7 @@ Office / KitchenS scenes. GUI: `interactive/household_task_gui.py`. Sweep: `test
 
 ## Extras (not in the 23+12 GUI suites)
 
-`catch_valley_ball_v1` (cup-place variant) may exist in `envs/` but is **not** in the main GUI TASKS lists unless the user explicitly adds it.
+Tasks like `serve_dinner`, `catch_rolling_cup` may exist in `envs/` / docs but are **not** in the main GUI TASKS lists unless the user explicitly adds them.
 
 ## Authoritative blurbs
 
