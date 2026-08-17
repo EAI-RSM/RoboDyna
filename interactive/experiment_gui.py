@@ -55,10 +55,13 @@ from experiment_logs import (  # noqa: E402
 )
 from household_task_gui import TASKS as HOUSEHOLD_TASKS  # noqa: E402
 from robodyna_gui import (  # noqa: E402
+    ABOUT_ACCENT,
     BASE_ACCENT,
     BLURB_INK,
     BRAND_BASE,
+    BRAND_EXPERIMENT,
     BRAND_HOUSEHOLD,
+    EXPERIMENT_ACCENT,
     HEADING_INK,
     HOUSEHOLD_ACCENT,
     _hex,
@@ -75,6 +78,24 @@ TEXT_SECONDARY = "#aebdca"
 SURVEY_BG = "#ffffff"
 SURVEY_FG = "#1A1A1A"
 SURVEY_BORDER = "#d4d5db"
+RANK_TILE_BORDER = "#c5cad3"
+RANK_TILE_SELECTED_BG = "#eaf3fb"
+# Post-experiment questionnaire card shares the hub GUI's About-box blue.
+QUESTIONNAIRE_CARD_BG = _hex(ABOUT_ACCENT)
+QUESTIONNAIRE_CARD_BORDER = _hex(_shade(ABOUT_ACCENT, 0.82))
+QUESTIONNAIRE_BUTTON_BG = _hex(_shade(ABOUT_ACCENT, 0.62))
+QUESTIONNAIRE_BUTTON_ACTIVE = _hex(_shade(ABOUT_ACCENT, 0.78))
+# Name card shares the hub GUI's Experiments-box red.
+NAME_CARD_BG = _hex(EXPERIMENT_ACCENT)
+NAME_CARD_BORDER = _hex(_shade(EXPERIMENT_ACCENT, 0.82))
+NAME_BUTTON_BG = _hex(BRAND_EXPERIMENT)
+NAME_BUTTON_ACTIVE = _hex(_shade(BRAND_EXPERIMENT, 1.12))
+NAME_STATUS_FG = _hex(_shade(BRAND_EXPERIMENT, 0.55))
+NOTICE_FG = "#c0261a"
+NOTICE_SECONDS = 5
+QUESTIONNAIRE_LOCKED_NOTICE = (
+    "Please complete the tasks with both controllers before starting the questionnaire."
+)
 SUITE_TITLE_FG = _hex(HEADING_INK)
 SUITE_BLURB_FG = _hex(BLURB_INK)
 BASE_CARD_BG = _hex(BASE_ACCENT)
@@ -124,6 +145,8 @@ class ExperimentLauncher(tk.Tk):
         self._ui_scale_job: str | None = None
         self._screen = "name"
         self._survey_canvas = None
+        self._subtitle_default = ""
+        self._notice_job: str | None = None
 
         self.logo_bar = tk.Frame(self, bg=PAGE_BG)
         self.logo_bar.pack(fill="x", padx=24, pady=(16, 0))
@@ -277,15 +300,15 @@ class ExperimentLauncher(tk.Tk):
         )
         self.name_subtitle.pack(anchor="w", pady=(4, 0))
 
-        card = self._card(self.name_screen)
+        card = self._card(self.name_screen, bg=NAME_CARD_BG, border=NAME_CARD_BORDER)
         card.pack(fill="x")
-        pad = tk.Frame(card, bg=CARD_BG)
+        pad = tk.Frame(card, bg=NAME_CARD_BG)
         pad.pack(fill="x", padx=28, pady=28)
         self.name_caption = tk.Label(
             pad,
-            text="Your name",
-            bg=CARD_BG,
-            fg=TEXT_SECONDARY,
+            text="Please enter your name",
+            bg=NAME_CARD_BG,
+            fg=SUITE_TITLE_FG,
             anchor="w",
             font=("Sans", 13, "bold"),
         )
@@ -304,8 +327,8 @@ class ExperimentLauncher(tk.Tk):
             pad,
             text="Continue",
             command=self._submit_name,
-            bg=PLAY_BLUE,
-            activebackground=PLAY_BLUE_ACTIVE,
+            bg=NAME_BUTTON_BG,
+            activebackground=NAME_BUTTON_ACTIVE,
             font=("Sans", 16, "bold"),
             width=220,
             height=64,
@@ -315,8 +338,8 @@ class ExperimentLauncher(tk.Tk):
         self.name_status = tk.Label(
             pad,
             text="",
-            bg=CARD_BG,
-            fg="#7fb6dc",
+            bg=NAME_CARD_BG,
+            fg=NAME_STATUS_FG,
             anchor="w",
             justify="left",
             wraplength=760,
@@ -381,12 +404,169 @@ class ExperimentLauncher(tk.Tk):
             canvas.yview_scroll(1, "units")
 
     def _make_question_var(self, question: dict):
+        if question.get("rank"):
+            return []
         if question.get("multi"):
             return {
                 value: tk.BooleanVar(value=False)
                 for value, _label in question_choices(question)
             }
         return tk.StringVar(value="")
+
+    def _fill_rank_host(self, form: dict, block: dict, choices):
+        host = block["host"]
+        for child in host.winfo_children():
+            child.destroy()
+        block["dots"] = []
+        block["tiles"] = []
+        block["rank_captions"] = []
+        question = block["question"]
+        labels = {value: text for value, text in choices}
+        allowed = [value for value, _text in choices]
+        current = [value for value in list(form["vars"].get(question["key"]) or []) if value in labels]
+        for value in allowed:
+            if value not in current:
+                current.append(value)
+        form["vars"][question["key"]] = current
+        selected = {"value": None}
+        if not choices:
+            return
+
+        scale = self._ui_scale
+
+        def fnt(size, weight=""):
+            px = max(8, int(round(size * scale)))
+            return ("Sans", px, weight) if weight else ("Sans", px)
+
+        wraplength = max(360, int(self.winfo_width() or 920) - 100)
+        help_label = tk.Label(
+            host,
+            text="Click a task, then use the arrows to move it. Most difficult at the top, easiest at the bottom.",
+            bg=SURVEY_BG,
+            fg=GUI_MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=wraplength,
+            font=fnt(13),
+        )
+        help_label.pack(anchor="w", pady=(0, 8))
+        top_label = tk.Label(
+            host,
+            text="Most difficult",
+            bg=SURVEY_BG,
+            fg=SURVEY_FG,
+            anchor="w",
+            font=fnt(12, "bold"),
+        )
+        top_label.pack(anchor="w", pady=(0, 4))
+        list_host = tk.Frame(host, bg=SURVEY_BG)
+        list_host.pack(anchor="w", fill="x")
+        bot_label = tk.Label(
+            host,
+            text="Easiest",
+            bg=SURVEY_BG,
+            fg=SURVEY_FG,
+            anchor="w",
+            font=fnt(12, "bold"),
+        )
+        bot_label.pack(anchor="w", pady=(8, 0))
+        block["rank_captions"] = [help_label, top_label, bot_label]
+
+        def redraw():
+            for child in list_host.winfo_children():
+                child.destroy()
+            block["tiles"] = []
+            order = form["vars"][question["key"]]
+            for index, value in enumerate(order):
+                active = selected["value"] == value
+                tile_bg = RANK_TILE_SELECTED_BG if active else SURVEY_BG
+                tile = tk.Frame(
+                    list_host,
+                    bg=tile_bg,
+                    highlightbackground=PLAY_BLUE if active else RANK_TILE_BORDER,
+                    highlightthickness=2,
+                    cursor="hand2",
+                )
+                tile.pack(anchor="w", fill="x", pady=(0, 6))
+                inner = tk.Frame(tile, bg=tile_bg)
+                inner.pack(fill="x", padx=12, pady=8)
+                num = tk.Label(
+                    inner,
+                    text=str(index + 1),
+                    bg=tile_bg,
+                    fg=PLAY_BLUE if active else GUI_MUTED,
+                    font=fnt(15, "bold"),
+                    width=2,
+                    anchor="w",
+                    cursor="hand2",
+                )
+                num.pack(side="left")
+                name = tk.Label(
+                    inner,
+                    text=labels.get(value, value),
+                    bg=tile_bg,
+                    fg=SURVEY_FG,
+                    font=fnt(15, "bold"),
+                    anchor="w",
+                    cursor="hand2",
+                )
+                name.pack(side="left", fill="x", expand=True, padx=(8, 8))
+                tile._rank_num = num
+                tile._rank_name = name
+                tile._rank_up = None
+                tile._rank_down = None
+
+                def select(_event=None, current=value):
+                    selected["value"] = current
+                    redraw()
+
+                if active:
+                    arrows = tk.Frame(inner, bg=tile_bg)
+                    arrows.pack(side="right")
+                    up_fg = SURVEY_FG if index > 0 else "#b7bec6"
+                    down_fg = SURVEY_FG if index + 1 < len(order) else "#b7bec6"
+                    up = tk.Label(
+                        arrows,
+                        text="▲",
+                        bg=tile_bg,
+                        fg=up_fg,
+                        font=fnt(14, "bold"),
+                        cursor="hand2" if index > 0 else "arrow",
+                        padx=8,
+                    )
+                    down = tk.Label(
+                        arrows,
+                        text="▼",
+                        bg=tile_bg,
+                        fg=down_fg,
+                        font=fnt(14, "bold"),
+                        cursor="hand2" if index + 1 < len(order) else "arrow",
+                        padx=8,
+                    )
+                    up.pack(side="left")
+                    down.pack(side="left")
+                    tile._rank_up = up
+                    tile._rank_down = down
+
+                    def move(_event=None, current=value, delta=0):
+                        items = form["vars"][question["key"]]
+                        here = items.index(current)
+                        there = here + delta
+                        if 0 <= there < len(items):
+                            items[here], items[there] = items[there], items[here]
+                            selected["value"] = current
+                            redraw()
+                        return "break"
+
+                    if index > 0:
+                        up.bind("<Button-1>", lambda e, current=value: move(e, current, -1))
+                    if index + 1 < len(order):
+                        down.bind("<Button-1>", lambda e, current=value: move(e, current, 1))
+                for widget in (tile, inner, num, name):
+                    widget.bind("<Button-1>", select)
+                block["tiles"].append(tile)
+
+        redraw()
 
     def _fill_choice_host(self, form: dict, block: dict, choices):
         host = block["host"]
@@ -474,10 +654,7 @@ class ExperimentLauncher(tk.Tk):
             "on_change": on_change,
         }
         for question in questions:
-            if question.get("choices") == ASSIGNED_TASKS:
-                form["vars"][question["key"]] = tk.StringVar(value="")
-            else:
-                form["vars"][question["key"]] = self._make_question_var(question)
+            form["vars"][question["key"]] = self._make_question_var(question)
             wrap = tk.Frame(inner, bg=SURVEY_BG)
             wrap.pack(anchor="w", fill="x", pady=(0, 18))
             label = tk.Label(
@@ -499,16 +676,23 @@ class ExperimentLauncher(tk.Tk):
                 "label": label,
                 "host": host,
                 "dots": [],
+                "tiles": [],
+                "rank_captions": [],
             }
             form["blocks"].append(block)
-            self._fill_choice_host(form, block, question_choices(question))
+            if question.get("rank"):
+                self._fill_rank_host(form, block, question_choices(question))
+            else:
+                self._fill_choice_host(form, block, question_choices(question))
         return form
 
     def _survey_answers(self, form: dict) -> dict:
         answers = {}
         for question in form["questions"]:
             var = form["vars"][question["key"]]
-            if question.get("multi"):
+            if question.get("rank"):
+                answers[question["key"]] = list(var)
+            elif question.get("multi"):
                 answers[question["key"]] = [
                     value for value, flag in var.items() if flag.get()
                 ]
@@ -519,7 +703,9 @@ class ExperimentLauncher(tk.Tk):
     def _clear_survey(self, form: dict):
         for question in form["questions"]:
             var = form["vars"][question["key"]]
-            if question.get("multi"):
+            if question.get("rank"):
+                form["vars"][question["key"]] = []
+            elif question.get("multi"):
                 for flag in var.values():
                     flag.set(False)
             else:
@@ -543,7 +729,9 @@ class ExperimentLauncher(tk.Tk):
                 block["wrap"].pack(anchor="w", fill="x", pady=(0, 18))
                 continue
             var = form["vars"][question["key"]]
-            if question.get("multi"):
+            if question.get("rank"):
+                form["vars"][question["key"]] = []
+            elif question.get("multi"):
                 for flag in var.values():
                     flag.set(False)
             elif var.get():
@@ -588,14 +776,16 @@ class ExperimentLauncher(tk.Tk):
             question = block["question"]
             if question.get("choices") != ASSIGNED_TASKS:
                 continue
+            choices = question_choices(question, extra)
+            if question.get("rank"):
+                self._fill_rank_host(self.post_form, block, choices)
+                continue
             current = str(self.post_form["vars"][question["key"]].get() or "")
-            allowed = {value for value, _label in question_choices(question, extra)}
+            allowed = {value for value, _label in choices}
             self.post_form["vars"][question["key"]] = tk.StringVar(
                 value=current if current in allowed else ""
             )
-            self._fill_choice_host(
-                self.post_form, block, question_choices(question, extra)
-            )
+            self._fill_choice_host(self.post_form, block, choices)
             for dot in block["dots"]:
                 dot._dot_size = size
                 dot._dot_label.configure(font=("Sans", font_px, "bold"))
@@ -774,6 +964,10 @@ class ExperimentLauncher(tk.Tk):
             blurb="Please fill in the questionnaire to share your experience about the experiment.",
             command=self._open_questionnaire,
             button_text="Start",
+            bg=QUESTIONNAIRE_CARD_BG,
+            border=QUESTIONNAIRE_CARD_BORDER,
+            title_fg=SUITE_TITLE_FG,
+            blurb_fg=SUITE_BLURB_FG,
             button_bg=LOCKED_GRAY,
             button_active=LOCKED_GRAY,
             show_progress=False,
@@ -781,6 +975,9 @@ class ExperimentLauncher(tk.Tk):
         self.questionnaire_card._button.configure(
             state="disabled",
             disabledbackground=LOCKED_GRAY,
+        )
+        self.questionnaire_card._button.bind(
+            "<ButtonRelease-1>", self._on_questionnaire_click, add="+"
         )
         self.questionnaire_card.pack(fill="x", pady=(0, 12))
         self.base_card = self._suite_card(
@@ -936,11 +1133,11 @@ class ExperimentLauncher(tk.Tk):
     def _submit_name(self):
         name = self.name_entry.get().strip()
         if not name:
-            self.name_status.configure(text="Please enter your name.", fg="#e6a15c")
+            self.name_status.configure(text="Please enter your name.", fg=NAME_STATUS_FG)
             self.name_entry.focus_set()
             return
         if not slugify_user_name(name):
-            self.name_status.configure(text="Please use letters or numbers in your name.", fg="#e6a15c")
+            self.name_status.configure(text="Please use letters or numbers in your name.", fg=NAME_STATUS_FG)
             return
         existing = find_user(name)
         if existing:
@@ -1045,11 +1242,9 @@ class ExperimentLauncher(tk.Tk):
             "Robot",
         )
         self.suite_title.configure(text=f"Welcome back, {display}" if log.get("plays") else f"Hello, {display}")
-        self.suite_subtitle.configure(
-            text=(
-                f"{control_label} session — progress is stored in user_{tag}.json. "
-                "Finished items stay gray after you close this window."
-            )
+        self._set_suite_subtitle(
+            f"{control_label} session — progress is stored in user_{tag}.json. "
+            "Finished items stay gray after you close this window."
         )
 
     def _protocol_task_names(self) -> tuple[list[str], list[str]]:
@@ -1231,11 +1426,9 @@ class ExperimentLauncher(tk.Tk):
                 "Robot",
             )
             self.suite_title.configure(text=f"Welcome back, {display}" if plays else f"Hello, {display}")
-            self.suite_subtitle.configure(
-                text=(
-                    f"{control_label} session — progress is stored in user_{tag}.json. "
-                    "Finished items stay gray after you close this window."
-                )
+            self._set_suite_subtitle(
+                f"{control_label} session — progress is stored in user_{tag}.json. "
+                "Finished items stay gray after you close this window."
             )
         if counts["base_done"] >= base_total > 0:
             self.base_card._button.configure(text="Review")
@@ -1372,6 +1565,22 @@ class ExperimentLauncher(tk.Tk):
             choice._dot_size = px(28)
             choice._dot_label.configure(font=font(16, "bold"))
             choice._dot_paint()
+        for form in (getattr(self, "pre_form", None), getattr(self, "post_form", None)):
+            if not form:
+                continue
+            for block in form["blocks"]:
+                captions = block.get("rank_captions") or []
+                if len(captions) >= 1:
+                    captions[0].configure(font=font(13), wraplength=max(360, width - 100))
+                for caption in captions[1:]:
+                    caption.configure(font=font(12, "bold"))
+                for tile in block.get("tiles") or []:
+                    tile._rank_num.configure(font=font(15, "bold"))
+                    tile._rank_name.configure(font=font(15, "bold"))
+                    if tile._rank_up is not None:
+                        tile._rank_up.configure(font=font(14, "bold"))
+                    if tile._rank_down is not None:
+                        tile._rank_down.configure(font=font(14, "bold"))
         self.exp_continue.configure(font=font(16, "bold"), width=px(220), height=px(64), radius=px(26))
         self.post_continue.configure(font=font(16, "bold"), width=px(220), height=px(64), radius=px(26))
         self.post_back.configure(font=font(16, "bold"), width=px(140), height=px(64), radius=px(26))
@@ -1409,13 +1618,35 @@ class ExperimentLauncher(tk.Tk):
         finally:
             self.child = None
 
+    def _set_suite_subtitle(self, text: str):
+        """Remember the standard subtitle; a flashing notice owns the label until it clears."""
+        self._subtitle_default = text
+        if self._notice_job is None:
+            self.suite_subtitle.configure(text=text, fg=GUI_MUTED)
+
+    def _flash_suite_notice(self, message: str, seconds: int = NOTICE_SECONDS):
+        if self._notice_job is not None:
+            self.after_cancel(self._notice_job)
+        self.suite_subtitle.configure(text=message, fg=NOTICE_FG)
+        self._notice_job = self.after(seconds * 1000, self._clear_suite_notice)
+
+    def _clear_suite_notice(self):
+        self._notice_job = None
+        self.suite_subtitle.configure(text=self._subtitle_default, fg=GUI_MUTED)
+
+    def _on_questionnaire_click(self, _event=None):
+        """RoundedButton swallows clicks while disabled, so explain the gray Start here."""
+        if self.questionnaire_card._button.button_state == "normal":
+            return
+        self._flash_suite_notice(QUESTIONNAIRE_LOCKED_NOTICE)
+
     def _lock_questionnaire_card(self, card):
         self._style_suite_card(
             card,
-            bg=CARD_BG,
-            border=CARD_BORDER,
-            title_fg=TEXT_PRIMARY,
-            blurb_fg=TEXT_SECONDARY,
+            bg=QUESTIONNAIRE_CARD_BG,
+            border=QUESTIONNAIRE_CARD_BORDER,
+            title_fg=SUITE_TITLE_FG,
+            blurb_fg=SUITE_BLURB_FG,
         )
         card._button.configure(
             text="Start",
@@ -1434,16 +1665,16 @@ class ExperimentLauncher(tk.Tk):
             return
         self._style_suite_card(
             card,
-            bg=SURVEY_BG,
-            border=SURVEY_BORDER,
-            title_fg=SURVEY_FG,
-            blurb_fg=SURVEY_FG,
+            bg=QUESTIONNAIRE_CARD_BG,
+            border=QUESTIONNAIRE_CARD_BORDER,
+            title_fg=SUITE_TITLE_FG,
+            blurb_fg=SUITE_BLURB_FG,
         )
         card._button.configure(
             text="Start",
             state="normal",
-            bg=SURVEY_FG,
-            activebackground="#333333",
+            bg=QUESTIONNAIRE_BUTTON_BG,
+            activebackground=QUESTIONNAIRE_BUTTON_ACTIVE,
         )
 
     def _open_questionnaire(self):

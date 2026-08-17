@@ -43,6 +43,7 @@ def _survey_item(
     choices,
     *,
     multi: bool = False,
+    rank: bool = False,
     exclusive: str | None = None,
     visible_if=None,
     layout: str = "row",
@@ -52,9 +53,10 @@ def _survey_item(
         "prompt": prompt,
         "choices": choices,
         "multi": multi,
+        "rank": rank,
         "exclusive": exclusive,
         "visible_if": visible_if,
-        "layout": layout,
+        "layout": "rank" if rank else layout,
     }
 
 
@@ -149,16 +151,26 @@ POST_SURVEY_QUESTIONS = (
         ),
     ),
     _survey_item(
-        "hardest_task",
-        "Which task did you find most difficult?",
+        "task_difficulty_rank",
+        "Rank the tasks in order of difficulty.",
         ASSIGNED_TASKS,
-        layout="stack",
+        rank=True,
     ),
     _survey_item(
-        "easiest_task",
-        "Which task did you find easiest?",
-        ASSIGNED_TASKS,
-        layout="stack",
+        "robot_hardest_aspect",
+        "Using the robot controller, which aspect of performing the task did you find most difficult?",
+        (
+            ("control", "Control"),
+            ("event_prediction", "Event prediction"),
+        ),
+    ),
+    _survey_item(
+        "keyboard_hardest_aspect",
+        "Using the keyboard+mouse controller, which aspect of performing the task did you find most difficult?",
+        (
+            ("control", "Control"),
+            ("event_prediction", "Event prediction"),
+        ),
     ),
     _survey_item(
         "easier_controller",
@@ -213,6 +225,18 @@ def question_visible(
 def _parse_question_answer(question: dict[str, Any], raw, extra_choices: dict[str, Any] | None = None):
     choices = question_choices(question, extra_choices)
     allowed = {value for value, _label in choices}
+    if question.get("rank"):
+        selected: list[str] = []
+        seen: set[str] = set()
+        for item in _answer_list(raw):
+            if (allowed and item not in allowed) or item in seen:
+                continue
+            seen.add(item)
+            selected.append(item)
+        for value, _label in choices:
+            if value not in seen:
+                selected.append(value)
+        return selected
     if question.get("multi"):
         selected = [item for item in _answer_list(raw) if not allowed or item in allowed]
         exclusive = question.get("exclusive")
@@ -239,7 +263,7 @@ def normalize_survey_answers(
     for question in questions:
         if question_visible(question, parsed, extra_choices):
             continue
-        parsed[question["key"]] = [] if question.get("multi") else ""
+        parsed[question["key"]] = [] if question.get("multi") or question.get("rank") else ""
     return parsed
 
 
@@ -254,7 +278,11 @@ def survey_missing_prompts(
         if not question_visible(question, parsed, extra_choices):
             continue
         value = parsed.get(question["key"])
-        if question.get("multi"):
+        if question.get("rank"):
+            allowed = [item for item, _label in question_choices(question, extra_choices)]
+            if set(value or []) != set(allowed) or len(value or []) != len(allowed):
+                missing.append(question["prompt"])
+        elif question.get("multi"):
             if not value:
                 missing.append(question["prompt"])
         elif not value:
