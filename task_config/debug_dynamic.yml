@@ -44,7 +44,7 @@ lerobot_chunks_size: 1000
 lerobot_task_state_dim: 32
 save_failed_cases: true       # debug: save every attempt (with its success flag) so a not-yet-fixed task's job always TERMINATES instead of looping seeds forever
 # ---------------------------------------------------------------------------
-# Interactive teleop (script_exp / script_hh_exp robot mode). Keep in sync with
+# Interactive teleop (interactive/ robot mode). Keep in sync with
 # demo_dynamic.yml interactive_params.
 # ---------------------------------------------------------------------------
 interactive_params:
@@ -156,7 +156,7 @@ task_args:
     rabbit_height: 0.1047
     table_height_bias: 0.05   # raise table (+board) 5 cm
     board_z_lift: 0.06        # play surface ~6 cm above table; compact base sits on table
-    board_color: [0.34, 0.62, 0.24]  # grass green play surface
+    board_color: [0.10, 0.45, 0.22]  # billiard-felt green play surface
     board_body_color: [0.18, 0.09, 0.04]  # dark brown walls
   collect_falling_bowl:
     num_objects: 4

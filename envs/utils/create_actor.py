@@ -642,24 +642,12 @@ def create_box_with_circular_holes(
     )
     vis_mesh.export(vis_path, include_color=False, include_normals=True)
 
-    board_color = list(color) if color is not None else [0.34, 0.62, 0.24]
+    board_color = list(color) if color is not None else [0.10, 0.45, 0.22]
     if len(board_color) == 3:
         board_rgba = [*board_color, 1.0]
     else:
         board_rgba = board_color[:4]
     render_mat = sapien.render.RenderMaterial(base_color=board_rgba)
-    try:
-        render_mat.set_metallic(0.0)
-        render_mat.set_roughness(0.9)
-        # Slight emission so RT head-camera recordings keep grass readable
-        # (raster interactive already looks fine without it).
-        render_mat.set_emission([
-            0.25 * float(board_rgba[0]),
-            0.25 * float(board_rgba[1]),
-            0.25 * float(board_rgba[2]),
-        ])
-    except Exception:
-        pass
 
     wall_color = list(body_color) if body_color is not None else list(board_color)
     wall_rgb = wall_color[:3]

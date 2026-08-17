@@ -65,7 +65,7 @@ class whack_moles(Base_Task):
     # stays raised (board_z_lift).
     BOARD_HALF_XY = [0.245, 0.16]
     BOARD_TOP_HALF_Z = 0.024          # Thin deck; total board height is half the prior default.
-    BOARD_COLOR = [0.34, 0.62, 0.24]  # grass-green play surface
+    BOARD_COLOR = [0.10, 0.45, 0.22]  # billiard-felt green play surface
     BOARD_BODY_COLOR = [0.18, 0.09, 0.04]  # dark brown box body / walls
     # Raise the play surface above the table; the solid base fills down to the tabletop.
     BOARD_Z_LIFT_DEFAULT = 0.06
