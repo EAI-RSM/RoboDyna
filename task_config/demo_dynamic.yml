@@ -938,7 +938,7 @@ task_args:
   cook_food:
     # KitchenS: food starts on chopping board → pan → cook via knob → shut off (no plating).
     # food_type: meat|sausage|onion_half|random
-    # Layout: stove current|center; pan on left_front|right_front (handle inward on right);
+    # Layout: stove current|center; pan on left_front|right_front (handle toward rear / +Y);
     # board/decor/food jittered with AABB clearance.
     scene_id: 0
     food_type: random
@@ -960,7 +960,7 @@ task_args:
     range_scale_mult: 1.0
     pan_scale: 1.0
     skillet_id: 2
-    skillet_handle_yaw: 1.5708
+    skillet_handle_yaw: 3.1416   # handle +Y (rear), clear of front-apron knob
     # Drop on skillet bowl center (functional point 0).
     place_dx: 0.0
     place_dy: 0.0
@@ -987,7 +987,7 @@ task_args:
     range_scale_mult: 1.0
     pan_scale: 1.0
     skillet_id: 2
-    skillet_handle_yaw: 1.5708
+    skillet_handle_yaw: 3.1416   # handle +Y (rear), clear of front-apron knob
     place_dx: 0.0
     place_dy: 0.0
     plate_scale: 0.715

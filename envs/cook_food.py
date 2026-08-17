@@ -52,9 +52,10 @@ class cook_food(KitchenS_base_task):
     # Magnitude of the left turn: 0 = off (tick up), −π/2 = full fire (tick left).
     KNOB_MAX_ANGLE: ClassVar[float] = float(np.pi / 2)
     SKILLET_BASE_QPOS: ClassVar[list[float]] = [0.0, 0.0, 0.707, 0.707]
-    # Base orientation points the handle −Y (toward the robot). Extra world-Z
-    # yaw of +90° swings the handle to +X (right side of the stove).
-    SKILLET_HANDLE_YAW: ClassVar[float] = 0.5 * np.pi
+    # Base orientation points the handle −Y (toward the robot / front-apron knob).
+    # Extra world-Z yaw of +180° sends the handle +Y (rear of the cooktop) so it
+    # stays out of the knob approach corridor on both front burners.
+    SKILLET_HANDLE_YAW: ClassVar[float] = float(np.pi)
     FOOD_QPOS: ClassVar[list[float]] = [0.707, 0.707, 0.0, 0.0]
     FOOD_TYPES: ClassVar[tuple[str, ...]] = ("meat", "sausage", "onion_half")
     # Front-left burner on the cooktop; handle points +X (right).
@@ -158,6 +159,7 @@ class cook_food(KitchenS_base_task):
         self._expert_holding_knob = False
         self._cook_phase_done = False
         self._cooking_idle = False
+        self._knob_prestaged = False
         self._burner_shapes = []
         self._ring_shapes: list[Any] = []
         self._ring_parts: list[Any] = []
@@ -307,6 +309,7 @@ class cook_food(KitchenS_base_task):
         self._expert_holding_knob = False
         self._cook_phase_done = False
         self._cooking_idle = False
+        self._knob_prestaged = False
         self._food_welded = False
         self._food_weld_offset = None
         self._food_weld_arm = None
@@ -373,9 +376,6 @@ class cook_food(KitchenS_base_task):
         if self.skillet_id not in (0, 2):
             self.skillet_id = 2
         handle_yaw = float(cfg.get("skillet_handle_yaw", self.SKILLET_HANDLE_YAW))
-        # On the right-front burner, swing the handle 180° so it points into the stove.
-        if burner_name == "right_front":
-            handle_yaw = float(handle_yaw + np.pi)
         self.skillet_handle_yaw = handle_yaw
         skillet_q = list(
             t3d.quaternions.qmult(
@@ -397,9 +397,8 @@ class cook_food(KitchenS_base_task):
             scale_mult=self.pan_scale,
         )
         self.skillet.set_name("106_skillet")
-        # Inward handle on right_front sits in the left-arm lane — keep planner padding light.
-        pan_pad = 0.015 if burner_name == "right_front" else 0.04
-        self.add_prohibit_area(self.skillet, padding=pan_pad)
+        # Handle points rear (+Y); bowl footprint is the planner obstacle.
+        self.add_prohibit_area(self.skillet, padding=0.04)
 
         # Slide pan until bowl matches burner XY (no extra visual nudge).
         for _ in range(12):
@@ -448,11 +447,7 @@ class cook_food(KitchenS_base_task):
         jitter = float(cfg.get("pos_jitter", self.POS_JITTER_XY if randomize else 0.0))
 
         # Board stays on the left so the left food-arm can reach both front burners.
-        # Right-front pans get a 180° handle flip (handle into the stove); pull the
-        # board slightly forward so the arm approaches under the handle arc.
         board_y0 = float(cfg.get("board_y", self.BOARD_REL_XY[1]))
-        if randomize and burner_name == "right_front" and "board_y" not in cfg:
-            board_y0 = float(np.clip(board_y0 - 0.06, -0.20, 0.05))
         board_on_right = False
         if "board_x" in cfg:
             board_x0 = float(cfg["board_x"])
@@ -982,8 +977,53 @@ class cook_food(KitchenS_base_task):
         except Exception:
             return False
 
+    def _knob_approach_offsets(self) -> tuple[tuple[float, float, float], ...]:
+        path = tuple(self.KNOB_APPROACH_PATH)
+        if float(getattr(self, "_knob_local_xy", self.KNOB_LOCAL_XY)[0]) < 0.0:
+            path = tuple((-float(ox), float(oy), float(oz)) for ox, oy, oz in path)
+        return path
+
+    def _prestage_knob_arm(self) -> bool:
+        """Hover over the knob during the cook wait (open jaws, no twist).
+
+        One overhead waypoint only — a full approach here overcooks before
+        shutoff. Returns True when the arm is staged so shutoff can skip the
+        long lateral path.
+        """
+        if str(self.arm) == str(self.food_arm):
+            return False
+        arm = self.arm
+        start = float(self.knob_angle)
+        path = self._knob_approach_offsets()
+        hover = path[-1] if path else (0.0, 0.0, 0.08)
+        self._ignore_knob = True
+        self.plan_success = True
+        self.move(self.open_gripper(arm))
+        self.plan_success = True
+        self.move(self.move_to_pose(arm, self._knob_pose(hover, start)))
+        if not self.plan_success:
+            self.plan_success = True
+            try:
+                self.move(
+                    self.move_by_displacement(arm_tag=arm, z=0.10, move_axis="world")
+                )
+            except Exception:
+                pass
+            self.plan_success = True
+            self.move(self.move_to_pose(arm, self._knob_pose(hover, start)))
+        ok = bool(self.plan_success)
+        self._ignore_knob = False
+        self.plan_success = True
+        self._knob_prestaged = bool(ok)
+        return bool(ok)
+
     def _set_knob_to(
-        self, target_angle: float, approach: bool = True, *, park_food_arm: bool = True
+        self,
+        target_angle: float,
+        approach: bool = True,
+        *,
+        park_food_arm: bool = True,
+        direct: bool = False,
     ) -> None:
         """Contact-driven continuous knob turn (shared KitchenS helper)."""
         end = float(np.clip(target_angle, -self.KNOB_MAX_ANGLE, 0.0))
@@ -997,9 +1037,10 @@ class cook_food(KitchenS_base_task):
             end,
             approach=approach,
             start_angle=start,
-            after_idle=6,
+            after_idle=2 if (direct or not approach) else 6,
             commit_stove=None,
             retry_closer=True,
+            direct=direct,
         )
         self._dbg(f"knob_grasp_near={self._tcp_near_knob()}")
         # Fire from contact angle only — no snap to the commanded target.
@@ -1493,8 +1534,7 @@ class cook_food(KitchenS_base_task):
         self._dbg("grasp_from_board")
 
         # --- 2) Carry / place above bowl, release (only when close) ---
-        # Right-front pan has the handle swung inward (−X), which sits in the
-        # left-arm approach corridor — allow fingers into the bowl for the drop.
+        # Right-front bowl sits closer to the knob column — allow fingers in.
         if getattr(self, "burner_name", "") == "right_front":
             self._ignore_skillet_robot_collision()
         self._drop_into_pan(arm)
@@ -1668,13 +1708,18 @@ class cook_food(KitchenS_base_task):
 
         # 2) Cook on the pre-lit burner, then twist the knob off.
         # Browns + timer keep advancing whenever the stove is lit — never freeze
-        # while the burner is on. Start the knob approach early (shutoff_lead)
-        # so live cook during approach+twist still lands in-band. Do not spend
-        # hundreds of park steps after shut_at; leave the food arm where it is.
+        # while the burner is on. Walk the knob arm to the standoff during the
+        # cook wait so shutoff is a short close+twist (not a long approach).
         lead = max(0.0, float(getattr(self, "shutoff_lead", 0.58)))
         shut_at = max(0.01, float(self.target_doneness) - lead)
+        prestaged = self._prestage_knob_arm()
         self._idle_until_doneness(shut_at)
-        self._set_knob_to(0.0, approach=True, park_food_arm=False)
+        self._set_knob_to(
+            0.0,
+            approach=not prestaged,
+            park_food_arm=False,
+            direct=False,
+        )
         self._dbg("stove_off")
         if (
             bool(self.stove_on)
