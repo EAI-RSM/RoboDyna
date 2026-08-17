@@ -542,23 +542,12 @@ class HouseholdTaskLauncher(tk.Tk):
         self.canvas.bind_all("<Button-5>", lambda event: self.canvas.yview_scroll(3, "units"))
 
         self._add_tutorial_section()
-        if self._experiment_cfg is not None:
-            assignment = self._assignment or {}
-            grouped = self._experiment_cfg.grouped_visible_indices(
-                "household",
-                len(TASKS),
-                assigned=assignment.get("household_tasks"),
-                picks=assignment.get("household_picks"),
-            )
-            for section, idxs in grouped:
-                if section:
-                    self._add_category_header(section)
-                for row_start in range(0, len(idxs), self.COLUMNS):
-                    self._add_task_row(idxs[row_start : row_start + self.COLUMNS])
-        else:
-            vis = self._visible_task_indices
-            for row_start in range(0, len(vis), self.COLUMNS):
-                self._add_task_row(vis[row_start : row_start + self.COLUMNS])
+        # Flat 4-column grid (same in free-play and experiment). Experiment still
+        # filters to the assigned tasks via ``_visible_task_indices``; tiling them
+        # side-by-side avoids one-per-line when only Easy + Hard are assigned.
+        vis = self._visible_task_indices
+        for row_start in range(0, len(vis), self.COLUMNS):
+            self._add_task_row(vis[row_start : row_start + self.COLUMNS])
 
     @staticmethod
     def _scaled_font(size: float, weight: str = "", scale: float = 1.0) -> tuple:
