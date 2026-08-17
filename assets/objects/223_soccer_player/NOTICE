@@ -1,6 +1,0 @@
-Asset: 223_soccer_player
-Source: https://www.meshy.ai/3d-models/Blue-Kit-Forward-on-the-Pitch-019f5caa-0adc-77b2-a899-ea586b9e511d
-Author: Meshy community (@sky)
-License: CC0 1.0 (Public Domain Dedication) — no attribution required; recorded for provenance.
-Use: field player mesh for goalkeeper Opt 1 (scaled so width matches goalkeeper square).
-Notes: Source GLB was Animation_Walking_withSkin; exported as a static pose, reoriented Y-up→Z-up, and decimated for SAPIEN.

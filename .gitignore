@@ -41,83 +41,25 @@ assets/background_texture/*
 !assets/background_texture/custom/
 !assets/background_texture/custom/**
 
-# Custom / local objects used by dynamic + household tasks
+# Stock RoboTwin objects (HF download). Custom RoboDyna meshes live in dyna_assets.
 !assets/objects/
 assets/objects/*
-!assets/objects/200_cockroach/
-!assets/objects/200_cockroach/**
-!assets/objects/200_steak/
-!assets/objects/200_steak/**
-!assets/objects/201_spider/
-!assets/objects/201_spider/**
-!assets/objects/202_ant/
-!assets/objects/202_ant/**
-!assets/objects/220_apple_plain/
-!assets/objects/220_apple_plain/**
-!assets/objects/221_mole/
-!assets/objects/221_mole/**
-!assets/objects/223_soccer_player/
-!assets/objects/223_soccer_player/**
-!assets/objects/224_rabbit/
-!assets/objects/224_rabbit/**
-!assets/objects/250_triangular_prism/
-!assets/objects/250_triangular_prism/**
-!assets/objects/251_cylinder/
-!assets/objects/251_cylinder/**
-!assets/objects/252_coffee_bean/
-!assets/objects/252_coffee_bean/**
-!assets/objects/253_glass_jar/
-!assets/objects/253_glass_jar/**
-!assets/objects/254_kitchen_stove/
-!assets/objects/254_kitchen_stove/**
-!assets/objects/255_beer_bottle/
-!assets/objects/255_beer_bottle/**
-!assets/objects/259_sausage/
-!assets/objects/259_sausage/**
-!assets/objects/260_paper_grocery_bag/
-!assets/objects/260_paper_grocery_bag/**
-!assets/objects/261_flour_sack/
-!assets/objects/261_flour_sack/**
-!assets/objects/262_egg/
-!assets/objects/262_egg/**
-!assets/objects/263_chocolate_chips_bag/
-!assets/objects/263_chocolate_chips_bag/**
-!assets/objects/263_lettuce_leaf/
-!assets/objects/263_lettuce_leaf/**
-!assets/objects/264_cherry_tomato/
-!assets/objects/264_cherry_tomato/**
-!assets/objects/265_wine_bottle/
-!assets/objects/265_wine_bottle/**
-!assets/objects/266_pillow/
-!assets/objects/266_pillow/**
-!assets/objects/267_countertop_stove/
-!assets/objects/267_countertop_stove/**
-!assets/objects/268_countertop_gas_stove/
-!assets/objects/268_countertop_gas_stove/**
-!assets/objects/270_onion_half/
-!assets/objects/270_onion_half/**
 
-# Custom objects_bench fixtures (office shelf/file-holder, kitchen fridge)
-!assets/objects_bench/
-assets/objects_bench/*
-!assets/objects_bench/121_wall-shelf/
-!assets/objects_bench/121_wall-shelf/**
-!assets/objects_bench/122_file-holder/
-!assets/objects_bench/122_file-holder/**
-!assets/objects_bench/124_fridge_hivvdf/
-!assets/objects_bench/124_fridge_hivvdf/**
-!assets/objects_bench/backgrounds/
-assets/objects_bench/backgrounds/*
-!assets/objects_bench/backgrounds/fridge/
-!assets/objects_bench/backgrounds/fridge/**
+# Custom RoboDyna objects + office fixtures used by dynamic / household tasks
+!assets/dyna_assets/
+!assets/dyna_assets/**
 
-# Locally-modified ur5-wsg URDF (wrist-camera mount pose). The meshes still come
-# from the HF embodiments.zip download; only the text descriptor is tracked.
+# Embodiment configs + locally-modified ur5-wsg URDF. Meshes / other embodiment
+# assets still come from the HF embodiments.zip download.
 !assets/embodiments/
 assets/embodiments/*
 !assets/embodiments/ur5-wsg/
 assets/embodiments/ur5-wsg/*
 !assets/embodiments/ur5-wsg/ur5_wsg_gripper.urdf
+!assets/embodiments/ur5-wsg/*.yml
+!assets/embodiments/aloha-agilex/
+assets/embodiments/aloha-agilex/*
+!assets/embodiments/aloha-agilex/*.yml
 
 policy/weights/*
 
