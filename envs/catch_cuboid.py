@@ -70,6 +70,8 @@ class catch_cuboid(Base_Task):
         self._cuboid_auto_motion = []
         self._cuboid_pop_target_z = []
         self._cuboid_hidden_z = []
+        self._cuboid_pin_pose = []
+        self._cuboid_stop_at_hidden = []
         super()._init_task_env_(**kwags)
         self._configure_observer_camera()
 
@@ -270,10 +272,14 @@ class catch_cuboid(Base_Task):
             self._cuboid_auto_motion.append("rising")
             self._cuboid_pop_target_z.append(float(raised_z))
             self._cuboid_hidden_z.append(float(hidden_pose[2]))
+            self._cuboid_pin_pose.append(None)
+            self._cuboid_stop_at_hidden.append(False)
         else:
             self._cuboid_auto_motion.append(False)
             self._cuboid_pop_target_z.append(0.0)
             self._cuboid_hidden_z.append(0.0)
+            self._cuboid_pin_pose.append(None)
+            self._cuboid_stop_at_hidden.append(False)
         self.cuboids.append(cuboid)
         self._cuboid_rigids.append(rigid)
         self._cuboid_holes.append(int(hole_idx))
@@ -294,6 +300,8 @@ class catch_cuboid(Base_Task):
         self._cuboid_auto_motion = []
         self._cuboid_pop_target_z = []
         self._cuboid_hidden_z = []
+        self._cuboid_pin_pose = []
+        self._cuboid_stop_at_hidden = []
         self.catches = 0
         self.appearances_done = 0
         self._grab_offsets = []
@@ -414,8 +422,19 @@ class catch_cuboid(Base_Task):
                 target_p[2] = next_z
                 rigid.set_kinematic_target(sapien.Pose(p=target_p, q=current_pose.q))
                 if reached:
-                    self._cuboid_auto_motion[i] = "rising"
-                    self._cuboid_raised[i] = False
+                    if i < len(getattr(self, "_cuboid_stop_at_hidden", []) or []) and self._cuboid_stop_at_hidden[i]:
+                        self._cuboid_auto_motion[i] = False
+                        self._cuboid_raised[i] = False
+                    else:
+                        self._cuboid_auto_motion[i] = "rising"
+                        self._cuboid_raised[i] = False
+                return
+            if motion == "pinned":
+                pins = getattr(self, "_cuboid_pin_pose", None) or []
+                pin = pins[i] if i < len(pins) else None
+                if pin is None:
+                    pin = current_pose
+                rigid.set_kinematic_target(pin)
                 return
             print_c(f"cuboid auto motion[{i}]: {motion}", "red")
             return
@@ -444,6 +463,24 @@ class catch_cuboid(Base_Task):
             if self.save_freq and (self._global_step % self.save_freq == 0):
                 self._take_picture()
 
+    def _pin_cuboid(self, cuboid_idx=0):
+        """Stop the pop-up drive and hold the cuboid at its current pose."""
+        rigid = self._cuboid_rigids[cuboid_idx] if cuboid_idx < len(self._cuboid_rigids) else None
+        if rigid is None:
+            return False
+        pose = rigid.entity.get_pose()
+        pins = getattr(self, "_cuboid_pin_pose", None)
+        if pins is None:
+            pins = [None] * len(self._cuboid_rigids)
+            self._cuboid_pin_pose = pins
+        while len(pins) <= cuboid_idx:
+            pins.append(None)
+        pins[cuboid_idx] = pose
+        self._cuboid_auto_motion[cuboid_idx] = "pinned"
+        self._cuboid_raised[cuboid_idx] = True
+        rigid.set_kinematic_target(pose)
+        return True
+
     def _release_cuboid(self, cuboid_idx=0):
         # turn the cuboid into a free dynamic body so the gripper can carry it off
         rigid = self._cuboid_rigids[cuboid_idx]
@@ -456,6 +493,9 @@ class catch_cuboid(Base_Task):
                 rigid.set_kinematic(False)
                 self._cuboid_rigids[cuboid_idx] = None
                 self._cuboid_auto_motion[cuboid_idx] = False
+                pins = getattr(self, "_cuboid_pin_pose", None)
+                if pins is not None and cuboid_idx < len(pins):
+                    pins[cuboid_idx] = None
                 if cuboid_idx == 0:
                     self._cuboid_rigid = None
             except Exception:
@@ -509,8 +549,12 @@ class catch_cuboid(Base_Task):
 
     def _grasp_offset(self, cuboid_idx, arm_tag):
         raised_p = self.cuboids[cuboid_idx].get_pose().p
-        ee = np.array(self.get_arm_pose(arm_tag)[:3])
-        return float(np.linalg.norm(ee[:2] - raised_p[:2]))
+        tcp = (
+            self.robot.get_left_tcp_pose() if arm_tag == "left"
+            else self.robot.get_right_tcp_pose()
+        )
+        gripper_p = np.array(tcp[:3], dtype=float)
+        return float(np.linalg.norm(gripper_p[:2] - raised_p[:2]))
 
     def _gripper_closed(self, arm_tag):
         return bool(
@@ -628,10 +672,7 @@ class catch_cuboid(Base_Task):
         return float(np.mean(vals))
 
     def _cuboid_in_gripper(self, name, arm_tag=None):
-        """True when the cuboid is pinched (closed gripper + contact + proximity).
-
-        A bare finger touch with an open gripper is not enough.
-        """
+        """True when a closed gripper TCP is around the cuboid (either arm)."""
         try:
             cuboid_idx = self._cuboid_names.index(name)
         except (ValueError, AttributeError):
@@ -640,14 +681,12 @@ class catch_cuboid(Base_Task):
             if cuboid_idx >= len(getattr(self, "_cuboid_holes", [])):
                 return False
             arm_tag = self._arm_for_hole(self._cuboid_holes[cuboid_idx])
-        try:
-            if not self.get_gripper_actor_contact_position(name):
-                return False
-        except Exception:
-            return False
-        if not self._gripper_closed(arm_tag):
-            return False
-        return self._grasp_offset(cuboid_idx, arm_tag) < self.grasp_tol * 2.5
+        other = "right" if str(arm_tag) == "left" else "left"
+        hold_tol = max(self.grasp_tol * 2.5, float(self.cuboid_half[0]) + 0.03)
+        for tag in (arm_tag, other):
+            if self._gripper_closed(tag) and self._grasp_offset(cuboid_idx, tag) < hold_tol:
+                return True
+        return False
 
     def _cuboids_held(self):
         """Per-cuboid grasp flags (same order as self._cuboid_names)."""
