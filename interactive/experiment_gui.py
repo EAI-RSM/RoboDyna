@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Human-experiment launcher: login, experience survey, then base / household GUIs."""
+"""Human-experiment launcher: login, pre/post surveys, then base / household GUIs."""
 from __future__ import annotations
 
 import os
@@ -22,6 +22,7 @@ from _task_briefing import (  # noqa: E402
     setup_gui_app_icon,
 )
 from base_task_gui import (  # noqa: E402
+    LOCKED_GRAY,
     PLAY_BLUE,
     PLAY_BLUE_ACTIVE,
     RoundedButton,
@@ -30,20 +31,27 @@ from base_task_gui import (  # noqa: E402
 )
 from experiment_config import CONFIG_ENV, load_experiment_config  # noqa: E402
 from experiment_logs import (  # noqa: E402
-    EXPERIENCE_QUESTIONS,
+    ASSIGNED_TASKS,
     EXPERIMENT_ENV,
     EXPERIMENT_LOG_ENV,
     EXPERIMENT_USER_ENV,
+    POST_SURVEY_QUESTIONS,
+    PRE_SURVEY_QUESTIONS,
     child_experiment_env,
     create_user,
     delete_experiment_logs,
     ensure_controller_log,
     find_user,
+    iter_user_controller_logs,
     load_user_assignment,
     load_user_log,
     log_controller_tag,
     progress_counts,
+    question_choices,
+    save_post_survey,
     slugify_user_name,
+    survey_complete,
+    survey_missing_prompts,
 )
 from household_task_gui import TASKS as HOUSEHOLD_TASKS  # noqa: E402
 
@@ -54,6 +62,11 @@ CARD_BG = "#202c38"
 CARD_BORDER = "#405367"
 TEXT_PRIMARY = "#f4f8fb"
 TEXT_SECONDARY = "#aebdca"
+QUESTIONNAIRE_GREEN = "#2f9e6b"
+QUESTIONNAIRE_GREEN_ACTIVE = "#3cb87d"
+QUESTIONNAIRE_GREEN_BORDER = "#246f4c"
+QUESTIONNAIRE_GREEN_TEXT = "#f4fff8"
+QUESTIONNAIRE_GREEN_BLURB = "#e7f6ee"
 
 CONTROLLER_DISPLAY = ("Robot", "Keyboard + mouse")
 CONTROLLER_MODE = {
@@ -92,6 +105,7 @@ class ExperimentLauncher(tk.Tk):
         self._ui_scale = 1.0
         self._ui_scale_job: str | None = None
         self._screen = "name"
+        self._survey_canvas = None
 
         self.logo_bar = tk.Frame(self, bg=PAGE_BG)
         self.logo_bar.pack(fill="x", padx=24, pady=(16, 0))
@@ -104,15 +118,28 @@ class ExperimentLauncher(tk.Tk):
 
         self._build_name_screen()
         self._build_experience_screen()
+        self._build_post_screen()
         self._build_suite_screen()
         self._show_screen("name")
 
         self.bind("<Configure>", self._on_root_configure)
+        self.bind_all("<Button-4>", self._on_survey_wheel)
+        self.bind_all("<Button-5>", self._on_survey_wheel)
+        self.bind_all("<MouseWheel>", self._on_survey_wheel)
         self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
 
-    def _yes_no_choice(self, parent, var: tk.StringVar, value: str, text: str) -> tk.Frame:
-        """Clickable Yes/No control with a large custom radio dot (Tk's is tiny on Linux)."""
+    def _choice_dot(
+        self,
+        parent,
+        *,
+        selected_fn,
+        select_fn,
+        text: str,
+        watch_var=None,
+        shape: str = "circle",
+    ) -> tk.Frame:
+        """Clickable choice with a large custom radio (circle) or checkbox (square)."""
         wrap = tk.Frame(parent, bg=CARD_BG, cursor="hand2")
         size = 28
         canvas = tk.Canvas(
@@ -143,27 +170,22 @@ class ExperimentLauncher(tk.Tk):
             canvas.configure(width=outer, height=outer)
             pad = max(2, outer // 12)
             ring = max(2, outer // 12)
-            canvas.create_oval(
-                pad,
-                pad,
-                outer - pad,
-                outer - pad,
-                outline="#d7e4ef",
-                width=ring,
-            )
-            if var.get() == value:
+            box = (pad, pad, outer - pad, outer - pad)
+            if shape == "square":
+                canvas.create_rectangle(*box, outline="#d7e4ef", width=ring)
+            else:
+                canvas.create_oval(*box, outline="#d7e4ef", width=ring)
+            if selected_fn():
                 inset = max(pad + ring + 1, outer // 4)
-                canvas.create_oval(
-                    inset,
-                    inset,
-                    outer - inset,
-                    outer - inset,
-                    fill=PLAY_BLUE,
-                    outline=PLAY_BLUE,
-                )
+                inner = (inset, inset, outer - inset, outer - inset)
+                if shape == "square":
+                    canvas.create_rectangle(*inner, fill=PLAY_BLUE, outline=PLAY_BLUE)
+                else:
+                    canvas.create_oval(*inner, fill=PLAY_BLUE, outline=PLAY_BLUE)
 
         def select(_event=None):
-            var.set(value)
+            select_fn()
+            paint()
 
         wrap._dot_size = size
         wrap._dot_canvas = canvas
@@ -171,15 +193,16 @@ class ExperimentLauncher(tk.Tk):
         wrap._dot_paint = paint
         for widget in (wrap, canvas, label):
             widget.bind("<Button-1>", select)
-        var.trace_add("write", paint)
+        if watch_var is not None:
+            watch_var.trace_add("write", paint)
         paint()
         return wrap
 
-    def _card(self, parent) -> tk.Frame:
+    def _card(self, parent, *, bg: str = CARD_BG, border: str = CARD_BORDER) -> tk.Frame:
         card = tk.Frame(
             parent,
-            bg=CARD_BG,
-            highlightbackground=CARD_BORDER,
+            bg=bg,
+            highlightbackground=border,
             highlightthickness=2,
         )
         return card
@@ -201,7 +224,7 @@ class ExperimentLauncher(tk.Tk):
         self.name_title.pack(anchor="w")
         self.name_subtitle = tk.Label(
             inner,
-            text="Enter your name to start or continue. Returning participants skip the survey.",
+            text="Enter your name to start or continue. Returning participants skip the pre-experiment survey.",
             bg=HEADER_BG,
             fg=GUI_MUTED,
             anchor="w",
@@ -258,6 +281,280 @@ class ExperimentLauncher(tk.Tk):
         )
         self.name_status.pack(anchor="w", pady=(16, 0))
 
+    def _scrollable_card(self, parent):
+        card = self._card(parent)
+        body = tk.Frame(card, bg=CARD_BG)
+        body.pack(fill="both", expand=True)
+        canvas = tk.Canvas(body, bg=CARD_BG, highlightthickness=0, bd=0)
+        scroll = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=CARD_BG)
+        window = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+
+        def _inner_cfg(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _canvas_cfg(event):
+            canvas.itemconfigure(window, width=max(1, event.width))
+
+        inner.bind("<Configure>", _inner_cfg)
+        canvas.bind("<Configure>", _canvas_cfg)
+        canvas.pack(side="left", fill="both", expand=True, padx=(28, 0), pady=(24, 0))
+        scroll.pack(side="right", fill="y", pady=(24, 0), padx=(0, 10))
+        footer = tk.Frame(card, bg=CARD_BG)
+        footer.pack(fill="x", padx=28, pady=(12, 24))
+        return card, canvas, inner, footer
+
+    def _scrollable_region(self, parent, *, bg: str = PAGE_BG):
+        wrap = tk.Frame(parent, bg=bg)
+        canvas = tk.Canvas(wrap, bg=bg, highlightthickness=0, bd=0)
+        scroll = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=bg)
+        window = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+
+        def _inner_cfg(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _canvas_cfg(event):
+            canvas.itemconfigure(window, width=max(1, event.width))
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        inner.bind("<Configure>", _inner_cfg)
+        canvas.bind("<Configure>", _canvas_cfg)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        return wrap, canvas, inner
+
+    def _on_survey_wheel(self, event):
+        if self._screen not in ("experience", "post", "suite"):
+            return
+        canvas = self._survey_canvas
+        if canvas is None:
+            return
+        if getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+            canvas.yview_scroll(-1, "units")
+        else:
+            canvas.yview_scroll(1, "units")
+
+    def _make_question_var(self, question: dict):
+        if question.get("multi"):
+            return {
+                value: tk.BooleanVar(value=False)
+                for value, _label in question_choices(question)
+            }
+        return tk.StringVar(value="")
+
+    def _fill_choice_host(self, form: dict, block: dict, choices):
+        host = block["host"]
+        for child in host.winfo_children():
+            child.destroy()
+        block["dots"] = []
+        question = block["question"]
+        var = form["vars"][question["key"]]
+        layout = question.get("layout") or "row"
+        exclusive = question.get("exclusive")
+        on_change = form.get("on_change")
+        if not choices:
+            return
+
+        def add_dot(parent, value, text, watch):
+            if question.get("multi"):
+                def selected_fn(current=value):
+                    return bool(var[current].get())
+
+                def select_fn(current=value):
+                    chosen = not bool(var[current].get())
+                    if exclusive and current == exclusive:
+                        for key, flag in var.items():
+                            flag.set(bool(chosen) if key == exclusive else False)
+                    else:
+                        var[current].set(chosen)
+                        if exclusive and chosen:
+                            var[exclusive].set(False)
+                    if callable(on_change):
+                        on_change()
+
+                return self._choice_dot(
+                    parent,
+                    selected_fn=selected_fn,
+                    select_fn=select_fn,
+                    text=text,
+                    watch_var=watch,
+                    shape="square",
+                )
+            def selected_fn(current=value):
+                return var.get() == current
+
+            def select_fn(current=value):
+                var.set(current)
+                if callable(on_change):
+                    on_change()
+
+            return self._choice_dot(
+                parent,
+                selected_fn=selected_fn,
+                select_fn=select_fn,
+                text=text,
+                watch_var=watch,
+                shape="circle",
+            )
+
+        if layout == "stack":
+            for value, text in choices:
+                row = tk.Frame(host, bg=CARD_BG)
+                row.pack(anchor="w", pady=(0, 8))
+                watch = var[value] if question.get("multi") else var
+                dot = add_dot(row, value, text, watch)
+                dot.pack(side="left")
+                block["dots"].append(dot)
+            return
+        row = None
+        for index, (value, text) in enumerate(choices):
+            if row is None or index % 3 == 0:
+                row = tk.Frame(host, bg=CARD_BG)
+                row.pack(anchor="w", pady=(0, 8))
+            watch = var[value] if question.get("multi") else var
+            dot = add_dot(row, value, text, watch)
+            dot.pack(side="left", padx=(0, 22))
+            block["dots"].append(dot)
+
+    def _populate_survey(self, inner, questions, *, on_change=None) -> dict:
+        form = {
+            "questions": questions,
+            "vars": {},
+            "blocks": [],
+            "on_change": on_change,
+        }
+        for question in questions:
+            if question.get("choices") == ASSIGNED_TASKS:
+                form["vars"][question["key"]] = tk.StringVar(value="")
+            else:
+                form["vars"][question["key"]] = self._make_question_var(question)
+            wrap = tk.Frame(inner, bg=CARD_BG)
+            wrap.pack(anchor="w", fill="x", pady=(0, 18))
+            label = tk.Label(
+                wrap,
+                text=question["prompt"],
+                bg=CARD_BG,
+                fg=TEXT_PRIMARY,
+                anchor="w",
+                justify="left",
+                wraplength=760,
+                font=("Sans", 15, "bold"),
+            )
+            label.pack(anchor="w", pady=(0, 8))
+            host = tk.Frame(wrap, bg=CARD_BG)
+            host.pack(anchor="w", fill="x")
+            block = {
+                "question": question,
+                "wrap": wrap,
+                "label": label,
+                "host": host,
+                "dots": [],
+            }
+            form["blocks"].append(block)
+            self._fill_choice_host(form, block, question_choices(question))
+        return form
+
+    def _survey_answers(self, form: dict) -> dict:
+        answers = {}
+        for question in form["questions"]:
+            var = form["vars"][question["key"]]
+            if question.get("multi"):
+                answers[question["key"]] = [
+                    value for value, flag in var.items() if flag.get()
+                ]
+            else:
+                answers[question["key"]] = str(var.get() or "").strip()
+        return answers
+
+    def _clear_survey(self, form: dict):
+        for question in form["questions"]:
+            var = form["vars"][question["key"]]
+            if question.get("multi"):
+                for flag in var.values():
+                    flag.set(False)
+            else:
+                var.set("")
+        self._refresh_survey_visibility(form)
+
+    def _refresh_survey_visibility(self, form: dict, extra_choices=None):
+        answers = self._survey_answers(form)
+        for block in form["blocks"]:
+            block["wrap"].pack_forget()
+        for block in form["blocks"]:
+            question = block["question"]
+            visible = True
+            pred = question.get("visible_if")
+            if callable(pred) and not pred(answers):
+                visible = False
+            if question.get("choices") == ASSIGNED_TASKS:
+                if not question_choices(question, extra_choices):
+                    visible = False
+            if visible:
+                block["wrap"].pack(anchor="w", fill="x", pady=(0, 18))
+                continue
+            var = form["vars"][question["key"]]
+            if question.get("multi"):
+                for flag in var.values():
+                    flag.set(False)
+            elif var.get():
+                var.set("")
+
+    def _iter_survey_dots(self):
+        for form in (getattr(self, "pre_form", None), getattr(self, "post_form", None)):
+            if not form:
+                continue
+            for block in form["blocks"]:
+                yield from block["dots"]
+
+    def _iter_survey_labels(self):
+        for form in (getattr(self, "pre_form", None), getattr(self, "post_form", None)):
+            if not form:
+                continue
+            for block in form["blocks"]:
+                yield block["label"]
+
+    def _assigned_task_choices(self) -> tuple[tuple[str, str], ...]:
+        base_names, household_names = self._protocol_task_names()
+        labels = {key: label for label, key in BASE_TASKS}
+        labels.update({key: label for label, key, _script in HOUSEHOLD_TASKS})
+        out = []
+        seen = set()
+        for key in list(base_names) + list(household_names):
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((key, labels.get(key, key)))
+        return tuple(out)
+
+    def _post_extra_choices(self) -> dict:
+        return {ASSIGNED_TASKS: self._assigned_task_choices()}
+
+    def _refresh_post_task_choices(self):
+        extra = self._post_extra_choices()
+        scale = self._ui_scale
+        size = max(8, int(round(28 * scale)))
+        font_px = max(8, int(round(16 * scale)))
+        for block in self.post_form["blocks"]:
+            question = block["question"]
+            if question.get("choices") != ASSIGNED_TASKS:
+                continue
+            current = str(self.post_form["vars"][question["key"]].get() or "")
+            allowed = {value for value, _label in question_choices(question, extra)}
+            self.post_form["vars"][question["key"]] = tk.StringVar(
+                value=current if current in allowed else ""
+            )
+            self._fill_choice_host(
+                self.post_form, block, question_choices(question, extra)
+            )
+            for dot in block["dots"]:
+                dot._dot_size = size
+                dot._dot_label.configure(font=("Sans", font_px, "bold"))
+                dot._dot_paint()
+        self._refresh_survey_visibility(self.post_form, extra_choices=extra)
+
     def _build_experience_screen(self):
         self.exp_screen = tk.Frame(self.body, bg=PAGE_BG)
         header = tk.Frame(self.exp_screen, bg=HEADER_BG, highlightbackground="#d4d5db", highlightthickness=1)
@@ -285,36 +582,17 @@ class ExperimentLauncher(tk.Tk):
         )
         self.exp_subtitle.pack(anchor="w", pady=(4, 0))
 
-        card = self._card(self.exp_screen)
+        card, canvas, body, footer = self._scrollable_card(self.exp_screen)
         card.pack(fill="both", expand=True)
-        pad = tk.Frame(card, bg=CARD_BG)
-        pad.pack(fill="both", expand=True, padx=28, pady=24)
-        self.exp_vars: dict[str, tk.StringVar] = {}
-        self.exp_question_labels: list[tk.Label] = []
-        self.exp_choice_rows: list[tk.Frame] = []
-        for key, question in EXPERIENCE_QUESTIONS:
-            var = tk.StringVar(value="")
-            self.exp_vars[key] = var
-            q_label = tk.Label(
-                pad,
-                text=question,
-                bg=CARD_BG,
-                fg=TEXT_PRIMARY,
-                anchor="w",
-                justify="left",
-                wraplength=760,
-                font=("Sans", 15, "bold"),
-            )
-            q_label.pack(anchor="w", pady=(0, 8))
-            self.exp_question_labels.append(q_label)
-            row = tk.Frame(pad, bg=CARD_BG)
-            row.pack(anchor="w", pady=(0, 18))
-            for value, text in (("yes", "Yes"), ("no", "No")):
-                choice = self._yes_no_choice(row, var, value, text)
-                choice.pack(side="left", padx=(0, 22))
-                self.exp_choice_rows.append(choice)
+        self.exp_canvas = canvas
+        self.pre_form = self._populate_survey(
+            body,
+            PRE_SURVEY_QUESTIONS,
+            on_change=lambda: self._refresh_survey_visibility(self.pre_form),
+        )
+        self._refresh_survey_visibility(self.pre_form)
         self.exp_continue = RoundedButton(
-            pad,
+            footer,
             text="Continue",
             command=self._submit_experience,
             bg=PLAY_BLUE,
@@ -324,7 +602,63 @@ class ExperimentLauncher(tk.Tk):
             height=64,
             radius=26,
         )
-        self.exp_continue.pack(anchor="w", pady=(8, 0))
+        self.exp_continue.pack(anchor="w")
+
+    def _build_post_screen(self):
+        self.post_screen = tk.Frame(self.body, bg=PAGE_BG)
+        header = tk.Frame(self.post_screen, bg=HEADER_BG, highlightbackground="#d4d5db", highlightthickness=1)
+        header.pack(fill="x", pady=(0, 16))
+        inner = tk.Frame(header, bg=HEADER_BG)
+        inner.pack(fill="x", padx=24, pady=18)
+        self.post_title = tk.Label(
+            inner,
+            text="After the experiment",
+            bg=HEADER_BG,
+            fg=GUI_INK,
+            anchor="w",
+            font=("Sans", 30, "bold"),
+        )
+        self.post_title.pack(anchor="w")
+        self.post_subtitle = tk.Label(
+            inner,
+            text="Please answer these questions now that you have finished the assigned tasks.",
+            bg=HEADER_BG,
+            fg=GUI_MUTED,
+            anchor="w",
+            wraplength=780,
+            justify="left",
+            font=("Sans", 14),
+        )
+        self.post_subtitle.pack(anchor="w", pady=(4, 0))
+
+        card, canvas, body, footer = self._scrollable_card(self.post_screen)
+        card.pack(fill="both", expand=True)
+        self.post_canvas = canvas
+        self.post_form = self._populate_survey(body, POST_SURVEY_QUESTIONS)
+        self.post_continue = RoundedButton(
+            footer,
+            text="Finish",
+            command=self._submit_post,
+            bg=PLAY_BLUE,
+            activebackground=PLAY_BLUE_ACTIVE,
+            font=("Sans", 16, "bold"),
+            width=220,
+            height=64,
+            radius=26,
+        )
+        self.post_continue.pack(side="left")
+        self.post_back = RoundedButton(
+            footer,
+            text="Back",
+            command=lambda: self._show_screen("suite"),
+            bg="#6b7c8d",
+            activebackground="#7d8e9e",
+            font=("Sans", 16, "bold"),
+            width=140,
+            height=64,
+            radius=26,
+        )
+        self.post_back.pack(side="left", padx=(12, 0))
 
     def _build_suite_screen(self):
         self.suite_screen = tk.Frame(self.body, bg=PAGE_BG)
@@ -388,8 +722,12 @@ class ExperimentLauncher(tk.Tk):
         self.controller_combo.pack(side="left", padx=(10, 0))
         self.controller_combo.bind("<<ComboboxSelected>>", self._on_controller_change)
 
+        body, canvas, inner = self._scrollable_region(self.suite_screen)
+        body.pack(fill="both", expand=True)
+        self.suite_canvas = canvas
+
         self.remaining_stats = tk.Label(
-            self.suite_screen,
+            inner,
             text="",
             bg=PAGE_BG,
             fg=GUI_INK,
@@ -400,8 +738,23 @@ class ExperimentLauncher(tk.Tk):
         )
         self.remaining_stats.pack(fill="x", pady=(0, 12))
 
-        grid = tk.Frame(self.suite_screen, bg=PAGE_BG)
-        grid.pack(fill="both", expand=True)
+        grid = tk.Frame(inner, bg=PAGE_BG)
+        grid.pack(fill="x")
+        self.questionnaire_card = self._suite_card(
+            grid,
+            title="Post-experiment Questionnaire",
+            blurb="Please fill in the questionnaire to share your experience about the experiment.",
+            command=self._open_questionnaire,
+            bg=QUESTIONNAIRE_GREEN,
+            border=QUESTIONNAIRE_GREEN_BORDER,
+            title_fg=QUESTIONNAIRE_GREEN_TEXT,
+            blurb_fg=QUESTIONNAIRE_GREEN_BLURB,
+            button_text="Start",
+            button_bg="#1f6b48",
+            button_active="#26855a",
+            show_progress=False,
+        )
+        self.questionnaire_card.pack(fill="x", pady=(0, 12))
         self.base_card = self._suite_card(
             grid,
             title="Base Tasks",
@@ -417,7 +770,7 @@ class ExperimentLauncher(tk.Tk):
         )
         self.household_card.pack(fill="x")
         self.switch_user = tk.Button(
-            self.suite_screen,
+            inner,
             text="Switch user",
             command=self._switch_user,
             bg=PAGE_BG,
@@ -431,7 +784,7 @@ class ExperimentLauncher(tk.Tk):
         )
         self.switch_user.pack(anchor="w", pady=(14, 0))
         self.delete_logs = tk.Button(
-            self.suite_screen,
+            inner,
             text="Delete this participant's logs",
             command=self._delete_current_logs,
             bg=PAGE_BG,
@@ -443,17 +796,32 @@ class ExperimentLauncher(tk.Tk):
             font=("Sans", 12, "underline"),
             cursor="hand2",
         )
-        self.delete_logs.pack(anchor="w", pady=(6, 0))
+        self.delete_logs.pack(anchor="w", pady=(6, 8))
 
-    def _suite_card(self, parent, *, title: str, blurb: str, command) -> tk.Frame:
-        card = self._card(parent)
-        pad = tk.Frame(card, bg=CARD_BG)
+    def _suite_card(
+        self,
+        parent,
+        *,
+        title: str,
+        blurb: str,
+        command,
+        bg: str = CARD_BG,
+        border: str = CARD_BORDER,
+        title_fg: str = TEXT_PRIMARY,
+        blurb_fg: str = TEXT_SECONDARY,
+        button_text: str = "Open",
+        button_bg: str = PLAY_BLUE,
+        button_active: str = PLAY_BLUE_ACTIVE,
+        show_progress: bool = True,
+    ) -> tk.Frame:
+        card = self._card(parent, bg=bg, border=border)
+        pad = tk.Frame(card, bg=bg)
         pad.pack(fill="x", padx=24, pady=20)
         title_label = tk.Label(
             pad,
             text=title,
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
+            bg=bg,
+            fg=title_fg,
             anchor="w",
             font=("Sans", 22, "bold"),
         )
@@ -461,53 +829,80 @@ class ExperimentLauncher(tk.Tk):
         blurb_label = tk.Label(
             pad,
             text=blurb,
-            bg=CARD_BG,
-            fg=TEXT_SECONDARY,
+            bg=bg,
+            fg=blurb_fg,
             anchor="w",
             wraplength=780,
             justify="left",
             font=("Sans", 13),
         )
         blurb_label.pack(anchor="w", pady=(4, 10))
-        progress = tk.Label(
-            pad,
-            text="",
-            bg=CARD_BG,
-            fg="#7fb6dc",
-            anchor="w",
-            font=("Sans", 13, "bold"),
-        )
-        progress.pack(anchor="w", pady=(0, 12))
+        progress = None
+        if show_progress:
+            progress = tk.Label(
+                pad,
+                text="",
+                bg=bg,
+                fg="#7fb6dc",
+                anchor="w",
+                font=("Sans", 13, "bold"),
+            )
+            progress.pack(anchor="w", pady=(0, 12))
         button = RoundedButton(
             pad,
-            text="Open",
+            text=button_text,
             command=command,
-            bg=PLAY_BLUE,
-            activebackground=PLAY_BLUE_ACTIVE,
+            bg=button_bg,
+            activebackground=button_active,
             font=("Sans", 16, "bold"),
             width=180,
             height=60,
             radius=26,
         )
         button.pack(anchor="w")
+        card._pad = pad
         card._title = title_label
         card._blurb = blurb_label
         card._progress = progress
         card._button = button
         return card
 
+    def _style_suite_card(
+        self,
+        card,
+        *,
+        bg: str,
+        border: str,
+        title_fg: str,
+        blurb_fg: str,
+    ):
+        card.configure(bg=bg, highlightbackground=border)
+        card._pad.configure(bg=bg)
+        card._title.configure(bg=bg, fg=title_fg)
+        card._blurb.configure(bg=bg, fg=blurb_fg)
+        if card._progress is not None:
+            card._progress.configure(bg=bg)
+
     def _show_screen(self, name: str):
         self._screen = name
-        for screen in (self.name_screen, self.exp_screen, self.suite_screen):
+        for screen in (self.name_screen, self.exp_screen, self.post_screen, self.suite_screen):
             screen.pack_forget()
         if name == "name":
+            self._survey_canvas = None
             self.name_screen.pack(fill="both", expand=True)
             self.after(50, lambda: self.name_entry.focus_set())
         elif name == "experience":
+            self._survey_canvas = self.exp_canvas
             self.exp_screen.pack(fill="both", expand=True)
+        elif name == "post":
+            self._survey_canvas = self.post_canvas
+            self._refresh_post_task_choices()
+            self.post_screen.pack(fill="both", expand=True)
         else:
+            self._survey_canvas = self.suite_canvas
             self._refresh_suite_progress()
             self.suite_screen.pack(fill="both", expand=True)
+            self.after(0, lambda: self.suite_canvas.configure(scrollregion=self.suite_canvas.bbox("all")))
 
     def _submit_name(self):
         name = self.name_entry.get().strip()
@@ -525,17 +920,16 @@ class ExperimentLauncher(tk.Tk):
             return
         self._pending_name = name
         self.name_status.configure(text="")
-        for var in self.exp_vars.values():
-            var.set("")
+        self._clear_survey(self.pre_form)
         self._show_screen("experience")
 
     def _submit_experience(self):
-        answers = {key: var.get().strip() for key, var in self.exp_vars.items()}
-        missing = [label for key, label in EXPERIENCE_QUESTIONS if answers.get(key) not in ("yes", "no")]
+        answers = self._survey_answers(self.pre_form)
+        missing = survey_missing_prompts(PRE_SURVEY_QUESTIONS, answers)
         if missing:
             messagebox.showinfo(
                 "Please answer every question",
-                "Select Yes or No for each experience question before continuing.",
+                "Select an option for each question before continuing.",
             )
             return
         name = getattr(self, "_pending_name", "").strip()
@@ -544,6 +938,25 @@ class ExperimentLauncher(tk.Tk):
             return
         data = create_user(name, answers)
         self._activate_user(data)
+        self._show_screen("suite")
+
+    def _submit_post(self):
+        if self.user_data is None:
+            self._show_screen("name")
+            return
+        extra = self._post_extra_choices()
+        answers = self._survey_answers(self.post_form)
+        missing = survey_missing_prompts(
+            POST_SURVEY_QUESTIONS, answers, extra_choices=extra
+        )
+        if missing:
+            messagebox.showinfo(
+                "Please answer every question",
+                "Select an option for each question before continuing.",
+            )
+            return
+        log = save_post_survey(self.user_data, answers, extra_choices=extra)
+        self.user_data = log
         self._show_screen("suite")
 
     def _selected_control_mode(self) -> str:
@@ -662,8 +1075,55 @@ class ExperimentLauncher(tk.Tk):
         if not any_slot:
             return "No limited scenarios in this protocol."
         if all_done:
+            if self._should_collect_post():
+                return (
+                    "All protocol scenarios are complete for this controller. "
+                    "Use the Post-experiment Questionnaire card to share your experience."
+                )
             return "All protocol scenarios are complete for this controller."
         return "  ·  ".join(parts)
+
+    def _protocol_complete(self, data: dict | None = None) -> bool:
+        log = data if data is not None else load_user_log()
+        cfg = load_experiment_config()
+        base_names, household_names = self._protocol_task_names()
+        counts = progress_counts(
+            log,
+            base_task_names=base_names,
+            household_task_names=household_names,
+            n_scenarios=len(SCENARIOS),
+            cfg=cfg,
+        )
+        total = int(counts.get("base_total") or 0) + int(counts.get("household_total") or 0)
+        if total <= 0:
+            return False
+        return (
+            int(counts.get("base_done") or 0) >= int(counts.get("base_total") or 0)
+            and int(counts.get("household_done") or 0) >= int(counts.get("household_total") or 0)
+        )
+
+    def _post_saved(self, data: dict | None = None) -> bool:
+        extra = self._post_extra_choices()
+        source = data if data is not None else self.user_data or {}
+        slug = str(source.get("user_id") or slugify_user_name(source.get("user_name") or ""))
+        logs = list(iter_user_controller_logs(slug)) if slug else []
+        if not logs and source.get("post_survey"):
+            return survey_complete(
+                POST_SURVEY_QUESTIONS, source.get("post_survey"), extra_choices=extra
+            )
+        return any(
+            survey_complete(POST_SURVEY_QUESTIONS, log.get("post_survey"), extra_choices=extra)
+            for _tag, _path, log in logs
+        )
+
+    def _should_collect_post(self) -> bool:
+        if self.user_data is None or self._post_saved():
+            return False
+        slug = str(self.user_data.get("user_id") or "")
+        logs = list(iter_user_controller_logs(slug)) if slug else []
+        if not logs:
+            return self._protocol_complete(self.user_data)
+        return all(self._protocol_complete(log) for _tag, _path, log in logs)
 
     def _refresh_suite_progress(self):
         if self.user_data:
@@ -721,6 +1181,7 @@ class ExperimentLauncher(tk.Tk):
         )
         remaining = self._remaining_summary(log, counts=counts)
         self.remaining_stats.configure(text=remaining)
+        self._refresh_questionnaire_card()
         display = ""
         if self.user_data:
             display = str(self.user_data.get("user_name") or "")
@@ -856,8 +1317,13 @@ class ExperimentLauncher(tk.Tk):
             wrap = max(360, width - 80)
             self.name_subtitle.configure(wraplength=wrap)
             self.exp_subtitle.configure(wraplength=wrap)
+            self.post_subtitle.configure(wraplength=wrap)
             self.suite_subtitle.configure(wraplength=max(280, wrap - 160))
             self.remaining_stats.configure(wraplength=max(360, width - 80))
+            for label in self._iter_survey_labels():
+                label.configure(wraplength=max(360, width - 100))
+            if getattr(self, "suite_canvas", None) is not None:
+                self.suite_canvas.configure(scrollregion=self.suite_canvas.bbox("all"))
             return
         self._ui_scale = scale
 
@@ -877,26 +1343,33 @@ class ExperimentLauncher(tk.Tk):
         self.name_status.configure(font=font(13), wraplength=max(360, width - 100))
         self.exp_title.configure(font=font(30, "bold"))
         self.exp_subtitle.configure(font=font(14), wraplength=max(360, width - 80))
-        for label in self.exp_question_labels:
+        self.post_title.configure(font=font(30, "bold"))
+        self.post_subtitle.configure(font=font(14), wraplength=max(360, width - 80))
+        for label in self._iter_survey_labels():
             label.configure(font=font(15, "bold"), wraplength=max(360, width - 100))
-        for choice in self.exp_choice_rows:
+        for choice in self._iter_survey_dots():
             choice._dot_size = px(28)
             choice._dot_label.configure(font=font(16, "bold"))
             choice._dot_paint()
         self.exp_continue.configure(font=font(16, "bold"), width=px(220), height=px(64), radius=px(26))
+        self.post_continue.configure(font=font(16, "bold"), width=px(220), height=px(64), radius=px(26))
+        self.post_back.configure(font=font(16, "bold"), width=px(140), height=px(64), radius=px(26))
         self.suite_title.configure(font=font(30, "bold"))
         self.suite_subtitle.configure(font=font(14), wraplength=max(280, width - 240))
         self.controller_caption.configure(font=font(13, "bold"))
         self.controller_combo.configure(font=font(13, "bold"))
         self.remaining_stats.configure(font=font(13, "bold"), wraplength=max(360, width - 80))
         self.suite_exit.configure(font=font(16, "bold"), width=px(140), height=px(64), radius=px(26))
-        for card in (self.base_card, self.household_card):
+        for card in (self.questionnaire_card, self.base_card, self.household_card):
             card._title.configure(font=font(22, "bold"))
             card._blurb.configure(font=font(13), wraplength=max(360, width - 100))
-            card._progress.configure(font=font(13, "bold"))
+            if card._progress is not None:
+                card._progress.configure(font=font(13, "bold"))
             card._button.configure(font=font(16, "bold"), width=px(180), height=px(60), radius=px(26))
         self.switch_user.configure(font=font(12, "underline"))
         self.delete_logs.configure(font=font(12, "underline"))
+        if getattr(self, "suite_canvas", None) is not None:
+            self.suite_canvas.configure(scrollregion=self.suite_canvas.bbox("all"))
 
     def _stop_child(self):
         child = self.child
@@ -912,6 +1385,55 @@ class ExperimentLauncher(tk.Tk):
             pass
         finally:
             self.child = None
+
+    def _refresh_questionnaire_card(self):
+        card = getattr(self, "questionnaire_card", None)
+        if card is None:
+            return
+        done = bool(self.user_data) and self._post_saved()
+        if done:
+            self._style_suite_card(
+                card,
+                bg=CARD_BG,
+                border=CARD_BORDER,
+                title_fg=TEXT_PRIMARY,
+                blurb_fg=TEXT_SECONDARY,
+            )
+            card._button.configure(
+                text="Start",
+                state="disabled",
+                bg=LOCKED_GRAY,
+                activebackground=LOCKED_GRAY,
+                disabledbackground=LOCKED_GRAY,
+            )
+            return
+        self._style_suite_card(
+            card,
+            bg=QUESTIONNAIRE_GREEN,
+            border=QUESTIONNAIRE_GREEN_BORDER,
+            title_fg=QUESTIONNAIRE_GREEN_TEXT,
+            blurb_fg=QUESTIONNAIRE_GREEN_BLURB,
+        )
+        card._button.configure(
+            text="Start",
+            state="normal",
+            bg="#1f6b48",
+            activebackground="#26855a",
+        )
+
+    def _open_questionnaire(self):
+        if self._post_saved():
+            return
+        if self.child is not None:
+            messagebox.showinfo(
+                "Task still running",
+                "Close the task window before opening the questionnaire.",
+            )
+            return
+        if self.user_data is None:
+            self._show_screen("name")
+            return
+        self._show_screen("post")
 
     def exit_app(self):
         self._stop_child()

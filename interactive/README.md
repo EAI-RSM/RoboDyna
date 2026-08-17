@@ -20,7 +20,8 @@ The slug is the participant name, lowercased, with spaces turned into underscore
 Each `user.json` stores:
 
 - `user_name` / `user_id`
-- one-time experience answers (video games, keyboard games, robotic simulators)
+- pre-experiment answers (`experience`): games, controllers, simulators, teleop, 3D apps, mouse hand
+- post-experiment answers (`post_survey`): difficulty, clarity, hardest/easiest task, preferred controller, policy outlook. Opened from the green **Post-experiment Questionnaire** card on the suite screen. After it is submitted, the card stays gray and Start is locked for later sessions.
 - `completed_keys` — finished items that stay gray in the task GUIs
 - `plays` — every attempt, including:
 

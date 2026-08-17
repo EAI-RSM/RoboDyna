@@ -33,11 +33,241 @@ _KEYBOARD_ALIASES = {
     "km",
 }
 
-EXPERIENCE_QUESTIONS = (
-    ("video_games", "Do you have experience playing video games?"),
-    ("keyboard_video_games", "Do you have experience playing video games using a keyboard?"),
-    ("robotic_simulators", "Do you have previous experience with robotic simulators?"),
+YES_NO_CHOICES = (("yes", "Yes"), ("no", "No"))
+ASSIGNED_TASKS = "assigned_tasks"
+
+
+def _survey_item(
+    key: str,
+    prompt: str,
+    choices,
+    *,
+    multi: bool = False,
+    exclusive: str | None = None,
+    visible_if=None,
+    layout: str = "row",
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "prompt": prompt,
+        "choices": choices,
+        "multi": multi,
+        "exclusive": exclusive,
+        "visible_if": visible_if,
+        "layout": layout,
+    }
+
+
+def _answer_list(value) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return []
+
+
+def pre_controller_visible(answers: dict[str, Any] | None) -> bool:
+    return str((answers or {}).get("video_games") or "").strip().lower() == "yes"
+
+
+def pre_wasd_visible(answers: dict[str, Any] | None) -> bool:
+    if not pre_controller_visible(answers):
+        return False
+    selected = {item.lower() for item in _answer_list((answers or {}).get("game_controllers"))}
+    return "keyboard" in selected
+
+
+PRE_SURVEY_QUESTIONS = (
+    _survey_item(
+        "video_games",
+        "Do you have experience playing video games?",
+        YES_NO_CHOICES,
+    ),
+    _survey_item(
+        "game_controllers",
+        "What types of controller have you used playing games? More than one option can be selected.",
+        (
+            ("gamepad", "Gamepad"),
+            ("vr_controller", "VR Controller"),
+            ("keyboard", "Keyboard"),
+            ("mouse", "Mouse"),
+            ("none", "None"),
+        ),
+        multi=True,
+        exclusive="none",
+        visible_if=pre_controller_visible,
+    ),
+    _survey_item(
+        "wasd_mouse_look",
+        "Have you used WASD / mouse-look games (Minecraft, first person shooters, etc.)?",
+        YES_NO_CHOICES,
+        visible_if=pre_wasd_visible,
+    ),
+    _survey_item(
+        "robotic_simulators",
+        "Do you have previous experience with robotic simulators?",
+        YES_NO_CHOICES,
+    ),
+    _survey_item(
+        "teleoperated_robot",
+        "Have you teleoperated a real or simulated robot before?",
+        YES_NO_CHOICES,
+    ),
+    _survey_item(
+        "spatial_3d_apps",
+        "Do you use applications with 3D spatial tasks (CAD, Blender, etc.)?",
+        YES_NO_CHOICES,
+    ),
+    _survey_item(
+        "mouse_regular_hand",
+        "Do you regularly use a mouse with your right or left hand?",
+        (("right", "Right"), ("left", "Left")),
+    ),
 )
+
+POST_SURVEY_QUESTIONS = (
+    _survey_item(
+        "task_difficulty",
+        "Overall, how do you rank the difficulty of the tasks?",
+        (
+            ("very_easy", "Very Easy"),
+            ("easy", "Easy"),
+            ("neutral", "Neutral"),
+            ("hard", "Hard"),
+            ("very_hard", "Very hard"),
+        ),
+    ),
+    _survey_item(
+        "objectives_clear",
+        "Were the objectives of the tasks clear?",
+        (
+            ("very_clear", "Very clear"),
+            ("clear", "Clear"),
+            ("neutral", "Neutral"),
+            ("unclear", "Unclear"),
+            ("very_unclear", "Very unclear"),
+        ),
+    ),
+    _survey_item(
+        "hardest_task",
+        "Which task did you find most difficult?",
+        ASSIGNED_TASKS,
+        layout="stack",
+    ),
+    _survey_item(
+        "easiest_task",
+        "Which task did you find easiest?",
+        ASSIGNED_TASKS,
+        layout="stack",
+    ),
+    _survey_item(
+        "easier_controller",
+        "Which controller did you find easier to use?",
+        (
+            ("robot", "Robot"),
+            ("keyboard", "Keyboard + mouse"),
+            ("same", "Same"),
+        ),
+    ),
+    _survey_item(
+        "policy_solve_6mo",
+        "How likely do you think a robotic policy can solve these tasks in the next 6 months?",
+        (
+            ("very_likely", "Very likely"),
+            ("likely", "Likely"),
+            ("neither", "Neither"),
+            ("unlikely", "Unlikely"),
+            ("very_unlikely", "Very unlikely"),
+        ),
+    ),
+)
+
+# Legacy (key, prompt) pairs for older yes/no experience items.
+EXPERIENCE_QUESTIONS = tuple(
+    (item["key"], item["prompt"])
+    for item in PRE_SURVEY_QUESTIONS
+    if item["key"] in {"video_games", "robotic_simulators"}
+)
+
+
+def question_choices(question: dict[str, Any], extra_choices: dict[str, Any] | None = None):
+    choices = question.get("choices")
+    if choices == ASSIGNED_TASKS:
+        return tuple((extra_choices or {}).get(ASSIGNED_TASKS) or ())
+    return tuple(choices or ())
+
+
+def question_visible(
+    question: dict[str, Any],
+    answers: dict[str, Any] | None = None,
+    extra_choices: dict[str, Any] | None = None,
+) -> bool:
+    pred = question.get("visible_if")
+    if callable(pred) and not pred(answers or {}):
+        return False
+    if question.get("choices") == ASSIGNED_TASKS and not question_choices(question, extra_choices):
+        return False
+    return True
+
+
+def _parse_question_answer(question: dict[str, Any], raw, extra_choices: dict[str, Any] | None = None):
+    choices = question_choices(question, extra_choices)
+    allowed = {value for value, _label in choices}
+    if question.get("multi"):
+        selected = [item for item in _answer_list(raw) if not allowed or item in allowed]
+        exclusive = question.get("exclusive")
+        if exclusive and exclusive in selected:
+            return [exclusive]
+        return selected
+    value = str(raw or "").strip()
+    if allowed:
+        return value if value in allowed else ""
+    return value
+
+
+def normalize_survey_answers(
+    questions,
+    answers: dict[str, Any] | None,
+    extra_choices: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    answers = answers or {}
+    parsed: dict[str, Any] = {}
+    for question in questions:
+        parsed[question["key"]] = _parse_question_answer(
+            question, answers.get(question["key"]), extra_choices
+        )
+    for question in questions:
+        if question_visible(question, parsed, extra_choices):
+            continue
+        parsed[question["key"]] = [] if question.get("multi") else ""
+    return parsed
+
+
+def survey_missing_prompts(
+    questions,
+    answers: dict[str, Any] | None,
+    extra_choices: dict[str, Any] | None = None,
+) -> list[str]:
+    parsed = normalize_survey_answers(questions, answers, extra_choices=extra_choices)
+    missing: list[str] = []
+    for question in questions:
+        if not question_visible(question, parsed, extra_choices):
+            continue
+        value = parsed.get(question["key"])
+        if question.get("multi"):
+            if not value:
+                missing.append(question["prompt"])
+        elif not value:
+            missing.append(question["prompt"])
+    return missing
+
+
+def survey_complete(
+    questions,
+    answers: dict[str, Any] | None,
+    extra_choices: dict[str, Any] | None = None,
+) -> bool:
+    return not survey_missing_prompts(questions, answers, extra_choices=extra_choices)
 
 # Base suite: 23 tasks × 4 scenarios. Household: 12 tasks.
 # Tutorial parts are unlimited practice and are never written to these logs.
@@ -100,6 +330,15 @@ def _iter_user_log_files(folder: Path):
     legacy = folder / "user.json"
     if legacy.is_file():
         yield "legacy", legacy
+
+
+def iter_user_controller_logs(name_or_slug: str):
+    """Yield ``(tag, path, data)`` for each log file in this participant folder."""
+    folder = user_dir(name_or_slug)
+    for tag, path in _iter_user_log_files(folder):
+        data = load_user_log(path)
+        if data:
+            yield tag, path, data
 
 
 ASSIGNMENT_FILENAME = "assignment.json"
@@ -185,6 +424,7 @@ def _empty_user_log(
         "created_at": created_at or now,
         "updated_at": now,
         "experience": dict(experience or {}),
+        "post_survey": {},
         "completed_keys": [],
         "play_counts": {},
         "success_counts": {},
@@ -268,20 +508,46 @@ def ensure_controller_log(
 
 def create_user(
     name: str,
-    experience: dict[str, str],
+    experience: dict[str, Any],
     controller: str | None = None,
 ) -> dict[str, Any]:
     display = str(name or "").strip()
-    answers = {
-        key: str(experience.get(key, "")).strip().lower()
-        for key, _label in EXPERIENCE_QUESTIONS
-    }
+    answers = normalize_survey_answers(PRE_SURVEY_QUESTIONS, experience)
     return ensure_controller_log(
         display,
         display=display,
         experience=answers,
         controller=controller,
     )
+
+
+def save_post_survey(
+    data: dict[str, Any],
+    answers: dict[str, Any],
+    extra_choices: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write post-experiment answers onto every controller log for this user."""
+    parsed = normalize_survey_answers(
+        POST_SURVEY_QUESTIONS, answers, extra_choices=extra_choices
+    )
+    slug = str(data.get("user_id") or slugify_user_name(data.get("user_name") or ""))
+    written = None
+    for _tag, path, current in iter_user_controller_logs(slug):
+        log = dict(current)
+        log["post_survey"] = parsed
+        log["log_path"] = str(path)
+        save_user_log(path, log)
+        if str(path) == str(data.get("log_path") or "") or written is None:
+            written = log
+    if written is not None:
+        return written
+    path = Path(str(data.get("log_path") or ""))
+    log = dict(data)
+    log["post_survey"] = parsed
+    if path:
+        log["log_path"] = str(path)
+        save_user_log(path, log)
+    return log
 
 
 def _attach_assignment(log: dict[str, Any], assignment: dict[str, Any] | None) -> None:
@@ -825,6 +1091,7 @@ def append_play(
         "user_name": os.environ.get(EXPERIMENT_USER_ENV, "user"),
         "created_at": iso_now(),
         "experience": {},
+        "post_survey": {},
         "completed_keys": [],
         "play_counts": {},
         "success_counts": {},
