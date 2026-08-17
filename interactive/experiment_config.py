@@ -56,10 +56,9 @@ HOUSEHOLD_TASK_TABLE: tuple[tuple[int, str, str], ...] = (
     (12, "clean_table", "Clean Table"),
 )
 
-# Default experiment set: all base except cuboid / cook_meat / punch_dual_holes,
+# Default experiment set: all base except cook_meat / punch_dual_holes,
 # all household except fill_coffee_jar / cook_food.
 DEFAULT_BASE_TASKS = [n for n, key, _ in BASE_TASK_TABLE if key not in (
-    "catch_cuboid",
     "cook_meat",
     "punch_dual_holes",
 )]
@@ -119,25 +118,17 @@ def _as_positive_int(value, default: int) -> int:
 
 
 def pick_lowest_count(pool: list[int], counts: dict[int, int], rng) -> int | None:
-    """Uniform choice among pool members that currently have the lowest count."""
+    """Choose uniformly among pool members that currently have the lowest count.
+
+    Example: if 2 has been used once and 6, 12, 15 are still unused, the next
+    pick is random among 6, 12, and 15.
+    """
     values = [int(n) for n in pool]
     if not values:
         return None
     min_count = min(int(counts.get(n, 0) or 0) for n in values)
     lowest = [n for n in values if int(counts.get(n, 0) or 0) == min_count]
     return int(rng.choice(lowest))
-
-
-def _choose_n(items: list, scores: list[int], n: int, rng) -> list:
-    remaining = list(zip(items, scores))
-    chosen = []
-    while remaining and len(chosen) < n:
-        min_score = min(score for _item, score in remaining)
-        tied = [item for item, score in remaining if score == min_score]
-        pick = rng.choice(tied)
-        chosen.append(pick)
-        remaining = [(item, score) for item, score in remaining if item is not pick]
-    return chosen
 
 
 def sample_category_assignment(
@@ -150,60 +141,63 @@ def sample_category_assignment(
 ) -> list[dict[str, Any]]:
     """Sample ``n`` task numbers, one per category when possible.
 
-    Within a category, tasks with the lowest usage count are equally likely.
-    Already-picked tasks are skipped so a dual-listed task (15) is used once.
-    Extra slots beyond the category count take another lowest-count task from
-    remaining category pools, then from any leftover eligible numbers.
+    Within a category, unused / lowest-count tasks are equally likely. Already-
+    picked tasks are skipped so a dual-listed task (15) is used once. Working
+    counts update after each pick. Extra slots beyond the category count take
+    another lowest-count task from remaining category pools, then from any
+    leftover eligible numbers.
     """
     rng = rng or random.SystemRandom()
     need = max(0, int(n))
     eligible_set = {int(x) for x in eligible}
     picked: list[dict[str, Any]] = []
     used: set[int] = set()
+    working = {int(k): int(v or 0) for k, v in (counts or {}).items()}
+    cat_taken = {str(key): 0 for key, _label, _nums in categories}
 
     def pool_for(numbers) -> list[int]:
         return [int(x) for x in numbers if int(x) in eligible_set and int(x) not in used]
 
-    cats = list(categories)
-    progressed = True
-    while need > 0 and progressed:
-        progressed = False
-        available = []
-        scores = []
-        for key, label, numbers in cats:
+    def append_pick(key: str, label: str, choice: int) -> None:
+        picked.append(
+            {
+                "category": key,
+                "category_label": label,
+                "task": int(choice),
+            }
+        )
+        used.add(int(choice))
+        working[int(choice)] = int(working.get(int(choice), 0) or 0) + 1
+        if key in cat_taken:
+            cat_taken[key] += 1
+
+    while need > 0:
+        available: list[tuple[int, int, str, str, list[int]]] = []
+        for key, label, numbers in categories:
             pool = pool_for(numbers)
             if not pool:
                 continue
-            available.append((key, label, numbers, pool))
-            scores.append(min(int(counts.get(n, 0) or 0) for n in pool))
+            min_task = min(int(working.get(t, 0) or 0) for t in pool)
+            available.append((int(cat_taken.get(key, 0)), min_task, key, label, pool))
         if not available:
             break
-        take = min(need, len(available))
-        chosen = _choose_n(available, scores, take, rng)
-        for key, label, _numbers, pool in chosen:
-            choice = pick_lowest_count(pool, counts, rng)
-            if choice is None:
-                continue
-            picked.append(
-                {
-                    "category": key,
-                    "category_label": label,
-                    "task": int(choice),
-                }
-            )
-            used.add(int(choice))
-            need -= 1
-            progressed = True
+        min_cat = min(row[0] for row in available)
+        same_cat = [row for row in available if row[0] == min_cat]
+        min_task = min(row[1] for row in same_cat)
+        tied = [row for row in same_cat if row[1] == min_task]
+        _n_cat, _min_task, key, label, pool = rng.choice(tied)
+        choice = pick_lowest_count(pool, working, rng)
+        if choice is None:
+            break
+        append_pick(key, label, choice)
+        need -= 1
 
     leftover = [n for n in sorted(eligible_set) if n not in used]
     while need > 0 and leftover:
-        choice = pick_lowest_count(leftover, counts, rng)
+        choice = pick_lowest_count(leftover, working, rng)
         if choice is None:
             break
-        picked.append(
-            {"category": "other", "category_label": "Other", "task": int(choice)}
-        )
-        used.add(int(choice))
+        append_pick("other", "Other", choice)
         leftover = [n for n in leftover if n != choice]
         need -= 1
     return picked
