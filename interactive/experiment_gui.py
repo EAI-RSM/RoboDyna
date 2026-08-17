@@ -682,19 +682,29 @@ class ExperimentLauncher(tk.Tk):
         )
         base_total = counts["base_total"]
         household_total = counts["household_total"]
-        self.base_card._blurb.configure(
-            text=(
-                f"{len(base_names)} sampled dynamic-table tasks "
-                f"(one from each skill group, {cfg.base_scenarios_per_experiment} total), "
-                "each with Default / Opt 1 / Opt 2 / Opt 1+2."
+        if cfg.suite_enabled("base"):
+            self.base_card._blurb.configure(
+                text=(
+                    f"{len(base_names)} sampled dynamic-table tasks "
+                    f"(one from each skill group, {cfg.base_scenarios_per_experiment} total), "
+                    "each with Default / Opt 1 / Opt 2 / Opt 1+2."
+                )
             )
-        )
-        self.household_card._blurb.configure(
-            text=(
-                f"{len(household_names)} sampled kitchen / office tasks "
-                f"(1 easy + 1 hard, {cfg.household_scenarios_per_experiment} total)."
+        else:
+            self.base_card._blurb.configure(
+                text="Not part of this protocol (base_scenarios_per_experiment: 0)."
             )
-        )
+        if cfg.suite_enabled("household"):
+            self.household_card._blurb.configure(
+                text=(
+                    f"{len(household_names)} sampled kitchen / office tasks "
+                    f"(1 easy + 1 hard, {cfg.household_scenarios_per_experiment} total)."
+                )
+            )
+        else:
+            self.household_card._blurb.configure(
+                text="Not part of this protocol (household_scenarios_per_experiment: 0)."
+            )
         base_left = max(0, int(base_total) - int(counts["base_done"]))
         household_left = max(0, int(household_total) - int(counts["household_done"]))
         self.base_card._progress.configure(
@@ -736,10 +746,23 @@ class ExperimentLauncher(tk.Tk):
             self.household_card._button.configure(text="Review")
         else:
             self.household_card._button.configure(text="Open")
+        for suite, card in (("base", self.base_card), ("household", self.household_card)):
+            if cfg.suite_enabled(suite):
+                card._button.configure(state="normal")
+            else:
+                card._progress.configure(text="")
+                card._button.configure(state="disabled", text="Skipped")
 
     def _launch_suite(self, suite: str):
         if self.child is not None:
             messagebox.showinfo("Already open", "Close the task window before opening another suite.")
+            return
+        if not load_experiment_config().suite_enabled(suite):
+            messagebox.showinfo(
+                "Not in this protocol",
+                f"{suite}_scenarios_per_experiment is 0, so no tasks are assigned "
+                "for this suite.",
+            )
             return
         if self.user_data is None:
             self._show_screen("name")

@@ -117,6 +117,17 @@ def _as_positive_int(value, default: int) -> int:
     return number
 
 
+def _as_count_int(value, default: int) -> int:
+    """Like ``_as_positive_int`` but ``0`` is meaningful (skip that suite)."""
+    if value is None or value == "":
+        return int(default)
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    return max(0, number)
+
+
 def pick_lowest_count(pool: list[int], counts: dict[int, int], rng) -> int | None:
     """Choose uniformly among pool members that currently have the lowest count.
 
@@ -635,6 +646,15 @@ class ExperimentConfig:
             return ""
         return ",".join(str(seed) for seed in self.seeds)
 
+    def scenarios_per_experiment(self, suite: str) -> int:
+        if suite == "household":
+            return int(self.household_scenarios_per_experiment)
+        return int(self.base_scenarios_per_experiment)
+
+    def suite_enabled(self, suite: str) -> bool:
+        """False when ``*_scenarios_per_experiment`` is 0, i.e. skip this suite."""
+        return self.scenarios_per_experiment(suite) > 0
+
     def visible_indices(
         self,
         suite: str,
@@ -642,6 +662,8 @@ class ExperimentConfig:
         assigned: list[int] | None = None,
     ) -> list[int]:
         """0-based TASKS indices that should appear in the given suite GUI."""
+        if not self.suite_enabled(suite):
+            return []
         if assigned is not None:
             ones = assigned
         elif suite == "base":
@@ -820,19 +842,19 @@ def load_experiment_config(path: Path | None = None) -> ExperimentConfig:
         DEFAULT_HOUSEHOLD_TASK_CATEGORIES,
     )
     if "base_scenarios_per_experiment" in raw:
-        cfg.base_scenarios_per_experiment = _as_positive_int(
+        cfg.base_scenarios_per_experiment = _as_count_int(
             raw.get("base_scenarios_per_experiment"), 5
         )
     elif "base_tasks_per_experiment" in raw:
-        cfg.base_scenarios_per_experiment = _as_positive_int(
+        cfg.base_scenarios_per_experiment = _as_count_int(
             raw.get("base_tasks_per_experiment"), 5
         )
     if "household_scenarios_per_experiment" in raw:
-        cfg.household_scenarios_per_experiment = _as_positive_int(
+        cfg.household_scenarios_per_experiment = _as_count_int(
             raw.get("household_scenarios_per_experiment"), 2
         )
     elif "household_tasks_per_experiment" in raw:
-        cfg.household_scenarios_per_experiment = _as_positive_int(
+        cfg.household_scenarios_per_experiment = _as_count_int(
             raw.get("household_tasks_per_experiment"), 2
         )
     return cfg

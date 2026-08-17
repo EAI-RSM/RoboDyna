@@ -497,6 +497,8 @@ def _sample_suite(cfg, suite: str) -> tuple[list[int], list[dict[str, Any]]]:
         n = int(cfg.base_scenarios_per_experiment)
         fallback = list(cfg.base_tasks)
         counts = task_usage_counts("base")
+    if n <= 0:
+        return [], []
     picks = sample_category_assignment(
         categories=categories,
         eligible=eligible,
@@ -532,12 +534,12 @@ def _ensure_user_assignment(
     existing = load_assignment_file(path)
     if existing:
         changed = False
-        if not existing.get("base_tasks"):
+        if not existing.get("base_tasks") and cfg.suite_enabled("base"):
             tasks, picks = _sample_suite(cfg, "base")
             existing["base_tasks"] = tasks
             existing["base_picks"] = picks
             changed = True
-        if not existing.get("household_tasks"):
+        if not existing.get("household_tasks") and cfg.suite_enabled("household"):
             tasks, picks = _sample_suite(cfg, "household")
             existing["household_tasks"] = tasks
             existing["household_picks"] = picks
