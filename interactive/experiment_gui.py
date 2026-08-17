@@ -35,11 +35,11 @@ from experiment_logs import (  # noqa: E402
     EXPERIMENT_ENV,
     EXPERIMENT_LOG_ENV,
     EXPERIMENT_USER_ENV,
+    LOG_CONTROLLER_TAGS,
     POST_SURVEY_QUESTIONS,
     PRE_SURVEY_QUESTIONS,
     child_experiment_env,
     create_user,
-    delete_experiment_logs,
     ensure_controller_log,
     find_user,
     iter_user_controller_logs,
@@ -54,6 +54,16 @@ from experiment_logs import (  # noqa: E402
     survey_missing_prompts,
 )
 from household_task_gui import TASKS as HOUSEHOLD_TASKS  # noqa: E402
+from robodyna_gui import (  # noqa: E402
+    BASE_ACCENT,
+    BLURB_INK,
+    BRAND_BASE,
+    BRAND_HOUSEHOLD,
+    HEADING_INK,
+    HOUSEHOLD_ACCENT,
+    _hex,
+    _shade,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE_BG = GUI_PAGE_BG
@@ -62,11 +72,19 @@ CARD_BG = "#202c38"
 CARD_BORDER = "#405367"
 TEXT_PRIMARY = "#f4f8fb"
 TEXT_SECONDARY = "#aebdca"
-QUESTIONNAIRE_GREEN = "#2f9e6b"
-QUESTIONNAIRE_GREEN_ACTIVE = "#3cb87d"
-QUESTIONNAIRE_GREEN_BORDER = "#246f4c"
-QUESTIONNAIRE_GREEN_TEXT = "#f4fff8"
-QUESTIONNAIRE_GREEN_BLURB = "#e7f6ee"
+SURVEY_BG = "#ffffff"
+SURVEY_FG = "#1A1A1A"
+SURVEY_BORDER = "#d4d5db"
+SUITE_TITLE_FG = _hex(HEADING_INK)
+SUITE_BLURB_FG = _hex(BLURB_INK)
+BASE_CARD_BG = _hex(BASE_ACCENT)
+BASE_CARD_BORDER = _hex(_shade(BASE_ACCENT, 0.82))
+BASE_BUTTON_BG = _hex(BRAND_BASE)
+BASE_BUTTON_ACTIVE = _hex(_shade(BRAND_BASE, 1.12))
+HOUSEHOLD_CARD_BG = _hex(HOUSEHOLD_ACCENT)
+HOUSEHOLD_CARD_BORDER = _hex(_shade(HOUSEHOLD_ACCENT, 0.82))
+HOUSEHOLD_BUTTON_BG = _hex(BRAND_HOUSEHOLD)
+HOUSEHOLD_BUTTON_ACTIVE = _hex(_shade(BRAND_HOUSEHOLD, 1.12))
 
 CONTROLLER_DISPLAY = ("Robot", "Keyboard + mouse")
 CONTROLLER_MODE = {
@@ -138,15 +156,17 @@ class ExperimentLauncher(tk.Tk):
         text: str,
         watch_var=None,
         shape: str = "circle",
+        bg: str = SURVEY_BG,
+        fg: str = SURVEY_FG,
     ) -> tk.Frame:
         """Clickable choice with a large custom radio (circle) or checkbox (square)."""
-        wrap = tk.Frame(parent, bg=CARD_BG, cursor="hand2")
+        wrap = tk.Frame(parent, bg=bg, cursor="hand2")
         size = 28
         canvas = tk.Canvas(
             wrap,
             width=size,
             height=size,
-            bg=CARD_BG,
+            bg=bg,
             highlightthickness=0,
             bd=0,
             cursor="hand2",
@@ -155,10 +175,10 @@ class ExperimentLauncher(tk.Tk):
         label = tk.Label(
             wrap,
             text=text,
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-            activebackground=CARD_BG,
-            activeforeground=TEXT_PRIMARY,
+            bg=bg,
+            fg=fg,
+            activebackground=bg,
+            activeforeground=fg,
             font=("Sans", 16, "bold"),
             cursor="hand2",
         )
@@ -172,16 +192,16 @@ class ExperimentLauncher(tk.Tk):
             ring = max(2, outer // 12)
             box = (pad, pad, outer - pad, outer - pad)
             if shape == "square":
-                canvas.create_rectangle(*box, outline="#d7e4ef", width=ring)
+                canvas.create_rectangle(*box, outline=fg, width=ring)
             else:
-                canvas.create_oval(*box, outline="#d7e4ef", width=ring)
+                canvas.create_oval(*box, outline=fg, width=ring)
             if selected_fn():
                 inset = max(pad + ring + 1, outer // 4)
                 inner = (inset, inset, outer - inset, outer - inset)
                 if shape == "square":
-                    canvas.create_rectangle(*inner, fill=PLAY_BLUE, outline=PLAY_BLUE)
+                    canvas.create_rectangle(*inner, fill=fg, outline=fg)
                 else:
-                    canvas.create_oval(*inner, fill=PLAY_BLUE, outline=PLAY_BLUE)
+                    canvas.create_oval(*inner, fill=fg, outline=fg)
 
         def select(_event=None):
             select_fn()
@@ -207,11 +227,13 @@ class ExperimentLauncher(tk.Tk):
         )
         return card
 
-    def _header_with_exit(self, parent) -> tuple[tk.Frame, tk.Frame, RoundedButton]:
+    def _header_with_exit(
+        self, parent, *, bg: str = HEADER_BG, title_fg: str = GUI_INK
+    ) -> tuple[tk.Frame, tk.Frame, RoundedButton]:
         """Page header with an Exit button on the right (same chrome on every screen)."""
-        header = tk.Frame(parent, bg=HEADER_BG, highlightbackground="#d4d5db", highlightthickness=1)
+        header = tk.Frame(parent, bg=bg, highlightbackground="#d4d5db", highlightthickness=1)
         header.pack(fill="x", pady=(0, 16))
-        top = tk.Frame(header, bg=HEADER_BG)
+        top = tk.Frame(header, bg=bg)
         top.pack(fill="x")
         exit_button = RoundedButton(
             top,
@@ -225,8 +247,10 @@ class ExperimentLauncher(tk.Tk):
             radius=26,
         )
         exit_button.pack(side="right", padx=(8, 18), pady=14)
-        inner = tk.Frame(top, bg=HEADER_BG)
+        inner = tk.Frame(top, bg=bg)
         inner.pack(side="left", fill="x", expand=True, padx=24, pady=18)
+        inner._header_bg = bg
+        inner._header_fg = title_fg
         return header, inner, exit_button
 
     def _build_name_screen(self):
@@ -300,13 +324,13 @@ class ExperimentLauncher(tk.Tk):
         )
         self.name_status.pack(anchor="w", pady=(16, 0))
 
-    def _scrollable_card(self, parent):
-        card = self._card(parent)
-        body = tk.Frame(card, bg=CARD_BG)
+    def _scrollable_card(self, parent, *, bg: str = CARD_BG, border: str = CARD_BORDER):
+        card = self._card(parent, bg=bg, border=border)
+        body = tk.Frame(card, bg=bg)
         body.pack(fill="both", expand=True)
-        canvas = tk.Canvas(body, bg=CARD_BG, highlightthickness=0, bd=0)
+        canvas = tk.Canvas(body, bg=bg, highlightthickness=0, bd=0)
         scroll = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
-        inner = tk.Frame(canvas, bg=CARD_BG)
+        inner = tk.Frame(canvas, bg=bg)
         window = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=scroll.set)
 
@@ -320,7 +344,7 @@ class ExperimentLauncher(tk.Tk):
         canvas.bind("<Configure>", _canvas_cfg)
         canvas.pack(side="left", fill="both", expand=True, padx=(28, 0), pady=(24, 0))
         scroll.pack(side="right", fill="y", pady=(24, 0), padx=(0, 10))
-        footer = tk.Frame(card, bg=CARD_BG)
+        footer = tk.Frame(card, bg=bg)
         footer.pack(fill="x", padx=28, pady=(12, 24))
         return card, canvas, inner, footer
 
@@ -401,6 +425,8 @@ class ExperimentLauncher(tk.Tk):
                     text=text,
                     watch_var=watch,
                     shape="square",
+                    bg=SURVEY_BG,
+                    fg=SURVEY_FG,
                 )
             def selected_fn(current=value):
                 return var.get() == current
@@ -417,11 +443,13 @@ class ExperimentLauncher(tk.Tk):
                 text=text,
                 watch_var=watch,
                 shape="circle",
+                bg=SURVEY_BG,
+                fg=SURVEY_FG,
             )
 
         if layout == "stack":
             for value, text in choices:
-                row = tk.Frame(host, bg=CARD_BG)
+                row = tk.Frame(host, bg=SURVEY_BG)
                 row.pack(anchor="w", pady=(0, 8))
                 watch = var[value] if question.get("multi") else var
                 dot = add_dot(row, value, text, watch)
@@ -431,7 +459,7 @@ class ExperimentLauncher(tk.Tk):
         row = None
         for index, (value, text) in enumerate(choices):
             if row is None or index % 3 == 0:
-                row = tk.Frame(host, bg=CARD_BG)
+                row = tk.Frame(host, bg=SURVEY_BG)
                 row.pack(anchor="w", pady=(0, 8))
             watch = var[value] if question.get("multi") else var
             dot = add_dot(row, value, text, watch)
@@ -450,20 +478,20 @@ class ExperimentLauncher(tk.Tk):
                 form["vars"][question["key"]] = tk.StringVar(value="")
             else:
                 form["vars"][question["key"]] = self._make_question_var(question)
-            wrap = tk.Frame(inner, bg=CARD_BG)
+            wrap = tk.Frame(inner, bg=SURVEY_BG)
             wrap.pack(anchor="w", fill="x", pady=(0, 18))
             label = tk.Label(
                 wrap,
                 text=question["prompt"],
-                bg=CARD_BG,
-                fg=TEXT_PRIMARY,
+                bg=SURVEY_BG,
+                fg=SURVEY_FG,
                 anchor="w",
                 justify="left",
                 wraplength=760,
                 font=("Sans", 15, "bold"),
             )
             label.pack(anchor="w", pady=(0, 8))
-            host = tk.Frame(wrap, bg=CARD_BG)
+            host = tk.Frame(wrap, bg=SURVEY_BG)
             host.pack(anchor="w", fill="x")
             block = {
                 "question": question,
@@ -598,7 +626,9 @@ class ExperimentLauncher(tk.Tk):
         )
         self.exp_subtitle.pack(anchor="w", pady=(4, 0))
 
-        card, canvas, body, footer = self._scrollable_card(self.exp_screen)
+        card, canvas, body, footer = self._scrollable_card(
+            self.exp_screen, bg=SURVEY_BG, border=SURVEY_BORDER
+        )
         card.pack(fill="both", expand=True)
         self.exp_canvas = canvas
         self.pre_form = self._populate_survey(
@@ -644,7 +674,9 @@ class ExperimentLauncher(tk.Tk):
         )
         self.post_subtitle.pack(anchor="w", pady=(4, 0))
 
-        card, canvas, body, footer = self._scrollable_card(self.post_screen)
+        card, canvas, body, footer = self._scrollable_card(
+            self.post_screen, bg=SURVEY_BG, border=SURVEY_BORDER
+        )
         card.pack(fill="both", expand=True)
         self.post_canvas = canvas
         self.post_form = self._populate_survey(body, POST_SURVEY_QUESTIONS)
@@ -741,14 +773,14 @@ class ExperimentLauncher(tk.Tk):
             title="Post-experiment Questionnaire",
             blurb="Please fill in the questionnaire to share your experience about the experiment.",
             command=self._open_questionnaire,
-            bg=QUESTIONNAIRE_GREEN,
-            border=QUESTIONNAIRE_GREEN_BORDER,
-            title_fg=QUESTIONNAIRE_GREEN_TEXT,
-            blurb_fg=QUESTIONNAIRE_GREEN_BLURB,
             button_text="Start",
-            button_bg="#1f6b48",
-            button_active="#26855a",
+            button_bg=LOCKED_GRAY,
+            button_active=LOCKED_GRAY,
             show_progress=False,
+        )
+        self.questionnaire_card._button.configure(
+            state="disabled",
+            disabledbackground=LOCKED_GRAY,
         )
         self.questionnaire_card.pack(fill="x", pady=(0, 12))
         self.base_card = self._suite_card(
@@ -756,6 +788,13 @@ class ExperimentLauncher(tk.Tk):
             title="Base Tasks",
             blurb="Dynamic table tasks with Default / Opt 1 / Opt 2 / Opt 1+2.",
             command=lambda: self._launch_suite("base"),
+            bg=BASE_CARD_BG,
+            border=BASE_CARD_BORDER,
+            title_fg=SUITE_TITLE_FG,
+            blurb_fg=SUITE_BLURB_FG,
+            button_bg=BASE_BUTTON_BG,
+            button_active=BASE_BUTTON_ACTIVE,
+            progress_fg=BASE_BUTTON_BG,
         )
         self.base_card.pack(fill="x", pady=(0, 12))
         self.household_card = self._suite_card(
@@ -763,6 +802,13 @@ class ExperimentLauncher(tk.Tk):
             title="Household Tasks",
             blurb="Kitchen / office tasks with per-episode randomization.",
             command=lambda: self._launch_suite("household"),
+            bg=HOUSEHOLD_CARD_BG,
+            border=HOUSEHOLD_CARD_BORDER,
+            title_fg=SUITE_TITLE_FG,
+            blurb_fg=SUITE_BLURB_FG,
+            button_bg=HOUSEHOLD_BUTTON_BG,
+            button_active=HOUSEHOLD_BUTTON_ACTIVE,
+            progress_fg=HOUSEHOLD_BUTTON_BG,
         )
         self.household_card.pack(fill="x")
         self.switch_user = tk.Button(
@@ -778,21 +824,7 @@ class ExperimentLauncher(tk.Tk):
             font=("Sans", 12, "underline"),
             cursor="hand2",
         )
-        self.switch_user.pack(anchor="w", pady=(14, 0))
-        self.delete_logs = tk.Button(
-            inner,
-            text="Delete this participant's logs",
-            command=self._delete_current_logs,
-            bg=PAGE_BG,
-            fg=GUI_MUTED,
-            activebackground=PAGE_BG,
-            activeforeground=GUI_INK,
-            bd=0,
-            highlightthickness=0,
-            font=("Sans", 12, "underline"),
-            cursor="hand2",
-        )
-        self.delete_logs.pack(anchor="w", pady=(6, 8))
+        self.switch_user.pack(anchor="w", pady=(14, 8))
 
     def _suite_card(
         self,
@@ -809,6 +841,7 @@ class ExperimentLauncher(tk.Tk):
         button_bg: str = PLAY_BLUE,
         button_active: str = PLAY_BLUE_ACTIVE,
         show_progress: bool = True,
+        progress_fg: str = "#7fb6dc",
     ) -> tk.Frame:
         card = self._card(parent, bg=bg, border=border)
         pad = tk.Frame(card, bg=bg)
@@ -839,7 +872,7 @@ class ExperimentLauncher(tk.Tk):
                 pad,
                 text="",
                 bg=bg,
-                fg="#7fb6dc",
+                fg=progress_fg,
                 anchor="w",
                 font=("Sans", 13, "bold"),
             )
@@ -1112,14 +1145,23 @@ class ExperimentLauncher(tk.Tk):
             for _tag, _path, log in logs
         )
 
+    def _both_controllers_complete(self) -> bool:
+        """True only after every assigned slot is done on robot and keyboard+mouse."""
+        if self.user_data is None:
+            return False
+        slug = str(self.user_data.get("user_id") or "")
+        if not slug:
+            return False
+        logs = {tag: log for tag, _path, log in iter_user_controller_logs(slug)}
+        return all(
+            tag in logs and self._protocol_complete(logs[tag])
+            for tag in LOG_CONTROLLER_TAGS
+        )
+
     def _should_collect_post(self) -> bool:
         if self.user_data is None or self._post_saved():
             return False
-        slug = str(self.user_data.get("user_id") or "")
-        logs = list(iter_user_controller_logs(slug)) if slug else []
-        if not logs:
-            return self._protocol_complete(self.user_data)
-        return all(self._protocol_complete(log) for _tag, _path, log in logs)
+        return self._both_controllers_complete()
 
     def _refresh_suite_progress(self):
         if self.user_data:
@@ -1203,9 +1245,14 @@ class ExperimentLauncher(tk.Tk):
             self.household_card._button.configure(text="Review")
         else:
             self.household_card._button.configure(text="Open")
+        brand = {
+            "base": (BASE_BUTTON_BG, BASE_BUTTON_ACTIVE),
+            "household": (HOUSEHOLD_BUTTON_BG, HOUSEHOLD_BUTTON_ACTIVE),
+        }
         for suite, card in (("base", self.base_card), ("household", self.household_card)):
             if cfg.suite_enabled(suite):
-                card._button.configure(state="normal")
+                bg, active = brand[suite]
+                card._button.configure(state="normal", bg=bg, activebackground=active)
             else:
                 card._progress.configure(text="")
                 card._button.configure(state="disabled", text="Skipped")
@@ -1273,28 +1320,6 @@ class ExperimentLauncher(tk.Tk):
         self.name_entry.delete(0, "end")
         self.name_status.configure(text="")
         self._show_screen("name")
-
-    def _delete_current_logs(self):
-        if self.child is not None:
-            messagebox.showinfo("Task still running", "Close the task window before deleting logs.")
-            return
-        data = self.user_data or {}
-        display = str(data.get("user_name") or data.get("user_id") or "").strip()
-        slug = str(data.get("user_id") or slugify_user_name(display))
-        if not slug:
-            return
-        ok = messagebox.askyesno(
-            "Delete this participant's logs?",
-            (
-                f"This permanently deletes data/exp_logs/{slug}/ including "
-                "plays and the sampled task assignment. Usage counts for those "
-                "tasks will drop so they can be sampled again."
-            ),
-        )
-        if not ok:
-            return
-        delete_experiment_logs(slug)
-        self._switch_user()
 
     def _on_root_configure(self, event):
         if event.widget is not self:
@@ -1366,7 +1391,6 @@ class ExperimentLauncher(tk.Tk):
                 card._progress.configure(font=font(13, "bold"))
             card._button.configure(font=font(16, "bold"), width=px(180), height=px(60), radius=px(26))
         self.switch_user.configure(font=font(12, "underline"))
-        self.delete_logs.configure(font=font(12, "underline"))
         if getattr(self, "suite_canvas", None) is not None:
             self.suite_canvas.configure(scrollregion=self.suite_canvas.bbox("all"))
 
@@ -1385,43 +1409,45 @@ class ExperimentLauncher(tk.Tk):
         finally:
             self.child = None
 
+    def _lock_questionnaire_card(self, card):
+        self._style_suite_card(
+            card,
+            bg=CARD_BG,
+            border=CARD_BORDER,
+            title_fg=TEXT_PRIMARY,
+            blurb_fg=TEXT_SECONDARY,
+        )
+        card._button.configure(
+            text="Start",
+            state="disabled",
+            bg=LOCKED_GRAY,
+            activebackground=LOCKED_GRAY,
+            disabledbackground=LOCKED_GRAY,
+        )
+
     def _refresh_questionnaire_card(self):
         card = getattr(self, "questionnaire_card", None)
         if card is None:
             return
-        done = bool(self.user_data) and self._post_saved()
-        if done:
-            self._style_suite_card(
-                card,
-                bg=CARD_BG,
-                border=CARD_BORDER,
-                title_fg=TEXT_PRIMARY,
-                blurb_fg=TEXT_SECONDARY,
-            )
-            card._button.configure(
-                text="Start",
-                state="disabled",
-                bg=LOCKED_GRAY,
-                activebackground=LOCKED_GRAY,
-                disabledbackground=LOCKED_GRAY,
-            )
+        if not self._should_collect_post():
+            self._lock_questionnaire_card(card)
             return
         self._style_suite_card(
             card,
-            bg=QUESTIONNAIRE_GREEN,
-            border=QUESTIONNAIRE_GREEN_BORDER,
-            title_fg=QUESTIONNAIRE_GREEN_TEXT,
-            blurb_fg=QUESTIONNAIRE_GREEN_BLURB,
+            bg=SURVEY_BG,
+            border=SURVEY_BORDER,
+            title_fg=SURVEY_FG,
+            blurb_fg=SURVEY_FG,
         )
         card._button.configure(
             text="Start",
             state="normal",
-            bg="#1f6b48",
-            activebackground="#26855a",
+            bg=SURVEY_FG,
+            activebackground="#333333",
         )
 
     def _open_questionnaire(self):
-        if self._post_saved():
+        if not self._should_collect_post():
             return
         if self.child is not None:
             messagebox.showinfo(
