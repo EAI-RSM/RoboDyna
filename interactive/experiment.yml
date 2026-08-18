@@ -14,6 +14,20 @@
 #   null        → a new random seed every play
 #   0           → the same seed every play
 #   [0, 1, 2]   → 1st SUCCESS/FAILURE play uses 0, 2nd uses 1, 3rd uses 2, then wraps
+#
+# Per-scenario / per-task map (same shape as plays_per_scenario). More specific
+# keys win: task+opt → task → suite+opt → global opt → suite → global default.
+#   seed:
+#     all: 0
+#     default: 0
+#     opt1: [1, 2]
+#     opt1+2: 5
+#     household: 10
+#     base:
+#       1: {opt1+2: 42}
+#       catch_ramp_ball: {opt1: [8, 9]}
+#     household:
+#       9: [11, 12]
 seed: null
 
 # ---------------------------------------------------------------------------

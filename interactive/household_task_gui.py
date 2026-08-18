@@ -1594,19 +1594,25 @@ class HouseholdTaskLauncher(tk.Tk):
         self._refresh_tutorial_mode()
 
     def _resolve_launch_seed(self, suite: str, task: str, scenario: str | None = None) -> int:
-        """Protocol seed list/int, else the (locked) seed field / random."""
+        """Protocol seed list/int (global or per-slot), else the seed field / random."""
         if experiment_mode():
             cfg = self._experiment_cfg or load_experiment_config()
             self._experiment_cfg = cfg
-            if cfg.seeds:
-                if suite == "tutorial":
-                    index = int(getattr(self, "_tutorial_seed_index", 0) or 0)
-                    self._tutorial_seed_index = index + 1
-                else:
-                    index = terminal_play_count(suite, task, scenario)
-                picked = cfg.pick_seed(play_index=index)
-                if picked is not None:
-                    return picked
+            if suite == "tutorial":
+                index = int(getattr(self, "_tutorial_seed_index", 0) or 0)
+                self._tutorial_seed_index = index + 1
+            else:
+                index = terminal_play_count(suite, task, scenario)
+            picked = cfg.pick_seed(
+                play_index=index,
+                suite=suite,
+                task=task,
+                scenario=scenario,
+            )
+            if picked is not None:
+                return picked
+            # Protocol null / empty for this slot → random (ignore locked field text).
+            return secrets.randbelow(RANDOM_SEED_MAX + 1)
         return resolve_seed(self.seed_entry.get())
 
     def _apply_experiment_protocol(self):

@@ -596,12 +596,82 @@ def parse_int_policy(raw, default: int | None = 1) -> SlotPolicy:
     return SlotPolicy(default=_as_play_limit(raw), bool_mode=False)
 
 
+def _ingest_seed_task(policy: SlotPolicy, suite: str, task: str, spec) -> None:
+    if isinstance(spec, dict):
+        for raw_scenario, raw_value in spec.items():
+            scenario = _normalize_scenario(raw_scenario)
+            if scenario:
+                policy.slot[(suite, task, scenario)] = _as_seeds(raw_value)
+        return
+    policy.task[(suite, task)] = _as_seeds(spec)
+
+
+def _ingest_seed_suite(policy: SlotPolicy, suite: str, spec) -> None:
+    if isinstance(spec, dict):
+        for raw_key, raw_value in spec.items():
+            scenario = _normalize_scenario(raw_key)
+            task = resolve_task_name(suite, raw_key)
+            if scenario and not task:
+                if isinstance(raw_value, dict):
+                    continue
+                policy.suite_scenario[(suite, scenario)] = _as_seeds(raw_value)
+                continue
+            if task:
+                _ingest_seed_task(policy, suite, task, raw_value)
+        return
+    policy.suite[suite] = _as_seeds(spec)
+
+
+def parse_seed_policy(raw) -> SlotPolicy:
+    """Parse seed ``null`` / int / list, or a per-suite / per-task / per-opt map.
+
+    Values are seed lists (empty → random each play). Map form mirrors
+    ``plays_per_scenario``::
+
+        seed: 0
+        seed: [0, 1, 2]
+        seed:
+          default: 0
+          opt1: [1, 2]
+          opt1+2: 5
+          household: 10
+          base:
+            1: {opt1+2: [3, 4]}   # task 01 Opt 1+2 only
+            2: 7                  # task 02, every scenario
+    """
+    if _is_policy_map(raw):
+        has_opts = _top_level_has_opt_keys(raw)
+        if "all" in raw:
+            fallback = _as_seeds(raw.get("all"))
+        elif "default" in raw and not has_opts:
+            fallback = _as_seeds(raw.get("default"))
+        else:
+            fallback = []
+        policy = SlotPolicy(default=fallback, bool_mode=False, missing_slot=[])
+        for key, value in raw.items():
+            text = str(key or "").strip().lower()
+            if text in ("all",):
+                continue
+            if text in ("base", "household"):
+                _ingest_seed_suite(policy, text, value)
+                continue
+            scenario = _normalize_scenario(key)
+            if scenario is None:
+                continue
+            if text == "default" and not has_opts and "all" not in raw:
+                continue
+            policy.scenario_kind[scenario] = _as_seeds(value)
+        return policy
+    return SlotPolicy(default=_as_seeds(raw), bool_mode=False, missing_slot=[])
+
+
 @dataclass
 class ExperimentConfig:
     record_data_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(False))
     save_video_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(False))
     log_plays_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(True))
     plays_policy: SlotPolicy = field(default_factory=lambda: parse_int_policy(1))
+    seed_policy: SlotPolicy = field(default_factory=lambda: parse_seed_policy(None))
     seeds: list[int] = field(default_factory=list)
     base_tasks: list[int] = field(default_factory=lambda: list(DEFAULT_BASE_TASKS))
     household_tasks: list[int] = field(default_factory=lambda: list(DEFAULT_HOUSEHOLD_TASKS))
@@ -626,25 +696,54 @@ class ExperimentConfig:
 
     @property
     def seed(self) -> int | None:
-        """Single fixed seed, or None when random / a list is used."""
+        """Single fixed global seed, or None when random / a list / map is used."""
         if len(self.seeds) == 1:
             return self.seeds[0]
         return None
 
-    def pick_seed(self, play_index: int = 0) -> int | None:
+    def seeds_for(
+        self,
+        suite: str | None = None,
+        task: str | None = None,
+        scenario: str | None = None,
+    ) -> list[int]:
+        """Resolved seed list for a slot (empty → random each play)."""
+        if suite and task:
+            resolved = self.seed_policy.resolve(suite, task, scenario)
+            if isinstance(resolved, list):
+                return list(resolved)
+            return _as_seeds(resolved)
+        return list(self.seeds)
+
+    def pick_seed(
+        self,
+        play_index: int = 0,
+        suite: str | None = None,
+        task: str | None = None,
+        scenario: str | None = None,
+    ) -> int | None:
         """Seed for this play, or None to randomize.
 
         A list is consumed in order and wraps: play 0 → seeds[0], play 1 → seeds[1], …
+        When ``suite``/``task`` are set, per-slot overrides win over the global list.
         """
-        if not self.seeds:
+        seeds = self.seeds_for(suite, task, scenario)
+        if not seeds:
             return None
         index = max(0, int(play_index))
-        return self.seeds[index % len(self.seeds)]
+        return seeds[index % len(seeds)]
 
-    def seed_display(self) -> str:
-        if not self.seeds:
+    def seed_display(
+        self,
+        suite: str | None = None,
+        task: str | None = None,
+        scenario: str | None = None,
+    ) -> str:
+        """Comma-joined seeds for the locked GUI field (global, or a specific slot)."""
+        seeds = self.seeds_for(suite, task, scenario) if suite and task else self.seeds
+        if not seeds:
             return ""
-        return ",".join(str(seed) for seed in self.seeds)
+        return ",".join(str(seed) for seed in seeds)
 
     def scenarios_per_experiment(self, suite: str) -> int:
         if suite == "household":
@@ -831,7 +930,8 @@ def load_experiment_config(path: Path | None = None) -> ExperimentConfig:
     cfg.log_plays_policy = parse_bool_policy(log_raw, True)
     if "plays_per_scenario" in raw:
         cfg.plays_policy = parse_int_policy(raw.get("plays_per_scenario"), 1)
-    cfg.seeds = _as_seeds(raw.get("seed"))
+    cfg.seed_policy = parse_seed_policy(raw.get("seed"))
+    cfg.seeds = list(cfg.seed_policy.default or [])
     if "base_tasks" in raw:
         cfg.base_tasks = _as_int_list(raw.get("base_tasks"), DEFAULT_BASE_TASKS)
     if "household_tasks" in raw:
