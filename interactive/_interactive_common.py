@@ -814,14 +814,26 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
             entry["seed"] = seed
             entry["success"] = bool(success)
             entry["source"] = "interactive"
-            entry["scenario"] = (
-                os.environ.get("ROBODYNA_SCENARIO")
-                or "default"
+            option = (
+                os.environ.get("ROBODYNA_SCENARIO", "").strip()
+                or str(getattr(env, "interactive_scenario", None) or "").strip()
+                or _resolve_catalog_option_label(env)
             )
+            entry["scenario"] = option or "default"
+            if option:
+                # Base catalog tag (default / opt1 / opt2 / opt1+2).
+                entry["option_label"] = option
+            timing = _frozen_episode_timing(env)
+            entry["total_time_sim_s"] = timing.get("total_time_sim_s")
+            entry["wall_s"] = timing.get("wall_s")
+            entry["steps"] = timing.get("steps")
             entry["frames"] = n_frames
+            extras = getattr(env, "_last_result_extras", None)
+            if isinstance(extras, dict) and isinstance(extras.get("metrics"), dict):
+                entry["metrics"] = dict(extras["metrics"])
             info_db[f"episode_{ep_num}"] = entry
             Path(info_path).write_text(
-                json.dumps(info_db, ensure_ascii=False, indent=4),
+                json.dumps(info_db, ensure_ascii=False, indent=4, default=_json_safe),
                 encoding="utf-8",
             )
         except Exception as exc:
@@ -1209,10 +1221,61 @@ def experiment_session_enabled() -> bool:
     return flag in ("1", "true", "yes", "on")
 
 
-def maybe_attach_experiment_metrics(env) -> None:
-    """Count sim steps / wall time and attach EvalMetricsTracker in experiment mode."""
-    if not experiment_session_enabled():
-        return
+def _resolve_catalog_option_label(env) -> str | None:
+    """Base suite catalog tag: ``default`` / ``opt1`` / ``opt2`` / ``opt1+2``."""
+    scenario = (
+        os.environ.get("ROBODYNA_SCENARIO", "").strip()
+        or str(getattr(env, "interactive_scenario", None) or "").strip()
+    )
+    return scenario or None
+
+
+def _compute_episode_timing(env) -> dict:
+    """Live timing snapshot: total_time_sim_s / wall_s / steps."""
+    steps = int(getattr(env, "_exp_sim_steps", 0) or 0)
+    dt = None
+    try:
+        dt = float(env.scene.get_timestep())
+    except Exception:
+        dt = None
+    wall_start = getattr(env, "_exp_wall_start", None)
+    wall_s = (time.perf_counter() - wall_start) if wall_start else None
+    sim_s = None if dt is None else round(steps * float(dt), 6)
+    return {
+        "total_time_sim_s": sim_s,
+        "wall_s": None if wall_s is None else round(float(wall_s), 4),
+        "steps": steps,
+    }
+
+
+def _frozen_episode_timing(env) -> dict:
+    """Timing frozen at first ``report_task_result`` (or live if not reported yet)."""
+    cached = getattr(env, "_last_episode_timing", None)
+    if isinstance(cached, dict) and "steps" in cached:
+        return dict(cached)
+    timing = _compute_episode_timing(env)
+    env._last_episode_timing = dict(timing)
+    return dict(timing)
+
+
+def _timing_payload(timing: dict) -> dict:
+    """Canonical timing keys plus legacy aliases for older log readers."""
+    sim_s = timing.get("total_time_sim_s")
+    wall_s = timing.get("wall_s")
+    steps = timing.get("steps")
+    return {
+        "total_time_sim_s": sim_s,
+        "wall_s": wall_s,
+        "steps": steps,
+        # Legacy aliases
+        "wall_clock_s": wall_s,
+        "simulation_s": sim_s,
+        "simulation_steps": steps,
+    }
+
+
+def maybe_attach_episode_timing(env) -> None:
+    """Count sim steps / wall time for every interactive episode."""
     if getattr(env, "_exp_timing_installed", False):
         return
     scene = getattr(env, "scene", None)
@@ -1223,10 +1286,10 @@ def maybe_attach_experiment_metrics(env) -> None:
     env._exp_sim_steps = 0
     orig_step = scene.step
 
-    def _step_and_count():
+    def _step_and_count(*args, **kwargs):
         if getattr(env, "_exp_wall_start", None) is None:
             env._exp_wall_start = time.perf_counter()
-        orig_step()
+        result = orig_step(*args, **kwargs)
         env._exp_sim_steps = int(getattr(env, "_exp_sim_steps", 0) or 0) + 1
         tracker = getattr(env, "_metrics_tracker", None)
         if tracker is not None and int(env._exp_sim_steps) % 10 == 0:
@@ -1234,13 +1297,19 @@ def maybe_attach_experiment_metrics(env) -> None:
                 tracker.on_step()
             except Exception:
                 pass
+        return result
 
     try:
         scene.step = _step_and_count
     except Exception:
         env._exp_timing_installed = False
-        return
 
+
+def maybe_attach_experiment_metrics(env) -> None:
+    """Install episode timing; attach EvalMetricsTracker in experiment mode."""
+    maybe_attach_episode_timing(env)
+    if not experiment_session_enabled():
+        return
     if getattr(env, "_metrics_tracker", None) is not None:
         return
     try:
@@ -1272,9 +1341,13 @@ def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
             metrics["seed"] = int(seed_raw)
         except ValueError:
             metrics["seed"] = seed_raw
-    scenario = os.environ.get("ROBODYNA_SCENARIO", "").strip()
-    if scenario:
-        metrics["option_label"] = scenario
+    option = _resolve_catalog_option_label(env)
+    if option:
+        metrics["option_label"] = option
+    timing = _frozen_episode_timing(env)
+    metrics["total_time_sim_s"] = timing.get("total_time_sim_s")
+    metrics["wall_s"] = timing.get("wall_s")
+    metrics["steps"] = timing.get("steps")
     tracker = getattr(env, "_metrics_tracker", None)
     if tracker is not None:
         try:
@@ -1329,24 +1402,16 @@ def _interactive_result_extras(env, ok: bool | None, detail: str | None) -> dict
             extras["seed"] = int(seed_raw)
         except ValueError:
             extras["seed"] = seed_raw
-    scenario = os.environ.get("ROBODYNA_SCENARIO", "").strip()
-    if scenario:
-        extras["scenario"] = scenario
+    option = _resolve_catalog_option_label(env)
+    if option:
+        extras["scenario"] = option
+        extras["option_label"] = option
 
-    steps = int(getattr(env, "_exp_sim_steps", 0) or 0)
-    dt = None
-    try:
-        dt = float(env.scene.get_timestep())
-    except Exception:
-        dt = None
-    wall_start = getattr(env, "_exp_wall_start", None)
-    wall_s = (time.perf_counter() - wall_start) if wall_start else None
-    extras["time"] = {
-        "wall_clock_s": None if wall_s is None else round(float(wall_s), 4),
-        "simulation_s": None if dt is None else round(steps * dt, 6),
-        "simulation_steps": steps,
-    }
+    # Freeze timing at metric-build / report time (not after the post-success hold).
+    timing = _frozen_episode_timing(env)
+    extras["time"] = _timing_payload(timing)
     extras["metrics"] = _collect_episode_metrics(env, ok, detail)
+    env._last_result_extras = extras
     return extras
 
 

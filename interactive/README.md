@@ -28,8 +28,9 @@ Each `user.json` stores:
   - task, suite, scenario (base only)
   - controller (`keyboard` or `robot`)
   - seed, result (`SUCCESS` / `FAILURE` / `closed` / `stopped` / `error`)
-  - metrics (success, manipulation score, route completion, penalties, …)
-  - time: `wall_clock_s`, `simulation_s`, `simulation_steps`
+  - metrics (success, total_time_sim_s, wall_s, steps, option_label for base, manipulation score, …)
+  - time: `total_time_sim_s`, `wall_s`, `steps` (legacy aliases `wall_clock_s` / `simulation_s` / `simulation_steps` still written)
+  - `option_label` / `scenario` — base catalog tag (`default` / `opt1` / `opt2` / `opt1+2`)
 
 A task/scenario is locked (gray, not selectable) only after a terminal **SUCCESS** or **FAILURE**. Closing the viewer early or pressing Stop does not consume the slot, so the participant can retry.
 

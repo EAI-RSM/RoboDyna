@@ -1152,16 +1152,39 @@ def append_play(
         result = "FAILURE"
 
     time_block = payload.get("time") if isinstance(payload.get("time"), dict) else {}
-    wall = time_block.get("wall_clock_s")
+    wall = time_block.get("wall_s")
+    if wall is None:
+        wall = time_block.get("wall_clock_s")
     if wall is None and wall_fallback_s is not None:
         wall = round(float(wall_fallback_s), 4)
         time_block = dict(time_block)
+        time_block["wall_s"] = wall
         time_block["wall_clock_s"] = wall
 
+    sim_s = time_block.get("total_time_sim_s")
+    if sim_s is None:
+        sim_s = time_block.get("simulation_s")
+    steps = time_block.get("steps")
+    if steps is None:
+        steps = time_block.get("simulation_steps")
+
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    metrics = dict(metrics)
     if "success" not in metrics and payload.get("ok") is not None:
-        metrics = dict(metrics)
         metrics["success"] = bool(payload.get("ok"))
+    if metrics.get("total_time_sim_s") is None and sim_s is not None:
+        metrics["total_time_sim_s"] = sim_s
+    if metrics.get("wall_s") is None and wall is not None:
+        metrics["wall_s"] = wall
+    if metrics.get("steps") is None and steps is not None:
+        metrics["steps"] = steps
+    option = (
+        payload.get("option_label")
+        or metrics.get("option_label")
+        or (scenario if suite == "base" else None)
+    )
+    if option and not metrics.get("option_label"):
+        metrics["option_label"] = option
 
     entry = {
         "played_at": iso_now(),
@@ -1169,6 +1192,7 @@ def append_play(
         "task": task,
         "task_label": task_label or task,
         "scenario": scenario,
+        "option_label": option if suite == "base" else (option or None),
         "controller": controller or payload.get("controller") or "",
         "seed": seed if seed is not None else payload.get("seed"),
         "result": result,
@@ -1177,9 +1201,13 @@ def append_play(
         "exit_code": exit_code,
         "metrics": metrics,
         "time": {
-            "wall_clock_s": time_block.get("wall_clock_s"),
-            "simulation_s": time_block.get("simulation_s"),
-            "simulation_steps": time_block.get("simulation_steps"),
+            "total_time_sim_s": sim_s if sim_s is not None else metrics.get("total_time_sim_s"),
+            "wall_s": wall if wall is not None else metrics.get("wall_s"),
+            "steps": steps if steps is not None else metrics.get("steps"),
+            # Legacy aliases
+            "wall_clock_s": wall if wall is not None else metrics.get("wall_s"),
+            "simulation_s": sim_s if sim_s is not None else metrics.get("total_time_sim_s"),
+            "simulation_steps": steps if steps is not None else metrics.get("steps"),
         },
     }
     counted = False
