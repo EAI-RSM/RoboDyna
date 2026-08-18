@@ -96,7 +96,7 @@ plays_per_scenario:
   opt1: 1
   opt2: 1
   Opt1+2: 5
-  household: 5
+  household: 10
 
 # Write terminal plays to data/exp_logs/<user>/user.json
 # true / false = all or none. Same map form as plays_per_scenario, e.g.
