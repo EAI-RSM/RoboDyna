@@ -16,7 +16,7 @@ import sys
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import font as tkfont, messagebox
+from tkinter import font as tkfont, messagebox, ttk
 
 from PIL import Image, ImageTk
 
@@ -279,6 +279,13 @@ SUITES = (
 
 class RoboDynaLauncher(tk.Tk):
     DESIGN_SIZE = (1680, 1040)
+    # Small screens can go below the design size; the page then scrolls.
+    MIN_SIZE = (900, 560)
+    # Room left for window decorations / desktop panels when sizing to the screen.
+    SCREEN_MARGIN = (80, 120)
+    # Overflow this small is layout rounding, not cut-off content, so it must not
+    # pop a scrollbar at the design size.
+    SCROLL_SLACK = 8
     UI_SCALE_MIN = 0.6
     UI_SCALE_MAX = 1.15
     # Base logo bar is 160px in the suite GUIs; the hub shows it 30% larger.
@@ -298,8 +305,9 @@ class RoboDynaLauncher(tk.Tk):
     def __init__(self):
         super().__init__(className=GUI_WM_CLASS["gui"])
         self.title("RoboDyna")
-        self.geometry("1680x1040")
-        self.minsize(1080, 760)
+        start_width, start_height = self._startup_size()
+        self.geometry(f"{start_width}x{start_height}")
+        self.minsize(*self.MIN_SIZE)
         self.configure(bg=PAGE_BG)
         setup_gui_app_icon(self, suite="gui", script_path=Path(__file__))
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
@@ -312,6 +320,7 @@ class RoboDynaLauncher(tk.Tk):
         self._about_fit_job: str | None = None
         self._about_fit_key: tuple[int, int] | None = None
         self._about_family = self._resolve_about_family()
+        self._page_size: tuple[int, int] | None = None
 
         self._sources = {
             "base": _base_snapshots(),
@@ -319,7 +328,9 @@ class RoboDynaLauncher(tk.Tk):
             "experiment": _experiment_snapshots(random.Random()),
         }
 
-        top = tk.Frame(self, bg=PAGE_BG)
+        self._build_scroll_host()
+
+        top = tk.Frame(self.page, bg=PAGE_BG)
         top.pack(fill="x", padx=self.OUTER_PAD, pady=(16, 0))
         self.exit_button = RoundedButton(
             top,
@@ -337,7 +348,7 @@ class RoboDynaLauncher(tk.Tk):
         self.logo_label.pack(anchor="center", pady=(0, 4))
         apply_gui_logo(self.logo_label, height=self.LOGO_HEIGHT)
 
-        self.body = tk.Frame(self, bg=PAGE_BG)
+        self.body = tk.Frame(self.page, bg=PAGE_BG)
         self.body.pack(fill="both", expand=True, padx=self.OUTER_PAD, pady=(8, self.OUTER_PAD))
         for column in range(len(SUITES)):
             self.body.columnconfigure(column, weight=1, uniform="suite")
@@ -375,6 +386,95 @@ class RoboDynaLauncher(tk.Tk):
         self.bind("<Configure>", self._on_root_configure)
         self.after(0, self._apply_ui_scale)
         self.after(250, self._poll_child)
+        self.after(250, self._poll_layout)
+
+    def _startup_size(self) -> tuple[int, int]:
+        """Design size, capped to what the current screen can actually show."""
+        available = (
+            self.winfo_screenwidth() - self.SCREEN_MARGIN[0],
+            self.winfo_screenheight() - self.SCREEN_MARGIN[1],
+        )
+        return tuple(
+            max(smallest, min(design, room))
+            for design, room, smallest in zip(self.DESIGN_SIZE, available, self.MIN_SIZE)
+        )
+
+    def _build_scroll_host(self):
+        """Host the whole page in a canvas so a cut-off layout can be scrolled."""
+        host = tk.Frame(self, bg=PAGE_BG)
+        host.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(host, bg=PAGE_BG, highlightthickness=0, bd=0)
+        self.scrollbar = ttk.Scrollbar(host, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self._on_scroll_set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.page = tk.Frame(self.canvas, bg=PAGE_BG)
+        self.page_window = self.canvas.create_window((0, 0), window=self.page, anchor="nw")
+        self.page.bind("<Configure>", lambda _event: self._sync_page_window())
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
+        self.canvas.bind_all("<Button-4>", lambda _event: self.canvas.yview_scroll(-3, "units"))
+        self.canvas.bind_all("<Button-5>", lambda _event: self.canvas.yview_scroll(3, "units"))
+        self.bind("<Up>", lambda _event: self.canvas.yview_scroll(-3, "units"))
+        self.bind("<Down>", lambda _event: self.canvas.yview_scroll(3, "units"))
+        self.bind("<Prior>", lambda _event: self.canvas.yview_scroll(-1, "pages"))
+        self.bind("<Next>", lambda _event: self.canvas.yview_scroll(1, "pages"))
+        self.bind("<Home>", lambda _event: self.canvas.yview_moveto(0.0))
+        self.bind("<End>", lambda _event: self.canvas.yview_moveto(1.0))
+
+    def _on_scroll_set(self, first: str, last: str):
+        """Keep the scrollbar hidden unless the page really is taller than the view."""
+        self.scrollbar.set(first, last)
+        overflowing = float(first) > 0.0 or float(last) < 1.0
+        mapped = bool(self.scrollbar.winfo_ismapped())
+        if overflowing and not mapped:
+            self.scrollbar.pack(side="right", fill="y")
+        elif not overflowing and mapped:
+            self.scrollbar.pack_forget()
+
+    def _on_canvas_configure(self, event):
+        # A new viewport means a new scroll extent; start from the top so the logo
+        # and card headings are never left scrolled away by a plain resize.
+        self._sync_page_window(event.width, event.height, reset_view=True)
+
+    def _sync_page_window(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        *,
+        reset_view: bool = False,
+    ):
+        """Match the page to the viewport, but never below its natural height.
+
+        Stretching to the viewport keeps the ``expand`` based card / About
+        alignment identical to an unscrolled window; the natural height floor is
+        what makes the leftover content reachable on a small screen.
+        """
+        width = self.canvas.winfo_width() if width is None else width
+        height = self.canvas.winfo_height() if height is None else height
+        height = max(1, int(height))
+        natural = self.page.winfo_reqheight()
+        page_height = natural if natural > height + self.SCROLL_SLACK else height
+        size = (max(1, int(width)), page_height)
+        if size != self._page_size:
+            self._page_size = size
+            self.canvas.itemconfigure(self.page_window, width=size[0], height=size[1])
+        self.canvas.configure(scrollregion=(0, 0, size[0], page_height))
+        if reset_view or page_height <= height:
+            self.canvas.yview_moveto(0.0)
+
+    def _on_wheel(self, event):
+        if event.delta:
+            self.canvas.yview_scroll(-int(event.delta / 120), "units")
+
+    def _poll_layout(self):
+        """Track the natural height, which grows without resizing the page frame.
+
+        Rescaled fonts, rebuilt collages, and About refits all change what the
+        page asks for, so the scroll extent is re-derived on a heartbeat instead
+        of trusting a single post-resize pass.
+        """
+        self._sync_page_window()
+        self.after(250, self._poll_layout)
 
     def _resolve_about_family(self) -> str:
         """First family whose regular, bold, and italic share the same size.
@@ -491,6 +591,7 @@ class RoboDynaLauncher(tk.Tk):
                 text.configure(font=specs[""], height=lines)
                 text.tag_configure("bold", font=specs["bold"])
                 text.tag_configure("italic", font=specs["italic"])
+                self.after_idle(self._sync_page_window)
                 return
 
     def _suite_card(self, parent, spec: SuiteSpec) -> tk.Frame:
@@ -630,7 +731,11 @@ class RoboDynaLauncher(tk.Tk):
             self.about_title.configure(font=font(24, "bold"))
             self.about_card._pad.configure(padx=px(self.CARD_PAD), pady=px(self.CARD_PAD))
 
-        card_width = (width - 2 * px(self.OUTER_PAD)) / len(SUITES) - px(self.CARD_GAP)
+        # Card math follows the page, which is narrower than the window whenever
+        # the scrollbar is showing.
+        page_width = self.page.winfo_width()
+        usable = page_width if page_width > 1 else width
+        card_width = (usable - 2 * px(self.OUTER_PAD)) / len(SUITES) - px(self.CARD_GAP)
         inner_width = max(160, int(card_width) - 2 * (px(self.CARD_PAD) + self.CARD_BORDER) - 4)
         # Logo bar, card text, button, and outer padding all sit outside the collage.
         reserve = px(self.LOGO_HEIGHT) + px(240) + 2 * px(self.OUTER_PAD)
@@ -649,6 +754,9 @@ class RoboDynaLauncher(tk.Tk):
             self._refresh_collage(card, inner_width, max_height)
         self._about_fit_key = None
         self.after_idle(self._fit_about_text)
+        # Font / collage changes move the natural page height, so the scrollable
+        # extent has to be recomputed even when the page frame itself did not resize.
+        self.after_idle(self._sync_page_window)
 
     def _launch(self, key: str):
         if self.child is not None:
