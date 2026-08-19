@@ -137,6 +137,7 @@ class catch_marbles_trapdoors(Base_Task):
         self._reactive_buttons = None
         self._mutex_violation = False
         self._success_latched = False
+        self._reset_metric_state()
         self.shuffle_colors = bool(self.SHUFFLE_COLORS_DEFAULT)
         self.key_base_half = list(self.KEY_BASE_HALF_DEFAULT)
         self.key_base_color = list(self.KEY_BASE_COLOR_DEFAULT)
@@ -426,6 +427,7 @@ class catch_marbles_trapdoors(Base_Task):
         self._press_lead_steps = 0
         # Latch once the marble is below the closed trapdoor plane (may bounce back up).
         self._success_latched = False
+        self._reset_metric_state()
 
         for btn in self.buttons:
             self.add_prohibit_area(btn, padding=0.03)
@@ -1163,6 +1165,8 @@ class catch_marbles_trapdoors(Base_Task):
         if self._distractor_through_any() or self._distractor_drop_still_possible():
             return
         self._success_latched = True
+        if getattr(self, "_metric_drop_step", None) is None:
+            self._metric_drop_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
 
     # --------------------------------------------------------- press helpers
     def _dwell(self, steps: int):
@@ -1316,6 +1320,7 @@ class catch_marbles_trapdoors(Base_Task):
         if not in_cycle:
             self._door_open_count[btn_idx] = int(self._door_open_count[btn_idx]) + 1
         self._door_open[btn_idx] = True
+        self._latch_door_open_metrics(btn_idx)
         self._door_open_with_ball_over[btn_idx] = (
             self._door_open_with_ball_over[btn_idx] or opened_on_time
         )
@@ -1410,6 +1415,65 @@ class catch_marbles_trapdoors(Base_Task):
         return self.info
 
     # ----------------------------------------------------------- metric/obs
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_open_step = None       # target door first opened
+        self._metric_drop_step = None       # marble latched below the trapdoor
+        self._metric_press_offset_norm = None  # marble offset from door centre at press
+
+    def _latch_door_open_metrics(self, btn_idx):
+        """Record when the TARGET door was opened and where the marble was.
+
+        The offset is captured at the press, never recomputed: the marble keeps
+        bouncing along the lane, so its position later says nothing about whether
+        the press was well timed. Only the first open of the target door counts.
+        """
+        try:
+            if int(btn_idx) != int(getattr(self, "target_button_idx", -1)):
+                return
+            if getattr(self, "_metric_open_step", None) is not None:
+                return
+            self._metric_open_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+            x0, x1 = self._door_x_bounds[int(btn_idx)]
+            centre = 0.5 * (float(x0) + float(x1))
+            half = max(0.5 * abs(float(x1) - float(x0)), 1e-9)
+            ball_x = float(self.ball.get_pose().p[0])
+            self._metric_press_offset_norm = abs(ball_x - centre) / half
+        except Exception:
+            self._metric_press_offset_norm = None
+
+    def _compute_metrics(self):
+        """extra1 = target-door-open->drop latency, extra2 = press timing error.
+
+        ``press_offset_norm`` is the marble's horizontal distance from the target
+        trapdoor's centre at the instant the button was pressed, as a fraction of
+        the door half-width: 0.0 = pressed with the marble dead over the opening,
+        1.0 = right at the door edge, >1.0 = pressed while the marble was still
+        off the door (it must then bounce back before the door times out). LOWER
+        IS BETTER. None when the target door was never opened.
+        """
+        metrics = {
+            "drop_latency_steps": None,
+            "drop_latency_s": None,
+            "press_offset_norm": (
+                None
+                if getattr(self, "_metric_press_offset_norm", None) is None
+                else float(self._metric_press_offset_norm)
+            ),
+        }
+        start = getattr(self, "_metric_open_step", None)
+        drop = getattr(self, "_metric_drop_step", None)
+        if start is not None and drop is not None and drop >= start:
+            steps = int(drop - start)
+            metrics["drop_latency_steps"] = steps
+            try:
+                metrics["drop_latency_s"] = round(
+                    steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics
+
     def check_success(self):
         """Success iff the matching door was opened and the target is below it in the box.
 

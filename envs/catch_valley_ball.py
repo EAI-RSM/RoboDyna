@@ -613,6 +613,7 @@ class catch_valley_ball(Base_Task):
         self._bowl_welded = False
         self._bowl_arm = None
         self._bowl_ee_offset = None
+        self._reset_metric_state()
         self._loaded = True
         self._ball_phase = "frozen"
         if self.enable_distractor:
@@ -1118,6 +1119,8 @@ class catch_valley_ball(Base_Task):
         # Hold at the drop pose first; `_advance_ball` flips this to "dropping"
         # once the freeze clock (armed separately) has run out.
         self._ball_phase = "prestart" if self._start_freeze_pending > 0 else "dropping"
+        if self._ball_phase == "dropping":
+            self._latch_ball_start_step()
         self._drop_i = 0
         self._roll_i = 0
         self._roll_distance = 0.0
@@ -1254,6 +1257,7 @@ class catch_valley_ball(Base_Task):
             self._freeze_i += 1
             if self._freeze_i < self._start_freeze_pending:
                 return
+            self._latch_ball_start_step()
             self._ball_phase = "dropping"
             if self.enable_distractor and self._distractor_phase == "prestart":
                 self._distractor_phase = "dropping"
@@ -1338,6 +1342,9 @@ class catch_valley_ball(Base_Task):
         if self._ball_phase == "released":
             return
         self._ball_phase = "released"
+        # Metrics: the launch out of the valley opens the catch window.
+        if getattr(self, "_metric_release_step", None) is None:
+            self._metric_release_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
         self.ball.set_pose(sapien.Pose(self.ball_exit.tolist()))
         if self._ball_rigid is not None:
             self._ball_rigid.set_kinematic(False)
@@ -1394,6 +1401,7 @@ class catch_valley_ball(Base_Task):
         if weld_bowl:
             self._update_welded_bowl()
         self._advance_ball()
+        self._track_valley_catch_metrics()
 
     def _dwell(self, steps):
         for i in range(max(0, int(steps))):
@@ -1419,6 +1427,7 @@ class catch_valley_ball(Base_Task):
         self._ball_phase = None
         self._distractor_phase = None
         self._ball_freeze_armed = False
+        self._reset_metric_state()
         self._start_freeze_pending = 0
         self._freeze_i = 0
         self._expert_demo = False
@@ -1934,6 +1943,7 @@ class catch_valley_ball(Base_Task):
 
         # Start the ball immediately; drop/roll/flight advance concurrently with
         # the contact push (same timing model as the valley loader).
+        self._reset_metric_state()
         self._start_ball_motion(expert_demo=True)
         self._bowl_ready = False
         self._push_box_to_landing(arm_tag)
@@ -1998,6 +2008,79 @@ class catch_valley_ball(Base_Task):
             <= bowl_position[2] + self.bowl_height + 2.0 * self.ball_radius
         )
         return bool(horizontal_offset < self.bowl_inner_radius and in_height)
+
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_start_step = None
+        self._metric_release_step = None
+        self._metric_catch_step = None
+        self._metric_catch_offset_norm = None
+
+    def _latch_ball_start_step(self):
+        """Mark the step the ball actually began to drop (post start-freeze).
+
+        Overwritten on every fresh start so the landing-prediction rollout — which
+        re-runs _start_ball_motion several times before the real episode — leaves
+        the last (real) start in place.
+        """
+        self._metric_start_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+        self._metric_catch_step = None
+        self._metric_catch_offset_norm = None
+
+    def _track_valley_catch_metrics(self):
+        """Latch the first frame the ball settled inside the box, and how centred.
+
+        High-water mark: the ball can bounce back out, so only the first True is
+        kept. Subclasses that score a different event (see stop_valley_ball)
+        override _compute_metrics and ignore these latches.
+        """
+        if getattr(self, "_metric_catch_step", None) is not None:
+            return
+        if getattr(self, "_ball_phase", None) != "released":
+            return
+        try:
+            offset, in_bowl, _, _, _, _ = self._catch_state()
+        except Exception:
+            return
+        if not in_bowl:
+            return
+        self._metric_catch_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+        try:
+            self._metric_catch_offset_norm = float(offset) / max(
+                float(self.bowl_inner_radius), 1e-9)
+        except Exception:
+            self._metric_catch_offset_norm = None
+
+    def _compute_metrics(self):
+        """extra1 = drop->catch latency, extra2 = entry offset in box radii.
+
+        Latency runs from the moment the ball starts dropping (after any start
+        freeze) — when the human must commit to a catch position — not from the
+        ramp exit, which leaves no room to react. ``catch_offset_norm`` is the ball-to-box horizontal distance at the instant
+        the ball first counted as inside, as a fraction of the box inner radius:
+        0.0 = dead centre, 1.0 = grazing a wall. LOWER IS BETTER. None when the
+        ball never entered the box.
+        """
+        metrics = {
+            "catch_latency_steps": None,
+            "catch_latency_s": None,
+            "catch_offset_norm": (
+                None
+                if getattr(self, "_metric_catch_offset_norm", None) is None
+                else float(self._metric_catch_offset_norm)
+            ),
+        }
+        start = getattr(self, "_metric_start_step", None)
+        caught = getattr(self, "_metric_catch_step", None)
+        if start is not None and caught is not None and caught >= start:
+            steps = int(caught - start)
+            metrics["catch_latency_steps"] = steps
+            try:
+                metrics["catch_latency_s"] = round(steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics
 
     def _catch_state(self):
         ball_position = np.asarray(self.ball.get_pose().p)

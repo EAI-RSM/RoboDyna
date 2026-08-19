@@ -188,6 +188,7 @@ class pack_fruits(Base_Task):
         # guards: _update_kinematic_tasks runs before load_actors finishes
         self._belt_ready = False
         self._belt_running = False
+        self._reset_metric_state()
         super()._init_task_env_(**kwags)
 
     # --------------------------------------------------------------- actors
@@ -457,6 +458,7 @@ class pack_fruits(Base_Task):
         self._item_roll = [0.0] * self.n_items
         self._spawned_mask = [False] * self.n_items
         self._spawned = 0
+        self._reset_metric_state()
         self._packed = [False] * self.n_items
         self._missed = [False] * self.n_items  # rode off belt end without pack_fruits
         # gripper has reached the drop pose above this fruit's basket
@@ -608,6 +610,7 @@ class pack_fruits(Base_Task):
         self._item_x[idx] = x0
         self._item_roll[idx] = 0.0
         self._over_basket[idx] = False
+        self._latch_spawn_metric(idx)
         comp = self._item_comps[idx]
         if comp is not None:
             comp.set_kinematic(True)
@@ -960,6 +963,7 @@ class pack_fruits(Base_Task):
         if bool(os.environ.get("PACKING_DEBUG")):
             p = np.array(self.items[idx].get_pose().p, dtype=float)
             print(f"[pack_fruits]  RELEASE fruit_{idx} step={self._step_ctr} p={p.round(4)}", flush=True)
+        self._latch_release_offset(idx)
         self._welded[idx] = False
         self._weld_arm[idx] = None
         self._weld_offset[idx] = None
@@ -1257,6 +1261,7 @@ class pack_fruits(Base_Task):
         ftype = self.item_types[idx]
         if not self._packed[idx]:
             self._place_counts[ftype] = self._place_counts[ftype] + 1
+        self._latch_pack_metric(idx)
         self._packed[idx] = True
         self._missed[idx] = False
         self._over_basket[idx] = True
@@ -2648,6 +2653,88 @@ class pack_fruits(Base_Task):
         return self.info
 
     # ------------------------------------------------------------- success
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        n = int(getattr(self, "n_items", 0) or 0)
+        self._metric_spawn_step = [None] * n
+        self._metric_pack_step = [None] * n
+        self._metric_release_offset = [None] * n   # offset at the last release, normalised
+        self._metric_packed_offsets = []           # committed on a successful pack
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_spawn_metric(self, idx):
+        try:
+            if self._metric_spawn_step[idx] is None:
+                self._metric_spawn_step[idx] = self._metric_step()
+        except Exception:
+            pass
+
+    def _latch_release_offset(self, idx):
+        """Chebyshev XY offset from the fruit's own basket mouth centre, at let-go."""
+        try:
+            ftype = self.item_types[idx]
+            c = np.asarray(self.basket_centers[ftype], dtype=np.float64)
+            half_x, half_y = self.basket_half_xy.get(ftype, self.BASKET_HALF_XY)
+            p = np.array(self.items[idx].get_pose().p, dtype=np.float64)
+            self._metric_release_offset[idx] = float(max(
+                abs(float(p[0]) - float(c[0])) / max(float(half_x), 1e-9),
+                abs(float(p[1]) - float(c[1])) / max(float(half_y), 1e-9),
+            ))
+        except Exception:
+            pass
+
+    def _latch_pack_metric(self, idx):
+        """Called from _mark_packed the first time a fruit resolves into a basket."""
+        try:
+            if self._metric_pack_step[idx] is not None:
+                return
+            self._metric_pack_step[idx] = self._metric_step()
+            off = self._metric_release_offset[idx]
+            if off is not None:
+                self._metric_packed_offsets.append(float(off))
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `pack_latency_steps` — mean steps from a fruit appearing at the far
+        end of the belt until it is resolved into a basket, averaged over the fruits
+        actually packed. This is the belt-paced decision+transfer window.
+        extra2 `drop_offset_norm` — mean Chebyshev distance from the basket mouth
+        centre at the instant the jaws let go, in units of basket half-extent
+        (1.0 = right on the rim). LOWER is better.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        lats = []
+        try:
+            for i in range(int(self.n_items)):
+                a = self._metric_spawn_step[i]
+                b = self._metric_pack_step[i]
+                if a is not None and b is not None:
+                    lats.append(max(int(b) - int(a), 0))
+        except Exception:
+            lats = []
+        mean_lat = (sum(lats) / len(lats)) if lats else None
+        out["pack_latency_steps"] = None if mean_lat is None else round(float(mean_lat), 3)
+        out["pack_latency_s"] = None if mean_lat is None else round(float(mean_lat) * dt, 4)
+        out["first_pack_latency_steps"] = min(lats) if lats else None
+        out["packs_counted"] = len(lats)
+
+        offs = list(getattr(self, "_metric_packed_offsets", []) or [])
+        out["drop_offset_norm"] = round(sum(offs) / len(offs), 4) if offs else None
+        out["worst_drop_offset_norm"] = round(max(offs), 4) if offs else None
+        return out
+
     def check_success(self):
         if not all(self._fruit_in_basket(i) for i in range(self.n_items)):
             return False

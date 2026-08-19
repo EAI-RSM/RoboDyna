@@ -191,6 +191,7 @@ class make_soup(KitchenS_base_task):
         self._veg_released = False
         self._veg_fallen = False
         self._pour_armed = False
+        self._reset_metric_state()
         self._force_veg_hold = False
         self._score_veg_spill = False
         self._arm_veg_contact = False
@@ -451,6 +452,7 @@ class make_soup(KitchenS_base_task):
         self._veg_released = False
         self._veg_fallen = False
         self._pour_armed = False
+        self._reset_metric_state()
         self._force_veg_hold = False
         self._score_veg_spill = False
         self._arm_veg_contact = False
@@ -1449,6 +1451,8 @@ class make_soup(KitchenS_base_task):
         self._board_welded = False
         self._board_weld_offset = None
         self._pour_armed = True
+        if self._metric_lift_step is None:
+            self._metric_lift_step = self._metric_step()
         self.arm = arm
         self.board_arm = arm
         if self._board_rigid is not None:
@@ -1593,6 +1597,74 @@ class make_soup(KitchenS_base_task):
             and float(p[2]) < self.pot_rim_z - 0.008
         )
 
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self) -> None:
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_lift_step = None   # board first picked up
+        self._metric_entry = {}         # veg index -> step it dropped into the pot
+        self._metric_offset = {}        # veg index -> radial offset at that instant
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_veg_metrics(self) -> None:
+        """Latch the first frame each piece is inside the pot, with where it entered.
+
+        The radial offset must be read at entry: pieces roll and settle afterwards,
+        so a pour that only just cleared the rim looks centered by the end.
+        """
+        try:
+            for i, veg in enumerate(self.veggies):
+                if i in self._metric_entry:
+                    continue
+                if not self._veg_in_pot(veg):
+                    continue
+                self._metric_entry[i] = self._metric_step()
+                p = np.asarray(veg.get_pose().p, dtype=float)
+                r = float(np.linalg.norm(p[:2] - np.asarray(self.pot_xy)))
+                self._metric_offset[i] = r / max(float(self.pot_inner_radius), 1e-6)
+        except Exception:
+            pass
+
+    def _compute_metrics(self) -> dict:
+        """Human-experiment extras.
+
+        extra1 `pour_latency_steps` — steps from the board being picked up until the
+        LAST piece is in the pot. `first_entry_latency_steps` is the same clock for the
+        first piece, so the spread shows how staggered the pour was.
+        extra2 `pot_offset_norm` — mean radial distance from the pot axis at the moment
+        each piece cleared the rim, over the pot's inner radius. LOWER is better;
+        0 = poured straight down the middle, ->1 = scraping the pot wall.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a = self._metric_lift_step
+        steps = sorted(self._metric_entry.values()) if self._metric_entry else []
+        last = (None if (a is None or not steps)
+                else max(int(steps[-1]) - int(a), 0))
+        first = (None if (a is None or not steps)
+                 else max(int(steps[0]) - int(a), 0))
+        out["pour_latency_steps"] = last
+        out["pour_latency_s"] = None if last is None else round(float(last) * dt, 4)
+        out["first_entry_latency_steps"] = first
+        out["pieces_in_pot"] = len(steps)
+        try:
+            out["pieces_total"] = int(len(self.veggies))
+        except Exception:
+            out["pieces_total"] = None
+
+        offs = list(self._metric_offset.values())
+        out["pot_offset_norm"] = round(sum(offs) / len(offs), 4) if offs else None
+        out["worst_pot_offset_norm"] = round(max(offs), 4) if offs else None
+        out["veg_fallen"] = bool(getattr(self, "_veg_fallen", False))
+        out["arm_veg_contact"] = bool(getattr(self, "_arm_veg_contact", False))
+        return out
+
     def _check_veg_fallen(self) -> None:
         """Fail if any piece leaves the board and settles outside the pot.
 
@@ -1671,6 +1743,7 @@ class make_soup(KitchenS_base_task):
         self._ensure_veggies_dynamic()
         self._check_veg_fallen()
         self._check_arm_veg_contact()
+        self._track_veg_metrics()
         # Knob grasp / fire: KitchenS_base_task._update_stove_knob_control
 
     def _idle_steps(self, n_steps: int, until=None) -> None:

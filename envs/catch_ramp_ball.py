@@ -72,6 +72,7 @@ class catch_ramp_ball(Base_Task):
         self._cfg = kwags.get("task_args", {}).get("catch_ramp_ball", {})
         self._loaded = False
         self._ball_phase = None
+        self._reset_metric_state()
         self._distractor_phase = None
         self._cup_ready = False
         self._expert_demo = False
@@ -387,6 +388,7 @@ class catch_ramp_ball(Base_Task):
 
         self._ball_phase = "frozen"
         self._roll_i = 0
+        self._reset_metric_state()
         self._loaded = True
 
     def _surface_point(self, local_x, local_y):
@@ -731,6 +733,9 @@ class catch_ramp_ball(Base_Task):
             return
         self._expert_demo = bool(expert_demo)
         self._cup_ready = False
+        self._reset_metric_state()
+        # Metrics: the drop is what the human reacts to; the catch window opens here.
+        self._metric_start_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
         self._ball_phase = "dropping"
         self._drop_i = 0
         self._roll_i = 0
@@ -833,6 +838,9 @@ class catch_ramp_ball(Base_Task):
         if self._ball_phase == "released":
             return
         self._ball_phase = "released"
+        # Metrics: the ramp exit is a secondary marker (kept for reference).
+        if getattr(self, "_metric_release_step", None) is None:
+            self._metric_release_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
         self._update_release_velocity()
         release_pos = np.asarray(
             getattr(self, "ball_release_pos", self.ball_edge), dtype=float
@@ -881,6 +889,7 @@ class catch_ramp_ball(Base_Task):
         if not getattr(self, "_loaded", False):
             return
         self._advance_ball()
+        self._track_catch_metrics()
 
     def _dwell(self, steps):
         for i in range(int(steps)):
@@ -1001,3 +1010,64 @@ class catch_ramp_ball(Base_Task):
         except Exception:
             pass
         return obs
+
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_start_step = None
+        self._metric_release_step = None
+        self._metric_catch_step = None
+        self._metric_catch_offset_norm = None
+
+    def _track_catch_metrics(self):
+        """Latch the first frame the ball sits inside the cup, and how centred.
+
+        High-water mark: the ball can bounce back out, so only the first True is
+        kept. Runs once per step and stops querying once latched.
+        """
+        if getattr(self, "_metric_catch_step", None) is not None:
+            return
+        if getattr(self, "_ball_phase", None) != "released":
+            return
+        try:
+            offset, in_vessel, _, _, _ = self._catch_state()
+        except Exception:
+            return
+        if not in_vessel:
+            return
+        self._metric_catch_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+        try:
+            self._metric_catch_offset_norm = float(offset) / max(float(self.rim_radius), 1e-9)
+        except Exception:
+            self._metric_catch_offset_norm = None
+
+    def _compute_metrics(self):
+        """extra1 = drop->catch latency, extra2 = entry offset in cup radii.
+
+        Latency is measured from the drop at the top of the ramp (when the human
+        first sees the ball move and must get the cup under the exit), NOT from
+        the ramp exit — by then a good run already has the cup in place, so that
+        anchor has no spread. ``catch_offset_norm`` is the ball-to-cup horizontal
+        distance at the instant the ball first counted as inside, as a fraction
+        of the cup rim radius: 0.0 = dead centre, 1.0 = grazing the rim. LOWER IS
+        BETTER. None when the ball never entered the cup.
+        """
+        metrics = {
+            "catch_latency_steps": None,
+            "catch_latency_s": None,
+            "catch_offset_norm": (
+                None
+                if getattr(self, "_metric_catch_offset_norm", None) is None
+                else float(self._metric_catch_offset_norm)
+            ),
+        }
+        start = getattr(self, "_metric_start_step", None)
+        caught = getattr(self, "_metric_catch_step", None)
+        if start is not None and caught is not None and caught >= start:
+            steps = int(caught - start)
+            metrics["catch_latency_steps"] = steps
+            try:
+                metrics["catch_latency_s"] = round(steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics

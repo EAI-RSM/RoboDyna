@@ -94,6 +94,7 @@ class drop_ball_hole(Base_Task):
         self._drop_timed_out = False
         self._ball_fell_off_table = False
         self._steps_since_release = 0
+        self._reset_metric_state()
         self.selected_arm = None
         self.bucket_floor_z = 0.0
         self.hole_orbit_radius = 0.0
@@ -247,6 +248,7 @@ class drop_ball_hole(Base_Task):
         self._drop_timed_out = False
         self._steps_since_release = 0
         self.ball_released = False
+        self._reset_metric_state()
 
         # Randomized spin direction and speed sampled from a range each episode.
         self.spin_dir = float(np.random.choice([-1.0, 1.0]))
@@ -1156,6 +1158,8 @@ class drop_ball_hole(Base_Task):
             self.ball_in_box = self._ball_in_box()
         self._try_latch_ball_off_table()
         self._tick_drop_timeout()
+        self._track_release_metric()
+        self._track_in_box_metric()
 
     def _cap_angle_at_step(self, step):
         return self.spin_omega * (step * 0.01)
@@ -1247,6 +1251,132 @@ class drop_ball_hole(Base_Task):
             "{a}": arm_name,
         }
         return self.info
+
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_release_step = None
+        self._metric_in_box_step = None
+        self._metric_aim_offset_norm = None
+        self._metric_ball_held = False
+        self._metric_free_steps = 0
+        self._metric_over_cap_step = None
+
+    # Frames of no gripper/ball contact before the drop counts as real (finger
+    # contact flickers by a frame or two as the jaws part).
+    RELEASE_DEBOUNCE_STEPS = 4
+
+    def _track_release_metric(self):
+        """Detect the ball actually leaving the gripper and latch the aim error.
+
+        ``mark_ball_released`` is NOT usable as the anchor: the expert calls it
+        after a second-chance alignment pass, by which time the ball may already
+        be in the box. Contact loss is the true hand-off and works for teleop too.
+        """
+        if getattr(self, "_metric_release_step", None) is not None:
+            return
+        if getattr(self, "ball", None) is None:
+            return
+        try:
+            held = len(self.get_gripper_actor_contact_position(self.ball.get_name())) > 0
+        except Exception:
+            return
+        if held:
+            self._metric_ball_held = True
+            self._metric_free_steps = 0
+            if getattr(self, "_metric_over_cap_step", None) is None:
+                try:
+                    if float(self.ball.get_pose().p[2]) >= float(
+                        self.cap_z + self.cap_thickness + self.ball_radius
+                    ):
+                        self._metric_over_cap_step = int(
+                            getattr(self, "_exp_sim_steps", 0) or 0)
+                except Exception:
+                    pass
+            return
+        if not getattr(self, "_metric_ball_held", False):
+            return
+        self._metric_free_steps = int(getattr(self, "_metric_free_steps", 0)) + 1
+        if self._metric_free_steps < int(self.RELEASE_DEBOUNCE_STEPS):
+            return
+        self._latch_release_metrics()
+
+    def _latch_release_metrics(self):
+        """Record the drop instant and how well the ball was aimed at the hole.
+
+        The aim error is captured HERE, not at the end: the cap keeps spinning, so
+        the hole is somewhere else entirely by the time the episode finishes.
+        Back-dated to the first contact-free frame.
+        """
+        if getattr(self, "_metric_release_step", None) is not None:
+            return
+        now = int(getattr(self, "_exp_sim_steps", 0) or 0)
+        free = int(getattr(self, "_metric_free_steps", 0) or 0)
+        self._metric_release_step = max(0, now - max(0, free - 1))
+        try:
+            ball_xy = np.asarray(self.ball.get_pose().p[:2], dtype=np.float64)
+            hole_xy = self.cap_center[:2] + self._cap_rot2() @ self._cap_hole_local_xy
+            dist = float(np.linalg.norm(ball_xy - hole_xy))
+            self._metric_aim_offset_norm = dist / max(float(self.cap_hole_radius), 1e-9)
+        except Exception:
+            self._metric_aim_offset_norm = None
+
+    def _track_in_box_metric(self):
+        """Latch the first frame the ball rested inside the bucket.
+
+        High-water mark: the ball can bounce, so only the first True is kept.
+        """
+        if getattr(self, "_metric_in_box_step", None) is not None:
+            return
+        if not bool(getattr(self, "ball_in_box", False)):
+            return
+        self._metric_in_box_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _compute_metrics(self):
+        """extra1 = hover->release latency, extra2 = aim error in hole radii.
+
+        The decisive act is WHEN the gripper opens: the cap spins, so the drop
+        must be timed to the moving hole. ``release_latency`` runs from the moment
+        the held ball first cleared the cap surface (aiming window opens) to the
+        instant it left the gripper — i.e. how long the operator deliberated.
+        Release->in-box is reported too, but it is near-constant free fall from a
+        low release height, so it does not discriminate.
+
+        ``aim_offset_norm`` is the ball-centre to hole-centre distance at release,
+        as a fraction of the cap hole radius: 0.0 = dead over the hole, 1.0 = over
+        the rim, >1.0 = released over solid cap. LOWER IS BETTER. None when the
+        ball was never released.
+        """
+        metrics = {
+            "release_latency_steps": None,
+            "release_latency_s": None,
+            "in_box_latency_steps": None,
+            "in_box_latency_s": None,
+            "aim_offset_norm": (
+                None
+                if getattr(self, "_metric_aim_offset_norm", None) is None
+                else float(self._metric_aim_offset_norm)
+            ),
+        }
+        dt = None
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            dt = None
+        hover = getattr(self, "_metric_over_cap_step", None)
+        released = getattr(self, "_metric_release_step", None)
+        landed = getattr(self, "_metric_in_box_step", None)
+        if hover is not None and released is not None and released >= hover:
+            steps = int(released - hover)
+            metrics["release_latency_steps"] = steps
+            if dt is not None:
+                metrics["release_latency_s"] = round(steps * dt, 6)
+        if released is not None and landed is not None and landed >= released:
+            steps = int(landed - released)
+            metrics["in_box_latency_steps"] = steps
+            if dt is not None:
+                metrics["in_box_latency_s"] = round(steps * dt, 6)
+        return metrics
 
     def check_success(self):
         """Success: ball fell through the target hole and rests inside the box."""

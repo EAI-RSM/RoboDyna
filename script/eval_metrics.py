@@ -9,9 +9,20 @@ Metrics:
 """
 
 import numpy as np
+import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Any
 from collections import deque
+
+
+def env_uses_dynamic(env, args: Optional[dict] = None) -> bool:
+    """Return whether this episode should use dynamic-eval metric handling."""
+    if bool(getattr(env, "use_dynamic", False)):
+        return True
+    try:
+        return env.get_dynamic_motion_config() is not None
+    except Exception:
+        return False
 
 
 @dataclass
@@ -53,6 +64,9 @@ class EpisodeMetrics:
     # Failure reason
     fail_reason: Optional[str] = None
 
+    # Shared/task-specific metric payload copied into reports.
+    metric_detail: Dict[str, Any] = field(default_factory=dict)
+
 
 class EvalMetricsTracker:
     """
@@ -89,7 +103,7 @@ class EvalMetricsTracker:
         """
         self.env = env
         self.args = args
-        self.use_dynamic = args.get("use_dynamic", False)
+        self.use_dynamic = env_uses_dynamic(env, args)
         
         # Reset state
         self.reset()
@@ -97,6 +111,7 @@ class EvalMetricsTracker:
     def reset(self):
         """Reset tracker for new episode."""
         self.step_count = 0
+        self.wall_start_time = time.monotonic()
         self.penalty_events: List[PenaltyEvent] = []
         
         # End effector trajectory tracking
@@ -507,6 +522,97 @@ class EvalMetricsTracker:
         for event in self.penalty_events:
             factor *= event.penalty_factor
         return factor
+
+    def _get_total_steps(self) -> int:
+        """Best-effort policy/env step count for shared metrics."""
+        return int(max(
+            self.step_count,
+            int(getattr(self.env, "take_action_cnt", 0) or 0),
+            int(getattr(self.env, "FRAME_IDX", 0) or 0),
+        ))
+
+    def _get_sim_time(self, total_steps: int) -> float:
+        """Best-effort simulation time in seconds."""
+        try:
+            timestep = float(self.env.scene.get_timestep())
+        except Exception:
+            timestep = 0.0
+        return float(total_steps) * timestep
+
+    def _get_option_label(self) -> Optional[str]:
+        """Return default/opt1/opt2/opt1+2 label when the task exposes it."""
+        for attr in ("option_label", "option", "_interactive_scenario"):
+            value = getattr(self.env, attr, None)
+            if value:
+                return str(value)
+        option_fn = getattr(self.env, "_option_label", None)
+        if callable(option_fn):
+            try:
+                value = option_fn()
+                if value is not None:
+                    return str(value)
+            except Exception:
+                pass
+        try:
+            info = getattr(self.env, "info", {}) or {}
+            for key in ("option_label", "option"):
+                if info.get(key) is not None:
+                    return str(info[key])
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        """Convert numpy/scalar containers to JSON-serializable values."""
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, dict):
+            return {str(k): EvalMetricsTracker._json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [EvalMetricsTracker._json_safe(v) for v in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    def build_metric_detail(
+        self,
+        success: bool,
+        route_completion: float,
+        manipulation_score: float,
+    ) -> Dict[str, Any]:
+        """Build the per-episode metric_detail payload promised by docs/metrics."""
+        total_steps = self._get_total_steps()
+        metric_detail = {
+            "success": bool(success),
+            "total_time_sim_s": self._get_sim_time(total_steps),
+            "total_time_wall_s": float(time.monotonic() - self.wall_start_time),
+            "total_steps": total_steps,
+            "option_label": self._get_option_label(),
+            "route_completion": float(route_completion),
+            "manipulation_score": float(manipulation_score),
+            "total_penalty_factor": float(self.compute_total_penalty_factor()),
+        }
+
+        info = getattr(self.env, "info", {}) or {}
+        existing_detail = info.get("metric_detail")
+        if isinstance(existing_detail, dict):
+            metric_detail.update(existing_detail)
+
+        for key, value in info.items():
+            if key in {"info", "metric_detail", "texture_info", "cluttered_table_info"}:
+                continue
+            if key not in metric_detail:
+                metric_detail[key] = value
+
+        metric_detail = self._json_safe(metric_detail)
+        try:
+            self.env.info["metric_detail"] = metric_detail
+        except Exception:
+            pass
+        return metric_detail
     
     def get_episode_metrics(self, success: bool, fail_reason: Optional[str] = None, seed: Optional[int] = None) -> EpisodeMetrics:
         """
@@ -527,6 +633,8 @@ class EvalMetricsTracker:
         
         # Manipulation score
         manipulation_score = route_completion * total_penalty
+
+        metric_detail = self.build_metric_detail(success, route_completion, manipulation_score)
         
         # Efficiency
         # efficiency = self.compute_efficiency(success, self.step_count, max_steps)
@@ -546,7 +654,8 @@ class EvalMetricsTracker:
             # avg_jerk=avg_jerk,
             penalty_events=self.penalty_events.copy(),
             total_penalty_factor=total_penalty,
-            fail_reason=fail_reason
+            fail_reason=fail_reason,
+            metric_detail=metric_detail,
         )
 
 
@@ -571,6 +680,9 @@ class AggregatedMetrics:
         # Average metrics (only for valid values)
         ms_scores = [e.manipulation_score for e in self.episodes]
         rc_scores = [e.route_completion for e in self.episodes]
+        sim_times = [e.metric_detail.get("total_time_sim_s", 0.0) for e in self.episodes]
+        wall_times = [e.metric_detail.get("total_time_wall_s", 0.0) for e in self.episodes]
+        total_steps = [e.metric_detail.get("total_steps", e.steps_taken) for e in self.episodes]
         # comfort_scores = [e.comfort_score for e in self.episodes]
         
         # Efficiency only for successful episodes
@@ -599,6 +711,13 @@ class AggregatedMetrics:
             
             "route_completion_mean": np.mean(rc_scores) if rc_scores else 0,
             "route_completion_std": np.std(rc_scores) if rc_scores else 0,
+
+            "total_time_sim_s_mean": np.mean(sim_times) if sim_times else 0,
+            "total_time_sim_s_std": np.std(sim_times) if sim_times else 0,
+            "total_time_wall_s_mean": np.mean(wall_times) if wall_times else 0,
+            "total_time_wall_s_std": np.std(wall_times) if wall_times else 0,
+            "total_steps_mean": np.mean(total_steps) if total_steps else 0,
+            "total_steps_std": np.std(total_steps) if total_steps else 0,
             
             # "efficiency_mean": np.mean(eff_scores) if eff_scores else float('nan'),
             # "efficiency_std": np.std(eff_scores) if eff_scores else float('nan'),
@@ -640,6 +759,13 @@ class AggregatedMetrics:
             f"  Mean: {summary['route_completion_mean']:.2f}%",
             f"  Std:  {summary['route_completion_std']:.2f}",
             "",
+            "--- Timing ---",
+            f"  Sim Time Mean:  {summary['total_time_sim_s_mean']:.2f}s",
+            f"  Sim Time Std:   {summary['total_time_sim_s_std']:.2f}s",
+            f"  Wall Time Mean: {summary['total_time_wall_s_mean']:.2f}s",
+            f"  Wall Time Std:  {summary['total_time_wall_s_std']:.2f}s",
+            f"  Steps Mean:     {summary['total_steps_mean']:.1f}",
+            "",
             # "--- Efficiency (Success Only) ---",
             # f"  Mean: {summary['efficiency_mean']:.2f}" if not np.isnan(summary['efficiency_mean']) else "  Mean: N/A",
             # f"  Avg Steps: {summary['avg_steps_success']:.1f}" if not np.isnan(summary['avg_steps_success']) else "  Avg Steps: N/A",
@@ -680,6 +806,7 @@ class AggregatedMetrics:
                 # "avg_jerk": episode.avg_jerk,
                 "total_penalty_factor": episode.total_penalty_factor,
                 "fail_reason": episode.fail_reason,
+                "metric_detail": episode.metric_detail,
                 "penalty_events": [
                     {
                         "event_type": p.event_type,

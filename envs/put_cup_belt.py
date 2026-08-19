@@ -104,6 +104,7 @@ class put_cup_belt(Base_Task):
         self.belt_pegs = []
         self.belt_plate = None
         self._attempt_active = False
+        self._reset_metric_state()
         if hasattr(self, "_kin_step"):
             del self._kin_step
         super()._init_task_env_(**kwags)
@@ -180,6 +181,7 @@ class put_cup_belt(Base_Task):
         self._kin_step = 0
         self._curtain_hit = False
         self._attempt_active = False
+        self._reset_metric_state()
         self._deposit_step = None
         self._slot_x_at_deposit = None
         self._belt_frozen_offset = None  # unused: yellow sticks never halt during place
@@ -591,6 +593,7 @@ class put_cup_belt(Base_Task):
         self._kin_step += 1
         self._apply_kinematics()
         self._check_curtain_contact()
+        self._track_cup_metrics()
 
     # ------------------------------------------------------------- helpers
     def _dwell(self, steps):
@@ -903,6 +906,91 @@ class put_cup_belt(Base_Task):
             return 0.0
         off = self._center_offset()
         return float(np.clip(1.0 - off / max(self.placement_tol, 1e-6), 0.0, 1.0))
+
+    # ------------------------------------------------- experiment metrics
+    # Frames of no gripper/cup contact before the release counts as real (finger
+    # contact flickers by a frame or two as the jaws part).
+    RELEASE_DEBOUNCE_STEPS = 4
+
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_grasp_step = None       # cup first in hand
+        self._metric_window_step = None      # first open window while holding the cup
+        self._metric_release_step = None     # cup let go
+        self._metric_release_offset = None   # gap offset at let-go, normalised
+        self._metric_held_seen = False
+        self._metric_free_frames = 0
+        self._metric_last_held_offset = None
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_cup_metrics(self):
+        """Per-step latches: grasp, window opening, release + the offset at release."""
+        try:
+            held = bool(self._cup_held())
+            if held:
+                if self._metric_grasp_step is None:
+                    self._metric_grasp_step = self._metric_step()
+                self._metric_held_seen = True
+                self._metric_free_frames = 0
+                self._metric_last_held_offset = float(self._center_offset())
+                if self._metric_window_step is None and self._window_open():
+                    self._metric_window_step = self._metric_step()
+                # Picked up again after a fumble — the earlier let-go was not the
+                # decisive one, so re-arm and let the FINAL release win.
+                self._metric_release_step = None
+                self._metric_release_offset = None
+                return
+            if not self._metric_held_seen or self._metric_release_step is not None:
+                return
+            self._metric_free_frames += 1
+            if self._metric_free_frames >= self.RELEASE_DEBOUNCE_STEPS:
+                # Back-date to the first contact-free frame — that is when the cup
+                # actually left the hand, before it drifted.
+                self._metric_release_step = self._metric_step() - self._metric_free_frames + 1
+                off = self._metric_last_held_offset
+                self._metric_release_offset = (
+                    None if off is None
+                    else float(off) / max(float(self.placement_tol), 1e-9)
+                )
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `release_latency_steps` — steps from the yellow gap first arriving at the
+        reach corridor (with the cup already in hand) until the cup is let go. This is
+        the operator's commit window against the moving belt / swaying curtain.
+        extra2 `gap_offset_norm` — cup-to-gap-centre distance at the instant of release,
+        divided by the placement tolerance. LOWER is better; <= 1.0 lands in the slot.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        w = getattr(self, "_metric_window_step", None)
+        r = getattr(self, "_metric_release_step", None)
+        lat = None if (w is None or r is None) else int(r) - int(w)
+        out["release_latency_steps"] = lat
+        out["release_latency_s"] = None if lat is None else round(lat * dt, 4)
+
+        g = getattr(self, "_metric_grasp_step", None)
+        carry = None if (g is None or r is None) else max(int(r) - int(g), 0)
+        out["carry_latency_steps"] = carry
+
+        off = getattr(self, "_metric_release_offset", None)
+        out["gap_offset_norm"] = None if off is None else round(float(off), 4)
+        try:
+            out["placement_score"] = round(float(self.placement_score()), 4)
+        except Exception:
+            out["placement_score"] = None
+        out["curtain_hit"] = bool(getattr(self, "_curtain_hit", False))
+        return out
 
     # ------------------------------------------------------------- success
     def check_success(self):

@@ -127,6 +127,7 @@ class load_train(Base_Task):
         self._car_rigids = []
         self.ball = None
         self._ball_rigid = None
+        self._reset_metrics()
         super()._init_task_env_(**kwags)
         self._configure_observer_camera()
         # Start the train after setup so it also runs during policy eval (no play_once).
@@ -320,6 +321,7 @@ class load_train(Base_Task):
         self.catch_radius = float(cfg.get("catch_radius", self.CATCH_RADIUS_DEFAULT))
         self.drop_reach_tol = float(cfg.get("drop_reach_tol", self.DROP_REACH_TOL_DEFAULT))
         self._bed_contact_steps = 0
+        self._reset_metrics()
 
         # Opt 1 — one randomly selected target wagon (red); others gray.
         self.target_wagon_mode = self._parse_target_wagon_mode(cfg)
@@ -960,6 +962,7 @@ class load_train(Base_Task):
         self._latched_car_idx = int(wagon_idx)
         self._ball_latched = True
         self.ball_in_train = True
+        self._latch_seat_metrics()
         if self._ball_rigid is not None:
             try:
                 self._ball_rigid.set_linear_velocity([0, 0, 0])
@@ -1070,6 +1073,7 @@ class load_train(Base_Task):
             self._update_latched_ball()
         self._try_latch_ball_off_table()
         self.ball_in_train = self._success_in_target_wagon()
+        self._update_metrics()
 
     def _dwell(self, steps: int):
         for i in range(max(0, int(steps))):
@@ -1094,6 +1098,7 @@ class load_train(Base_Task):
         self._train_angle0 = 0.5 * np.pi
         self._train_step = 0
         self._train_angle = self._train_angle0
+        self._reset_metrics()
         self._place_train(self._train_angle)
         self._train_running = True
         if self.save_freq:
@@ -1235,6 +1240,7 @@ class load_train(Base_Task):
         self._bed_contact_steps = 0
         self.move(self.open_gripper(arm_tag))
         self._ball_released = True
+        self._latch_release_metric()
         # Retract clear of the train while the ball falls under gravity onto the bed.
         self.move(self.move_by_displacement(arm_tag=arm_tag, z=0.12, move_axis="world"))
         # Densify third-view frames during the fall so the drop is visible (not 1–2 frames).
@@ -1279,6 +1285,7 @@ class load_train(Base_Task):
         self._try_latch_ball_off_table()
         off_table = bool(getattr(self, "_ball_fell_off_table", False))
         self.ball_in_train = (not off_table) and self._success_in_target_wagon()
+        self._update_metrics()
         self.info["ball_side"] = str(getattr(self, "ball_side", "left"))
         self.info["selected_arm"] = str(getattr(self, "selected_arm", "left"))
         self.info["n_wagons"] = int(getattr(self, "n_wagons", max(0, getattr(self, "n_cars", 1) - 1)))
@@ -1337,3 +1344,127 @@ class load_train(Base_Task):
             "option_label": self._option_label(),
         }
         return obs
+
+    # ------------------------------------------------- human-experiment metrics
+    # Steps of no gripper/ball contact before the release is considered real
+    # (finger contact flickers by a frame or two while the grasp settles).
+    RELEASE_DEBOUNCE_STEPS = 5
+
+    def _reset_metrics(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_release_step = None
+        self._metric_seat_step = None
+        self._metric_bed_offset_norm = None
+        self._metric_ball_held = False
+        self._metric_free_steps = 0
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_release_metric(self):
+        """Explicit release marker for the scripted policy; first writer wins."""
+        if getattr(self, "_metric_release_step", None) is None:
+            self._metric_release_step = self._metric_step()
+
+    def _track_release_metric(self):
+        """Detect the ball leaving the gripper (teleop has no _ball_released flag).
+
+        Only runs until the release is latched, so the contact query costs nothing
+        for the rest of the episode.
+        """
+        if getattr(self, "_metric_release_step", None) is not None or self.ball is None:
+            return
+        try:
+            held = len(self.get_gripper_actor_contact_position(self.ball.get_name())) > 0
+        except Exception:
+            return
+        if held:
+            self._metric_ball_held = True
+            self._metric_free_steps = 0
+            return
+        if not getattr(self, "_metric_ball_held", False):
+            return
+        self._metric_free_steps = int(getattr(self, "_metric_free_steps", 0)) + 1
+        if self._metric_free_steps >= int(self.RELEASE_DEBOUNCE_STEPS):
+            # Back-date to the first contact-free frame.
+            self._metric_release_step = max(
+                0, self._metric_step() - self._metric_free_steps + 1
+            )
+
+    def _seated_wagon_idx(self):
+        """Which open wagon currently holds the ball, or None."""
+        if getattr(self, "_latched_car_idx", None) is not None:
+            return int(self._latched_car_idx)
+        if getattr(self, "target_wagon_mode", False) and self.target_wagon_idx is not None:
+            idx = int(self.target_wagon_idx)
+            return idx if self._ball_in_car(idx) else None
+        for i in getattr(self, "_cargo_indices", []):
+            if self._ball_in_car(i):
+                return int(i)
+        return None
+
+    def _latch_seat_metrics(self):
+        """Record when the ball first counted as loaded and how centred it landed.
+
+        High-water mark: ``ball_in_train`` can flip back to False if the ball
+        bounces out of the bed, so only the first True is kept.
+        """
+        if getattr(self, "_metric_seat_step", None) is not None:
+            return
+        try:
+            if not self._success_in_target_wagon():
+                return
+        except Exception:
+            return
+        self._metric_seat_step = self._metric_step()
+        try:
+            idx = self._seated_wagon_idx()
+            if idx is None:
+                self._metric_bed_offset_norm = None
+                return
+            local = self._world_to_car_local(
+                self.ball.get_pose().p, self.cars[idx].get_pose()
+            )
+            hl, hw = self._wagon_bed_half()
+            self._metric_bed_offset_norm = float(max(
+                abs(float(local[0])) / max(float(hl), 1e-9),
+                abs(float(local[1])) / max(float(hw), 1e-9),
+            ))
+        except Exception:
+            self._metric_bed_offset_norm = None
+
+    def _update_metrics(self):
+        try:
+            self._track_release_metric()
+            self._latch_seat_metrics()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """extra1 = release->loaded latency, extra2 = landing offset in bed half-widths.
+
+        ``bed_offset_norm`` is the ball's offset from the wagon bed centre at the
+        instant it first counted as loaded, as a fraction of the bed half-extent
+        (max over the along-track and across-track axes): 0.0 = dead centre,
+        1.0 = touching a wagon wall. LOWER IS BETTER. None when the ball never
+        landed in an accepted wagon.
+        """
+        metrics = {
+            "load_latency_steps": None,
+            "load_latency_s": None,
+            "bed_offset_norm": (
+                None
+                if getattr(self, "_metric_bed_offset_norm", None) is None
+                else float(self._metric_bed_offset_norm)
+            ),
+        }
+        start = getattr(self, "_metric_release_step", None)
+        seat = getattr(self, "_metric_seat_step", None)
+        if start is not None and seat is not None and seat >= start:
+            steps = int(seat - start)
+            metrics["load_latency_steps"] = steps
+            try:
+                metrics["load_latency_s"] = round(steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics

@@ -193,6 +193,7 @@ class pour_beer(KitchenS_base_task):
         self.overflowed = False
         self.opened_once = False
         self.closed_after_pour = False
+        self._reset_metric_state()
         self.liquid_level = 0.0
         self.foam_level = 0.0
         self._foam_open_steps = 0
@@ -844,6 +845,7 @@ class pour_beer(KitchenS_base_task):
         self.overflowed = False
         self.opened_once = False
         self.closed_after_pour = False
+        self._reset_metric_state()
         self._liquid_entity = None
         self._foam_entity = None
         self._stream_entity = None
@@ -1663,6 +1665,8 @@ class pour_beer(KitchenS_base_task):
         if not self._gripper_pressing_bell():
             return
         self._bell_pressed = True
+        if self._metric_bell_step is None:
+            self._metric_bell_step = self._metric_step()
         print("[pour_beer] finish bell pressed — scoring pour", flush=True)
         try:
             if self._pour_quality_ok():
@@ -2173,6 +2177,7 @@ class pour_beer(KitchenS_base_task):
         if not getattr(self, "_loaded", False):
             return
         self._update_tap_button()
+        self._track_pour_metrics()
         if self._tap_is_idle_instant():
             self._tap_idle_steps = int(getattr(self, "_tap_idle_steps", 0)) + 1
         else:
@@ -2422,6 +2427,96 @@ class pour_beer(KitchenS_base_task):
         self._idle_steps(20, until=lambda: bool(getattr(self, "_bell_pressed", False)))
         self.move(self.move_by_displacement(arm, z=drop))
         return bool(getattr(self, "_bell_pressed", False))
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_open_step = None    # tap button first held down
+        self._metric_target_step = None  # beer first rose above target_liquid
+        self._metric_stop_step = None    # tap released (decisive event)
+        self._metric_stop_liquid = None  # beer level at that release
+        self._metric_stop_total = None   # beer + foam at that release
+        self._metric_peak_foam = 0.0
+        self._metric_bell_step = None
+        self._metric_was_pouring = False
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_pour_metrics(self):
+        """Latch the open / on-target / release edges of the pour.
+
+        The release latch is deliberately overwritten on every falling edge: a short
+        first pour that was topped up is not the decision being scored, the FINAL
+        release is.
+        """
+        try:
+            pouring = bool(getattr(self, "_button_pouring", False))
+            if pouring and self._metric_open_step is None:
+                self._metric_open_step = self._metric_step()
+            if (self._metric_target_step is None
+                    and float(self.liquid_level) > float(self.target_liquid)):
+                self._metric_target_step = self._metric_step()
+            if self._metric_was_pouring and not pouring:
+                self._metric_stop_step = self._metric_step()
+                self._metric_stop_liquid = float(self.liquid_level)
+                self._metric_stop_total = float(self._total_fill())
+            self._metric_peak_foam = max(
+                float(self._metric_peak_foam), float(self.foam_level))
+            self._metric_was_pouring = pouring
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `stop_latency_steps` — steps from the beer level first clearing
+        ``target_liquid`` until the tap button is finally released. The glass keeps
+        filling the whole time, so this window is spent burning the overflow headroom.
+        extra2 `headroom_norm` — beer+foam still missing from the overflow gate at the
+        moment the tap was released, over the full usable window
+        (``overflow_level - 0.02 - target_liquid``). 0 = stopped right at the gate,
+        1 = stopped as soon as the beer cleared the target line. Values are reported
+        raw, so a negative number means the pour went past the gate (overfilled).
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a, b = self._metric_target_step, self._metric_stop_step
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["stop_latency_steps"] = lat
+        out["stop_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+        pour = (None if (self._metric_open_step is None or a is None)
+                else max(int(a) - int(self._metric_open_step), 0))
+        out["pour_latency_steps"] = pour
+        bell = (None if (b is None or self._metric_bell_step is None)
+                else max(int(self._metric_bell_step) - int(b), 0))
+        out["bell_latency_steps"] = bell
+
+        tot = self._metric_stop_total
+        try:
+            gate = float(self.overflow_level) - 0.02
+            span = max(gate - float(self.target_liquid), 1e-6)
+            out["headroom_norm"] = (
+                None if tot is None else round((gate - float(tot)) / span, 4))
+        except Exception:
+            out["headroom_norm"] = None
+        out["stop_liquid"] = (None if self._metric_stop_liquid is None
+                              else round(float(self._metric_stop_liquid), 4))
+        out["stop_total_fill"] = None if tot is None else round(float(tot), 4)
+        out["peak_foam"] = round(float(self._metric_peak_foam), 4)
+        try:
+            out["target_liquid"] = round(float(self.target_liquid), 4)
+            out["final_liquid"] = round(float(self.liquid_level), 4)
+        except Exception:
+            out["target_liquid"] = None
+            out["final_liquid"] = None
+        out["overflowed"] = bool(getattr(self, "overflowed", False))
+        return out
 
     def _pour_quality_ok(self) -> bool:
         """Fill criteria only (no bell). Used while pouring and for miss reasons."""

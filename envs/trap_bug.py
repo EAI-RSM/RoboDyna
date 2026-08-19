@@ -109,6 +109,7 @@ class trap_bug(Office_base_task):
         self._trap_anchored = False
         self._trap_released = False  # gripper opened / trap left the hand
         self._partial_score = 0.0  # latched at trap landing (bug keeps running after)
+        self._reset_metric_state()
         self._trap_falling = False
         self._trap_welded = False
         self._trap_weld_offset = None
@@ -454,6 +455,7 @@ class trap_bug(Office_base_task):
         self._trap_weld_offset = None
         self._trap_weld_arm = None
         self._trap_anchor_pose = None
+        self._reset_metric_state()
         self._trap_collision_groups_backup = None
 
         self.add_prohibit_area(self.trap, padding=0.04)
@@ -768,6 +770,8 @@ class trap_bug(Office_base_task):
         self._trap_weld_offset = None
         self._trap_weld_arm = None
         self._trap_released = True
+        if self._metric_release_step is None:
+            self._metric_release_step = self._metric_step()
         if not self._trap_anchored:
             self._trap_falling = True
 
@@ -787,6 +791,7 @@ class trap_bug(Office_base_task):
         self._trap_anchored = True
         self._trap_falling = False
         self._trap_released = True
+        self._latch_land_metric(p)
         # Restore PhysX shapes now that the box is seated (bug resolve is geometric).
         self._set_trap_physx_collisions_enabled(True)
         # Capture verdict at land time.
@@ -873,6 +878,8 @@ class trap_bug(Office_base_task):
         self._bug_mode = "hidden"
         self._bug_moving = False
         self._bug_escaped = True
+        if self._metric_escape_step is None:
+            self._metric_escape_step = self._metric_step()
         self._bug_vel = np.zeros(3, dtype=np.float64)
         if self.bug is None or self._bug_rigid is None:
             return
@@ -899,6 +906,7 @@ class trap_bug(Office_base_task):
         self._sim_steps += 1
         self._maybe_auto_weld_or_release()
         self._step_trap_fall()
+        self._track_trap_metrics()
         # Keep a landed trap pinned at the exact landing pose.
         if self._trap_anchored and self._trap_anchor_pose is not None:
             self._set_trap_pose(self._trap_anchor_pose)
@@ -1013,6 +1021,8 @@ class trap_bug(Office_base_task):
         self._bug_moving = True
         self._bug_walk_elapsed = 0.0
         self._bug_escaped = False
+        if self._metric_bug_start_step is None:
+            self._metric_bug_start_step = self._metric_step()
         if self._bug_mode in ("hidden", "hide"):
             self._bug_mode = "emerge"
 
@@ -1193,6 +1203,117 @@ class trap_bug(Office_base_task):
         dx = abs(float(bug_p[0] - trap_p[0])) - hx
         dy = abs(float(bug_p[1] - trap_p[1])) - hy
         return float(np.hypot(max(0.0, dx), max(0.0, dy)))
+    # --------------------------------------------------- experiment metrics
+    def _reset_metric_state(self) -> None:
+        """Per-episode metric latches. Called at every reset site."""
+        self._metric_bug_start_step = None
+        self._metric_release_step = None
+        self._metric_land_step = None
+        self._metric_escape_step = None
+        self._metric_land_offset = None
+        self._metric_land_covered = None
+        self._metric_best_offset = None
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _trap_offset_norm(self, trap_p) -> float:
+        """Bug centre vs trap footprint, normalised by the success half-extents.
+
+        <= 1.0 means the bug is under the trap by the same test ``check_success``
+        uses (``trap_half * 0.95``), so the number is directly readable as
+        "how close to a clean capture".
+        """
+        bp = np.asarray(self.bug.get_pose().p, dtype=np.float64)
+        tp = np.asarray(trap_p, dtype=np.float64)
+        hx = float(self.trap_half[0]) * 0.95
+        hy = float(self.trap_half[1]) * 0.95
+        return float(max(abs(bp[0] - tp[0]) / max(hx, 1e-6),
+                         abs(bp[1] - tp[1]) / max(hy, 1e-6)))
+
+    def _latch_land_metric(self, trap_p) -> None:
+        """The trap has come to rest — the verdict is fixed at this instant.
+
+        Read the offset here, not at the end: a captured bug is stopped and a
+        missed one keeps running, so a late recompute would flatter the capture
+        and punish the miss for motion that happened after the outcome.
+        """
+        try:
+            if self._metric_land_step is not None:
+                return
+            self._metric_land_step = self._metric_step()
+            if self.bug is None or self._bug_rigid is None:
+                return
+            off = self._trap_offset_norm(trap_p)
+            self._metric_land_offset = off
+            self._metric_land_covered = bool(off <= 1.0)
+        except Exception:
+            pass
+
+    def _track_trap_metrics(self) -> None:
+        """Closest the bug ever came to being under the (still airborne) trap.
+
+        A high-water mark of the *best* alignment while the trap was still in
+        play: it separates "aimed badly" from "aimed right but dropped late".
+        """
+        try:
+            if self._metric_land_step is not None:
+                return
+            if self.trap is None or self.bug is None or self._bug_rigid is None:
+                return
+            if not self._bug_moving:
+                return
+            off = self._trap_offset_norm(self.trap.get_pose().p)
+            if (self._metric_best_offset is None
+                    or off < self._metric_best_offset):
+                self._metric_best_offset = off
+        except Exception:
+            pass
+
+    def _compute_metrics(self) -> dict:
+        """Human-experiment metrics.
+
+        extra1 ``cover_latency_steps`` — bug starts running -> trap lands on the
+        table. That is the decisive event: once the trap is anchored the verdict
+        is already decided, so this is the whole reaction window.
+
+        extra2 ``bug_offset_norm`` — bug centre vs trap footprint at landing,
+        normalised by ``trap_half * 0.95`` (the success half-extents).
+        Dimensionless, LOWER IS BETTER; <= 1.0 == covered, 0.0 == dead centre.
+        ``None`` when the trap never landed.
+        """
+        out = {}
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            dt = 0.004
+        start = self._metric_bug_start_step
+        land = self._metric_land_step
+        rel = self._metric_release_step
+
+        lat = None if (land is None or start is None) else int(land - start)
+        out["cover_latency_steps"] = lat
+        out["cover_latency_s"] = None if lat is None else round(lat * dt, 4)
+        out["release_latency_steps"] = (
+            None if (rel is None or start is None) else int(rel - start))
+        out["fall_latency_steps"] = (
+            None if (land is None or rel is None) else int(land - rel))
+        esc = self._metric_escape_step
+        out["escape_margin_steps"] = (
+            None if (esc is None or land is None) else int(esc - land))
+
+        off = self._metric_land_offset
+        out["bug_offset_norm"] = None if off is None else round(float(off), 4)
+        best = self._metric_best_offset
+        out["best_offset_norm"] = None if best is None else round(float(best), 4)
+        out["covered_at_landing"] = self._metric_land_covered
+        out["bug_escaped"] = bool(getattr(self, "_bug_escaped", False))
+        out["trap_landed"] = bool(getattr(self, "_trap_anchored", False))
+        try:
+            out["walk_time_s"] = round(float(self.walk_time), 4)
+        except Exception:
+            out["walk_time_s"] = None
+        return out
 
     def check_success(self):
         """Success = released trap has landed, with the bug under its footprint.

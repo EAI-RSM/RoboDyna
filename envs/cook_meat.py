@@ -121,6 +121,7 @@ class cook_meat(Base_Task):
         self._cook_cfg = dict(kwargs.get("task_args", {}).get("cook_meat", {}))
         self._apply_legacy_option()
         self._ep_seed = int(kwargs.get("seed", 0))
+        self._reset_metric_state()
         super()._init_task_env_(**kwargs)
         # Base eval may overwrite step_lim from yaml ``eval_step_limit`` after
         # load_actors; re-apply the task_args cutoff for every scenario.
@@ -991,6 +992,7 @@ class cook_meat(Base_Task):
         self.doneness = primary["doneness"]
         self.max_doneness = primary["max_doneness"]
         self._grasp_doneness = primary["grasp_doneness"]
+        self._reset_metric_state()
         self._cooking_active = False
         # Legacy alias used by older unit tests / success helpers.
         self.plate = primary["board"]
@@ -1327,6 +1329,7 @@ class cook_meat(Base_Task):
         self.doneness = float(primary["doneness"])
         self.max_doneness = float(primary["max_doneness"])
         self._grasp_doneness = primary["grasp_doneness"]
+        self._track_cook_metrics(stations)
 
     def _cook_idle(self) -> None:
         """Step until every station reaches target doneness (or dwell limit)."""
@@ -1844,6 +1847,68 @@ class cook_meat(Base_Task):
         elif bool(station.get("cook_on")):
             return False
         return bool(self._doneness_in_target_range(float(station["grasp_doneness"])))
+
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self) -> None:
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_band_open_step = None   # every steak first inside the band
+        self._metric_shutoff_step = None     # every steak's cooking stopped
+        self._metric_doneness_error = None   # worst |grasp - centre| / half-width
+
+    def _track_cook_metrics(self, stations: list[dict[str, Any]]) -> None:
+        """Latch when the success band opened and when the last steak was shut off.
+
+        High-water marks: doneness keeps rising past the band and a station can
+        be re-cooked, so only the first crossing / first full shutoff is kept.
+        """
+        try:
+            low, high = self._doneness_range_bounds()
+            if getattr(self, "_metric_band_open_step", None) is None and all(
+                float(st.get("doneness", 0.0)) >= low for st in stations
+            ):
+                self._metric_band_open_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+            if getattr(self, "_metric_shutoff_step", None) is not None:
+                return
+            grasps = [st.get("grasp_doneness") for st in stations]
+            if any(g is None for g in grasps):
+                return
+            self._metric_shutoff_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+            centre = 0.5 * (low + high)
+            half = max(0.5 * (high - low), 1e-9)
+            self._metric_doneness_error = float(max(
+                abs(float(g) - centre) / half for g in grasps
+            ))
+        except Exception:
+            pass
+
+    def _compute_metrics(self) -> dict[str, Any]:
+        """extra1 = band-open->shutoff latency, extra2 = doneness error in half-bands.
+
+        ``doneness_error_norm`` is |grasp_doneness - band centre| divided by the
+        band half-width, worst over stations: 0.0 = the ideal doneness, 1.0 =
+        exactly on a band edge, >1.0 = under/overcooked. LOWER IS BETTER. None
+        when cooking was never shut off.
+        """
+        metrics: dict[str, Any] = {
+            "shutoff_latency_steps": None,
+            "shutoff_latency_s": None,
+            "doneness_error_norm": (
+                None
+                if getattr(self, "_metric_doneness_error", None) is None
+                else float(self._metric_doneness_error)
+            ),
+        }
+        start = getattr(self, "_metric_band_open_step", None)
+        off = getattr(self, "_metric_shutoff_step", None)
+        if start is not None and off is not None and off >= start:
+            steps = int(off - start)
+            metrics["shutoff_latency_steps"] = steps
+            try:
+                metrics["shutoff_latency_s"] = round(
+                    steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics
 
     def check_success(self) -> bool:
         """Return whether every steak was cooked into the target doneness range.

@@ -150,6 +150,7 @@ class stop_ball(Office_base_task):
         self._arm_contacted = False
         self._stopper_contacted = False
         self._stopper_placed = False
+        self._reset_metric_state()
         self._table_start_idx = 0
         self._roll_start_idx = 0
         self._intercept_idx = 0
@@ -712,6 +713,7 @@ class stop_ball(Office_base_task):
         self._arm_contacted = False
         self._stopper_contacted = False
         self._stopper_placed = False
+        self._reset_metric_state()
         self._settle_steps = 0
         self._off_table_steps = 0
         self._live_steps = 0
@@ -1042,6 +1044,8 @@ class stop_ball(Office_base_task):
         if self._ball_state != "parked":
             return
         self._ball_state = "rolling"
+        if self._metric_release_step is None:
+            self._metric_release_step = self._metric_step()
         self._traj_step = 0
         self._armed = True
 
@@ -1111,6 +1115,94 @@ class stop_ball(Office_base_task):
         self._tune_ball_friction()
         self._ball_state = "live"
         self._live_steps = 0
+        self._latch_table_entry()
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_release_step = None  # ball let go at the top of the shelf
+        self._metric_live_step = None    # ball landed on the table, PhysX took over
+        self._metric_entry_margin = None # distance to the exit edge at that landing
+        self._metric_contact_step = None # arm first touched the ball
+        self._metric_contact_margin = None
+        self._metric_stop_step = None    # ball confirmed stopped
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _edge_margin(self, p):
+        """Distance from the ball centre to the edge it is heading for, in metres."""
+        edge = str(getattr(self, "_exit_edge", "front"))
+        if edge == "left":
+            return float(p[0]) + float(self.table_x_edge)
+        if edge == "right":
+            return float(self.table_x_edge) - float(p[0])
+        return float(p[1]) - float(self.table_edge_y)
+
+    def _latch_table_entry(self):
+        """Called when the ball goes live on the table — start of the reaction window."""
+        try:
+            if self._metric_live_step is None:
+                self._metric_live_step = self._metric_step()
+                self._metric_entry_margin = self._edge_margin(self._ball_centre())
+        except Exception:
+            pass
+
+    def _latch_contact_metric(self):
+        """Called the instant the arm first touches the ball, before it deflects."""
+        try:
+            if self._metric_contact_step is None:
+                self._metric_contact_step = self._metric_step()
+                self._metric_contact_margin = self._edge_margin(self._ball_centre())
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `intercept_latency_steps` — steps from the ball being let go at the
+        top of the shelf until the arm first touches it: the full reaction window a
+        human sees. `table_intercept_latency_steps` is the same clock started when
+        the ball actually lands on the table and PhysX takes over.
+        extra2 `edge_margin_norm` — table left between the ball and the edge it was
+        heading for at the moment of contact, over the margin it had on landing.
+        HIGHER is better: 1.0 = intercepted the instant it landed, 0 = caught it right
+        at the lip. `stop_margin_norm` is the same measure at the final resting pose.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a, b = self._metric_release_step, self._metric_contact_step
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["intercept_latency_steps"] = lat
+        out["intercept_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+        live = self._metric_live_step
+        tbl = None if (live is None or b is None) else max(int(b) - int(live), 0)
+        out["table_intercept_latency_steps"] = tbl
+        c = self._metric_stop_step
+        settle = None if (b is None or c is None) else max(int(c) - int(b), 0)
+        out["settle_latency_steps"] = settle
+
+        d0 = self._metric_entry_margin
+        d1 = self._metric_contact_margin
+        ok = d0 is not None and float(d0) > 1e-6
+        out["edge_margin_norm"] = (
+            None if (not ok or d1 is None) else round(float(d1) / float(d0), 4))
+        out["edge_margin_m"] = None if d1 is None else round(float(d1), 4)
+        try:
+            rest = self._edge_margin(self._ball_centre())
+            out["stop_margin_norm"] = (
+                None if not ok else round(float(rest) / float(d0), 4))
+        except Exception:
+            out["stop_margin_norm"] = None
+        out["exit_edge"] = str(getattr(self, "_exit_edge", "front"))
+        out["arm_contacted"] = bool(getattr(self, "_arm_contacted", False))
+        out["fell_off"] = bool(getattr(self, "_fell_off", False))
+        return out
 
     def _table_lip(self):
         """(half_x, front_y) of the physical tabletop, including table bias."""
@@ -1202,6 +1294,7 @@ class stop_ball(Office_base_task):
                     n1 == ball_name and n0 in robot_links
                 ):
                     self._arm_contacted = True
+                    self._latch_contact_metric()
                     return
         except Exception:
             pass
@@ -1211,6 +1304,7 @@ class stop_ball(Office_base_task):
             gap = float(np.linalg.norm(self._ball_to_tcp(self.arm_side)[:3]))
             if gap <= (self.ball_radius + 0.028):
                 self._arm_contacted = True
+                self._latch_contact_metric()
         except Exception:
             pass
 
@@ -1250,6 +1344,8 @@ class stop_ball(Office_base_task):
                     if self._settle_steps >= self.settle_hold_steps:
                         self._ball_state = "stopped"
                         self._stopped = True
+                        if self._metric_stop_step is None:
+                            self._metric_stop_step = self._metric_step()
                 else:
                     self._settle_steps = 0
                     # Never boost a contacted ball or one overlapping a hand —

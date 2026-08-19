@@ -69,6 +69,9 @@ class stop_valley_ball(catch_valley_ball):
         self._panel_hit = False
         self._distractor_panel_hit = False
         self._ball_table_before_hit = False
+        self._metric_release_step = None
+        self._metric_hit_step = None
+        self._metric_hit_radial = None
         self.distractor = None
         self._distractor_rigid = None
         self.enable_distractor = False
@@ -382,6 +385,9 @@ class stop_valley_ball(catch_valley_ball):
         self._panel_hit = False
         self._distractor_panel_hit = False
         self._ball_table_before_hit = False
+        self._metric_release_step = None
+        self._metric_hit_step = None
+        self._metric_hit_radial = None
         self.add_prohibit_area(self.panel, padding=0.04)
 
     def _ball_actor_name(self, ball_actor):
@@ -473,9 +479,13 @@ class stop_valley_ball(catch_valley_ball):
         """Track head hits and table-before-hit failures after PhysX release."""
         if self._ball_phase != "released":
             return
+        # Latch the release step once so hit latency is measured from the launch.
+        if self._metric_release_step is None:
+            self._metric_release_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
         # Head hit first wins; table contact before any head hit is a permanent fail.
         if not self._panel_hit and self._ball_hit_bat_head(self.ball):
             self._panel_hit = True
+            self._latch_hit_metrics()
         if (
             (not self._panel_hit)
             and (not self._ball_table_before_hit)
@@ -488,6 +498,42 @@ class stop_valley_ball(catch_valley_ball):
             and self._ball_hit_bat_head(self.distractor)
         ):
             self._distractor_panel_hit = True
+
+    def _reset_metric_state(self):
+        """Also clear the bat-hit latches (parent only knows the catch ones)."""
+        super()._reset_metric_state()
+        self._metric_hit_step = None
+        self._metric_hit_radial = None
+
+    def _latch_hit_metrics(self):
+        """Record when the ball met the bat head and how far off centre it was."""
+        self._metric_hit_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+        try:
+            ball_p = np.asarray(self.ball.get_pose().p, dtype=np.float64)
+            head_p = np.asarray(self.panel.get_pose().p, dtype=np.float64)
+            # Bat local frame: cylinder axis = X, circular face spans YZ.
+            radial = float(np.linalg.norm((ball_p - head_p)[1:3]))
+            self._metric_hit_radial = radial / max(float(self.panel_radius), 1e-9)
+        except Exception:
+            self._metric_hit_radial = None
+
+    def _compute_metrics(self):
+        """extra1 = release->hit latency, extra2 = radial miss in bat-head radii."""
+        metrics = {
+            "hit_latency_steps": None,
+            "hit_latency_s": None,
+            "radial_offset_norm": self._metric_hit_radial,
+        }
+        start = self._metric_release_step
+        hit = self._metric_hit_step
+        if start is not None and hit is not None and hit >= start:
+            steps = int(hit - start)
+            metrics["hit_latency_steps"] = steps
+            try:
+                metrics["hit_latency_s"] = round(steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics
 
     def _update_kinematic_tasks(self):
         # Bat is welded to the EE; do not use the parent's box (no-weld) update.
@@ -559,6 +605,9 @@ class stop_valley_ball(catch_valley_ball):
         self._panel_hit = False
         self._distractor_panel_hit = False
         self._ball_table_before_hit = False
+        self._metric_release_step = None
+        self._metric_hit_step = None
+        self._metric_hit_radial = None
 
         self.move(self.grasp_actor(self.panel, arm_tag=arm_tag, pre_grasp_dis=0.10))
         self._weld_bowl_to_end_effector(arm_tag)

@@ -135,6 +135,7 @@ class sort_apples_belt(Base_Task):
         # Ensure stream is OFF during base settle / gripper open (re-used task instances
         # may still have _stream_active=True from a prior episode).
         self._stream_active = False
+        self._reset_metric_state()
         super()._init_task_env_(**kwags)
         # activate the stream AFTER setup (the base settles the scene during _init_task_env_ with the
         # stream OFF, so apples don't deposit before the episode). Set here -- NOT in play_once -- so
@@ -490,6 +491,7 @@ class sort_apples_belt(Base_Task):
         self._stream_active = False
         self._routed = [None] * self.n_apples
         self.delivered = [None] * self.n_apples
+        self._reset_metric_state()
         self.results = [None] * self.n_apples
         self.press_count = 0
         self.dump_press_count = 0
@@ -650,6 +652,7 @@ class sort_apples_belt(Base_Task):
     def _spawn(self, idx):
         self._apple_y[idx] = self.BELT_Y_FAR
         self._apple_mode[idx] = "belt"
+        self._latch_spawn_metric(idx)
         comp = self._apple_comps[idx]
         if comp is not None:
             comp.set_kinematic(True)
@@ -697,6 +700,7 @@ class sort_apples_belt(Base_Task):
             return
         self._routed[idx] = side
         self._apple_mode[idx] = "physics"
+        self._latch_commit_metric(idx, side)
         comp = self._apple_comps[idx]
         if comp is None:
             return
@@ -722,6 +726,7 @@ class sort_apples_belt(Base_Task):
         """
         self._routed[idx] = "dump"
         self._apple_mode[idx] = "physics"
+        self._latch_commit_metric(idx, "dump")
         comp = self._apple_comps[idx]
         if comp is None:
             self._deposited[idx] = True
@@ -1666,6 +1671,94 @@ class sort_apples_belt(Base_Task):
             f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
             f1s.append(f1)
         return float(np.mean(f1s)) if f1s else 0.0
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        n = int(getattr(self, "n_apples", 0) or 0)
+        self._metric_spawn_step = [None] * n
+        self._metric_commit_step = [None] * n   # apple handed to physics past the fork
+        self._metric_commit_correct = [None] * n
+        self._metric_commit_margin = [None] * n # belt distance still to run at commit, metres
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_spawn_metric(self, idx):
+        try:
+            if self._metric_spawn_step[idx] is None:
+                self._metric_spawn_step[idx] = self._metric_step()
+        except Exception:
+            pass
+
+    def _latch_commit_metric(self, idx, side):
+        """Called from the release paths — the gate side is final from here.
+
+        Records whether the committed route matched the apple's true class at the
+        instant of commit; the later landing can still be spoiled by physics, but
+        the operator's decision is fixed right here.
+        """
+        try:
+            if self._metric_commit_step[idx] is not None:
+                return
+            self._metric_commit_step[idx] = self._metric_step()
+            want = self._target_side_for_apple(idx)
+            if self.apple_colors[idx] == self.COLOR_ROTTEN:
+                want = "dump"
+            self._metric_commit_correct[idx] = bool(side is not None and side == want)
+            y = self._apple_y[idx]
+            self._metric_commit_margin[idx] = (
+                None if y is None else float(y) - float(self.BELT_Y_END)
+            )
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `route_latency_steps` — mean steps from an apple appearing at the far end
+        of the belt until it is committed past the diverter (gate side final). The belt
+        never stops, so this is the classify-and-act window.
+        extra2 `route_accuracy` — fraction of committed apples whose gate side matched
+        their true class AT THE MOMENT OF COMMIT. HIGHER is better. Reported alongside
+        the task's own end-of-episode ``sorting_accuracy`` / ``macro_f1``.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        lats = []
+        try:
+            for i in range(int(self.n_apples)):
+                a = self._metric_spawn_step[i]
+                b = self._metric_commit_step[i]
+                if a is not None and b is not None:
+                    lats.append(max(int(b) - int(a), 0))
+        except Exception:
+            lats = []
+        mean_lat = (sum(lats) / len(lats)) if lats else None
+        out["route_latency_steps"] = None if mean_lat is None else round(float(mean_lat), 3)
+        out["route_latency_s"] = None if mean_lat is None else round(float(mean_lat) * dt, 4)
+        out["first_route_latency_steps"] = min(lats) if lats else None
+        out["routes_counted"] = len(lats)
+
+        try:
+            oks = [c for c in self._metric_commit_correct if c is not None]
+        except Exception:
+            oks = []
+        out["route_accuracy"] = (
+            round(sum(1 for c in oks if c) / len(oks), 4) if oks else None
+        )
+        try:
+            out["sorting_accuracy"] = round(float(self.sorting_accuracy), 4)
+            out["macro_f1"] = round(float(self.macro_f1), 4)
+        except Exception:
+            out["sorting_accuracy"] = None
+            out["macro_f1"] = None
+        return out
 
     def check_success(self):
         self._eval_landings()

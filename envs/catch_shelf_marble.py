@@ -186,6 +186,7 @@ class catch_shelf_marble(Base_Task):
         self.osc_shelf_idx = -1
         self._osc_steps = 0
         self._osc_armed = False  # flipped True at play_once; keeps check_stable from seeing motion
+        self._reset_metric_state()
         self.key_xy = {}
         self.key_rest_xyz = {}
         self.key_arrows = {}
@@ -974,6 +975,7 @@ class catch_shelf_marble(Base_Task):
         self._marble_result = None
         self._leg_idx = 0
         self._leg_step = 0
+        self._reset_metric_state()
 
         # ---- bowl: kinematic, rides the belt, starts at the belt's horizontal centre ----
         self.bowl_x_start = 0.5 * (self.bowl_x_min + self.bowl_x_max)
@@ -1097,6 +1099,9 @@ class catch_shelf_marble(Base_Task):
         if self._marble_state != "parked":
             return
         self._marble_state = "descending"
+        # Metrics: the drop opens the window to get the bowl under the marble.
+        if getattr(self, "_metric_release_step", None) is None:
+            self._metric_release_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
         self._marble_result = None
         self._leg_idx = 0
         self._leg_step = 0
@@ -1160,6 +1165,13 @@ class catch_shelf_marble(Base_Task):
         a still-converging approach as a miss."""
         self._marble_state = "resolved"
         bowl_x = float(self.bowl.get_pose().p[0])
+        # Metrics: this offset is exactly what decides caught vs. missed.
+        try:
+            self._metric_resolve_offset_norm = abs(
+                bowl_x - float(self.target_catch_x)
+            ) / max(float(self.bowl_catch_xy_tol), 1e-9)
+        except Exception:
+            self._metric_resolve_offset_norm = None
         if abs(bowl_x - self.target_catch_x) <= self.bowl_catch_xy_tol:
             self._marble_result = "caught"
         else:
@@ -1274,6 +1286,7 @@ class catch_shelf_marble(Base_Task):
             self._advance_marble()
         elif self._marble_state == "resolved" and self._marble_result == "caught":
             self._ride_marble_in_bowl()
+        self._track_bowl_in_position_metric()
 
     def _dwell(self, steps):
         for i in range(max(0, int(steps))):
@@ -1348,6 +1361,7 @@ class catch_shelf_marble(Base_Task):
         # Start the oscillating shelf as soon as the episode action begins -- including the
         # close_gripper / approach window where the marble is still frozen on the top shelf.
         self._osc_armed = True
+        self._reset_metric_state()
 
         if _CSM_DEBUG:
             print(f"[CSM] play_once start: bowl_pose_p={self.bowl.get_pose().p.round(4)}", flush=True)
@@ -1430,6 +1444,60 @@ class catch_shelf_marble(Base_Task):
         return self.info
 
     # ------------------------------------------------------------------ success
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_release_step = None
+        self._metric_in_position_step = None
+        self._metric_resolve_offset_norm = None
+
+    def _track_bowl_in_position_metric(self):
+        """Latch the first frame the bowl reached the marble's landing column.
+
+        High-water mark: the bowl can drift back out (the belt keeps moving), so
+        only the first arrival is kept. Stops querying once latched.
+        """
+        if getattr(self, "_metric_in_position_step", None) is not None:
+            return
+        if getattr(self, "_metric_release_step", None) is None:
+            return
+        try:
+            bowl_x = float(self.bowl.get_pose().p[0])
+            if abs(bowl_x - float(self.target_catch_x)) > float(self.bowl_catch_xy_tol):
+                return
+        except Exception:
+            return
+        self._metric_in_position_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _compute_metrics(self):
+        """extra1 = drop->bowl-in-position latency, extra2 = final aim error in tolerances.
+
+        ``catch_offset_norm`` is |bowl_x - target_catch_x| at the instant the catch
+        was judged, as a fraction of ``bowl_catch_xy_tol``: 0.0 = perfectly under
+        the marble, 1.0 = exactly on the pass/fail boundary, >1.0 = a miss.
+        LOWER IS BETTER. None when the catch was never judged.
+        """
+        metrics = {
+            "in_position_latency_steps": None,
+            "in_position_latency_s": None,
+            "catch_offset_norm": (
+                None
+                if getattr(self, "_metric_resolve_offset_norm", None) is None
+                else float(self._metric_resolve_offset_norm)
+            ),
+        }
+        start = getattr(self, "_metric_release_step", None)
+        arrived = getattr(self, "_metric_in_position_step", None)
+        if start is not None and arrived is not None and arrived >= start:
+            steps = int(arrived - start)
+            metrics["in_position_latency_steps"] = steps
+            try:
+                metrics["in_position_latency_s"] = round(
+                    steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics
+
     def check_success(self):
         self.info["target_catch_x"] = float(self.target_catch_x)
         self.info["marble_result"] = str(self._marble_result)

@@ -117,6 +117,7 @@ class marble_shelf_maze(Base_Task):
         self._ball_rigid = None
         self.active_shelf_idx = 0
         self._ball_mode = "resting"      # resting | sliding | falling | done | missed
+        self._reset_metric_state()
         self._sliding_shelf_idx = -1
         self._sliding_dir = 0
         self._sliding_start_local_x = 0.0
@@ -521,6 +522,7 @@ class marble_shelf_maze(Base_Task):
         self.active_shelf_idx = 0
         self._ball_mode = "resting"
         self._sliding_shelf_idx = -1
+        self._reset_metric_state()
         self._sliding_dir = 0
         self._sliding_local_x = 0.0
         self._sliding_last_p = None
@@ -1036,6 +1038,7 @@ class marble_shelf_maze(Base_Task):
         except Exception:
             pass
         self._ball_mode = "falling"
+        self._latch_final_release_metric(idx)
         self._sliding_last_p = None
         # Expert path eases the shelf back immediately; interactive hold-to-tilt keeps it
         # tilted until the key is released (see `_sync_hold_tilt`). The marble is already
@@ -1449,6 +1452,7 @@ class marble_shelf_maze(Base_Task):
         if self._interactive_controls_enabled():
             self._resolve_hold_tilt_ball()
         self._animate_oscillating_bowl()
+        self._track_maze_metrics()
         # Catch Opt-1 roll-offs / table hits from the *previous* step so the next control
         # iteration can abort (also see take_dense_action / _dwell post-step watches).
         self._watch_for_ball_miss()
@@ -1754,6 +1758,91 @@ class marble_shelf_maze(Base_Task):
         self.info["continuous_ball_motion"] = bool(self.continuous_ball_motion)
         self.info["oscillating_bowl_enabled"] = bool(self.osc_bowl_enabled)
         return self.info
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_final_ready_step = None    # marble parked on the bottom shelf
+        self._metric_final_release_step = None  # bottom shelf fired
+        self._metric_bowl_step = None           # marble first inside the bowl
+        self._metric_final_falling = False
+        self._metric_min_bowl_offset = None     # closest horizontal approach, metres
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_final_release_metric(self, idx: int):
+        """Called from _release_ball when the *bottom* shelf fires."""
+        try:
+            if int(idx) < int(self.n_shelves) - 1:
+                return
+            if getattr(self, "_metric_final_release_step", None) is None:
+                self._metric_final_release_step = self._metric_step()
+            self._metric_final_falling = True
+        except Exception:
+            pass
+
+    def _track_maze_metrics(self):
+        """Per-step latches: bottom-shelf arrival, closest bowl approach, bowl entry."""
+        try:
+            mode = str(getattr(self, "_ball_mode", ""))
+            last = int(self.n_shelves) - 1
+            if (
+                getattr(self, "_metric_final_ready_step", None) is None
+                and mode == "resting"
+                and int(getattr(self, "active_shelf_idx", -1)) == last
+            ):
+                self._metric_final_ready_step = self._metric_step()
+            if not getattr(self, "_metric_final_falling", False) or self.ball is None:
+                return
+            p = np.array(self.ball.get_pose().p, dtype=np.float64)
+            # Only score the descent below the shelf stack — the slide along the shelf
+            # itself passes over the bowl and would fake a perfect approach.
+            if float(p[2]) <= float(self.shelf_z[last]):
+                horiz = float(np.linalg.norm(p[:2] - self._bowl_xy()))
+                prev = getattr(self, "_metric_min_bowl_offset", None)
+                if prev is None or horiz < prev:
+                    self._metric_min_bowl_offset = horiz
+            if getattr(self, "_metric_bowl_step", None) is None and self._ball_in_bowl():
+                self._metric_bowl_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `final_drop_latency_steps` — steps from the marble coming to rest on the
+        bottom shelf until that shelf is fired. Under Opt 2 the bowl sweeps left/right,
+        so this window is exactly the operator's timing decision.
+        extra2 `bowl_offset_norm` — closest horizontal marble-to-bowl-centre distance
+        during the final descent, divided by the catch radius. LOWER is better; <= 1.0
+        means it fell within the bowl mouth.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        ready = getattr(self, "_metric_final_ready_step", None)
+        rel = getattr(self, "_metric_final_release_step", None)
+        lat = None if (ready is None or rel is None) else max(int(rel) - int(ready), 0)
+        out["final_drop_latency_steps"] = lat
+        out["final_drop_latency_s"] = None if lat is None else round(lat * dt, 4)
+
+        bowl = getattr(self, "_metric_bowl_step", None)
+        fall = None if (rel is None or bowl is None) else max(int(bowl) - int(rel), 0)
+        out["fall_latency_steps"] = fall
+        out["fall_latency_s"] = None if fall is None else round(fall * dt, 4)
+
+        off = getattr(self, "_metric_min_bowl_offset", None)
+        try:
+            denom = float(self.bowl_catch_radius) + float(self.ball_radius)
+            out["bowl_offset_norm"] = None if off is None else round(float(off) / max(denom, 1e-9), 4)
+        except Exception:
+            out["bowl_offset_norm"] = None
+        return out
 
     # ----------------------------------------------------------- metric/obs
     def check_success(self):

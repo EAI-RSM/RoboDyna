@@ -95,6 +95,7 @@ class boil_milk(KitchenS_base_task):
         self.turned_on_once = False
         self.turned_off_after_boil = False
         self._partial_score = 0.0  # latched at the stove-off transition
+        self._reset_metric_state()
         self._liquid_entity = None
         self._spill_entity = None
         self._target_ring_parts = []
@@ -200,6 +201,7 @@ class boil_milk(KitchenS_base_task):
         self.turned_on_once = False
         self.turned_off_after_boil = False
         self._partial_score = 0.0
+        self._reset_metric_state()
         self._knob_press_latched = False
         self._prev_knob_pressed = False
         self._expert_holding_knob = False
@@ -756,6 +758,8 @@ class boil_milk(KitchenS_base_task):
             return
         self.stove_on = on
         if on:
+            if self._metric_on_step is None:
+                self._metric_on_step = self._metric_step()
             self.turned_on_once = True
         elif self.turned_on_once and not self.overflowed:
             # Count as a boil shutoff only if milk already hit the red ring.
@@ -764,6 +768,7 @@ class boil_milk(KitchenS_base_task):
             # Latch the partial score at the shutoff frame — milk settles back
             # toward baseline afterward, so a live read would understate it.
             self._partial_score = self._score_at_shutoff()
+            self._latch_shutoff_metric()
             peak = float(getattr(self, "max_liquid_level", 0.0))
             target = float(getattr(self, "target_level", 0.0))
             print(
@@ -772,6 +777,69 @@ class boil_milk(KitchenS_base_task):
                 f"score={self._partial_score:.2f}"
             )
         self._set_burner_glow(on)
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_on_step = None        # burner first lit
+        self._metric_target_step = None    # milk first reached the red ring
+        self._metric_off_step = None       # burner switched off (decisive event)
+        self._metric_off_level = None      # liquid level at that instant
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_shutoff_metric(self):
+        """Called from _set_stove on the on->off edge, before the level settles back."""
+        try:
+            if self._metric_off_step is None:
+                self._metric_off_step = self._metric_step()
+                self._metric_off_level = float(self.liquid_level)
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `shutoff_latency_steps` — steps from the milk first touching the red
+        ring until the burner is switched off. This is the whole reaction window: the
+        milk keeps rising the entire time, so every step here eats overflow headroom.
+        extra2 `level_error_norm` — |level at shutoff - target| / (overflow - target).
+        LOWER is better; 0 = cut the flame exactly on the ring, 1 = only shut off at
+        the boil-over point.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a, b = self._metric_target_step, self._metric_off_step
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["shutoff_latency_steps"] = lat
+        out["shutoff_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+        heat = (None if (self._metric_on_step is None or self._metric_target_step is None)
+                else max(int(self._metric_target_step) - int(self._metric_on_step), 0))
+        out["heat_latency_steps"] = heat
+
+        lvl = self._metric_off_level
+        try:
+            span = float(self.overflow_level) - float(self.target_level)
+            out["level_error_norm"] = (
+                None if (lvl is None or span <= 1e-9)
+                else round(abs(float(lvl) - float(self.target_level)) / span, 4))
+        except Exception:
+            out["level_error_norm"] = None
+        out["shutoff_level"] = None if lvl is None else round(float(lvl), 4)
+        try:
+            out["target_level"] = round(float(self.target_level), 4)
+            out["max_liquid_level"] = round(float(self.max_liquid_level), 4)
+        except Exception:
+            out["target_level"] = None
+            out["max_liquid_level"] = None
+        out["overflowed"] = bool(getattr(self, "overflowed", False))
+        return out
 
     def _spawn_spill_puddle(self, scale: float = 1.0):
         """Compact white milk puddle under the pot (visual only).
@@ -846,6 +914,8 @@ class boil_milk(KitchenS_base_task):
             self.max_liquid_level = max(self.max_liquid_level, self.liquid_level)
             if self.liquid_level >= self.target_level - 1e-3:
                 self.reached_target = True
+                if self._metric_target_step is None:
+                    self._metric_target_step = self._metric_step()
             # Do not kill the flame mid-knob-turn: the expert is still reaching
             # to shut off. Overflow commits only once the hand is free again.
             if (
