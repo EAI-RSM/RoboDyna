@@ -1,0 +1,3 @@
+# URDF is small, mergeable source text. Keep it out of Git LFS even when a downloaded
+# parent asset bundle carries broad local LFS attributes.
+*.urdf -filter -diff -merge text
