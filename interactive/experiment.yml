@@ -10,11 +10,53 @@
 #
 # Override path with ROBODYNA_EXPERIMENT_CONFIG=/path/to/file.yml if needed.
 
-# Seed for each play (0–500).
+# Seed for each play (0–500). Global form still works:
 #   null        → a new random seed every play
 #   0           → the same seed every play
 #   [0, 1, 2]   → 1st SUCCESS/FAILURE play uses 0, 2nd uses 1, 3rd uses 2, then wraps
-seed: null
+#
+# Per-task values live here in the experiment YAML. Base tasks can set each opt
+# separately; household tasks have one value. Replace null with an int or list.
+# More specific keys win over ``all``. null means random for that slot.
+seed:
+  all: null
+  base:
+    catch_marbles_trapdoors: {default: null, opt1: null, opt2: null, opt1+2: null}
+    catch_ramp_ball:         {default: null, opt1: null, opt2: null, opt1+2: null}
+    catch_cuboid:            {default: null, opt1: null, opt2: null, opt1+2: null}
+    catch_shelf_marble:      {default: null, opt1: null, opt2: null, opt1+2: null}
+    catch_valley_ball:       {default: null, opt1: null, opt2: null, opt1+2: null}
+    stop_valley_ball:        {default: null, opt1: null, opt2: null, opt1+2: null}
+    cook_meat:               {default: null, opt1: null, opt2: null, opt1+2: null}
+    cook_meat_timer:         {default: null, opt1: null, opt2: null, opt1+2: null}
+    put_cup_belt:            {default: null, opt1: null, opt2: null, opt1+2: null}
+    dispense_gummy:          {default: null, opt1: null, opt2: null, opt1+2: null}
+    punch_dual_holes:        {default: null, opt1: null, opt2: null, opt1+2: null}
+    save_goal:               {default: null, opt1: null, opt2: null, opt1+2: null}
+    hit_target:              {default: null, opt1: null, opt2: null, opt1+2: null}
+    load_train:              {default: null, opt1: null, opt2: null, opt1+2: null}
+    marble_shelf_maze:       {default: null, opt1: null, opt2: null, opt1+2: null}
+    pack_fruits:             {default: null, opt1: null, opt2: null, opt1+2: null}
+    pick_ripe_apple:         {default: null, opt1: null, opt2: null, opt1+2: null}
+    place_block_belt:        {default: null, opt1: null, opt2: null, opt1+2: null}
+    play_billiard:           {default: null, opt1: null, opt2: null, opt1+2: null}
+    control_quality:         {default: null, opt1: null, opt2: null, opt1+2: null}
+    drop_ball_hole:          {default: null, opt1: null, opt2: null, opt1+2: null}
+    sort_apples_belt:        {default: null, opt1: null, opt2: null, opt1+2: null}
+    whack_moles:             {default: null, opt1: null, opt2: null, opt1+2: null}
+  household:
+    trap_bug: null
+    boil_milk: null
+    fill_coffee_jar: null
+    pour_beer: null
+    cook_food: null
+    cook_food_timer: null
+    measure_ingredient: null
+    make_soup: null
+    catch_cup: null
+    catch_mouse_object_drop: null
+    stop_ball: null
+    clean_table: null
 
 # ---------------------------------------------------------------------------
 # How many SUCCESS/FAILURE plays before a slot grays out.
@@ -49,7 +91,12 @@ seed: null
 #
 # null / unlimited = replay forever. Base keys: default, opt1, opt2, opt1+2.
 # ---------------------------------------------------------------------------
-plays_per_scenario: 1
+plays_per_scenario: 
+  default: 1
+  opt1: 1
+  opt2: 1
+  Opt1+2: 5
+  household: 10
 
 # Write terminal plays to data/exp_logs/<user>/user.json
 # true / false = all or none. Same map form as plays_per_scenario, e.g.

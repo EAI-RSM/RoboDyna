@@ -38,6 +38,7 @@ from interactive._interactive_common import (  # noqa: E402
     configure_task,
     edge_pressed,
     flash_gripper_failure,
+    format_ps_suffix,
     gripper_failure_feedback,
     is_robot_control,
     make_viewer_view_toggle,
@@ -52,6 +53,7 @@ from interactive._interactive_common import (  # noqa: E402
     require_selected_arms,
     resolve_action_arm,
     table_xy_from_click,
+    _env_partial_score,
 )
 
 
@@ -178,6 +180,8 @@ class HouseholdController:
         self._click_via_handler = False
         self._prev_mouse = False
         self._catcher_placed = False
+        self._stop_ball_bridge = None
+        self._stop_ball_bridge_placed = False
         # catch_cup / make_soup robot: keep the prop dynamic so gripper contact is real.
         # Keyboard+mouse drives props via click / keys (arms are hidden).
         if robot and task == "catch_cup" and self.actor is not None:
@@ -260,6 +264,8 @@ class HouseholdController:
             self._hover_sponge()
         elif t == "make_soup" and getattr(e, "board", None) is not None:
             _set_pose(e.board, e.board.get_pose().p, kinematic=True)
+        elif t == "stop_ball":
+            self._create_stop_ball_bridge()
         elif self.actor is not None and t not in ("stop_ball",):
             _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
         if t == "pour_beer":
@@ -277,6 +283,49 @@ class HouseholdController:
                 return orig() if callable(orig) else None
 
             e._button_press_signal = _keyboard_button_signal
+
+    def _create_stop_ball_bridge(self):
+        """Create a movable U-shaped WSG surrogate for keyboard control."""
+        e = self.env
+        builder = e.scene.create_actor_builder()
+        builder.set_physx_body_type("dynamic")
+
+        # Match the open WSG silhouette: two fingers with a connecting palm.
+        # The ball is slightly wider than this inner gap, as in robot mode.
+        gap = float(getattr(e, "WSG_OPEN_FINGER_GAP", 0.110))
+        finger_half = np.array([0.012, 0.022, 0.045], dtype=float)
+        finger_x = 0.5 * gap + finger_half[0]
+        palm_half = np.array([finger_x + finger_half[0], 0.022, 0.010], dtype=float)
+        palm_z = 2.0 * finger_half[2] - palm_half[2]
+        material = sapien.render.RenderMaterial(
+            base_color=[0.16, 0.20, 0.24, 1.0],
+        )
+        try:
+            material.set_roughness(0.42)
+            material.set_metallic(0.55)
+        except Exception:
+            pass
+
+        parts = (
+            (sapien.Pose([-finger_x, 0.0, finger_half[2]]), finger_half),
+            (sapien.Pose([finger_x, 0.0, finger_half[2]]), finger_half),
+            (sapien.Pose([0.0, 0.0, palm_z]), palm_half),
+        )
+        for pose, half_size in parts:
+            builder.add_box_collision(
+                pose=pose,
+                half_size=half_size.tolist(),
+                material=e.scene.default_physical_material,
+            )
+            builder.add_box_visual(
+                pose=pose,
+                half_size=half_size.tolist(),
+                material=material,
+            )
+
+        builder.set_initial_pose(sapien.Pose([0.0, 0.0, -10.0]))
+        self._stop_ball_bridge = builder.build(name="keyboard_stop_ball_bridge")
+        _set_pose(self._stop_ball_bridge, [0.0, 0.0, -10.0], kinematic=True)
 
     def _seat_food_in_pan(self):
         e = self.env
@@ -542,28 +591,27 @@ class HouseholdController:
 
     def _click_stop_ball(self, viewer, pixel_x, pixel_y):
         e = self.env
-        if not self._click_hits(viewer, pixel_x, pixel_y, getattr(e, "ball", None)):
+        if self._stop_ball_bridge_placed or self._stop_ball_bridge is None:
             return False
-        state = str(getattr(e, "_ball_state", ""))
-        land = int(getattr(e, "_land_idx", 0))
-        step = int(getattr(e, "_traj_step", 0))
-        on_table = state == "live" or (state == "rolling" and step > land)
-        if not on_table:
-            e._keyboard_early_click = True
-            print("[stop_ball] clicked too early — failure")
-            return True
-        rigid = getattr(e, "_ball_rigid", None)
-        if rigid is not None:
-            try:
-                rigid.set_linear_velocity(np.zeros(3))
-                rigid.set_angular_velocity(np.zeros(3))
-                rigid.set_kinematic(True)
-            except Exception:
-                pass
-        e._arm_contacted = True
-        e._stopped = True
-        e._ball_state = "stopped"
-        print("[stop_ball] ball stopped")
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+        if hit is None:
+            return False
+        x, y = float(hit[0]), float(hit[1])
+
+        # Turn the bridge across the sampled roll heading, with its opening
+        # facing the incoming ball. Local X spans across the path.
+        direction = np.asarray(getattr(e, "_roll_dir", [0.0, -1.0]), dtype=float)
+        yaw = float(np.arctan2(direction[1], direction[0]) - np.pi / 2.0)
+        quat = [float(np.cos(0.5 * yaw)), 0.0, 0.0, float(np.sin(0.5 * yaw))]
+        _set_pose(
+            self._stop_ball_bridge,
+            [x, y, float(e.table_top)],
+            quat=quat,
+            kinematic=True,
+        )
+        self._stop_ball_bridge_placed = True
+        e._stopper_placed = True
+        print(f"[stop_ball] gripper bridge placed at ({x:.3f}, {y:.3f})")
         return True
 
     def _click_sponge(self, viewer, pixel_x, pixel_y):
@@ -1004,6 +1052,9 @@ class HouseholdController:
     def after_step(self):
         """Post-physics hooks (release arming, catch/miss latch, trap freeze)."""
         env = self.env
+        if self.task == "stop_ball":
+            self._poll_stop_ball_bridge_contact()
+            return
         if self.task == "catch_mouse_object_drop":
             # Catch/miss is evaluated before scene.step inside
             # _update_kinematic_tasks; re-check after the step so a table
@@ -1023,6 +1074,29 @@ class HouseholdController:
         if bool(getattr(env, "_trap_anchored", False)) and not getattr(self, "_trap_land_logged", False):
             self._trap_land_logged = True
             print("[trap_bug] trap landed; pose frozen as-is")
+
+    def _poll_stop_ball_bridge_contact(self):
+        """Latch real PhysX contact between the ball and placed bridge."""
+        if (
+            not self._stop_ball_bridge_placed
+            or bool(getattr(self.env, "_stopper_contacted", False))
+            or getattr(self.env, "ball", None) is None
+        ):
+            return
+        ball_name = self.env.ball.get_name()
+        bridge_name = self._stop_ball_bridge.get_name()
+        try:
+            for contact in self.env.scene.get_contacts():
+                names = {
+                    contact.bodies[0].entity.name,
+                    contact.bodies[1].entity.name,
+                }
+                if ball_name in names and bridge_name in names:
+                    self.env._stopper_contacted = True
+                    print("[stop_ball] ball contacted the gripper bridge")
+                    return
+        except Exception:
+            pass
 
 
 def _fill_level_detail(env, task: str) -> str:
@@ -1195,14 +1269,26 @@ def _terminal_failure(env, task):
         if bool(getattr(env, "_fell_on_table", False)) or getattr(env, "_obj_state", "") == "fallen":
             return "object fell on the table"
     elif task == "stop_ball":
-        if bool(getattr(env, "_keyboard_early_click", False)):
-            return "clicked the ball too early"
         if bool(getattr(env, "_fell_off", False)) or getattr(env, "_ball_state", "") == "fallen":
             return "ball fell off the table without being stopped"
     elif task == "clean_table":
         if bool(getattr(env, "laptop_reached", False)):
             return "spill reached the laptop"
     return None
+
+
+def _terminal_hold_seconds(env, task: str) -> float:
+    """Wall-clock seconds to keep rendering after a terminal verdict.
+
+    stop_ball closes 1 s after the ball leaves the table: once it is falling
+    there is no settle left to watch, so it must not sit on the shared 2 s hold.
+    """
+    if task == "stop_ball" and (
+        bool(getattr(env, "_fell_off", False))
+        or str(getattr(env, "_ball_state", "")) == "fallen"
+    ):
+        return 1.0
+    return 2.0
 
 
 def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
@@ -1273,6 +1359,8 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     terminal_started_at = None
     terminal_fill_detail = ""
     terminal_failure_reason = None
+    terminal_partial_score = None  # freeze PS at the terminal decision frame
+    terminal_hold_s = 2.0
     escape_quit = False
     # Match interactive/_interactive_common run_viewer_loop: teleop once per display frame, then
     # fixed-dt physics catch-up so 60 Hz / 240 Hz monitors feel the same speed.
@@ -1293,8 +1381,14 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                         terminal_failure_reason = ESCAPE_QUIT_DETAIL
                         escape_quit = True
                     break
-                if terminal_started_at is not None and time.perf_counter() - terminal_started_at >= 2.0:
-                    print(f"[{task}] closing after 2-second terminal-result display")
+                if (
+                    terminal_started_at is not None
+                    and time.perf_counter() - terminal_started_at >= terminal_hold_s
+                ):
+                    print(
+                        f"[{task}] closing after {terminal_hold_s:g}-second "
+                        "terminal-result display"
+                    )
                     break
                 continue
 
@@ -1319,21 +1413,28 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                     if fill:
                         terminal_fill_detail = fill
                     if succeeded:
+                        terminal_partial_score = _env_partial_score(env)
                         msg = f"[{task}] terminal result: SUCCESS"
                         if fill:
                             msg = f"{msg} ({fill})"
+                        msg = f"{msg}{format_ps_suffix(terminal_partial_score)}"
                         print_success(msg)
                         terminal_result = True
+                        terminal_hold_s = _terminal_hold_seconds(env, task)
                         terminal_started_at = time.perf_counter()
                     if failure is not None:
+                        terminal_partial_score = _env_partial_score(env)
                         if fill and fill not in failure:
                             terminal_failure_reason = f"{failure}; {fill}"
                         else:
                             terminal_failure_reason = failure
                         print_failure(
-                            f"[{task}] terminal result: FAILURE ({terminal_failure_reason})"
+                            f"[{task}] terminal result: FAILURE "
+                            f"({terminal_failure_reason})"
+                            f"{format_ps_suffix(terminal_partial_score)}"
                         )
                         terminal_result = False
+                        terminal_hold_s = _terminal_hold_seconds(env, task)
                         terminal_started_at = time.perf_counter()
 
             env.scene.update_render()
@@ -1350,8 +1451,14 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
             if args.smoke_test and rendered_frames >= 3:
                 print(f"[{task}] smoke test rendered {rendered_frames} frames")
                 break
-            if terminal_started_at is not None and time.perf_counter() - terminal_started_at >= 2.0:
-                print(f"[{task}] closing after 2-second terminal-result display")
+            if (
+                terminal_started_at is not None
+                and time.perf_counter() - terminal_started_at >= terminal_hold_s
+            ):
+                print(
+                    f"[{task}] closing after {terminal_hold_s:g}-second "
+                    "terminal-result display"
+                )
                 break
     finally:
         try:
@@ -1361,7 +1468,20 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                 detail = terminal_failure_reason or terminal_fill_detail or None
             else:
                 detail = terminal_fill_detail or None
-            report_task_result(env, detail=detail, ok=False if escape_quit else None)
+            # Prefer the latched terminal verdict — do not re-score after the
+            # 2s hold (player can keep pouring and flip check_success / PS).
+            if terminal_partial_score is not None:
+                try:
+                    env._latched_partial_score = float(terminal_partial_score)
+                except (TypeError, ValueError):
+                    pass
+            if escape_quit:
+                report_ok = False
+            elif terminal_result is not None:
+                report_ok = bool(terminal_result)
+            else:
+                report_ok = None
+            report_task_result(env, detail=detail, ok=report_ok)
         finally:
             try:
                 viewer.close()

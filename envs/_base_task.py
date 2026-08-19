@@ -245,6 +245,13 @@ class Base_Task(gym.Env):
     def check_success(self):
         pass
 
+    def get_score(self) -> float:
+        """Partial / full task score in ``[0, 1]``. Default: 1 on success else 0."""
+        try:
+            return 1.0 if bool(self.check_success()) else 0.0
+        except Exception:
+            return 0.0
+
     def setup_scene(self, **kwargs):
         """
         Set the scene

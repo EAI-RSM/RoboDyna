@@ -48,6 +48,21 @@ def record_status_note(payload) -> str:
         return f" Recorded {path}/data/episode{ep}.hdf5 + video/episode{ep}.mp4."
     return ""
 
+
+def ps_status_note(payload) -> str:
+    """Append `` PS 0.75`` when the child reported a partial score."""
+    if not isinstance(payload, dict):
+        return ""
+    raw = payload.get("partial_score")
+    if raw is None and isinstance(payload.get("metrics"), dict):
+        raw = payload["metrics"].get("partial_score")
+    if raw is None:
+        return ""
+    try:
+        return f" PS {float(raw):.2f}"
+    except (TypeError, ValueError):
+        return ""
+
 _INTERACTIVE_DIR = Path(__file__).resolve().parent
 if str(_INTERACTIVE_DIR) not in sys.path:
     sys.path.insert(0, str(_INTERACTIVE_DIR))
@@ -1521,6 +1536,7 @@ class HouseholdTaskLauncher(tk.Tk):
                 payload = self._read_result_payload()
                 reason = None
                 recorded = record_status_note(payload)
+                ps_note = ps_status_note(payload)
                 if isinstance(payload, dict):
                     detail = payload.get("detail")
                     if isinstance(detail, str) and detail.strip():
@@ -1541,7 +1557,7 @@ class HouseholdTaskLauncher(tk.Tk):
                     )
                 elif code == 0:
                     self._set_status(
-                        f"Task result: SUCCESS.{recorded} Select another task below.",
+                        f"Task result: SUCCESS.{ps_note}{recorded} Select another task below.",
                         "#70d6a2",
                         sticky=True,
                     )
@@ -1550,13 +1566,13 @@ class HouseholdTaskLauncher(tk.Tk):
                     if reason:
                         msg = f"{msg} ({reason})"
                     self._set_status(
-                        f"{msg}.{recorded} Select another task below.",
+                        f"{msg}.{ps_note}{recorded} Select another task below.",
                         "#e6a15c",
                         sticky=True,
                     )
                 elif code == 2:
                     self._set_status(
-                        f"Task closed before a result was reached.{recorded}",
+                        f"Task closed before a result was reached.{ps_note}{recorded}",
                         TEXT_SECONDARY,
                         sticky=True,
                     )
@@ -1594,19 +1610,25 @@ class HouseholdTaskLauncher(tk.Tk):
         self._refresh_tutorial_mode()
 
     def _resolve_launch_seed(self, suite: str, task: str, scenario: str | None = None) -> int:
-        """Protocol seed list/int, else the (locked) seed field / random."""
+        """Protocol seed list/int (global or per-slot), else the seed field / random."""
         if experiment_mode():
             cfg = self._experiment_cfg or load_experiment_config()
             self._experiment_cfg = cfg
-            if cfg.seeds:
-                if suite == "tutorial":
-                    index = int(getattr(self, "_tutorial_seed_index", 0) or 0)
-                    self._tutorial_seed_index = index + 1
-                else:
-                    index = terminal_play_count(suite, task, scenario)
-                picked = cfg.pick_seed(play_index=index)
-                if picked is not None:
-                    return picked
+            if suite == "tutorial":
+                index = int(getattr(self, "_tutorial_seed_index", 0) or 0)
+                self._tutorial_seed_index = index + 1
+            else:
+                index = terminal_play_count(suite, task, scenario)
+            picked = cfg.pick_seed(
+                play_index=index,
+                suite=suite,
+                task=task,
+                scenario=scenario,
+            )
+            if picked is not None:
+                return picked
+            # Protocol null / empty for this slot → random (ignore locked field text).
+            return secrets.randbelow(RANDOM_SEED_MAX + 1)
         return resolve_seed(self.seed_entry.get())
 
     def _apply_experiment_protocol(self):

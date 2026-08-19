@@ -23,10 +23,19 @@ from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
 from .utils.create_actor import create_actor, create_box, UnStableError
+from .utils.partial_score import score_descending_bands
 
 
 class boil_milk(KitchenS_base_task):
     """Turn the range on, let milk rise to the red ring, then shut it off."""
+
+    # Deficit (percentage points below target) → partial score.
+    # Authoring bands [10,7.5) / [7.5,5) / [5,0) → 0.25 / 0.5 / 0.75.
+    PARTIAL_BELOW_BANDS = (
+        (10.0, 7.5, 0.25),
+        (7.5, 5.0, 0.5),
+        (5.0, 0.0, 0.75),
+    )
 
     BOIL_STEPS_DEFAULT = 6000         # steps for liquid_level 0→1 while stove is on
     SETTLE_STEPS_DEFAULT = 1200       # steps for liquid_level → baseline while stove is off
@@ -85,6 +94,7 @@ class boil_milk(KitchenS_base_task):
         self.reached_target = False
         self.turned_on_once = False
         self.turned_off_after_boil = False
+        self._partial_score = 0.0  # latched at the stove-off transition
         self._liquid_entity = None
         self._spill_entity = None
         self._target_ring_parts = []
@@ -189,6 +199,7 @@ class boil_milk(KitchenS_base_task):
         self.reached_target = False
         self.turned_on_once = False
         self.turned_off_after_boil = False
+        self._partial_score = 0.0
         self._knob_press_latched = False
         self._prev_knob_pressed = False
         self._expert_holding_knob = False
@@ -750,6 +761,16 @@ class boil_milk(KitchenS_base_task):
             # Count as a boil shutoff only if milk already hit the red ring.
             if self.reached_target or self.max_liquid_level >= self.target_level - 1e-3:
                 self.turned_off_after_boil = True
+            # Latch the partial score at the shutoff frame — milk settles back
+            # toward baseline afterward, so a live read would understate it.
+            self._partial_score = self._score_at_shutoff()
+            peak = float(getattr(self, "max_liquid_level", 0.0))
+            target = float(getattr(self, "target_level", 0.0))
+            print(
+                f"[boil_milk] stove off: peak={peak * 100:.1f}% "
+                f"target={target * 100:.1f}% deficit={(target - peak) * 100:.1f}pp "
+                f"score={self._partial_score:.2f}"
+            )
         self._set_burner_glow(on)
 
     def _spawn_spill_puddle(self, scale: float = 1.0):
@@ -955,6 +976,38 @@ class boil_milk(KitchenS_base_task):
             return False
         return True
 
+    def _score_at_shutoff(self) -> float:
+        """Deficit-band score from the peak milk level at the shutoff frame.
+
+        Overflow → 0. Under-target shutoff uses deficit bands ``[10,7.5)%`` /
+        ``[7.5,5)%`` / ``[5,0)%`` below target → 0.25 / 0.5 / 0.75. At/above the
+        target the deficit is <= 0, so the bands return their default (0); the
+        full-success case is handled in ``get_score``.
+        """
+        if bool(getattr(self, "overflowed", False)):
+            return 0.0
+        peak = float(getattr(self, "max_liquid_level", 0.0))
+        target = float(getattr(self, "target_level", 0.0))
+        deficit_pct = (target - peak) * 100.0
+        if deficit_pct <= 0.0:
+            return 0.0
+        return float(score_descending_bands(deficit_pct, self.PARTIAL_BELOW_BANDS))
+
+    def get_score(self) -> float:
+        """Partial score from peak milk level vs the red-ring target.
+
+        Full success → 1. Otherwise the score is the value latched the instant
+        the stove turned off (milk settles back afterward, so a live read would
+        understate the peak). Overflow or never-shut-off → 0.
+        """
+        if self.check_success():
+            return 1.0
+        if bool(getattr(self, "overflowed", False)):
+            return 0.0
+        if bool(getattr(self, "stove_on", False)):
+            return 0.0
+        return float(getattr(self, "_partial_score", 0.0))
+
     def get_obs(self):
         obs = super().get_obs()
         obs["boiling"] = {
@@ -970,5 +1023,6 @@ class boil_milk(KitchenS_base_task):
             "stove_side": str(getattr(self, "stove_side", "right")),
             "pot_burner": str(getattr(self, "pot_burner", "left_rear")),
             "range_xy": list(np.asarray(getattr(self, "range_xy", (0, 0)), dtype=float)),
+            "partial_score": float(self.get_score()),
         }
         return obs

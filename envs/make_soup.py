@@ -2216,6 +2216,27 @@ class make_soup(KitchenS_base_task):
             return False
         return True
 
+    def get_score(self) -> float:
+        """Fraction of vegetables currently in the pot.
+
+        A dropped / spilled piece is simply not in the pot, so it lowers the
+        fraction (e.g. 1 of 2 in the pot → 0.5) rather than zeroing the score.
+        Arm-vegetable contact is an illegal manipulation and still forces 0.
+        """
+        if not getattr(self, "_loaded", False):
+            return 0.0
+        if not self.veggies:
+            return 0.0
+        self._check_veg_fallen()
+        self._check_arm_veg_contact()
+        if bool(getattr(self, "_arm_veg_contact", False)):
+            return 0.0
+        n = len(self.veggies)
+        if n <= 0:
+            return 0.0
+        n_in = sum(1 for v in self.veggies if self._veg_in_pot(v))
+        return float(n_in) / float(n)
+
     def get_obs(self) -> dict[str, Any]:
         obs = super().get_obs()
         n_in = sum(1 for v in self.veggies if self._veg_in_pot(v)) if self.veggies else 0
@@ -2233,5 +2254,6 @@ class make_soup(KitchenS_base_task):
             "board_xy": list(np.asarray(getattr(self, "board_xy", (0, 0)), dtype=float)),
             "pot_xy": list(np.asarray(getattr(self, "pot_xy", (0, 0)), dtype=float)),
             "water_level": float(getattr(self, "water_level", 0.0)),
+            "partial_score": float(self.get_score()),
         }
         return obs

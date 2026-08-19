@@ -23,6 +23,9 @@ class catch_cup(Office_base_task):
     while the hand is on it. Hitting the bare table is a failure.
     """
 
+    # Near-miss ring outside the pillow footprint (thirds of half-diagonal).
+    PARTIAL_MISS_SCORES = (0.75, 0.5, 0.25)
+
     CUP_MODEL = "021_cup"
     CUP_IDS = [0, 1, 2, 3, 5]
     KETTLE_IDS = list(range(6))
@@ -1668,6 +1671,51 @@ class catch_cup(Office_base_task):
         touches_table = cup_bottom <= float(self.table_top) + 0.012
         return bool(sitting_on_pillow and not touches_table)
 
+    def _cup_pillow_edge_distance(self) -> float:
+        """Planar distance from cup to pillow footprint (0 if over / inside)."""
+        if self.cup is None or self.pillow is None:
+            return float("inf")
+        cp = np.array(self.cup.get_pose().p, dtype=np.float64)
+        pp = np.array(self.pillow.get_pose().p, dtype=np.float64)
+        tol = float(getattr(self, "pillow_catch_xy_tol", self.PILLOW_CATCH_XY_TOL))
+        hx = float(self.pillow_half_xy[0]) + tol
+        hy = float(self.pillow_half_xy[1]) + tol
+        dx = abs(float(cp[0] - pp[0])) - hx
+        dy = abs(float(cp[1] - pp[1])) - hy
+        return float(np.hypot(max(0.0, dx), max(0.0, dy)))
+
+    def get_score(self) -> float:
+        """Partial score from cup–pillow miss distance (no table-bounce credit).
+
+        Success → 1. Table contact / fallen → 0. Over pillow footprint but not
+        seated → 0.5. Outside: ring of width = pillow half-diagonal, thirds
+        → 0.75 / 0.5 / 0.25.
+        """
+        if self.cup is None or self.pillow is None:
+            return 0.0
+        if bool(getattr(self, "_fell_on_table", False)) or self._cup_state == "fallen":
+            return 0.0
+        if self._cup_touches_table():
+            return 0.0
+        if self.check_success():
+            return 1.0
+        if self._cup_over_pillow():
+            return 0.5
+        hx = float(self.pillow_half_xy[0])
+        hy = float(self.pillow_half_xy[1])
+        r = float(np.hypot(hx, hy))
+        if r <= 1e-9:
+            return 0.0
+        d = self._cup_pillow_edge_distance()
+        third = r / 3.0
+        if d > r + 1e-9:
+            return 0.0
+        if d < third:
+            return float(self.PARTIAL_MISS_SCORES[0])
+        if d < 2.0 * third:
+            return float(self.PARTIAL_MISS_SCORES[1])
+        return float(self.PARTIAL_MISS_SCORES[2])
+
     def get_obs(self):
         obs = super().get_obs()
         obs["catch_cup"] = {
@@ -1687,5 +1735,6 @@ class catch_cup(Office_base_task):
                 list(map(float, self.pillow.get_pose().p[:2]))
                 if self.pillow is not None else [0.0, 0.0]
             ),
+            "partial_score": float(self.get_score()),
         }
         return obs

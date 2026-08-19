@@ -23,10 +23,24 @@ import transforms3d as t3d
 from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
+from .utils.partial_score import score_descending_bands
 
 
 class measure_ingredient(KitchenS_base_task):
     """Push the jar under the nozzle and fill it to a target ring."""
+
+    # Abs error (pp) for 25/50/75% targets: [10,8.5) / [8.5,7) / [7,5) → 0.25/0.5/0.75.
+    PARTIAL_ABS_BANDS = (
+        (10.0, 8.5, 0.25),
+        (8.5, 7.0, 0.5),
+        (7.0, 5.0, 0.75),
+    )
+    # Abs error (pp) for 100% target: [13,12) / [12,11) / [11,10) → 0.25/0.5/0.75.
+    PARTIAL_ABS_BANDS_FULL = (
+        (13.0, 12.0, 0.25),
+        (12.0, 11.0, 0.5),
+        (11.0, 10.0, 0.75),
+    )
 
     EGG_ORANGE = [0.95, 0.48, 0.10, 1.0]
     YUP_Q = [0.5, 0.5, 0.5, 0.5]
@@ -3224,6 +3238,35 @@ class measure_ingredient(KitchenS_base_task):
             return False
         return True
 
+    def get_score(self) -> float:
+        """Partial score from absolute fill error after the key is OFF.
+
+        Success band → 1.0. For 25/50/75% targets, abs error bands
+        ``[10,8.5)%`` / ``[8.5,7)%`` / ``[7,5)%`` → 0.25 / 0.5 / 0.75.
+        For 100%: ``[13,12)`` / ``[12,11)`` / ``[11,10)`` → 0.25 / 0.5 / 0.75.
+        Spill / overflow / not ready → 0.
+        """
+        if bool(getattr(self, "tab_open", False)):
+            return 0.0
+        if not bool(getattr(self, "closed_after_pour", False)):
+            return 0.0
+        if not bool(getattr(self, "opened_once", False)):
+            return 0.0
+        if self.overflowed or float(getattr(self, "spill_amount", 0.0)) > 1e-4:
+            return 0.0
+        if not self._jar_under_nozzle():
+            return 0.0
+        if self.check_success():
+            return 1.0
+        lvl = float(self.liquid_level)
+        target = float(self.target_fill)
+        err_pct = abs(lvl - target) * 100.0
+        bands = (
+            self.PARTIAL_ABS_BANDS_FULL
+            if target >= 0.999
+            else self.PARTIAL_ABS_BANDS
+        )
+        return float(score_descending_bands(err_pct, bands))
 
     def get_obs(self):
         obs = super().get_obs()
@@ -3270,5 +3313,6 @@ class measure_ingredient(KitchenS_base_task):
             "microwave_xy": (
                 None if mw is None else [float(mw[0]), float(mw[1])]
             ),
+            "partial_score": float(self.get_score()),
         }
         return obs

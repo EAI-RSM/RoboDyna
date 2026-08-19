@@ -34,6 +34,7 @@ from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
 from .utils.create_actor import create_actor, create_box
+from .utils.partial_score import score_descending_bands
 
 
 class fill_coffee_jar(KitchenS_base_task):
@@ -56,6 +57,14 @@ class fill_coffee_jar(KitchenS_base_task):
     (timer resets on every press), success if fill ∈ [target − tol, target + tol],
     else failure.
     """
+
+    # Abs error (pp) from target → partial: [10,8.5) / [8.5,7) / [7,5) → 0.25/0.5/0.75.
+    # Under- and over-fill both count; success band is ±5% so partial starts past 5 pp.
+    PARTIAL_ABS_BANDS = (
+        (10.0, 8.5, 0.25),
+        (8.5, 7.0, 0.5),
+        (7.0, 5.0, 0.75),
+    )
 
     BEAN_MODEL = "252_coffee_bean"
     JAR_MODEL = "253_glass_jar"
@@ -2067,6 +2076,27 @@ class fill_coffee_jar(KitchenS_base_task):
         lo, hi = self._fill_band()
         return bool(self.beans_in_jar > 0 and lo - 1e-3 <= fill <= hi + 1e-3)
 
+    def get_score(self) -> float:
+        """Partial score from |fill − target| after idle (under and over both count).
+
+        Success band (±``fill_tol``, default ±5%) → 1.0. Outside it, abs error
+        bands ``[10,8.5)%`` / ``[8.5,7)%`` / ``[7,5)%`` → 0.25 / 0.5 / 0.75.
+        Not ready to score / empty jar / error ≥ 10 pp → 0.
+        """
+        if not getattr(self, "layout_ok", True):
+            return 0.0
+        if not self._fill_ready_to_score():
+            return 0.0
+        self.beans_in_jar = self._count_beans_in_jar()
+        if int(self.beans_in_jar) <= 0:
+            return 0.0
+        if self.check_success():
+            return 1.0
+        fill = float(self._current_fill())
+        target = float(self.target_fill)
+        err_pct = abs(fill - target) * 100.0
+        return float(score_descending_bands(err_pct, self.PARTIAL_ABS_BANDS))
+
     def get_obs(self):
         obs = super().get_obs()
         lo, hi = self._fill_band()
@@ -2097,5 +2127,6 @@ class fill_coffee_jar(KitchenS_base_task):
             "kettle_burner": str(getattr(self, "kettle_burner", "")),
             "stove_side": str(getattr(self, "stove_side", "right")),
             "range_xy": list(np.asarray(getattr(self, "range_xy", (0, 0)), dtype=float)),
+            "partial_score": float(self.get_score()),
         }
         return obs

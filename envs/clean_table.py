@@ -27,10 +27,19 @@ from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
 from .utils.action import Action
 from .utils.create_actor import create_actor, create_box, create_sapien_urdf_obj
+from .utils.partial_score import score_half_open_intervals
 
 
 class clean_table(Base_Task):
     """Tip a coffee mug, then wipe the irregular spill before it hits a laptop."""
+
+    # clean_frac [lo, hi) → partial score (laptop hit / tiny spill → 0).
+    PARTIAL_CLEAN_BANDS = (
+        (0.85, 1.0, 0.75),
+        (0.60, 0.85, 0.5),
+        (0.35, 0.60, 0.25),
+    )
+    PARTIAL_MIN_SPILL = 0.20
 
     MUG_MODEL = "039_mug"
     MUG_UPRIGHT_Q = [0.70710678, 0.70710678, 0.0, 0.0]
@@ -96,6 +105,7 @@ class clean_table(Base_Task):
         self.max_spill_amount = 0.0
         self.spill_cleaned = 0.0
         self.laptop_reached = False
+        self._partial_score = 0.0  # latched at the laptop-contact frame
         self.cleaned_ok = False
         self._spill_frozen = False
         self._coffee_entity = None
@@ -159,6 +169,7 @@ class clean_table(Base_Task):
         self.spill_active = False
         self._spill_frozen = False
         self.laptop_reached = False
+        self._partial_score = 0.0
         self.cleaned_ok = False
         self._coffee_entity = self._remove_entity(getattr(self, "_coffee_entity", None))
         self._spill_entity = self._remove_entity(getattr(self, "_spill_entity", None))
@@ -1100,6 +1111,18 @@ class clean_table(Base_Task):
         dy = max(abs(float(p[1] - c[1])) - hy, 0.0)
         return (dx * dx + dy * dy) <= (r * r)
 
+    def _latch_laptop_fail_score(self) -> None:
+        """Freeze wipe progress as the partial score at the laptop-fail frame.
+
+        The spill only stops growing once the table is fully clean, so a live
+        read after the failure would keep sliding as new lobes spawn. Laptop
+        contact remains a failure — this only preserves how much was cleaned.
+        """
+        frac = float(self._spill_clean_frac())
+        self._partial_score = float(
+            score_half_open_intervals(frac, self.PARTIAL_CLEAN_BANDS)
+        )
+
     def _mark_laptop_reached_if_contact(self) -> bool:
         """Fail as soon as any active (spawned) wipeable lobe touches the laptop.
 
@@ -1112,13 +1135,16 @@ class clean_table(Base_Task):
             if s.get("under_mug"):
                 continue
             if self._spot_hits_laptop(s):
+                self._latch_laptop_fail_score()
                 self.laptop_reached = True
                 print(
                     f"[clean_table] FAIL spill contacted laptop "
                     f"along={float(s.get('along', 0.0)):.3f} "
                     f"r={float(s['radius']):.3f} "
                     f"amt={self.spill_amount:.2f} "
-                    f"cleaned={bool(s.get('cleaned'))}"
+                    f"cleaned={bool(s.get('cleaned'))} "
+                    f"clean_frac={self._spill_clean_frac():.2f} "
+                    f"score={self._partial_score:.2f}"
                 )
                 return True
         return False
@@ -1846,11 +1872,14 @@ class clean_table(Base_Task):
                 and front_frac >= self.reach_laptop_level
                 and self._dirty_spots()
             ):
+                self._latch_laptop_fail_score()
                 self.laptop_reached = True
                 print(
                     f"[clean_table] FAIL spill reached laptop "
                     f"front={front:.3f} path={self.spill_path_len:.3f} "
-                    f"amt={self.spill_amount:.2f} dirty={len(self._dirty_spots())}"
+                    f"amt={self.spill_amount:.2f} dirty={len(self._dirty_spots())} "
+                    f"clean_frac={self._spill_clean_frac():.2f} "
+                    f"score={self._partial_score:.2f}"
                 )
 
         # Rebuild when new spots spawn (growth) even if nothing was cleared.
@@ -2163,6 +2192,26 @@ class clean_table(Base_Task):
             return False
         return True
 
+    def get_score(self) -> float:
+        """Partial score from wipe progress.
+
+        Full success → 1. Otherwise ``clean_frac`` bands ``[0.85,1)`` /
+        ``[0.60,0.85)`` / ``[0.35,0.60)`` → 0.75 / 0.5 / 0.25. Reaching the
+        laptop is still a failure, but keeps the credit earned up to that
+        frame: the spill only stops growing once the table is fully clean, so
+        without a latch the bands would be unreachable in a played episode.
+        """
+        if not bool(getattr(self, "cup_tipped", False)):
+            return 0.0
+        if float(getattr(self, "max_spill_amount", 0.0)) < float(self.PARTIAL_MIN_SPILL):
+            return 0.0
+        if bool(getattr(self, "laptop_reached", False)):
+            return float(getattr(self, "_partial_score", 0.0))
+        if self.check_success():
+            return 1.0
+        frac = float(self._spill_clean_frac())
+        return float(score_half_open_intervals(frac, self.PARTIAL_CLEAN_BANDS))
+
     def get_obs(self):
         obs = super().get_obs()
         obs["coffee_spill"] = {
@@ -2177,5 +2226,6 @@ class clean_table(Base_Task):
             "mug_side": float(self.mug_side),
             "laptop_side": float(getattr(self, "laptop_side", 0.0)),
             "spill_speed_mult": float(getattr(self, "_spill_speed_mult", 1.0)),
+            "partial_score": float(self.get_score()),
         }
         return obs

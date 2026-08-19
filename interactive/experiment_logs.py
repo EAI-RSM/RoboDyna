@@ -35,6 +35,7 @@ _KEYBOARD_ALIASES = {
 
 YES_NO_CHOICES = (("yes", "Yes"), ("no", "No"))
 ASSIGNED_TASKS = "assigned_tasks"
+NONE_CHOICE = ("none", "None")
 
 
 def _survey_item(
@@ -47,6 +48,7 @@ def _survey_item(
     exclusive: str | None = None,
     visible_if=None,
     layout: str = "row",
+    extra_options=(),
 ) -> dict[str, Any]:
     return {
         "key": key,
@@ -57,6 +59,7 @@ def _survey_item(
         "exclusive": exclusive,
         "visible_if": visible_if,
         "layout": "rank" if rank else layout,
+        "extra_options": tuple(extra_options),
     }
 
 
@@ -158,7 +161,7 @@ POST_SURVEY_QUESTIONS = (
     ),
     _survey_item(
         "robot_hardest_aspect",
-        "Using the robot controller, which aspect of performing the task did you find most difficult?",
+        "When using the robot controller, which aspect of performing the task did you find most difficult?",
         (
             ("control", "Control"),
             ("event_prediction", "Event prediction"),
@@ -166,22 +169,19 @@ POST_SURVEY_QUESTIONS = (
     ),
     _survey_item(
         "keyboard_hardest_aspect",
-        "Using the keyboard+mouse controller, which aspect of performing the task did you find most difficult?",
+        "When using the keyboard+mouse controller, which aspect of performing the task did you find most difficult?",
         (
             ("control", "Control"),
             ("event_prediction", "Event prediction"),
         ),
     ),
     _survey_item(
-        "gripper_view_usefulness",
-        "How useful did you find the gripper view?",
-        (
-            ("very_useful", "Very useful"),
-            ("useful", "Useful"),
-            ("neutral", "Neutral"),
-            ("not_useful", "Not useful"),
-            ("not_useful_at_all", "Not useful at all"),
-        ),
+        "gripper_view_useful_tasks",
+        "In which one of the following tasks you found gripper view useful? Multiple options can be selected.",
+        ASSIGNED_TASKS,
+        multi=True,
+        exclusive=NONE_CHOICE[0],
+        extra_options=(NONE_CHOICE,),
     ),
     _survey_item(
         "easier_controller",
@@ -198,7 +198,7 @@ POST_SURVEY_QUESTIONS = (
         (
             ("very_likely", "Very likely"),
             ("likely", "Likely"),
-            ("neither", "Neither"),
+            ("neutral", "Neutral"),
             ("unlikely", "Unlikely"),
             ("very_unlikely", "Very unlikely"),
         ),
@@ -216,7 +216,10 @@ EXPERIENCE_QUESTIONS = tuple(
 def question_choices(question: dict[str, Any], extra_choices: dict[str, Any] | None = None):
     choices = question.get("choices")
     if choices == ASSIGNED_TASKS:
-        return tuple((extra_choices or {}).get(ASSIGNED_TASKS) or ())
+        dynamic = tuple((extra_choices or {}).get(ASSIGNED_TASKS) or ())
+        if not dynamic:
+            return ()
+        return dynamic + tuple(question.get("extra_options") or ())
     return tuple(choices or ())
 
 
@@ -1149,16 +1152,44 @@ def append_play(
         result = "FAILURE"
 
     time_block = payload.get("time") if isinstance(payload.get("time"), dict) else {}
-    wall = time_block.get("wall_clock_s")
+    wall = time_block.get("wall_s")
+    if wall is None:
+        wall = time_block.get("wall_clock_s")
     if wall is None and wall_fallback_s is not None:
         wall = round(float(wall_fallback_s), 4)
         time_block = dict(time_block)
+        time_block["wall_s"] = wall
         time_block["wall_clock_s"] = wall
 
+    sim_s = time_block.get("total_time_sim_s")
+    if sim_s is None:
+        sim_s = time_block.get("simulation_s")
+    steps = time_block.get("steps")
+    if steps is None:
+        steps = time_block.get("simulation_steps")
+
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    metrics = dict(metrics)
     if "success" not in metrics and payload.get("ok") is not None:
-        metrics = dict(metrics)
         metrics["success"] = bool(payload.get("ok"))
+    if metrics.get("partial_score") is None and payload.get("partial_score") is not None:
+        try:
+            metrics["partial_score"] = float(payload.get("partial_score"))
+        except (TypeError, ValueError):
+            pass
+    if metrics.get("total_time_sim_s") is None and sim_s is not None:
+        metrics["total_time_sim_s"] = sim_s
+    if metrics.get("wall_s") is None and wall is not None:
+        metrics["wall_s"] = wall
+    if metrics.get("steps") is None and steps is not None:
+        metrics["steps"] = steps
+    option = (
+        payload.get("option_label")
+        or metrics.get("option_label")
+        or (scenario if suite == "base" else None)
+    )
+    if option and not metrics.get("option_label"):
+        metrics["option_label"] = option
 
     entry = {
         "played_at": iso_now(),
@@ -1166,17 +1197,23 @@ def append_play(
         "task": task,
         "task_label": task_label or task,
         "scenario": scenario,
+        "option_label": option if suite == "base" else (option or None),
         "controller": controller or payload.get("controller") or "",
         "seed": seed if seed is not None else payload.get("seed"),
         "result": result,
         "detail": payload.get("detail") or "",
         "condition": payload.get("condition") or "",
+        "partial_score": metrics.get("partial_score", payload.get("partial_score")),
         "exit_code": exit_code,
         "metrics": metrics,
         "time": {
-            "wall_clock_s": time_block.get("wall_clock_s"),
-            "simulation_s": time_block.get("simulation_s"),
-            "simulation_steps": time_block.get("simulation_steps"),
+            "total_time_sim_s": sim_s if sim_s is not None else metrics.get("total_time_sim_s"),
+            "wall_s": wall if wall is not None else metrics.get("wall_s"),
+            "steps": steps if steps is not None else metrics.get("steps"),
+            # Legacy aliases
+            "wall_clock_s": wall if wall is not None else metrics.get("wall_s"),
+            "simulation_s": sim_s if sim_s is not None else metrics.get("total_time_sim_s"),
+            "simulation_steps": steps if steps is not None else metrics.get("steps"),
         },
     }
     counted = False
