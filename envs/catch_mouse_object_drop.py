@@ -99,6 +99,19 @@ class catch_mouse_object_drop(Office_base_task):
     # Clear gap between fragile footprints so the mouse can scurry between them.
     OBJ_X_GAP_MIN = 0.06
     SETTLE_STEPS = 420          # sim steps allowed for the object to come to rest
+    # A bounce off the basket rim passes through near-zero speed at its apex, so
+    # an instantaneous speed test reads it as a catch. Require the object to rest
+    # on the cushion at this speed for this many consecutive steps instead.
+    SETTLE_SPEED = 0.12
+    SETTLE_DWELL_STEPS = 30
+    # Objects bigger than the basket settle across the rim instead of dropping
+    # in; require most of the footprint over the mouth rather than containment.
+    CATCH_FOOTPRINT_FRAC = 0.5
+    # A rim bounce passes through near-zero speed at its apex, so an
+    # instantaneous speed test reads it as a catch. Require the object to be
+    # at rest on the cushion for a continuous dwell instead.
+    SETTLE_SPEED = 0.12         # |v| + 0.05|w| below this counts as at rest
+    SETTLE_DWELL_STEPS = 30     # consecutive at-rest steps before a catch counts
 
     SHELF_WIDTH = 1.20
     SHELF_DEPTH = 0.30
@@ -190,6 +203,7 @@ class catch_mouse_object_drop(Office_base_task):
         self._mouse_state = "idle"  # idle | running | done
         self._fell_on_table = False
         self._caught = False
+        self._settle_steps = 0
         self._basket_placed = False
         self._holding_basket = False
         self._mouse_path = []
@@ -1177,6 +1191,7 @@ class catch_mouse_object_drop(Office_base_task):
         self._mouse_state = "idle"
         self._fell_on_table = False
         self._caught = False
+        self._settle_steps = 0
         self._basket_placed = False
         self._holding_basket = False
         self._target_live = False
@@ -1554,15 +1569,75 @@ class catch_mouse_object_drop(Office_base_task):
             p = np.array(self.target.get_pose().p, dtype=np.float64)
             return float(p[2] - self.target_radius)
 
-    def _target_in_basket(self, *, require_settled=False):
-        """True when the target's footprint sits over the cushion pad.
+    def _target_footprint_overlap_frac(self) -> float:
+        """Fraction of the target's XY footprint that lies over the basket mouth."""
+        if self.target is None or self.basket is None:
+            return 0.0
+        bp = np.array(self.basket.get_pose().p, dtype=np.float64)
+        half = getattr(self, "_cushion_half_xy", self.basket_half_xy)
+        tol = float(getattr(self, "catch_xy_tol", self.CATCH_XY_TOL))
+        bx0, bx1 = float(bp[0]) - (half[0] + tol), float(bp[0]) + (half[0] + tol)
+        by0, by1 = float(bp[1]) - (half[1] + tol), float(bp[1]) + (half[1] + tol)
+        rigid = self._get_rigid(self.target)
+        ox0 = ox1 = oy0 = oy1 = None
+        if rigid is not None:
+            try:
+                lo, hi = rigid.compute_global_aabb_tight()
+                ox0, ox1 = float(lo[0]), float(hi[0])
+                oy0, oy1 = float(lo[1]), float(hi[1])
+            except Exception:
+                ox0 = None
+        if ox0 is None:
+            p = np.array(self.target.get_pose().p, dtype=np.float64)
+            r = float(self.target_radius)
+            ox0, ox1 = float(p[0]) - r, float(p[0]) + r
+            oy0, oy1 = float(p[1]) - r, float(p[1]) + r
+        area = max(1e-9, (ox1 - ox0) * (oy1 - oy0))
+        ix = max(0.0, min(ox1, bx1) - max(ox0, bx0))
+        iy = max(0.0, min(oy1, by1) - max(oy0, by0))
+        return float(ix * iy / area)
 
-        ``require_settled`` gates success (object must have come to rest). Table
-        miss checks use ``require_settled=False`` so a bounce inside the basket
-        is not misread as a table hit.
+    def _target_supported_in_basket(self) -> bool:
+        """Target is resting in / on the basket rather than on the tabletop.
+
+        Objects wider or taller than the basket cannot drop inside; they settle
+        across the rim. Those count as caught as long as most of the footprint
+        is over the mouth and nothing rests on the tabletop.
         """
         if self.target is None or self.basket is None:
             return False
+        bottom = self._target_aabb_bottom()
+        bp = np.array(self.basket.get_pose().p, dtype=np.float64)
+        rim_top = float(bp[2]) + float(self.basket_hz)
+        # On the tabletop, or perched above the basket (décor / mid-air).
+        if bottom <= float(self.table_top) + 0.015:
+            return False
+        if bottom > rim_top + 0.03:
+            return False
+        return self._target_footprint_overlap_frac() >= self.CATCH_FOOTPRINT_FRAC
+
+    def _target_in_basket(self, *, require_settled=False):
+        """True when the target's footprint sits over the basket mouth.
+
+        ``require_settled`` gates success: the object must be *supported* by the
+        basket (on the cushion, or across the rim when it is too big to drop in)
+        and have stayed at rest for ``SETTLE_DWELL_STEPS`` consecutive steps.
+        Being airborne inside the basket volume is not a catch — a bounce off the
+        rim dips below any instantaneous speed threshold at its apex. Table miss
+        checks use ``require_settled=False`` so a bounce inside the basket is not
+        misread as a table hit.
+        """
+        if self.target is None or self.basket is None:
+            return False
+        supported = self._target_supported_in_basket()
+        if require_settled:
+            if not supported:
+                return False
+            if self._target_speed() >= self.SETTLE_SPEED:
+                return False
+            return int(getattr(self, "_settle_steps", 0)) >= self.SETTLE_DWELL_STEPS
+        if supported:
+            return True
         p = np.array(self.target.get_pose().p, dtype=np.float64)
         bp = np.array(self.basket.get_pose().p, dtype=np.float64)
         half = getattr(self, "_cushion_half_xy", self.basket_half_xy)
@@ -1572,19 +1647,22 @@ class catch_mouse_object_drop(Office_base_task):
         )
         if not inside_xy:
             return False
-        cushion_top = float(self._cushion_top_z())
+        # Airborne but clearly inside / above the basket volume (bounce in flight).
         bottom = self._target_aabb_bottom()
-        # Resting on the pad, or clearly inside the basket volume above the table.
-        on_cushion = cushion_top - 0.012 <= bottom <= cushion_top + 0.045
-        in_volume = (
+        return bool(
             bottom > float(self.table_top) + 0.018
             and bottom < float(bp[2]) + float(self.basket_hz) + 0.06
         )
-        if not (on_cushion or in_volume):
-            return False
-        if require_settled and self._target_speed() >= 0.60:
-            return False
-        return True
+
+    def _update_settle_dwell(self) -> None:
+        """Count consecutive steps the target has been at rest in the basket."""
+        if (
+            self._target_supported_in_basket()
+            and self._target_speed() < self.SETTLE_SPEED
+        ):
+            self._settle_steps = int(getattr(self, "_settle_steps", 0)) + 1
+        else:
+            self._settle_steps = 0
 
     def _target_speed(self):
         rigid = self._get_rigid(self.target)
@@ -1627,8 +1705,10 @@ class catch_mouse_object_drop(Office_base_task):
             self._fell_on_table = True
             self._caught = False
             self._obj_state = "fallen"
+            self._settle_steps = 0
             return
 
+        self._update_settle_dwell()
         if self._target_in_basket(require_settled=True):
             self._caught = True
             self._obj_state = "caught"
@@ -1915,35 +1995,54 @@ class catch_mouse_object_drop(Office_base_task):
         return False
 
     def _target_basket_edge_distance(self) -> float:
-        """Planar distance from target to basket/cushion footprint (0 if inside)."""
+        """Planar gap between the target's footprint and the basket mouth.
+
+        Zero when the footprints overlap or touch, so an object that came to
+        rest against the basket reads as the closest possible miss.
+        """
         if self.target is None or self.basket is None:
             return float("inf")
-        p = np.array(self.target.get_pose().p, dtype=np.float64)
         bp = np.array(self.basket.get_pose().p, dtype=np.float64)
         half = getattr(self, "_cushion_half_xy", self.basket_half_xy)
         tol = float(getattr(self, "catch_xy_tol", self.CATCH_XY_TOL))
-        hx = float(half[0]) + tol
-        hy = float(half[1]) + tol
-        dx = abs(float(p[0] - bp[0])) - hx
-        dy = abs(float(p[1] - bp[1])) - hy
-        return float(np.hypot(max(0.0, dx), max(0.0, dy)))
+        bx0, bx1 = float(bp[0]) - (half[0] + tol), float(bp[0]) + (half[0] + tol)
+        by0, by1 = float(bp[1]) - (half[1] + tol), float(bp[1]) + (half[1] + tol)
+        rigid = self._get_rigid(self.target)
+        ox0 = None
+        if rigid is not None:
+            try:
+                lo, hi = rigid.compute_global_aabb_tight()
+                ox0, ox1 = float(lo[0]), float(hi[0])
+                oy0, oy1 = float(lo[1]), float(hi[1])
+            except Exception:
+                ox0 = None
+        if ox0 is None:
+            p = np.array(self.target.get_pose().p, dtype=np.float64)
+            r = float(self.target_radius)
+            ox0, ox1 = float(p[0]) - r, float(p[0]) + r
+            oy0, oy1 = float(p[1]) - r, float(p[1]) + r
+        dx = max(0.0, bx0 - ox1, ox0 - bx1)
+        dy = max(0.0, by0 - oy1, oy0 - by1)
+        return float(np.hypot(dx, dy))
 
     def get_score(self) -> float:
-        """Partial score from object–basket miss (table contact → 0).
+        """Partial score from how close the object ended up to the basket.
 
-        Settled in basket → 1. In basket XY but not settled → 0.5. Outside:
-        ring of width = basket half-diagonal, thirds → 0.75 / 0.5 / 0.25.
+        Settled in / across the basket → 1.0. Over the basket but still moving
+        → 0.5. Otherwise the object missed and is down on the table, which is
+        exactly what the near-miss ring measures: the planar gap between its
+        footprint and the basket mouth, in thirds of the mouth half-diagonal
+        → 0.75 / 0.5 / 0.25, and 0 past that ring.
         """
         if self.target is None or self.basket is None:
             return 0.0
-        if bool(getattr(self, "_fell_on_table", False)) or self._obj_state == "fallen":
-            return 0.0
-        if self._object_touches_table():
+        # Never knocked off the shelf — there is no catch attempt to score.
+        if self._target_still_on_shelf():
             return 0.0
         if self.check_success():
             return 1.0
-        # Inside footprint but still bouncing / not settled.
-        if self._target_in_basket(require_settled=False):
+        fell = bool(getattr(self, "_fell_on_table", False)) or self._obj_state == "fallen"
+        if not fell and self._target_in_basket(require_settled=False):
             return 0.5
         half = getattr(self, "_cushion_half_xy", self.basket_half_xy)
         r = float(np.hypot(float(half[0]), float(half[1])))
