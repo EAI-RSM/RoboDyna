@@ -145,7 +145,10 @@ class Base_Task(gym.Env):
         # List of kinematic task objects
         self.active_kinematic_tasks = []
         self.transient_event = False
-        
+        # Gate for the setup-time _update_kinematic_tasks() call in load_camera(): the new scene
+        # has no task actors until load_actors() below runs. See the comment there.
+        self._actors_loaded = False
+
         self.create_table_and_wall(table_xy_bias=table_xy_bias, table_height=0.74)
         self.load_robot(**kwags)
         self.load_camera(**kwags)
@@ -158,6 +161,7 @@ class Base_Task(gym.Env):
 
         self.robot.set_origin_endpose()
         self.load_actors()
+        self._actors_loaded = True
 
         # Record references to all cluttered actors (for hiding after dynamic collision detection)
         self._clutter_actor_refs: dict = {}  # {name: (actor_wrapper, original_pose)}
@@ -213,7 +217,7 @@ class Base_Task(gym.Env):
         def check(times):
             nonlocal self, is_stable, actors_list, actors_pose_list
             for _ in range(times):
-                self._update_kinematic_tasks()
+                self._tick_kinematic_tasks()
                 self.scene.step()
                 for idx, actor in enumerate(actors_list):
                     actors_pose_list[idx].append(actor.get_pose())
@@ -228,7 +232,7 @@ class Base_Task(gym.Env):
 
         is_stable = True
         for _ in range(2000):
-            self._update_kinematic_tasks()
+            self._tick_kinematic_tasks()
             self.scene.step()
         for idx, actor in enumerate(actors_list):
             actors_pose_list.append([actor.get_pose()])
@@ -776,7 +780,7 @@ class Base_Task(gym.Env):
                     print(f"Warning: Failed to hide clutter '{name}': {e}")
         
         for _ in range(10):
-            self._update_kinematic_tasks()
+            self._tick_kinematic_tasks()
             self.scene.step()
 
     def load_robot(self, **kwags):
@@ -830,7 +834,15 @@ class Base_Task(gym.Env):
                 configure_standard_head_camera(self)
         except Exception:
             pass
-        self._update_kinematic_tasks()
+        # load_camera() is called from _init_task_env_ BEFORE load_actors(), so the freshly built
+        # scene holds no task actors yet. A task override of _update_kinematic_tasks() therefore
+        # can only touch handles left over from the PREVIOUS, already-destroyed scene -- and
+        # set_kinematic_target()/set_pose() on a dangling SAPIEN body segfaults the process
+        # (uncatchable, so the tasks' own try/except cannot help). pick_ripe_apple._apple_rigid and
+        # sort_apples_belt._gate_comps both died this way on every episode after the first.
+        # Skipping it loses nothing: with no task actors there is nothing meaningful to update, and
+        # the first real call still happens inside take_dense_action once actors exist.
+        self._tick_kinematic_tasks()
         self.scene.step()  # run a physical step
         self.scene.update_render()  # sync pose from SAPIEN to renderer
 
@@ -1538,7 +1550,7 @@ class Base_Task(gym.Env):
                 )
                 now_right_id += 1
 
-            self._update_kinematic_tasks()
+            self._tick_kinematic_tasks()
             self.scene.step()
             if pace_realtime:
                 last_render_t = self._pace_interactive_control_step(
@@ -2181,7 +2193,7 @@ class Base_Task(gym.Env):
             if pre_motion_duration > 0:
                 pre_motion_steps = int(pre_motion_duration / self.scene.get_timestep())
                 for _ in range(pre_motion_steps):
-                    self._update_kinematic_tasks()
+                    self._tick_kinematic_tasks()
                     self.scene.step()
             
             robot_action_sequence(need_plan_mode=False)
@@ -2288,7 +2300,7 @@ class Base_Task(gym.Env):
         if pre_motion_duration > 0:
             pre_motion_steps = int(pre_motion_duration / self.scene.get_timestep())
             for _ in range(pre_motion_steps):
-                self._update_kinematic_tasks()
+                self._tick_kinematic_tasks()
                 self.scene.step()
         
         self.save_freq = original_save_freq
@@ -2371,6 +2383,21 @@ class Base_Task(gym.Env):
             )
         except Exception:
             return None
+
+    def _tick_kinematic_tasks(self):
+        """Gated dispatch for the per-step kinematic hook.
+
+        _init_task_env_ drives several steps (load_camera, together_open_gripper, ...) BEFORE
+        load_actors() has rebuilt the task's actors, so a task override of
+        _update_kinematic_tasks() reached from there can only touch handles left over from the
+        PREVIOUS, already-destroyed scene. set_kinematic_target()/set_pose() on a dangling SAPIEN
+        body segfaults the process -- uncatchable, so the tasks' own try/except cannot help
+        (pick_ripe_apple._apple_rigid and sort_apples_belt._gate_comps both died this way on every
+        episode after the first). Skipping those pre-load ticks loses nothing: with no task actors
+        there is nothing meaningful to update.
+        """
+        if getattr(self, "_actors_loaded", False):
+            self._update_kinematic_tasks()
 
     def _update_kinematic_tasks(self):
         """
@@ -4071,7 +4098,7 @@ class Base_Task(gym.Env):
                     right_gripper["per_step"],
                 )  # TODO
 
-            self._update_kinematic_tasks()
+            self._tick_kinematic_tasks()
             self.scene.step()
             
             if not self.transient_event:
@@ -4288,7 +4315,7 @@ class Base_Task(gym.Env):
 
                 now_right_id += 1
 
-            self._update_kinematic_tasks()
+            self._tick_kinematic_tasks()
             self.scene.step()
             
             if not self.transient_event:

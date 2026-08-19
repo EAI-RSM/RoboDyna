@@ -17,6 +17,7 @@ merge (envs/utils/merge_lerobot_meta.py) is pure concatenation — no reindexing
 """
 import os
 import json
+import tempfile
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -180,23 +181,67 @@ class LeRobotV21Writer:
             fields.append(pa.field(k, pa.int64())); hf[k] = _hf_type("int64", [1])
         schema = pa.schema(fields, metadata={b"huggingface": json.dumps({"info": {"features": hf}}).encode()})
         table = pa.table({f.name: cols[f.name] for f in fields}, schema=schema)
-        pq.write_table(table, os.path.join(self.root, "data", self._tt, f"episode_{ee:08d}.parquet"))
+        parquet_out = os.path.join(self.root, "data", self._tt, f"episode_{ee:08d}.parquet")
 
-        # ---- videos (one mp4 per camera; reuse the HDF5 pipeline's encoder: rgb24 -> h264/yuv420p) ----
-        for vk in self.video_keys:
-            frames = np.stack(self._buf["images"][vk])  # (n, H, W, 3) uint8 RGB
-            out = os.path.join(self.root, "videos", self._tt, vk, f"episode_{ee:08d}.mp4")
-            images_to_video(frames, out, fps=self.fps, is_rgb=True)
-            stats[vk] = _stats_image(self._buf["images"][vk])
-
-        # ---- annotation json ----
+        # Stage every artifact first. The parquet is renamed last and is the completion marker used
+        # by resume/rebuild, so an interrupted encoder cannot create a loadable partial episode.
         ann = dict(annotation or {})
         ann.setdefault("task_name", self.task_name)
         ann.setdefault("episode_index", ee)
         ann.setdefault("meta_data", {})
         ann["meta_data"].update({"length": int(n), "valid_range": [0, int(n)], "success": bool(success)})
-        with open(os.path.join(self.root, "annotations", self._tt, f"episode_{ee:08d}.json"), "w") as fh:
-            json.dump(ann, fh, indent=2)
+        annotation_out = os.path.join(self.root, "annotations", self._tt, f"episode_{ee:08d}.json")
+        staged, committed = [], []
+        try:
+            fd, parquet_tmp = tempfile.mkstemp(prefix=f".episode_{ee:08d}.", suffix=".parquet",
+                                               dir=os.path.dirname(parquet_out))
+            os.close(fd)
+            staged.append(parquet_tmp)
+            pq.write_table(table, parquet_tmp)
+
+            video_pairs = []
+            for vk in self.video_keys:
+                frames = np.stack(self._buf["images"][vk])
+                out = os.path.join(self.root, "videos", self._tt, vk, f"episode_{ee:08d}.mp4")
+                fd, tmp = tempfile.mkstemp(prefix=f".episode_{ee:08d}.", suffix=".mp4",
+                                           dir=os.path.dirname(out))
+                os.close(fd)
+                os.unlink(tmp)  # the encoder creates its output path
+                staged.append(tmp)
+                images_to_video(frames, tmp, fps=self.fps, is_rgb=True)
+                if not os.path.isfile(tmp) or os.path.getsize(tmp) == 0:
+                    raise RuntimeError(f"video encoder produced no output for {vk}")
+                stats[vk] = _stats_image(self._buf["images"][vk])
+                video_pairs.append((tmp, out))
+
+            fd, annotation_tmp = tempfile.mkstemp(prefix=f".episode_{ee:08d}.", suffix=".json",
+                                                  dir=os.path.dirname(annotation_out), text=True)
+            with os.fdopen(fd, "w") as fh:
+                json.dump(ann, fh, indent=2)
+            staged.append(annotation_tmp)
+
+            for tmp, out in video_pairs:
+                os.replace(tmp, out)
+                committed.append(out)
+            os.replace(annotation_tmp, annotation_out)
+            committed.append(annotation_out)
+            os.replace(parquet_tmp, parquet_out)  # completion marker: commit last
+            committed.append(parquet_out)
+        except BaseException:
+            for path in staged:
+                try:
+                    if os.path.exists(path):
+                        os.unlink(path)
+                except OSError:
+                    pass
+            if parquet_out not in committed:
+                for path in committed:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+            self._reset_buf()
+            raise
 
         # ---- meta slices ----
         ep_line = {"episode_index": ee, "tasks": [task], "length": int(n), "success": bool(success)}

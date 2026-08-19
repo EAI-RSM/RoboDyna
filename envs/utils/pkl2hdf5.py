@@ -67,7 +67,17 @@ def _encode_string_array(value):
 
 
 def _create_dataset(hdf5_group, key, value):
-    arr = np.asarray(value)
+    try:
+        arr = np.asarray(value)
+    except ValueError:
+        # Ragged per-frame field: some frames carry a different-length sequence than others
+        # (e.g. a task whose per-step obs lists a varying number of objects). numpy refuses to
+        # build a rectangular array; fall back to the object path below, which serializes each
+        # frame's entry rather than dropping the whole episode.
+        print(f"[pkl2hdf5] ragged values for key '{key}' -> storing per-frame as strings")
+        arr = np.empty(len(value), dtype=object)
+        for i, item in enumerate(value):
+            arr[i] = item
 
     if arr.dtype.kind in {"U", "S"}:
         arr = _encode_string_array(arr)
@@ -98,11 +108,16 @@ def create_hdf5_from_dict(hdf5_group, data_dict):
             subgroup = hdf5_group.create_group(key)
             create_hdf5_from_dict(subgroup, value)
         elif isinstance(value, list):
-            if "rgb" in key:
-                encode_data, max_len = images_encoding(np.asarray(value))
-                hdf5_group.create_dataset(key, data=encode_data, dtype=f"S{max_len}")
-            else:
-                _create_dataset(hdf5_group, key, value)
+            # same belt-and-suspenders as the scalar branch below: one unstorable key must not
+            # abort the whole episode (a ragged field used to kill every render of a task).
+            try:
+                if "rgb" in key:
+                    encode_data, max_len = images_encoding(np.asarray(value))
+                    hdf5_group.create_dataset(key, data=encode_data, dtype=f"S{max_len}")
+                else:
+                    _create_dataset(hdf5_group, key, value)
+            except Exception as e:
+                print(f"Error storing value for key '{key}': {e}")
         else:
             try:
                 _create_dataset(hdf5_group, key, value)
