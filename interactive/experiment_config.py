@@ -291,7 +291,7 @@ def _as_seed(value) -> int | None:
         return None
     if seed < 0:
         return None
-    return min(seed, 500)
+    return seed
 
 
 def _is_unlimited(value) -> bool:
@@ -354,7 +354,7 @@ def resolve_task_name(suite: str, raw) -> str | None:
 
 
 def _as_seeds(value) -> list[int]:
-    """``null`` / empty → random each play. One int or a list of ints (0–500)."""
+    """``null`` / empty → random each play. One non-negative int or a list of ints."""
     if value is None or value == "" or value is False:
         return []
     if isinstance(value, str):
