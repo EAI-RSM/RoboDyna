@@ -38,6 +38,7 @@ from interactive._interactive_common import (  # noqa: E402
     configure_task,
     edge_pressed,
     flash_gripper_failure,
+    format_ps_suffix,
     gripper_failure_feedback,
     is_robot_control,
     make_viewer_view_toggle,
@@ -52,6 +53,7 @@ from interactive._interactive_common import (  # noqa: E402
     require_selected_arms,
     resolve_action_arm,
     table_xy_from_click,
+    _env_partial_score,
 )
 
 
@@ -1322,6 +1324,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                         msg = f"[{task}] terminal result: SUCCESS"
                         if fill:
                             msg = f"{msg} ({fill})"
+                        msg = f"{msg}{format_ps_suffix(_env_partial_score(env))}"
                         print_success(msg)
                         terminal_result = True
                         terminal_started_at = time.perf_counter()
@@ -1331,7 +1334,9 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                         else:
                             terminal_failure_reason = failure
                         print_failure(
-                            f"[{task}] terminal result: FAILURE ({terminal_failure_reason})"
+                            f"[{task}] terminal result: FAILURE "
+                            f"({terminal_failure_reason})"
+                            f"{format_ps_suffix(_env_partial_score(env))}"
                         )
                         terminal_result = False
                         terminal_started_at = time.perf_counter()

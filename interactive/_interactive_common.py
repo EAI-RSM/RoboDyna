@@ -1328,6 +1328,27 @@ def maybe_attach_experiment_metrics(env) -> None:
         pass
 
 
+def _env_partial_score(env) -> float | None:
+    """Best-effort ``get_score()`` → float in ``[0, 1]``, or ``None`` if unavailable."""
+    getter = getattr(env, "get_score", None)
+    if not callable(getter):
+        return None
+    try:
+        return float(getter())
+    except Exception:
+        return None
+
+
+def format_ps_suffix(score: float | None) -> str:
+    """Status / log suffix like `` PS 0.75`` (empty if score missing)."""
+    if score is None:
+        return ""
+    try:
+        return f" PS {float(score):.2f}"
+    except (TypeError, ValueError):
+        return ""
+
+
 def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
     metrics: dict = {
         "success": None if ok is None else bool(ok),
@@ -1348,6 +1369,9 @@ def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
     metrics["total_time_sim_s"] = timing.get("total_time_sim_s")
     metrics["wall_s"] = timing.get("wall_s")
     metrics["steps"] = timing.get("steps")
+    ps = _env_partial_score(env)
+    if ps is not None:
+        metrics["partial_score"] = float(ps)
     tracker = getattr(env, "_metrics_tracker", None)
     if tracker is not None:
         try:
@@ -1411,6 +1435,9 @@ def _interactive_result_extras(env, ok: bool | None, detail: str | None) -> dict
     timing = _frozen_episode_timing(env)
     extras["time"] = _timing_payload(timing)
     extras["metrics"] = _collect_episode_metrics(env, ok, detail)
+    ps = _env_partial_score(env)
+    if ps is not None:
+        extras["partial_score"] = float(ps)
     env._last_result_extras = extras
     return extras
 
@@ -1649,7 +1676,8 @@ def report_task_result(env, detail: str | None = None, *, ok: bool | None = None
     if detail is None and not ok:
         detail = _normalize_result_detail(getattr(env, "_last_fail_reason", None))
     status = "SUCCESS" if ok else "FAILURE"
-    msg = f"Task complete: {status}" + (f" ({detail})" if detail else "")
+    ps_note = format_ps_suffix(_env_partial_score(env))
+    msg = f"Task complete: {status}" + (f" ({detail})" if detail else "") + ps_note
     if ok:
         print_success(msg)
     else:

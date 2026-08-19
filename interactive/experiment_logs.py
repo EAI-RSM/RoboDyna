@@ -1172,6 +1172,11 @@ def append_play(
     metrics = dict(metrics)
     if "success" not in metrics and payload.get("ok") is not None:
         metrics["success"] = bool(payload.get("ok"))
+    if metrics.get("partial_score") is None and payload.get("partial_score") is not None:
+        try:
+            metrics["partial_score"] = float(payload.get("partial_score"))
+        except (TypeError, ValueError):
+            pass
     if metrics.get("total_time_sim_s") is None and sim_s is not None:
         metrics["total_time_sim_s"] = sim_s
     if metrics.get("wall_s") is None and wall is not None:
@@ -1198,6 +1203,7 @@ def append_play(
         "result": result,
         "detail": payload.get("detail") or "",
         "condition": payload.get("condition") or "",
+        "partial_score": metrics.get("partial_score", payload.get("partial_score")),
         "exit_code": exit_code,
         "metrics": metrics,
         "time": {

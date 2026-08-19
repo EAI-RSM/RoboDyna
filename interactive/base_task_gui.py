@@ -77,6 +77,21 @@ def record_status_note(payload) -> str:
         return f" Recorded {path}/data/episode{ep}.hdf5 + video/episode{ep}.mp4."
     return ""
 
+
+def ps_status_note(payload) -> str:
+    """Append `` PS 0.75`` when the child reported a partial score."""
+    if not isinstance(payload, dict):
+        return ""
+    raw = payload.get("partial_score")
+    if raw is None and isinstance(payload.get("metrics"), dict):
+        raw = payload["metrics"].get("partial_score")
+    if raw is None:
+        return ""
+    try:
+        return f" PS {float(raw):.2f}"
+    except (TypeError, ValueError):
+        return ""
+
 TASKS = (
     ("Catch Marbles Trapdoors", "catch_marbles_trapdoors"),
     ("Catch Ramp Ball", "catch_ramp_ball"),
@@ -1810,6 +1825,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 payload = self._read_result_payload()
                 reason = None
                 recorded = record_status_note(payload)
+                ps_note = ps_status_note(payload)
                 if isinstance(payload, dict):
                     detail = payload.get("detail")
                     if isinstance(detail, str) and detail.strip():
@@ -1832,7 +1848,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 # Match household_task_gui: 0=SUCCESS, 10=FAILURE, 2=closed early.
                 elif code == 0:
                     self._set_status(
-                        f"Task result: SUCCESS.{recorded} Select another scenario below.",
+                        f"Task result: SUCCESS.{ps_note}{recorded} Select another scenario below.",
                         "#70d6a2",
                         sticky=True,
                     )
@@ -1841,13 +1857,13 @@ class InteractiveTaskLauncher(tk.Tk):
                     if reason:
                         msg = f"{msg} ({reason})"
                     self._set_status(
-                        f"{msg}.{recorded} Select another scenario below.",
+                        f"{msg}.{ps_note}{recorded} Select another scenario below.",
                         "#e6a15c",
                         sticky=True,
                     )
                 elif code == 2:
                     self._set_status(
-                        f"Task closed before a result was reached.{recorded}",
+                        f"Task closed before a result was reached.{ps_note}{recorded}",
                         TEXT_SECONDARY,
                         sticky=True,
                     )
