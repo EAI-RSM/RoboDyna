@@ -21,7 +21,7 @@ import argparse
 import pdb
 
 from generate_episode_instructions import *
-from eval_metrics import EvalMetricsTracker, AggregatedMetrics, EpisodeMetrics
+from eval_metrics import EvalMetricsTracker, AggregatedMetrics, EpisodeMetrics, env_uses_dynamic
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
@@ -135,10 +135,7 @@ def main(usr_args):
 
     # output camera config
     print("============= Config =============\n")
-    print("\033[96mUse Dynamic:\033[0m " + str(args.get("use_dynamic", False)))
-    if args.get("use_dynamic", False):
-        print(" - Dynamic Level: " + str(args.get("dynamic_level", "N/A")))
-        print(" - Dynamic Coefficient: " + str(args.get("dynamic_coefficient", "N/A")))
+    print("\033[96mUse Dynamic:\033[0m inferred from task env")
     print("\033[95mMessy Table:\033[0m " + str(args["domain_randomization"]["cluttered_table"]))
     print("\033[95mRandom Background:\033[0m " + str(args["domain_randomization"]["random_background"]))
     if args["domain_randomization"]["random_background"]:
@@ -301,8 +298,10 @@ def eval_policy(task_name,
         instruction = np.random.choice(results[0][instruction_type])
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
 
+        episode_uses_dynamic = env_uses_dynamic(TASK_ENV, args)
+
         # Initialize dynamic object motion for policy evaluation
-        if args.get("use_dynamic", False):
+        if episode_uses_dynamic:
             dynamic_init_success = TASK_ENV.init_dynamic_motion_for_eval()
             if not dynamic_init_success:
                 print(f"Error: Failed to initialize dynamic motion for seed {now_seed}, skipping...")
@@ -387,7 +386,7 @@ def eval_policy(task_name,
             
             # Check if dynamic object is out of bounds (lost from view)
             out_of_bounds = False
-            if args.get("use_dynamic", False):
+            if episode_uses_dynamic:
                 # Stop motion if gripper contacts dynamic object
                 if TASK_ENV.check_gripper_contact_dynamic_object() and stop_on_contact:
                     TASK_ENV.stop_dynamic_object_motion()
