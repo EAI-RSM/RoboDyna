@@ -1275,6 +1275,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     terminal_started_at = None
     terminal_fill_detail = ""
     terminal_failure_reason = None
+    terminal_partial_score = None  # freeze PS at the terminal decision frame
     escape_quit = False
     # Match interactive/_interactive_common run_viewer_loop: teleop once per display frame, then
     # fixed-dt physics catch-up so 60 Hz / 240 Hz monitors feel the same speed.
@@ -1321,14 +1322,16 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                     if fill:
                         terminal_fill_detail = fill
                     if succeeded:
+                        terminal_partial_score = _env_partial_score(env)
                         msg = f"[{task}] terminal result: SUCCESS"
                         if fill:
                             msg = f"{msg} ({fill})"
-                        msg = f"{msg}{format_ps_suffix(_env_partial_score(env))}"
+                        msg = f"{msg}{format_ps_suffix(terminal_partial_score)}"
                         print_success(msg)
                         terminal_result = True
                         terminal_started_at = time.perf_counter()
                     if failure is not None:
+                        terminal_partial_score = _env_partial_score(env)
                         if fill and fill not in failure:
                             terminal_failure_reason = f"{failure}; {fill}"
                         else:
@@ -1336,7 +1339,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                         print_failure(
                             f"[{task}] terminal result: FAILURE "
                             f"({terminal_failure_reason})"
-                            f"{format_ps_suffix(_env_partial_score(env))}"
+                            f"{format_ps_suffix(terminal_partial_score)}"
                         )
                         terminal_result = False
                         terminal_started_at = time.perf_counter()
@@ -1366,7 +1369,20 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                 detail = terminal_failure_reason or terminal_fill_detail or None
             else:
                 detail = terminal_fill_detail or None
-            report_task_result(env, detail=detail, ok=False if escape_quit else None)
+            # Prefer the latched terminal verdict — do not re-score after the
+            # 2s hold (player can keep pouring and flip check_success / PS).
+            if terminal_partial_score is not None:
+                try:
+                    env._latched_partial_score = float(terminal_partial_score)
+                except (TypeError, ValueError):
+                    pass
+            if escape_quit:
+                report_ok = False
+            elif terminal_result is not None:
+                report_ok = bool(terminal_result)
+            else:
+                report_ok = None
+            report_task_result(env, detail=detail, ok=report_ok)
         finally:
             try:
                 viewer.close()

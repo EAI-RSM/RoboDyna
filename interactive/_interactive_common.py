@@ -1329,7 +1329,18 @@ def maybe_attach_experiment_metrics(env) -> None:
 
 
 def _env_partial_score(env) -> float | None:
-    """Best-effort ``get_score()`` → float in ``[0, 1]``, or ``None`` if unavailable."""
+    """Best-effort ``get_score()`` → float in ``[0, 1]``, or ``None`` if unavailable.
+
+    If the interactive loop latched a score at the terminal decision frame
+    (``env._latched_partial_score``), prefer that so a 2s post-result hold
+    cannot change PS after FAILURE/SUCCESS was already decided.
+    """
+    latched = getattr(env, "_latched_partial_score", None)
+    if latched is not None:
+        try:
+            return float(latched)
+        except (TypeError, ValueError):
+            pass
     getter = getattr(env, "get_score", None)
     if not callable(getter):
         return None
