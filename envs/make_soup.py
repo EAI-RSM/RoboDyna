@@ -2217,14 +2217,19 @@ class make_soup(KitchenS_base_task):
         return True
 
     def get_score(self) -> float:
-        """Fraction of vegetables currently in the pot (0 if episode failed)."""
+        """Fraction of vegetables currently in the pot.
+
+        A dropped / spilled piece is simply not in the pot, so it lowers the
+        fraction (e.g. 1 of 2 in the pot → 0.5) rather than zeroing the score.
+        Arm-vegetable contact is an illegal manipulation and still forces 0.
+        """
         if not getattr(self, "_loaded", False):
             return 0.0
         if not self.veggies:
             return 0.0
         self._check_veg_fallen()
         self._check_arm_veg_contact()
-        if self._episode_failed():
+        if bool(getattr(self, "_arm_veg_contact", False)):
             return 0.0
         n = len(self.veggies)
         if n <= 0:
