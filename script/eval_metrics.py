@@ -583,7 +583,7 @@ class EvalMetricsTracker:
         route_completion: float,
         manipulation_score: float,
     ) -> Dict[str, Any]:
-        """Build the per-episode metric_detail payload promised by docs/metrics."""
+        """Build the per-episode detailed-metrics payload."""
         total_steps = self._get_total_steps()
         metric_detail = {
             "success": bool(success),
