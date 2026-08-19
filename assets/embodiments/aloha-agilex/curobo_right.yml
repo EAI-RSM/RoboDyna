@@ -6,7 +6,7 @@ robot_cfg:
     # isaac_usd_path: ""
     # usd_flip_joints: {}
     # usd_flip_joint_limits: []
-    urdf_path: /shared_work/markhsp/RoboDyna/assets/embodiments/aloha-agilex/urdf/arx5_description_isaac.urdf
+    urdf_path: /home/aras/Desktop/workspace/RoboDynaExp/assets/embodiments/aloha-agilex/urdf/arx5_description_isaac.urdf
     asset_root_path: null
 
     base_link: "fr_base_link"
@@ -24,7 +24,7 @@ robot_cfg:
         "fr_link8",
         "right_camera"
       ]
-    collision_spheres: /shared_work/markhsp/RoboDyna/assets/embodiments/aloha-agilex/collision_aloha_right.yml
+    collision_spheres: /home/aras/Desktop/workspace/RoboDynaExp/assets/embodiments/aloha-agilex/collision_aloha_right.yml
     collision_sphere_buffer: 0.004
     extra_collision_spheres: {}
     use_global_cumul: True

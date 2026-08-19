@@ -6,7 +6,7 @@ robot_cfg:
     isaac_usd_path: null
     usd_flip_joints: {}
     usd_flip_joint_limits: {}
-    urdf_path: /shared_work/markhsp/RoboDyna/assets/embodiments/ur5-wsg/ur5_wsg_gripper.urdf
+    urdf_path: /home/aras/Desktop/workspace/RoboDynaExp/assets/embodiments/ur5-wsg/ur5_wsg_gripper.urdf
     asset_root_path: null
     base_link: "base_link"
     ee_link: "ee_link"
@@ -20,7 +20,7 @@ robot_cfg:
       "wrist_3_link",
       "ee_link"
     ]
-    collision_spheres: /shared_work/markhsp/RoboDyna/assets/embodiments/ur5-wsg/collision_wsg.yml
+    collision_spheres: /home/aras/Desktop/workspace/RoboDynaExp/assets/embodiments/ur5-wsg/collision_wsg.yml
     collision_sphere_buffer: 0.004
     extra_collision_spheres: null
     use_global_cumul: True
