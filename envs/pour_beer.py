@@ -31,10 +31,18 @@ from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
 from .utils.create_actor import create_actor
+from .utils.partial_score import score_half_open_intervals
 
 
 class pour_beer(KitchenS_base_task):
     """Hold the tap push-button to fill the mug, then click the finish bell."""
+
+    # Liquid fill fraction → partial: [55,65)% / [65,75)% / [75,85)% → 0.25/0.5/0.75.
+    PARTIAL_FILL_BANDS = (
+        (0.55, 0.65, 0.25),
+        (0.65, 0.75, 0.5),
+        (0.75, 0.85, 0.75),
+    )
 
     GLASS_MODEL = "beer_mug"
     GLASS_UPRIGHT_Q = [0.70710678, 0.70710678, 0.0, 0.0]
@@ -608,7 +616,7 @@ class pour_beer(KitchenS_base_task):
 
     @staticmethod
     def _model_data(modelname: str, model_id: int) -> dict:
-        path = Path("assets/objects") / modelname / f"model_data{int(model_id)}.json"
+        path = resolve_model_dir(modelname) / f"model_data{int(model_id)}.json"
         with open(path) as f:
             return json.load(f)
 
@@ -2446,6 +2454,22 @@ class pour_beer(KitchenS_base_task):
             return False
         return bool(self._pour_quality_ok())
 
+    def get_score(self) -> float:
+        """Partial score from liquid fill after the finish bell is pressed.
+
+        Full success → 1.0. Otherwise ``liquid_level`` bands
+        ``[55,65)%`` / ``[65,75)%`` / ``[75,85)%`` → 0.25 / 0.5 / 0.75.
+        Overflow or other hard fails → 0.
+        """
+        if not bool(getattr(self, "_bell_pressed", False)):
+            return 0.0
+        if bool(getattr(self, "overflowed", False)):
+            return 0.0
+        if self.check_success():
+            return 1.0
+        lvl = float(getattr(self, "liquid_level", 0.0))
+        return float(score_half_open_intervals(lvl, self.PARTIAL_FILL_BANDS))
+
     def get_language_instruction(self):
         return [
             {
@@ -2548,5 +2572,6 @@ class pour_beer(KitchenS_base_task):
                 getattr(self, "touch_xy", [0.0, 0.0]), dtype=float
             ).tolist(),
             "scene_id": int(getattr(self, "scene_id", 0)),
+            "partial_score": float(self.get_score()),
         }
         return obs

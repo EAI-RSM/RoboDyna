@@ -2216,6 +2216,22 @@ class make_soup(KitchenS_base_task):
             return False
         return True
 
+    def get_score(self) -> float:
+        """Fraction of vegetables currently in the pot (0 if episode failed)."""
+        if not getattr(self, "_loaded", False):
+            return 0.0
+        if not self.veggies:
+            return 0.0
+        self._check_veg_fallen()
+        self._check_arm_veg_contact()
+        if self._episode_failed():
+            return 0.0
+        n = len(self.veggies)
+        if n <= 0:
+            return 0.0
+        n_in = sum(1 for v in self.veggies if self._veg_in_pot(v))
+        return float(n_in) / float(n)
+
     def get_obs(self) -> dict[str, Any]:
         obs = super().get_obs()
         n_in = sum(1 for v in self.veggies if self._veg_in_pot(v)) if self.veggies else 0
@@ -2233,5 +2249,6 @@ class make_soup(KitchenS_base_task):
             "board_xy": list(np.asarray(getattr(self, "board_xy", (0, 0)), dtype=float)),
             "pot_xy": list(np.asarray(getattr(self, "pot_xy", (0, 0)), dtype=float)),
             "water_level": float(getattr(self, "water_level", 0.0)),
+            "partial_score": float(self.get_score()),
         }
         return obs

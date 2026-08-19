@@ -27,10 +27,19 @@ from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
 from .utils.action import Action
 from .utils.create_actor import create_actor, create_box, create_sapien_urdf_obj
+from .utils.partial_score import score_half_open_intervals
 
 
 class clean_table(Base_Task):
     """Tip a coffee mug, then wipe the irregular spill before it hits a laptop."""
+
+    # clean_frac [lo, hi) → partial score (laptop hit / tiny spill → 0).
+    PARTIAL_CLEAN_BANDS = (
+        (0.85, 1.0, 0.75),
+        (0.60, 0.85, 0.5),
+        (0.35, 0.60, 0.25),
+    )
+    PARTIAL_MIN_SPILL = 0.20
 
     MUG_MODEL = "039_mug"
     MUG_UPRIGHT_Q = [0.70710678, 0.70710678, 0.0, 0.0]
@@ -602,8 +611,8 @@ class clean_table(Base_Task):
         self._sponge_spawn_pose = pose
 
     def _create_bench_glb(self, model_name: str, pose: sapien.Pose, scale, mass=0.1):
-        """Static décor from ``assets/objects_bench`` (office file holder, etc.)."""
-        model_dir = Path("assets/objects_bench") / model_name
+        """Static décor from ``assets/dyna_assets`` (office file holder, etc.)."""
+        model_dir = resolve_model_dir(model_name)
         glb = model_dir / "base.glb"
         if not glb.exists():
             candidates = sorted(model_dir.glob("*.glb"))
@@ -2163,6 +2172,24 @@ class clean_table(Base_Task):
             return False
         return True
 
+    def get_score(self) -> float:
+        """Partial score from wipe progress; laptop contact zeros the episode.
+
+        Full success → 1. ``laptop_reached`` or ``max_spill < 0.20`` → 0.
+        Else ``clean_frac`` bands ``[0.85,1)`` / ``[0.60,0.85)`` / ``[0.35,0.60)``
+        → 0.75 / 0.5 / 0.25.
+        """
+        if bool(getattr(self, "laptop_reached", False)):
+            return 0.0
+        if not bool(getattr(self, "cup_tipped", False)):
+            return 0.0
+        if float(getattr(self, "max_spill_amount", 0.0)) < float(self.PARTIAL_MIN_SPILL):
+            return 0.0
+        if self.check_success():
+            return 1.0
+        frac = float(self._spill_clean_frac())
+        return float(score_half_open_intervals(frac, self.PARTIAL_CLEAN_BANDS))
+
     def get_obs(self):
         obs = super().get_obs()
         obs["coffee_spill"] = {
@@ -2177,5 +2204,6 @@ class clean_table(Base_Task):
             "mug_side": float(self.mug_side),
             "laptop_side": float(getattr(self, "laptop_side", 0.0)),
             "spill_speed_mult": float(getattr(self, "_spill_speed_mult", 1.0)),
+            "partial_score": float(self.get_score()),
         }
         return obs

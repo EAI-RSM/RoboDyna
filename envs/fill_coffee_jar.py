@@ -34,6 +34,7 @@ from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
 from .utils.create_actor import create_actor, create_box
+from .utils.partial_score import score_descending_bands
 
 
 class fill_coffee_jar(KitchenS_base_task):
@@ -56,6 +57,13 @@ class fill_coffee_jar(KitchenS_base_task):
     (timer resets on every press), success if fill ∈ [target − tol, target + tol],
     else failure.
     """
+
+    # Under-target deficit (pp) → partial: [10,8.5) / [8.5,7) / [7,5) → 0.25/0.5/0.75.
+    PARTIAL_BELOW_BANDS = (
+        (10.0, 8.5, 0.25),
+        (8.5, 7.0, 0.5),
+        (7.0, 5.0, 0.75),
+    )
 
     BEAN_MODEL = "252_coffee_bean"
     JAR_MODEL = "253_glass_jar"
@@ -242,7 +250,7 @@ class fill_coffee_jar(KitchenS_base_task):
     @classmethod
     def _ensure_kettle_assets(cls):
         """Ensure ``009_kettle`` has create_actor-compatible model_data + collision."""
-        root = Path("assets/objects") / cls.KETTLE_MODEL
+        root = resolve_model_dir(cls.KETTLE_MODEL)
         visual = root / "visual"
         if not visual.exists():
             return
@@ -514,13 +522,13 @@ class fill_coffee_jar(KitchenS_base_task):
 
     @staticmethod
     def _model_data(modelname: str, model_id: int) -> dict:
-        path = Path("assets/objects") / modelname / f"model_data{model_id}.json"
+        path = resolve_model_dir(modelname) / f"model_data{model_id}.json"
         with open(path) as f:
             return json.load(f)
 
     @classmethod
     def _available_model_ids(cls, modelname: str) -> list[int]:
-        root = Path("assets/objects") / modelname
+        root = resolve_model_dir(modelname)
         ids = []
         for p in root.glob("model_data*.json"):
             try:
@@ -1031,7 +1039,7 @@ class fill_coffee_jar(KitchenS_base_task):
 
         # One packed mesh containing many individual coffee beans (not a solid block).
         self._add_static_mesh_visual(
-            filename=Path("assets/objects/252_coffee_bean/reservoir_fill.glb"),
+            filename=resolve_model_dir("252_coffee_bean") / "reservoir_fill.glb",
             pose=sapien.Pose([x, y, box_z]),
             material=self._opaque_material(self.BEAN_BROWN),
             name="dispenser_reservoir_beans",
@@ -1343,9 +1351,7 @@ class fill_coffee_jar(KitchenS_base_task):
         x, y = self.jar_xy
         z0 = self.table_top + 0.001
 
-        col_path = Path(
-            f"assets/objects/{self.JAR_MODEL}/collision/base0.glb"
-        ).resolve()
+        col_path = (resolve_model_dir(self.JAR_MODEL) / "collision" / "base0.glb").resolve()
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
         builder.add_nonconvex_collision_from_file(filename=str(col_path), scale=[1, 1, 1])
@@ -1390,7 +1396,7 @@ class fill_coffee_jar(KitchenS_base_task):
         """Three thick red rings at 25% / 50% / 75% of the jar fill height."""
         x, y = self.jar_xy
         ring_material = self._ring_material()
-        ring_mesh = Path(f"assets/objects/{self.JAR_MODEL}/rings/thin_ring.glb")
+        ring_mesh = resolve_model_dir(self.JAR_MODEL) / "rings" / "thin_ring.glb"
         outer_r = float(self.JAR_INNER_R) + 0.0035
         xy = float(self.RING_XY_SCALE) * (outer_r / float(self.RING_MESH_RADIUS))
         z_sc = float(self.RING_Z_SCALE)
@@ -2069,6 +2075,29 @@ class fill_coffee_jar(KitchenS_base_task):
         lo, hi = self._fill_band()
         return bool(self.beans_in_jar > 0 and lo - 1e-3 <= fill <= hi + 1e-3)
 
+    def get_score(self) -> float:
+        """Partial score from under-fill vs target after idle.
+
+        Success band → 1.0. Under-target deficits
+        ``[10,8.5)%`` / ``[8.5,7)%`` / ``[7,5)%`` → 0.25 / 0.5 / 0.75.
+        Over-fill outside the success band (or not ready to score) → 0.
+        """
+        if not getattr(self, "layout_ok", True):
+            return 0.0
+        if not self._fill_ready_to_score():
+            return 0.0
+        self.beans_in_jar = self._count_beans_in_jar()
+        if int(self.beans_in_jar) <= 0:
+            return 0.0
+        if self.check_success():
+            return 1.0
+        fill = float(self._current_fill())
+        target = float(self.target_fill)
+        deficit_pct = (target - fill) * 100.0
+        if deficit_pct <= 0.0:
+            return 0.0  # over-target outside success band
+        return float(score_descending_bands(deficit_pct, self.PARTIAL_BELOW_BANDS))
+
     def get_obs(self):
         obs = super().get_obs()
         lo, hi = self._fill_band()
@@ -2099,5 +2128,6 @@ class fill_coffee_jar(KitchenS_base_task):
             "kettle_burner": str(getattr(self, "kettle_burner", "")),
             "stove_side": str(getattr(self, "stove_side", "right")),
             "range_xy": list(np.asarray(getattr(self, "range_xy", (0, 0)), dtype=float)),
+            "partial_score": float(self.get_score()),
         }
         return obs

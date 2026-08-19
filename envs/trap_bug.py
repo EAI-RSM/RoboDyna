@@ -1164,6 +1164,28 @@ class trap_bug(Office_base_task):
         return self.info
 
     # ------------------------------------------------------------- success
+    def _bug_under_trap(self) -> bool:
+        if self.trap is None or self.bug is None:
+            return False
+        trap_p = np.array(self.trap.get_pose().p, dtype=np.float64)
+        bug_p = np.array(self.bug.get_pose().p, dtype=np.float64)
+        return bool(
+            abs(bug_p[0] - trap_p[0]) < self.trap_half[0] * 0.95
+            and abs(bug_p[1] - trap_p[1]) < self.trap_half[1] * 0.95
+        )
+
+    def _bug_trap_edge_distance(self) -> float:
+        """Planar distance from bug to the trap footprint (0 if under / inside)."""
+        if self.trap is None or self.bug is None:
+            return float("inf")
+        trap_p = np.array(self.trap.get_pose().p, dtype=np.float64)
+        bug_p = np.array(self.bug.get_pose().p, dtype=np.float64)
+        hx = float(self.trap_half[0]) * 0.95
+        hy = float(self.trap_half[1]) * 0.95
+        dx = abs(float(bug_p[0] - trap_p[0])) - hx
+        dy = abs(float(bug_p[1] - trap_p[1])) - hy
+        return float(np.hypot(max(0.0, dx), max(0.0, dy)))
+
     def check_success(self):
         """Success = released trap has landed, with the bug under its footprint.
 
@@ -1179,13 +1201,41 @@ class trap_bug(Office_base_task):
             return False
         if not bool(getattr(self, "_trap_anchored", False)):
             return False
-        trap_p = np.array(self.trap.get_pose().p, dtype=np.float64)
-        bug_p = np.array(self.bug.get_pose().p, dtype=np.float64)
-        covered = (
-            abs(bug_p[0] - trap_p[0]) < self.trap_half[0] * 0.95
-            and abs(bug_p[1] - trap_p[1]) < self.trap_half[1] * 0.95
-        )
-        return bool(covered)
+        return bool(self._bug_under_trap())
+
+    def get_score(self) -> float:
+        """Partial score from how close the bug is to the landed trap.
+
+        Full success (bug under trap) → 1.0. Otherwise score only after the trap
+        has been released and anchored. Outside the footprint, a ring of width
+        equal to the trap half-width is split into three equal bands:
+        closest third → 0.75, middle → 0.5, furthest → 0.25; beyond → 0.
+        """
+        if self.trap is None or self.bug is None:
+            return 0.0
+        if bool(getattr(self, "_bug_escaped", False)):
+            return 0.0
+        if not bool(getattr(self, "_trap_released", False)):
+            return 0.0
+        if not bool(getattr(self, "_trap_anchored", False)):
+            return 0.0
+        if self._bug_under_trap():
+            return 1.0
+        # Half-width of the trap (square by default); ring extends one half-width out.
+        r = float(min(self.trap_half[0], self.trap_half[1]))
+        if r <= 1e-9:
+            return 0.0
+        d = self._bug_trap_edge_distance()
+        third = r / 3.0
+        # Closest third [0, r/3) → 0.75; middle [r/3, 2r/3) → 0.5;
+        # furthest [2r/3, r] → 0.25; beyond r → 0.
+        if d > r + 1e-9:
+            return 0.0
+        if d < third:
+            return 0.75
+        if d < 2.0 * third:
+            return 0.5
+        return 0.25
 
     def get_obs(self):
         obs = super().get_obs()
@@ -1204,5 +1254,6 @@ class trap_bug(Office_base_task):
             "walk_time": float(self.walk_time),
             "walk_elapsed": float(self._bug_walk_elapsed),
             "bug_escaped": bool(self._bug_escaped),
+            "partial_score": float(self.get_score()),
         }
         return obs

@@ -33,10 +33,18 @@ from ._kitchens_base_task import KitchenS_base_task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
 from .utils.create_actor import create_actor, create_visual_box, UnStableError
+from .utils.partial_score import score_open_closed_intervals
 
 
 class cook_food(KitchenS_base_task):
     """Drop food into a pre-lit pan, then shut the stove off at target doneness."""
+
+    # Seconds past exact target doneness → partial: (4,5] / (5,6] / (6,7] → 0.75 / 0.5 / 0.25.
+    PARTIAL_OVERCOOK_BANDS = (
+        (4.0, 5.0, 0.75),
+        (5.0, 6.0, 0.5),
+        (6.0, 7.0, 0.25),
+    )
 
     COOK_STEPS_DEFAULT: ClassVar[int] = 3076  # 2× prior 1538 (50% slower / mean cook time ×2)
     COOK_SPEED_JITTER_DEFAULT: ClassVar[float] = 0.20  # per-ep cook_steps ~ U(nom×(1±j))
@@ -1789,6 +1797,55 @@ class cook_food(KitchenS_base_task):
             or self._food_in_bowl(tol=0.10, require_released=True)
         )
 
+    def _scored_doneness(self) -> float:
+        if self._grasp_doneness is not None:
+            return float(self._grasp_doneness)
+        return float(getattr(self, "doneness", 0.0))
+
+    def _doneness_to_cook_seconds(self, delta_doneness: float) -> float:
+        """Convert a doneness delta to seconds of cooking at current heat."""
+        inten = max(0.05, float(getattr(self, "cook_intensity", 0.70)))
+        steps = max(1.0, float(getattr(self, "cook_steps", self.COOK_STEPS_DEFAULT)))
+        rate = inten / (steps * self._sim_dt())  # doneness per second
+        if rate <= 1e-12:
+            return 0.0
+        return float(delta_doneness) / rate
+
+    def get_score(self) -> float:
+        """Partial score for mild overcook past exact target doneness.
+
+        Scored only after stove shutoff. Full success → 1.0. Seconds past the
+        exact target (``target_doneness``): ``(4,5]`` → 0.75, ``(5,6]`` → 0.5,
+        ``(6,7]`` → 0.25. Undercook or larger overshoot → 0.
+        """
+        if (
+            bool(getattr(self, "stove_on", False))
+            or float(getattr(self, "fire_intensity", 0.0)) > 0.02
+            or float(getattr(self, "knob_angle", 0.0)) < -0.05
+        ):
+            return 0.0
+        if not bool(getattr(self, "turned_on_once", False)):
+            return 0.0
+        if not bool(getattr(self, "turned_off_after_cook", False)):
+            return 0.0
+        if self._food_held():
+            return 0.0
+        if not (
+            bool(getattr(self, "_food_in_pan", False))
+            or self._food_in_bowl(tol=0.10, require_released=True)
+        ):
+            return 0.0
+        if self.check_success():
+            return 1.0
+        doneness = self._scored_doneness()
+        target = float(getattr(self, "target_doneness", 0.5))
+        if doneness <= target + 1e-9:
+            return 0.0  # undercook / at-or-below target (in-band → check_success)
+        past_sec = self._doneness_to_cook_seconds(doneness - target)
+        return float(
+            score_open_closed_intervals(past_sec, self.PARTIAL_OVERCOOK_BANDS)
+        )
+
     def get_obs(self) -> dict[str, Any]:
         obs = super().get_obs()
         obs["cooking"] = {
@@ -1813,5 +1870,6 @@ class cook_food(KitchenS_base_task):
             "stove_on": bool(getattr(self, "stove_on", False)),
             "placed": bool(getattr(self, "_placed", False)),
             "burner": str(getattr(self, "burner_name", "")),
+            "partial_score": float(self.get_score()),
         }
         return obs

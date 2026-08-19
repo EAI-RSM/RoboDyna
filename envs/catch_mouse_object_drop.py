@@ -34,6 +34,9 @@ from transforms3d.euler import euler2quat
 class catch_mouse_object_drop(Office_base_task):
     """Mouse knocks one fragile shelf object; catch it in a pillow-lined basket."""
 
+    # Near-miss ring outside the basket footprint (thirds of half-diagonal).
+    PARTIAL_MISS_SCORES = (0.75, 0.5, 0.25)
+
     # Skip base6: silver metallic mug (wrong look / mesh orientation for this task).
     CUP_IDS = [0, 1, 2, 5, 3]
     WINEGLASS_IDS = [1, 2, 4]  # skip oversized base0 / tall base3
@@ -422,7 +425,7 @@ class catch_mouse_object_drop(Office_base_task):
 
     @staticmethod
     def _model_size(modelname, model_id, scale_mult=1.0):
-        path = Path(f"assets/objects/{modelname}/model_data{int(model_id)}.json")
+        path = resolve_model_dir(modelname) / f"model_data{int(model_id)}.json"
         data = json.loads(path.read_text())
         size = (
             np.asarray(data["extents"], dtype=np.float64)
@@ -490,7 +493,7 @@ class catch_mouse_object_drop(Office_base_task):
         )
         try:
             data = json.loads(
-                Path(f"assets/objects/{modelname}/model_data{int(model_id)}.json").read_text()
+                (resolve_model_dir(modelname) / f"model_data{int(model_id)}.json").read_text()
             )
             base = data.get("scale") or [1.0, 1.0, 1.0]
             scale = [float(s) * float(scale_mult) for s in base]
@@ -1911,6 +1914,51 @@ class catch_mouse_object_drop(Office_base_task):
             return True
         return False
 
+    def _target_basket_edge_distance(self) -> float:
+        """Planar distance from target to basket/cushion footprint (0 if inside)."""
+        if self.target is None or self.basket is None:
+            return float("inf")
+        p = np.array(self.target.get_pose().p, dtype=np.float64)
+        bp = np.array(self.basket.get_pose().p, dtype=np.float64)
+        half = getattr(self, "_cushion_half_xy", self.basket_half_xy)
+        tol = float(getattr(self, "catch_xy_tol", self.CATCH_XY_TOL))
+        hx = float(half[0]) + tol
+        hy = float(half[1]) + tol
+        dx = abs(float(p[0] - bp[0])) - hx
+        dy = abs(float(p[1] - bp[1])) - hy
+        return float(np.hypot(max(0.0, dx), max(0.0, dy)))
+
+    def get_score(self) -> float:
+        """Partial score from object–basket miss (table contact → 0).
+
+        Settled in basket → 1. In basket XY but not settled → 0.5. Outside:
+        ring of width = basket half-diagonal, thirds → 0.75 / 0.5 / 0.25.
+        """
+        if self.target is None or self.basket is None:
+            return 0.0
+        if bool(getattr(self, "_fell_on_table", False)) or self._obj_state == "fallen":
+            return 0.0
+        if self._object_touches_table():
+            return 0.0
+        if self.check_success():
+            return 1.0
+        # Inside footprint but still bouncing / not settled.
+        if self._target_in_basket(require_settled=False):
+            return 0.5
+        half = getattr(self, "_cushion_half_xy", self.basket_half_xy)
+        r = float(np.hypot(float(half[0]), float(half[1])))
+        if r <= 1e-9:
+            return 0.0
+        d = self._target_basket_edge_distance()
+        third = r / 3.0
+        if d > r + 1e-9:
+            return 0.0
+        if d < third:
+            return float(self.PARTIAL_MISS_SCORES[0])
+        if d < 2.0 * third:
+            return float(self.PARTIAL_MISS_SCORES[1])
+        return float(self.PARTIAL_MISS_SCORES[2])
+
     def get_obs(self):
         obs = super().get_obs()
         obs["catch_mouse_object_drop"] = {
@@ -1930,5 +1978,6 @@ class catch_mouse_object_drop(Office_base_task):
             "drop_x": float(getattr(self, "drop_x", 0.0)),
             "landing": list(map(float, self._landing)),
             "n_shelf_objects": int(len(self.shelf_objects)),
+            "partial_score": float(self.get_score()),
         }
         return obs

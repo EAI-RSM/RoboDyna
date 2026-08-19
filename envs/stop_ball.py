@@ -24,6 +24,9 @@ class stop_ball(Office_base_task):
     catch it.
     """
 
+    # After arm contact, fall past the table edge by at most this → partial 0.25.
+    PARTIAL_FALL_EDGE_M = 0.02
+
     BALL_IDS = [0]  # orange table-tennis (id 1 is hard to see in head cam)
     # Asset has no authored scale; 0.02 × mean(extents) ≈ 4.36 cm diameter.
     BALL_BASE_SCALE = 0.02
@@ -314,7 +317,7 @@ class stop_ball(Office_base_task):
 
     @staticmethod
     def _resolve_scale(modelname, model_id, scale_mult=1.0, fallback=0.05):
-        path = Path(f"assets/objects/{modelname}/model_data{int(model_id)}.json")
+        path = resolve_model_dir(modelname) / f"model_data{int(model_id)}.json"
         data = json.loads(path.read_text())
         base = data.get("scale")
         if not base:
@@ -1426,6 +1429,47 @@ class stop_ball(Office_base_task):
         # angled deflection is fine so long as the ball stays on the table.
         return bool(on_table and in_xy)
 
+    def _ball_past_edge_m(self) -> float:
+        """How far the ball is outside the table XY footprint (meters, ≥0)."""
+        if self.ball is None:
+            return float("inf")
+        p = self._ball_centre()
+        past_x = max(0.0, abs(float(p[0])) - float(self.table_x_edge))
+        past_y = max(0.0, float(self.table_edge_y) - float(p[1]))
+        return float(max(past_x, past_y))
+
+    def _ball_on_table_xy(self) -> bool:
+        if self.ball is None:
+            return False
+        p = self._ball_centre()
+        return bool(
+            abs(float(p[0])) <= float(self.table_x_edge) - 0.01
+            and float(self.table_edge_y) + 0.01 <= float(p[1])
+            <= float(getattr(self, "table_back_y", 0.35)) + 0.02
+            and float(p[2]) >= float(self.table_top) - 0.01
+        )
+
+    def get_score(self) -> float:
+        """Partial score; requires arm contact for any credit.
+
+        Stopped on table → 1. Arm contact, still on table, not fully stopped →
+        0.5. Arm contact then fell ≤2 cm past an edge → 0.25. Else → 0.
+        """
+        if self.ball is None:
+            return 0.0
+        if not bool(getattr(self, "_arm_contacted", False)):
+            return 0.0
+        if self.check_success():
+            return 1.0
+        fell = bool(getattr(self, "_fell_off", False)) or self._ball_state == "fallen"
+        if not fell and self._ball_on_table_xy():
+            # Contacted but not yet (or not fully) stopped on the table.
+            return 0.5
+        if fell or self._ball_off_table(self._ball_centre()):
+            if self._ball_past_edge_m() <= float(self.PARTIAL_FALL_EDGE_M) + 1e-9:
+                return 0.25
+        return 0.0
+
     def get_obs(self):
         obs = super().get_obs()
         obs["stop_ball"] = {
@@ -1441,5 +1485,6 @@ class stop_ball(Office_base_task):
             "roll_speed": float(getattr(self, "roll_speed", 0.0)),
             "roll_speed_mean": float(getattr(self, "roll_speed_mean", 0.0)),
             "ball_speed": float(self._ball_speed()),
+            "partial_score": float(self.get_score()),
         }
         return obs
