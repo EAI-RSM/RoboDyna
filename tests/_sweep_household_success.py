@@ -35,7 +35,8 @@ CONFIG = "demo_dynamic"
 
 
 def run_seed(task_name: str, seed: int) -> dict:
-    save_root = os.path.abspath(f"./tmp/tmp_{task_name}_hh_sweep")
+    sweep_root = os.environ.get("ROBODYNA_SWEEP_ROOT", "./tmp")
+    save_root = os.path.abspath(os.path.join(sweep_root, f"tmp_{task_name}_hh_sweep"))
     os.makedirs(save_root, exist_ok=True)
     args = build_args(task_name, CONFIG, save_root, option=None, task_arg_overrides=[])
     args["collect_data"] = False
@@ -45,6 +46,7 @@ def run_seed(task_name: str, seed: int) -> dict:
     args["render_freq"] = 0
     args["episode_num"] = 1
     args["check_render_success"] = False
+    args["export_lerobot"] = False
     args["use_dynamic"] = False
 
     env = class_decorator(task_name)
@@ -79,8 +81,9 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--n", type=int, default=10, help="seeds per task (0..n-1)")
     p.add_argument("--tasks", nargs="*", default=list(TASKS))
+    p.add_argument("--start-seed", type=int, default=0)
     args = p.parse_args()
-    seeds = list(range(int(args.n)))
+    seeds = list(range(int(args.start_seed), int(args.start_seed) + int(args.n)))
 
     summary = []
     for task in args.tasks:

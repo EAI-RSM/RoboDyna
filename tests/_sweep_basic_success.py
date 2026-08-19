@@ -198,7 +198,9 @@ SCENARIOS = ("default", "opt1", "opt2", "opt1+2")
 
 
 def run_seed(task_name: str, seed: int, scenario: str = "default") -> dict:
-    save_root = os.path.abspath(f"./tmp/tmp_{task_name}_basic_sweep")
+    sweep_root = os.environ.get("ROBODYNA_SWEEP_ROOT", "./tmp")
+    safe_scenario = scenario.replace("+", "plus")
+    save_root = os.path.abspath(os.path.join(sweep_root, f"tmp_{task_name}_{safe_scenario}_basic_sweep"))
     os.makedirs(save_root, exist_ok=True)
     args = build_args(task_name, CONFIG, save_root, option=None, task_arg_overrides=[])
     args["collect_data"] = False
