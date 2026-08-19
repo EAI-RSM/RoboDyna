@@ -41,7 +41,7 @@ python script/bench_script/record_demo.py <task>
 ## Training trajectories (not demos)
 
 ```bash
-bash collect_data.sh <task> <task_config> 0
+bash scripts/collect_data.sh <task> <task_config> 0
 ```
 
 → HDF5/mp4 under `data/` + LeRobot under `data_lerobot/` (gitignored). Use for dataset gen, not gallery clips.

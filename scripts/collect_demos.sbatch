@@ -23,6 +23,6 @@ export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 
 cd /shared_work/markhsp/DOMINO
 echo "[domino] host=$(hostname) task=$TASK cfg=$CFG gpu=$CUDA_VISIBLE_DEVICES start=$(date)"
-# collect_data.sh uses CUDA_VISIBLE_DEVICES; Slurm pins us to one GPU -> local index 0
+# scripts/collect_data.sh uses CUDA_VISIBLE_DEVICES; Slurm pins us to one GPU -> local index 0
 bash scripts/collect_data.sh "$TASK" "$CFG" 0
 echo "[domino] EXIT rc=$? videos -> data/$TASK/$CFG/video/  $(date)"

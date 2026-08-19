@@ -148,6 +148,6 @@ itself is parameterized by the config knobs `dynamic_level` (1–3) and `dynamic
 2. Write `envs/<task_name>.py` with `class <task_name>(Base_Task)` and the four methods.
 3. (Optional) add `_play_once_dynamic` + `get_dynamic_motion_config` for the dynamic variant.
 4. Write/generate `description/task_instruction/<task_name>.json`.
-5. Smoke test: `episode_num: 2` config, `bash collect_data.sh <task_name> demo_smoke 0`, watch the
+5. Smoke test: `episode_num: 2` config, `bash scripts/collect_data.sh <task_name> demo_smoke 0`, watch the
    mp4 and confirm `check_success` fires.
 6. Scale up with `demo_clean` / `demo_clean_dynamic` and full `episode_num`.

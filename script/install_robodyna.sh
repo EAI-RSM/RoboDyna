@@ -80,4 +80,4 @@ echo "  1. conda activate ${ENV_NAME}"
 echo "  2. bash script/_download_assets.sh   # RoboTwin objects / embodiments / textures"
 echo "  3. export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json && unset DISPLAY"
 echo
-echo "aarch64 / GB10: prefer ./build_domino_aarch64.sh instead of this script."
+echo "aarch64 / GB10: prefer scripts/build_domino_aarch64.sh instead of this script."

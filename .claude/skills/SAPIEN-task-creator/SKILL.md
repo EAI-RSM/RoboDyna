@@ -219,7 +219,7 @@ timeout 300 python -u script/collect_data.py <task> <config> 2>&1 | grep -vE "OI
   manipulation looks right and any custom state renders.
 - Check `check_success` actually fires (episode saved as SUCCESS) and the HDF5 carries your fields.
 - Iterate spawn ranges / place distances / params; then restore `episode_num` and scale up (Slurm:
-  `sbatch collect_demos.sbatch <task> <config>` — see the DOMINO-benchmark skill).
+  `sbatch scripts/collect_demos.sbatch <task> <config>` — see the DOMINO-benchmark skill).
 
 ### Always record and show a sample demo — this is a required deliverable, not optional polish
 
