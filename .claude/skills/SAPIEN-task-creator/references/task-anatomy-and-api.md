@@ -1,8 +1,8 @@
 # Designing a new DOMINO / RoboTwin task
 
 How task authoring actually works in this codebase, derived from reading `envs/_base_task.py`,
-example tasks (`envs/punch_dual_holes.py`, `envs/catch_ramp_ball.py`), `script/collect_data.py`, the
-object-asset format, and the `code_gen/` LLM pipeline.
+example tasks (`envs/punch_dual_holes.py`, `envs/catch_ramp_ball.py`), `script/collect_data.py`, and the
+object-asset format.
 
 ## Mental model
 
@@ -130,17 +130,11 @@ DOMINO's novelty over RoboTwin is moving objects. A dynamic-aware task adds:
 See `envs/punch_dual_holes.py` and `envs/catch_ramp_ball.py` for the two canonical patterns. The motion
 itself is parameterized by the config knobs `dynamic_level` (1–3) and `dynamic_coefficient`.
 
-## Two authoring paths
+## Authoring workflow
 
-1. **Manual** (recommended to start): copy the closest existing task (`pack_fruits` / `place_block_belt` for pick-place,
+Start manually: copy the closest existing task (`pack_fruits` / `place_block_belt` for pick-place,
    `punch_dual_holes` / `dispense_gummy` for contact, `cook_meat` / `make_soup` for bimanual), swap the object + target + success
    check, run a 2–3 episode smoke collection, iterate. Fastest way to learn the primitives.
-
-2. **LLM-assisted** (`code_gen/`): RoboTwin's generator (`code_gen/task_generation.py`) writes a
-   `gpt_<task>` subclass implementing `play_once` from a `task_description` + `actor_list`, using a
-   documented primitive API (`prompt.py`'s `AVAILABLE_ENV_FUNCTION`/`FUNCTION_EXAMPLE`) and
-   auto-retries against simulator errors (`test_gen_code.py`). Good for scaling out many tasks once
-   the manual workflow is understood. Needs an OpenAI/Azure key (see `code_gen/gpt_agent.py`).
 
 ## Concrete checklist for a new task
 
