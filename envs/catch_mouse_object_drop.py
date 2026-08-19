@@ -189,6 +189,7 @@ class catch_mouse_object_drop(Office_base_task):
         self._caught = False
         self._basket_placed = False
         self._holding_basket = False
+        self._reset_metric_state()
         self._mouse_path = []
         self._mouse_cum = [0.0]
         self._mouse_path_len = 0.0
@@ -1176,6 +1177,7 @@ class catch_mouse_object_drop(Office_base_task):
         self._caught = False
         self._basket_placed = False
         self._holding_basket = False
+        self._reset_metric_state()
         self._target_live = False
         self._allow_shove = True
         self._mouse_shove_attempts = 0
@@ -1424,6 +1426,8 @@ class catch_mouse_object_drop(Office_base_task):
         if self._mouse_state != "idle":
             return
         self._mouse_state = "running"
+        if self._metric_start_step is None:
+            self._metric_start_step = self._metric_step()
 
     def _advance_mouse(self):
         if self._mouse_state != "running":
@@ -1618,17 +1622,100 @@ class catch_mouse_object_drop(Office_base_task):
         bottom = self._target_aabb_bottom()
         if bottom < self.shelf_z_surf - 0.03 and self._obj_state == "parked":
             self._obj_state = "falling"
+            self._latch_fall_metric()
 
         # Table contact outside the basket is an immediate permanent fail.
         if self._object_touches_table():
             self._fell_on_table = True
             self._caught = False
             self._obj_state = "fallen"
+            self._latch_land_metric()
             return
 
         if self._target_in_basket(require_settled=True):
             self._caught = True
             self._obj_state = "caught"
+            self._latch_land_metric()
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_start_step = None   # mouse set loose toward the shelf
+        self._metric_cover_step = None   # basket first seated under the landing spot
+        self._metric_fall_step = None    # object knocked off the shelf
+        self._metric_land_step = None    # object settled (in the basket or on the table)
+        self._metric_offset_norm = None  # basket placement error at knock-off time
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _basket_offset_norm(self):
+        """Chebyshev basket-vs-landing offset over the basket's catch footprint.
+
+        <= 1.0 means the landing point is still inside the basket mouth.
+        """
+        bp = np.array(self.basket.get_pose().p, dtype=np.float64)
+        land = np.asarray(self._landing, dtype=np.float64)
+        tol = float(self.catch_xy_tol)
+        hx = float(self.basket_half_xy[0]) + tol
+        hy = float(self.basket_half_xy[1]) + tol
+        return float(max(abs(bp[0] - land[0]) / max(hx, 1e-6),
+                         abs(bp[1] - land[1]) / max(hy, 1e-6)))
+
+    def _latch_fall_metric(self):
+        """Called when the object leaves the shelf — basket placement is committed."""
+        try:
+            if self._metric_fall_step is None:
+                self._metric_fall_step = self._metric_step()
+                if self.basket is not None:
+                    self._metric_offset_norm = self._basket_offset_norm()
+        except Exception:
+            pass
+
+    def _latch_land_metric(self):
+        try:
+            if self._metric_land_step is None:
+                self._metric_land_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `cover_latency_steps` — steps from the mouse being set loose until the
+        basket is first seated under the landing spot. `cover_margin_steps` reports
+        how much slack was left when the object was actually knocked off (positive =
+        basket in place first; None = never covered before the fall).
+        extra2 `basket_offset_norm` — Chebyshev basket-vs-landing offset at the moment
+        the object left the shelf, over the basket's catch footprint. LOWER is better;
+        <= 1.0 means the landing point was inside the basket mouth.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a, b = self._metric_start_step, self._metric_cover_step
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["cover_latency_steps"] = lat
+        out["cover_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+
+        f = self._metric_fall_step
+        margin = None if (b is None or f is None) else int(f) - int(b)
+        out["cover_margin_steps"] = margin
+        out["cover_margin_s"] = None if margin is None else round(float(margin) * dt, 4)
+
+        fall = (None if (f is None or self._metric_land_step is None)
+                else max(int(self._metric_land_step) - int(f), 0))
+        out["fall_latency_steps"] = fall
+
+        off = self._metric_offset_norm
+        out["basket_offset_norm"] = None if off is None else round(float(off), 4)
+        out["caught"] = bool(getattr(self, "_caught", False))
+        out["fell_on_table"] = bool(getattr(self, "_fell_on_table", False))
+        return out
 
     def _basket_under_landing(self):
         if self.basket is None:
@@ -1649,6 +1736,8 @@ class catch_mouse_object_drop(Office_base_task):
             return
         if self.basket is not None and self._basket_under_landing():
             self._basket_placed = True
+            if self._metric_cover_step is None:
+                self._metric_cover_step = self._metric_step()
         self._advance_mouse()
         self._tame_shelf_velocities()
         self._maybe_retry_mouse_shove()

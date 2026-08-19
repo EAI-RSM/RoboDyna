@@ -158,6 +158,7 @@ class play_billiard(Base_Task):
         self._strike_armed = False
         self._strike_done = False
         self._cue_tip_hit_allowed = True
+        self._reset_metric_state()
         self._cue_tip_shapes = []
         self._cue_shaft_shapes = []
         self.cue = None
@@ -311,6 +312,7 @@ class play_billiard(Base_Task):
         self._strike_armed = False
         self._strike_done = False
         self._cue_tip_hit_allowed = True
+        self._reset_metric_state()
         self._cue_tip_shapes = []
         self._cue_shaft_shapes = []
         self._aim_dir = np.array([1.0, 0.0], dtype=np.float64)
@@ -1508,6 +1510,7 @@ class play_billiard(Base_Task):
         if n < 1e-6:
             return
         direction /= n
+        self._latch_strike_metrics(direction)
         try:
             rigid.set_linear_velocity(direction * self.strike_impulse)
             rigid.set_angular_velocity(np.zeros(3))
@@ -1634,6 +1637,7 @@ class play_billiard(Base_Task):
         if not getattr(self, "_loaded", False):
             return
         self._update_welded_cue()
+        self._track_billiard_metrics()
         if getattr(self, "_interactive_robot_mode", True) is False:
             self._check_cue_distractor_contact()
             self._ensure_balls_dynamic()
@@ -1962,6 +1966,128 @@ class play_billiard(Base_Task):
         return self.info
 
     # ------------------------------------------------------------------ success
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_armed_step = None    # tip in place, strike phase armed
+        self._metric_strike_step = None   # impulse actually applied
+        self._metric_sink_step = None     # primary fell into a pocket
+        self._metric_aim_error_deg = None # stick-vs-ideal angle at the strike
+        self._metric_strike_ball_xy = None
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_strike_metrics(self, direction_xy):
+        """Called from _try_apply_strike_impulse with the direction actually used.
+
+        The aim error is captured here because the ball leaves immediately after —
+        the post-shot geometry says nothing about what the operator aimed at.
+        """
+        try:
+            if self._metric_strike_step is not None:
+                return
+            self._metric_strike_step = self._metric_step()
+            ball = np.asarray(self.primary_ball.get_pose().p, dtype=np.float64)[:2]
+            self._metric_strike_ball_xy = [float(ball[0]), float(ball[1])]
+            ids = list(getattr(self, "_allowed_pocket_ids", []) or [])
+            d = np.asarray(direction_xy, dtype=np.float64)[:2]
+            dn = float(np.linalg.norm(d))
+            if not ids or dn < 1e-9:
+                self._metric_aim_error_deg = None
+                return
+            d = d / dn
+            best = None
+            for pid in ids:
+                ideal = np.asarray(self._pocket_centers[int(pid)], dtype=np.float64)[:2] - ball
+                inorm = float(np.linalg.norm(ideal))
+                if inorm < 1e-9:
+                    continue
+                cos = float(np.clip(np.dot(d, ideal / inorm), -1.0, 1.0))
+                ang = float(np.degrees(np.arccos(cos)))
+                if best is None or ang < best:
+                    best = ang
+            self._metric_aim_error_deg = best
+        except Exception:
+            self._metric_aim_error_deg = None
+
+    # Primary-ball speed (m/s) that counts as "the shot has been struck".
+    STRIKE_SPEED_THRESHOLD = 0.05
+
+    def _track_billiard_metrics(self):
+        """Per-step latches: strike arming, the shot itself, and the primary sinking.
+
+        The strike is detected from the primary ball's own velocity rather than from
+        ``_try_apply_strike_impulse`` — that scripted path only runs in interactive
+        mode, while the expert drives the cue into the ball under real physics.
+        """
+        try:
+            if self._metric_armed_step is None and getattr(self, "_strike_armed", False):
+                self._metric_armed_step = self._metric_step()
+            if self._metric_strike_step is None and self._primary_rigid is not None:
+                v = np.asarray(self._primary_rigid.get_linear_velocity(), dtype=np.float64)
+                if float(np.linalg.norm(v[:2])) >= self.STRIKE_SPEED_THRESHOLD:
+                    self._latch_strike_metrics(v[:2])
+            if self._metric_sink_step is None and getattr(self, "_primary_pocketed", False):
+                self._metric_sink_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `strike_latency_steps` — steps from the cue tip reaching the strike pose
+        (aim armed) until the impulse is applied. This is the aiming / commit window.
+        extra2 `aim_error_norm` — angle between the stick direction at the strike and the
+        straight line from the primary ball to the nearest ALLOWED pocket, divided by the
+        angular half-width that pocket subtends from the ball at that moment. LOWER is
+        better; <= 1.0 means the shot line was inside the pocket mouth.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a = getattr(self, "_metric_armed_step", None)
+        b = getattr(self, "_metric_strike_step", None)
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["strike_latency_steps"] = lat
+        out["strike_latency_s"] = None if lat is None else round(lat * dt, 4)
+
+        c = getattr(self, "_metric_sink_step", None)
+        roll = None if (b is None or c is None) else max(int(c) - int(b), 0)
+        out["sink_latency_steps"] = roll
+        out["sink_latency_s"] = None if roll is None else round(roll * dt, 4)
+
+        ang = getattr(self, "_metric_aim_error_deg", None)
+        out["aim_error_deg"] = None if ang is None else round(float(ang), 4)
+        try:
+            # Angular half-width of the pocket mouth as seen from the ball AT STRIKE TIME
+            # (the ball has moved since, so the live pose would give the wrong scale).
+            ball = getattr(self, "_metric_strike_ball_xy", None)
+            ids = list(getattr(self, "_allowed_pocket_ids", []) or [])
+            tol = None
+            if ball is not None and ids:
+                b_xy = np.asarray(ball, dtype=np.float64)
+                dists = [
+                    float(np.linalg.norm(
+                        np.asarray(self._pocket_centers[int(pid)], dtype=np.float64)[:2] - b_xy))
+                    for pid in ids
+                ]
+                d0 = min(dists) if dists else None
+                if d0 is not None and d0 > 1e-6:
+                    tol = float(np.degrees(np.arctan2(float(self.pocket_radius), d0)))
+            out["aim_tolerance_deg"] = None if tol is None else round(tol, 4)
+            out["aim_error_norm"] = (
+                None if (ang is None or not tol) else round(float(ang) / max(tol, 1e-9), 4)
+            )
+        except Exception:
+            out["aim_tolerance_deg"] = None
+            out["aim_error_norm"] = None
+        return out
+
     def check_success(self):
         """Success = primary in an allowed pocket with no foul.
 

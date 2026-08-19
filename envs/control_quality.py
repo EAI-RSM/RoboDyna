@@ -103,6 +103,7 @@ class control_quality(Base_Task):
         self._stamp_ready = False
         self._belt_running = False
         self._stamp_active = False
+        self._reset_metric_state()
         super()._init_task_env_(**kwags)
 
     def _apply_legacy_option(self):
@@ -478,6 +479,7 @@ class control_quality(Base_Task):
         self.n_correct = 0
         self.black_press = False
         self.black_press_count = 0
+        self._reset_metric_state()
         self._stamp_active = False
         self._set_pose_z(self.stamp, self.stamp_up_z)
         self._recolor_stamp(None)
@@ -627,6 +629,8 @@ class control_quality(Base_Task):
         if best_i is None:
             return
 
+        # Metrics: this press is the decisive act for tile best_i.
+        self._latch_mark_latency(best_i)
         tile_color = self.tile_colors[best_i]
         if tile_color == "black":
             # any key press on a black tile is a failure
@@ -707,6 +711,7 @@ class control_quality(Base_Task):
             self._advance_belt()
         if getattr(self, "_belt_running", False) or getattr(self, "_stamp_active", False):
             self._step_stamp()
+        self._track_tile_arrival()
 
     def _press_key(self, color):
         self.stamp_key_color = color
@@ -906,6 +911,87 @@ class control_quality(Base_Task):
         return self.info
 
     # ------------------------------------------------------------- success
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_arrival_step = {}    # tile idx -> step it entered the stamp band
+        self._metric_mark_latencies = []  # per-tile arrival->press latency, in steps
+
+    def _metric_step(self):
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_tile_arrival(self):
+        """Latch the step each tile first enters the stamp capture band.
+
+        This is when the tile becomes actionable; the press latency is measured
+        from here. Only the first arrival per tile is kept.
+        """
+        try:
+            i = self._tile_under_stamp(require_unhandled=True)
+        except Exception:
+            return
+        if i is None:
+            return
+        arrivals = getattr(self, "_metric_arrival_step", None)
+        if arrivals is None:
+            return
+        if int(i) not in arrivals:
+            arrivals[int(i)] = self._metric_step()
+
+    def _latch_mark_latency(self, tile_idx):
+        """Record arrival->press latency for one tile, at the instant of the press."""
+        try:
+            arrivals = getattr(self, "_metric_arrival_step", None) or {}
+            start = arrivals.get(int(tile_idx))
+            if start is None:
+                return
+            steps = self._metric_step() - int(start)
+            if steps >= 0:
+                self._metric_mark_latencies.append(int(steps))
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """extra1 = mean tile arrival->press latency, extra2 = fraction handled correctly.
+
+        ``correct_fraction`` counts every non-hidden tile that got its required
+        treatment (red/green correctly stamped, black correctly skipped) over the
+        total tile count: 1.0 = a flawless run. HIGHER IS BETTER. The latency keys
+        are None when no tile was ever stamped.
+        """
+        metrics = {
+            "mark_latency_steps": None,
+            "mark_latency_s": None,
+            "first_mark_latency_steps": None,
+            "marks_counted": 0,
+            "correct_fraction": None,
+        }
+        lat = list(getattr(self, "_metric_mark_latencies", []) or [])
+        if lat:
+            mean_steps = float(sum(lat)) / float(len(lat))
+            metrics["mark_latency_steps"] = round(mean_steps, 3)
+            metrics["first_mark_latency_steps"] = int(lat[0])
+            metrics["marks_counted"] = int(len(lat))
+            try:
+                metrics["mark_latency_s"] = round(
+                    mean_steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        try:
+            n = int(self.n_tiles)
+            if n > 0:
+                good = 0
+                for i, color in enumerate(self.tile_colors):
+                    if color == "black":
+                        if self.tile_skipped[i] and not self.tile_marked[i]:
+                            good += 1
+                    elif self.tile_marked[i] and self.tile_correct[i]:
+                        good += 1
+                metrics["correct_fraction"] = round(float(good) / float(n), 6)
+        except Exception:
+            pass
+        return metrics
+
     def check_success(self):
         if self.black_press:
             return False

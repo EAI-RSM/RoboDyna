@@ -113,6 +113,7 @@ class place_block_belt(Base_Task):
         self.max_tilt_deg = 0.0
         self.tilt_score = 0.0
         self.reached_end = False
+        self._reset_metric_state()
         self._block_dyn = None
         self._release_q = [1.0, 0.0, 0.0, 0.0]
         self._belt_q = [1.0, 0.0, 0.0, 0.0]
@@ -422,6 +423,7 @@ class place_block_belt(Base_Task):
         self.max_tilt_deg = 0.0
         self.tilt_score = 0.0
         self.reached_end = False
+        self._reset_metric_state()
         self._ride_steps_done = 0
         self._block_dropped = False
         self._drop_settle_steps = 0
@@ -930,6 +932,7 @@ class place_block_belt(Base_Task):
         super()._update_kinematic_tasks()
         self._advance_belt_visual_motion()
         self._advance_bowl_motion()
+        self._track_belt_metrics()
 
         if getattr(self, "_released", False) and getattr(self, "block", None) is not None:
             t = self._current_tilt_deg()
@@ -1113,6 +1116,93 @@ class place_block_belt(Base_Task):
             "{opt2}": "on" if self.blocker_enabled else "off",
         }
         return self.info
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_lift_step = None       # block first clear of the table
+        self._metric_contact_step = None    # block first seated on the belt
+        self._metric_drop_step = None       # block left the belt at the exit
+        self._metric_bowl_step = None       # block first inside the bowl
+        self._metric_min_bowl_offset = None # closest horizontal approach after the drop
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_belt_metrics(self):
+        """Per-step latches: lift, belt contact, exit drop, closest bowl approach."""
+        try:
+            if getattr(self, "block", None) is None:
+                return
+            p = np.array(self.block.get_pose().p, dtype=np.float64)
+            if (self._metric_lift_step is None
+                    and float(p[2]) >= float(self.table_top_z) + float(self.block_half_h) + 0.06):
+                self._metric_lift_step = self._metric_step()
+            if self._metric_contact_step is None and getattr(self, "_belt_contact_latched", False):
+                self._metric_contact_step = self._metric_step()
+            if self._metric_drop_step is None and getattr(self, "_block_dropped", False):
+                self._metric_drop_step = self._metric_step()
+            if self._metric_drop_step is None or getattr(self, "bowl", None) is None:
+                return
+            # Only after the cube has left the belt — while riding it passes over
+            # nothing and the bowl is still sweeping to meet it.
+            bowl = np.array(self.bowl.get_pose().p, dtype=np.float64)
+            horiz = float(np.linalg.norm(p[:2] - bowl[:2]))
+            prev = self._metric_min_bowl_offset
+            if prev is None or horiz < prev:
+                self._metric_min_bowl_offset = horiz
+            if self._metric_bowl_step is None and self._block_in_bowl():
+                self._metric_bowl_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `place_latency_steps` — steps from lifting the block clear of the table
+        until it is seated on the belt. Under Opt 1 the bowl oscillates, so this window
+        is where the operator decides *when* to commit the cube to the belt.
+        extra2 `bowl_offset_norm` — closest horizontal block-to-bowl-centre distance
+        after the cube leaves the belt, divided by the bowl inner radius. LOWER is
+        better; <= 1.0 means it fell inside the mouth.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a = getattr(self, "_metric_lift_step", None)
+        b = getattr(self, "_metric_contact_step", None)
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["place_latency_steps"] = lat
+        out["place_latency_s"] = None if lat is None else round(lat * dt, 4)
+
+        c = getattr(self, "_metric_drop_step", None)
+        d = getattr(self, "_metric_bowl_step", None)
+        ride = None if (b is None or c is None) else max(int(c) - int(b), 0)
+        out["ride_latency_steps"] = ride
+        out["ride_latency_s"] = None if ride is None else round(ride * dt, 4)
+        fall = None if (c is None or d is None) else max(int(d) - int(c), 0)
+        out["fall_latency_steps"] = fall
+
+        off = getattr(self, "_metric_min_bowl_offset", None)
+        try:
+            denom = max(float(self.bowl_inner_radius), 1e-9)
+            out["bowl_offset_norm"] = None if off is None else round(float(off) / denom, 4)
+        except Exception:
+            out["bowl_offset_norm"] = None
+        # Reuse the task's own upright-carry score (HIGHER is better, 1.0 = no tilt).
+        # Saturates at 0 once max_tilt_deg exceeds theta_max_deg, so also report the
+        # raw angle — it stays discriminating past that clip.
+        try:
+            out["tilt_score"] = round(float(self.tilt_score), 4)
+            out["max_tilt_deg"] = round(float(self.max_tilt_deg), 3)
+        except Exception:
+            out["tilt_score"] = None
+            out["max_tilt_deg"] = None
+        return out
 
     # ----------------------------------------------------------------- success + metric
     def check_success(self):

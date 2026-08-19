@@ -97,6 +97,7 @@ class clean_table(Base_Task):
         self.spill_cleaned = 0.0
         self.laptop_reached = False
         self.cleaned_ok = False
+        self._reset_metric_state()
         self._spill_frozen = False
         self._coffee_entity = None
         self._spill_entity = None
@@ -160,6 +161,7 @@ class clean_table(Base_Task):
         self._spill_frozen = False
         self.laptop_reached = False
         self.cleaned_ok = False
+        self._reset_metric_state()
         self._coffee_entity = self._remove_entity(getattr(self, "_coffee_entity", None))
         self._spill_entity = self._remove_entity(getattr(self, "_spill_entity", None))
         self._spill_visual_cached = None
@@ -1235,6 +1237,7 @@ class clean_table(Base_Task):
             if t > 0.65 and not self.spill_active:
                 self.cup_tipped = True
                 self.spill_active = True
+                self._latch_spill_start()
                 # Reveal the full initial multi-spot puddle immediately.
                 puddle = float(
                     getattr(self, "initial_puddle_level", self.INITIAL_PUDDLE_LEVEL_DEFAULT)
@@ -1250,6 +1253,7 @@ class clean_table(Base_Task):
         self._coffee_entity = self._remove_entity(self._coffee_entity)
         self.cup_tipped = True
         self.spill_active = True
+        self._latch_spill_start()
         puddle = float(
             getattr(self, "initial_puddle_level", self.INITIAL_PUDDLE_LEVEL_DEFAULT)
         )
@@ -1711,6 +1715,7 @@ class clean_table(Base_Task):
         if spot.get("cleaned"):
             return
         spot["cleaned"] = True
+        self._latch_wipe_metric()
         active = [s for s in self._active_spots() if not s.get("under_mug")]
         self.spill_cleaned = (
             float(sum(1 for s in active if s["cleaned"])) / max(1, len(active))
@@ -1724,6 +1729,96 @@ class clean_table(Base_Task):
             self._freeze_spill_growth("table clean")
             self.cleaned_ok = True
         self._rebuild_spill(force=True)
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_spill_step = None    # mug tipped, spill went live
+        self._metric_first_wipe = None    # first lobe cleared
+        self._metric_clear_step = None    # table first fully clean
+        self._metric_worst_front = 0.0    # closest the spill front ever got to the laptop
+        self._metric_wipes = 0
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_spill_start(self):
+        try:
+            if self._metric_spill_step is None:
+                self._metric_spill_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _latch_wipe_metric(self):
+        """Called from _clear_spot, before the clean/freeze bookkeeping runs."""
+        try:
+            self._metric_wipes += 1
+            if self._metric_first_wipe is None:
+                self._metric_first_wipe = self._metric_step()
+        except Exception:
+            pass
+
+    def _track_spill_metrics(self):
+        """High-water mark on the spill front, and the first fully-clean frame.
+
+        ``spill_cleaned`` is recomputed against the *currently active* lobes, so it
+        drops back as new lobes spawn — the front high-water mark is the value that
+        survives.
+        """
+        try:
+            if not getattr(self, "spill_active", False):
+                return
+            front = float(self._spill_front_along())
+            frac = front / max(1e-6, float(self.spill_path_len))
+            if frac > self._metric_worst_front:
+                self._metric_worst_front = float(frac)
+            if (self._metric_clear_step is None
+                    and self._metric_wipes > 0
+                    and self._table_fully_clean()):
+                self._metric_clear_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `first_wipe_latency_steps` — steps from the mug tipping until the first
+        spill lobe is dabbed. The spill keeps spreading toward the laptop the whole
+        time, so this is the reaction window that actually matters.
+        `clear_latency_steps` reports how long the full clean-up took.
+        extra2 `spill_front_norm` — the closest the dirty spill front ever got to the
+        laptop, as a fraction of the mug->laptop path. LOWER is better; >= 1.0 means it
+        arrived (`laptop_reached`), and the task's own failure threshold is
+        ``reach_laptop_level``.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a = self._metric_spill_step
+        b = self._metric_first_wipe
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["first_wipe_latency_steps"] = lat
+        out["first_wipe_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+
+        c = self._metric_clear_step
+        clr = None if (a is None or c is None) else max(int(c) - int(a), 0)
+        out["clear_latency_steps"] = clr
+        out["clear_latency_s"] = None if clr is None else round(float(clr) * dt, 4)
+        out["wipes_counted"] = int(self._metric_wipes)
+
+        out["spill_front_norm"] = round(float(self._metric_worst_front), 4)
+        try:
+            out["reach_laptop_level"] = round(float(self.reach_laptop_level), 4)
+            out["max_spill_amount"] = round(float(self.max_spill_amount), 4)
+        except Exception:
+            out["reach_laptop_level"] = None
+            out["max_spill_amount"] = None
+        out["laptop_reached"] = bool(getattr(self, "laptop_reached", False))
+        return out
 
     def _freeze_spill_growth(self, reason: str = "") -> None:
         """Once the table is clean, no new lobes may spawn."""
@@ -1865,6 +1960,7 @@ class clean_table(Base_Task):
             return
         self._sync_welded_sponge()
         self._step_spill()
+        self._track_spill_metrics()
 
     def _update_render(self):
         # Always seat the pad under the TCP before cameras sample the scene.

@@ -104,6 +104,7 @@ class punch_dual_holes(Base_Task):
         # capture task-scoped params from the (general) config's task_args block
         self._cfg = kwags.get("task_args", {}).get("punch_dual_holes", {})
         self._apply_legacy_option()
+        self._reset_metric_state()
         super()._init_task_env_(**kwags)
 
     def _apply_legacy_option(self):
@@ -520,6 +521,7 @@ class punch_dual_holes(Base_Task):
         # belt simulation clock (shared step counter; each belt reads its own phase/speed)
         self._belt_step = 0
         self._belt_active = False
+        self._reset_metric_state()
         self._belt_freeze_i = 0      # start-of-episode hold, counted once _belt_active
         self._belt_running = False   # only True inside the explicit dwell loops
         # Persistent frame counter so short idles (e.g. idle(1)) don't dump a picture
@@ -706,6 +708,7 @@ class punch_dual_holes(Base_Task):
         self._update_reactive_buttons()
         # Stamp strokes must advance even when belts are idle (discrete press windows).
         self._update_punch_heads()
+        self._track_punch_ready()
         if not getattr(self, "_belt_active", False):
             return
         # Start-of-episode hold: tiles stay put for belt_start_freeze_s so the stamps
@@ -774,6 +777,7 @@ class punch_dual_holes(Base_Task):
         off = abs(x - self.page_target_x[side][k])
         self.page_punched[side][k] = True
         self.page_offset[side][k] = float(off)
+        self._latch_punch_metric(side, k)
         if os.environ.get("DHP_DEBUG"):
             print(f"[dhp] FIRE {side} page{k} off={off:.4f} step={self._belt_step}", flush=True)
         # Defer the card mark until the head reaches the bottom of its stroke.
@@ -1197,6 +1201,97 @@ class punch_dual_holes(Base_Task):
         if not offs:
             return 0.0
         return float(np.mean([np.clip(1.0 - o / self.punch_tol, 0.0, 1.0) for o in offs]))
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        n = int(getattr(self, "n_pages", 0) or 0)
+        self._metric_ready_step = {"left": [None] * n, "right": [None] * n}
+        self._metric_punch_step = {"left": [None] * n, "right": [None] * n}
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_punch_ready(self):
+        """Latch the first step each unpunched tile satisfies the stamp criterion.
+
+        This is the leading edge of the operator's window: the tile is credit-eligible
+        under the head from here until the belt carries it past.
+        """
+        try:
+            for side in ("left", "right"):
+                slots = self._metric_ready_step.get(side)
+                if slots is None:
+                    continue
+                for k in range(int(self.n_pages)):
+                    if slots[k] is not None or self.page_hidden[side][k]:
+                        continue
+                    if self.page_punched[side][k] or self.page_missing[side][k]:
+                        continue
+                    if self._page_satisfies_stamp_criterion(side, k):
+                        slots[k] = self._metric_step()
+        except Exception:
+            pass
+
+    def _latch_punch_metric(self, side, k):
+        """Called from _fire_punch the moment a tile is credited."""
+        try:
+            slots = self._metric_punch_step.get(side)
+            if slots is not None and slots[k] is None:
+                slots[k] = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `punch_latency_steps` — mean steps from a tile first becoming
+        credit-eligible under the stamp head until the punch actually fires, averaged
+        over the tiles punched. The belt keeps moving, so this is the reaction window.
+        extra2 `punch_offset_norm` — mean recorded punch offset divided by ``punch_tol``.
+        LOWER is better; <= 1.0 scores, 0.0 is dead-centre.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        lats = []
+        try:
+            for side in ("left", "right"):
+                for k in range(int(self.n_pages)):
+                    a = self._metric_ready_step[side][k]
+                    b = self._metric_punch_step[side][k]
+                    if a is not None and b is not None:
+                        lats.append(max(int(b) - int(a), 0))
+        except Exception:
+            lats = []
+        mean_lat = (sum(lats) / len(lats)) if lats else None
+        out["punch_latency_steps"] = None if mean_lat is None else round(float(mean_lat), 3)
+        out["punch_latency_s"] = None if mean_lat is None else round(float(mean_lat) * dt, 4)
+        out["worst_punch_latency_steps"] = max(lats) if lats else None
+        out["punches_counted"] = len(lats)
+
+        offs = []
+        try:
+            for side in ("left", "right"):
+                offs.extend([float(o) for o in self.page_offset[side] if o is not None])
+        except Exception:
+            offs = []
+        try:
+            tol = max(float(self.punch_tol), 1e-9)
+            out["punch_offset_norm"] = round(sum(offs) / len(offs) / tol, 4) if offs else None
+            out["worst_punch_offset_norm"] = round(max(offs) / tol, 4) if offs else None
+        except Exception:
+            out["punch_offset_norm"] = None
+            out["worst_punch_offset_norm"] = None
+        try:
+            out["punch_score_mean"] = round(float(self.punch_score_mean), 4)
+        except Exception:
+            out["punch_score_mean"] = None
+        return out
 
     def check_success(self):
         """Success iff every present tile was punched (missing slots are skipped).

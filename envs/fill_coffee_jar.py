@@ -202,6 +202,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_peak_force = 0.0
         self._press_force_level = 0
         self._press_dispense_level = 0
+        self._reset_metric_state()
         self._button_visual_depth = 0.0
         self._button_target_depth = 0.0
         self._press_idle_s = 0.0
@@ -912,6 +913,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self.beans_in_jar = 0
         self.press_count = 0
         self._touch_latched = False
+        self._reset_metric_state()
         self._dispensing = False
         self._press_active = False
         self._awaiting_release = False
@@ -1718,6 +1720,8 @@ class fill_coffee_jar(KitchenS_base_task):
         self._press_active = True
         self._dispensing = True
         self._awaiting_release = False
+        if self._metric_first_press is None:
+            self._metric_first_press = self._metric_step()
         # Each new press restarts the post-release idle scoring window.
         self._press_idle_s = 0.0
         self._press_steps = 0
@@ -1815,6 +1819,7 @@ class fill_coffee_jar(KitchenS_base_task):
         self.beans_in_jar = self._count_beans_in_jar()
         self._sync_fill_visual()
         fill = self._current_fill()
+        self._latch_press_metric(fill)
         print(
             f"[fill_coffee_jar] force={peak:.1f}N level={level}/4 → {spawned} beans "
             f"fill={fill:.0%} "
@@ -1978,6 +1983,66 @@ class fill_coffee_jar(KitchenS_base_task):
         self._detect_lid_touch()
 
     # ------------------------------------------------------------------ expert / success
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_first_press = None   # button first held down
+        self._metric_last_press = None    # last dispense finished (fill committed)
+        self._metric_final_fill = None    # fill fraction right after that dispense
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_press_metric(self, fill):
+        """Called at the end of every dispense — LAST press wins.
+
+        Each shot changes the fill, so the decisive commit is the final one; an
+        earlier under-dose that was topped up is not the value being scored.
+        """
+        try:
+            self._metric_last_press = self._metric_step()
+            self._metric_final_fill = float(fill)
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `fill_latency_steps` — steps from the first button press until the last
+        dispense finished: the whole dosing window, including every top-up shot.
+        extra2 `fill_error_norm` — |final fill - target_fill| / fill_tol. LOWER is
+        better; <= 1.0 means the jar landed inside the success band.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a, b = self._metric_first_press, self._metric_last_press
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["fill_latency_steps"] = lat
+        out["fill_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+        out["first_press_step"] = None if a is None else int(a)
+        try:
+            out["press_count"] = int(self.press_count)
+        except Exception:
+            out["press_count"] = None
+
+        f = self._metric_final_fill
+        try:
+            tol = max(float(self.fill_tol), 1e-6)
+            out["fill_error_norm"] = (
+                None if f is None
+                else round(abs(float(f) - float(self.target_fill)) / tol, 4))
+            out["target_fill"] = round(float(self.target_fill), 4)
+        except Exception:
+            out["fill_error_norm"] = None
+            out["target_fill"] = None
+        out["final_fill"] = None if f is None else round(float(f), 4)
+        return out
+
     def _fill_band(self):
         lo = float(self.target_fill) - float(self.fill_tol)
         hi = float(self.target_fill) + float(self.fill_tol)

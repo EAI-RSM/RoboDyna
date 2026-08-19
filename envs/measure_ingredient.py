@@ -186,6 +186,7 @@ class measure_ingredient(KitchenS_base_task):
         self.spill_amount = 0.0
         self.opened_once = False
         self.closed_after_pour = False
+        self._reset_metric_state()
         self.jar_on_scale = False
         self._episode_jar_released = False
         self.target_fill = 0.25
@@ -992,6 +993,7 @@ class measure_ingredient(KitchenS_base_task):
         self.spill_amount = 0.0
         self.opened_once = False
         self.closed_after_pour = False
+        self._reset_metric_state()
         self.jar_on_scale = False
         self._episode_jar_released = False
         self._liquid_entity = None
@@ -1929,13 +1931,92 @@ class measure_ingredient(KitchenS_base_task):
         self.tab_open = open_
         if self.tab_open and not was_open:
             self.opened_once = True
+            if self._metric_open_step is None:
+                self._metric_open_step = self._metric_step()
         # Success / fail is scored only after the key returns to OFF.
         if was_open and not self.tab_open and self.opened_once:
             self.closed_after_pour = True
+            self._latch_close_metric()
         self._set_button_press_depth(self._switch_travel() if open_ else 0.0)
         self._sync_stream()
         # Force a liquid refresh so ON/OFF is immediately visible in interactive.
         self._rebuild_liquid(force=True)
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_open_step = None    # nozzle key first turned ON
+        self._metric_band_step = None    # fill first reached the lower band edge
+        self._metric_close_step = None   # key turned back OFF (decisive event)
+        self._metric_close_level = None  # fill frozen at that instant
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_fill_metrics(self):
+        """Stamp the frame the jar first reaches the bottom of the success band."""
+        try:
+            if self._metric_band_step is not None:
+                return
+            lo, _hi = self._fill_band()
+            if float(self.liquid_level) + 1e-3 >= float(lo):
+                self._metric_band_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _latch_close_metric(self):
+        """Called from _set_tab_open on the ON->OFF edge — LAST close wins.
+
+        A jar that was under-filled and topped up is scored on the final shutoff,
+        so the latch is deliberately overwritten rather than kept as a high-water mark.
+        """
+        try:
+            self._metric_close_step = self._metric_step()
+            self._metric_close_level = float(self.liquid_level)
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `shutoff_latency_steps` — steps from the fill first reaching the bottom
+        of the success band until the nozzle key is turned OFF. The oil keeps running
+        the whole time, so every step here eats into the overfill margin.
+        extra2 `fill_error_norm` — |fill at shutoff - target_fill| / fill_tol. LOWER is
+        better; <= 1.0 means the jar landed inside the success band.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a, b = self._metric_band_step, self._metric_close_step
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["shutoff_latency_steps"] = lat
+        out["shutoff_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+        pour = (None if (self._metric_open_step is None or a is None)
+                else max(int(a) - int(self._metric_open_step), 0))
+        out["pour_latency_steps"] = pour
+
+        lvl = self._metric_close_level
+        try:
+            tol = max(float(getattr(self, "fill_tol", self.FILL_TOL)), 1e-6)
+            out["fill_error_norm"] = (
+                None if lvl is None
+                else round(abs(float(lvl) - float(self.target_fill)) / tol, 4))
+            out["target_fill"] = round(float(self.target_fill), 4)
+        except Exception:
+            out["fill_error_norm"] = None
+            out["target_fill"] = None
+        out["shutoff_fill"] = None if lvl is None else round(float(lvl), 4)
+        try:
+            out["spill_amount"] = round(float(self.spill_amount), 4)
+        except Exception:
+            out["spill_amount"] = None
+        out["overflowed"] = bool(getattr(self, "overflowed", False))
+        return out
 
     def _sync_stream(self):
         """Narrow oil cylinder from nozzle outlet down to the table (tab-gated)."""
@@ -2129,6 +2210,7 @@ class measure_ingredient(KitchenS_base_task):
                 self._sync_stream()
         self._rebuild_liquid(force=False)
         self._rebuild_spill(force=False)
+        self._track_fill_metrics()
 
     def _update_kinematic_tasks(self):
         super()._update_kinematic_tasks()

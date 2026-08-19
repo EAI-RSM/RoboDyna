@@ -109,6 +109,7 @@ class hit_target(Base_Task):
         self._hit_ring_index = None  # 0 = outermost ring … n-1 = bullseye
         self._hit_planar_offset = None
         self._hit_radial_offset = None
+        self._reset_metric_state()
         # Partial credit for the ring stabbed: bullseye 1.0 down to 1/n on the
         # outer ring, 0.0 for a miss or a blocker strike. Success stays binary.
         self.hit_score = 0.0
@@ -852,6 +853,7 @@ class hit_target(Base_Task):
         # Stick–blocker contact fails the episode (checked every physics step).
         if not self._stuck:
             self._check_blocker_hit()
+        self._track_dart_metrics()
 
     def _ring_index_at_radius(self, radial_offset: float) -> int | None:
         """Index of the painted ring under the tip, 0 = outermost … n-1 = bullseye.
@@ -929,6 +931,10 @@ class hit_target(Base_Task):
         self._hit_radial_offset = radial_offset
         self._hit_color = color
         self._hit_ring_index = int(ring_index)
+        # Metrics: first board contact is the decisive event.
+        if getattr(self, "_metric_impact_step", None) is None:
+            self._metric_impact_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+            self._metric_impact_radial = float(radial_offset)
         # Keep the best ring reached: a tip that grazes an outer ring on the way
         # in must not downgrade a bullseye already scored this episode.
         self.hit_score = max(float(self.hit_score), self._ring_score(ring_index))
@@ -1611,6 +1617,69 @@ class hit_target(Base_Task):
         return self.info
 
     # ------------------------------------------------------------------ success
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_lift_step = None      # dart first clear of the table
+        self._metric_impact_step = None    # tip first on the board face
+        self._metric_impact_radial = None  # radial miss at that instant, in metres
+
+    def _track_dart_metrics(self):
+        """Latch the step the dart was first lifted clear of the table.
+
+        This opens the aiming window: everything before it is the approach/grasp,
+        which the completion time already covers. High-water mark — only the first
+        lift is kept, and the query stops once latched.
+        """
+        if getattr(self, "_metric_lift_step", None) is not None:
+            return
+        try:
+            dart_z = float(self.dart.get_pose().p[2])
+            if dart_z < float(self.table_z_bias) + 0.85:
+                return
+        except Exception:
+            return
+        self._metric_lift_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _compute_metrics(self):
+        """extra1 = lift->board-impact latency, extra2 = radial miss in bullseye radii.
+
+        ``impact_offset_norm`` is the tip's distance from the board centre at first
+        contact, as a fraction of the yellow bullseye radius: 0.0 = dead centre,
+        1.0 = exactly on the yellow edge, >1.0 = outside the scoring centre.
+        LOWER IS BETTER. ``ring_score`` is the partial credit already tracked by
+        the task (1.0 = bullseye, 1/n = outermost ring, 0.0 = miss or blocker) —
+        HIGHER IS BETTER. Both are None when the board was never touched.
+        """
+        offset = None
+        try:
+            if getattr(self, "_metric_impact_radial", None) is not None:
+                offset = float(self._metric_impact_radial) / max(
+                    float(self.center_radius), 1e-9)
+        except Exception:
+            offset = None
+        metrics = {
+            "impact_latency_steps": None,
+            "impact_latency_s": None,
+            "impact_offset_norm": offset,
+            "ring_score": (
+                None
+                if getattr(self, "_metric_impact_step", None) is None
+                else float(getattr(self, "hit_score", 0.0))
+            ),
+        }
+        start = getattr(self, "_metric_lift_step", None)
+        hit = getattr(self, "_metric_impact_step", None)
+        if start is not None and hit is not None and hit >= start:
+            steps = int(hit - start)
+            metrics["impact_latency_steps"] = steps
+            try:
+                metrics["impact_latency_s"] = round(
+                    steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics
+
     def check_success(self):
         """Success: black tip welded on the yellow paint; never struck a blocker.
 

@@ -168,6 +168,7 @@ class whack_moles(Base_Task):
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("whack_moles", {})
+        self._reset_metric_state()
         # init kinematic bookkeeping before base init (may call _update_kinematic_tasks)
         self._global_step = 0
         self.moles = []
@@ -442,6 +443,7 @@ class whack_moles(Base_Task):
         self._spawn_rabbits()
 
         self.touched = [False] * self.num_moles
+        self._reset_metric_state()
         self.schedule = self._build_schedule()
         self._schedule_i = 0
 
@@ -1790,6 +1792,96 @@ class whack_moles(Base_Task):
                 self.rabbits, self._rabbit_rigids, self._rabbit_state,
                 self._set_rabbit_pose)
 
+        self._track_pop_metrics()
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_pop_start = {}      # mole idx -> step this appearance broke the deck
+        self._metric_hit_latency = {}    # mole idx -> steps from that pop to the whack
+        self._metric_hit_height = {}     # mole idx -> raise fraction at the whack
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_pop_metrics(self):
+        """Stamp the start of each *current* appearance.
+
+        Reaction time is measured against the appearance the operator is actually
+        looking at, so the stamp is re-armed every time a mole ducks back under the
+        deck and pops again.
+        """
+        try:
+            for i, st in enumerate(getattr(self, "_mole_state", []) or []):
+                if st.get("touched") or st.get("exhausted"):
+                    continue
+                up = bool(self._mole_above_surface(i))
+                if up:
+                    if self._metric_pop_start.get(i) is None:
+                        self._metric_pop_start[i] = self._metric_step()
+                else:
+                    self._metric_pop_start[i] = None
+        except Exception:
+            pass
+
+    def _latch_hit_metric(self, idx):
+        """Called from _mark_touched, before the mole is snapped back down."""
+        try:
+            start = self._metric_pop_start.get(idx)
+            if start is not None and idx not in self._metric_hit_latency:
+                self._metric_hit_latency[idx] = max(self._metric_step() - int(start), 0)
+            st = self._mole_state[idx]
+            rigid = self._mole_rigids[idx]
+            if rigid is not None and idx not in self._metric_hit_height:
+                z = float(rigid.entity.get_pose().p[2])
+                lo = float(st["hidden_z"])
+                hi = float(st["raised_z"])
+                span = max(hi - lo, 1e-6)
+                self._metric_hit_height[idx] = float(
+                    min(max((z - lo) / span, 0.0), 1.0))
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `hit_latency_steps` — mean steps from a mole breaking the deck surface
+        until it is whacked, measured against the appearance that was actually hit.
+        extra2 `hit_height_norm` — mean raise fraction (0 = flush with the deck,
+        1 = fully crested) at the moment of the hit. HIGHER is better: striking near
+        the crown means the operator caught the mole at full extension rather than
+        clipping it on the way up or down.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        lats = sorted(self._metric_hit_latency.values()) if getattr(
+            self, "_metric_hit_latency", None) else []
+        mean_lat = (sum(lats) / len(lats)) if lats else None
+        out["hit_latency_steps"] = None if mean_lat is None else round(float(mean_lat), 3)
+        out["hit_latency_s"] = None if mean_lat is None else round(float(mean_lat) * dt, 4)
+        out["worst_hit_latency_steps"] = lats[-1] if lats else None
+        out["hits_counted"] = len(lats)
+
+        hs = list(self._metric_hit_height.values()) if getattr(
+            self, "_metric_hit_height", None) else []
+        out["hit_height_norm"] = (
+            round(sum(hs) / len(hs), 4) if hs else None)
+        out["worst_hit_height_norm"] = round(min(hs), 4) if hs else None
+        try:
+            out["moles_touched"] = int(sum(1 for t in self.touched if t))
+            out["moles_total"] = int(self.num_moles)
+        except Exception:
+            out["moles_touched"] = None
+            out["moles_total"] = None
+        out["distractor_hit"] = bool(getattr(self, "distractor_hit", False))
+        out["board_hit"] = bool(getattr(self, "board_hit", False))
+        return out
+
     def _dwell(self, steps):
         for _ in range(int(steps)):
             self._update_kinematic_tasks()
@@ -1935,6 +2027,7 @@ class whack_moles(Base_Task):
         if self.touched[idx]:
             return
         self.touched[idx] = True
+        self._latch_hit_metric(idx)
         st = self._mole_state[idx]
         st["touched"] = True
         st["motion"] = None

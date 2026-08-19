@@ -139,6 +139,7 @@ class catch_cup(Office_base_task):
         self._caught_on_pillow = False
         self._cup_physics = False
         self._pillow_placed = False
+        self._reset_metric_state()
         self._pillow_dynamic = False
         self._pillow_contact_steps = 0
         self._push_active = False
@@ -957,6 +958,7 @@ class catch_cup(Office_base_task):
         self._caught_on_pillow = False
         self._cup_physics = False
         self._pillow_placed = False
+        self._reset_metric_state()
         self._loaded = True
 
     def _sample_cup_slots(self, n_cups, cup_hx=0.050):
@@ -1101,7 +1103,99 @@ class catch_cup(Office_base_task):
         if self._cup_state != "parked":
             return
         self._cup_state = "rolling"
+        if self._metric_release_step is None:
+            self._metric_release_step = self._metric_step()
         self._traj_step = 0
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_release_step = None   # cup started rolling down the shelf
+        self._metric_cover_step = None     # cushion first covered the landing spot
+        self._metric_fall_step = None      # cup left the shelf into free fall
+        self._metric_land_step = None      # cup settled (caught or on the table)
+        self._metric_offset_norm = None    # cushion placement error at fall time
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _pillow_offset_norm(self):
+        """Chebyshev cushion-vs-landing offset over its catch footprint.
+
+        <= 1.0 means the landing point is still inside the cushion footprint.
+        """
+        pp = np.array(self.pillow.get_pose().p, dtype=np.float64)
+        land = np.asarray(self._landing, dtype=np.float64)
+        tol = float(self.pillow_catch_xy_tol)
+        hx = float(self.pillow_half_xy[0]) + tol
+        hy = float(self.pillow_half_xy[1]) + tol
+        return float(max(abs(pp[0] - land[0]) / max(hx, 1e-6),
+                         abs(pp[1] - land[1]) / max(hy, 1e-6)))
+
+    def _track_cup_metrics(self):
+        """Stamp the first frame the cushion actually covered the landing spot."""
+        try:
+            if (self._metric_cover_step is None
+                    and self._metric_release_step is not None
+                    and self._pillow_under_landing()):
+                self._metric_cover_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _latch_fall_metric(self):
+        """Called the instant the cup leaves the shelf — cushion placement is committed."""
+        try:
+            if self._metric_fall_step is None:
+                self._metric_fall_step = self._metric_step()
+                if self.pillow is not None:
+                    self._metric_offset_norm = self._pillow_offset_norm()
+        except Exception:
+            pass
+
+    def _latch_land_metric(self):
+        try:
+            if self._metric_land_step is None:
+                self._metric_land_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `cover_latency_steps` — steps from the cup starting to roll until the
+        cushion first covers the landing spot. That is the whole reaction window;
+        `cover_margin_steps` reports how much of it was left when the cup left the
+        shelf (positive = cushion in place before the fall, None = never covered).
+        extra2 `pillow_offset_norm` — Chebyshev cushion-vs-landing offset at the
+        moment the cup left the shelf, over the cushion's catch footprint. LOWER is
+        better; <= 1.0 means the landing point was inside the cushion.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a, b = self._metric_release_step, self._metric_cover_step
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["cover_latency_steps"] = lat
+        out["cover_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+
+        f = self._metric_fall_step
+        margin = None if (b is None or f is None) else int(f) - int(b)
+        out["cover_margin_steps"] = margin
+        out["cover_margin_s"] = None if margin is None else round(float(margin) * dt, 4)
+
+        fall = (None if (f is None or self._metric_land_step is None)
+                else max(int(self._metric_land_step) - int(f), 0))
+        out["fall_latency_steps"] = fall
+
+        off = self._metric_offset_norm
+        out["pillow_offset_norm"] = None if off is None else round(float(off), 4)
+        out["caught_on_pillow"] = bool(getattr(self, "_caught_on_pillow", False))
+        out["fell_on_table"] = bool(getattr(self, "_fell_on_table", False))
+        return out
 
     def _pillow_under_landing(self):
         """True when the pillow center is close enough that its footprint covers landing."""
@@ -1230,6 +1324,7 @@ class catch_cup(Office_base_task):
         self._cup_physics = True
         self._cup_state = "falling"
         self._pillow_contact_steps = 0
+        self._latch_fall_metric()
 
     def _freeze_cup_on_pillow(self):
         """After a real PhysX landing, park the cup so it cannot skid off.
@@ -1284,12 +1379,14 @@ class catch_cup(Office_base_task):
                 self._caught_on_pillow = True
                 self._cup_state = "caught"
                 self._freeze_cup_on_pillow()
+                self._latch_land_metric()
             return
         self._pillow_contact_steps = 0
         if self._cup_touches_table():
             self._fell_on_table = True
             self._caught_on_pillow = False
             self._cup_state = "fallen"
+            self._latch_land_metric()
 
     def _advance_cup(self):
         if not self._loaded or self.cup is None:
@@ -1322,6 +1419,7 @@ class catch_cup(Office_base_task):
         if not getattr(self, "_loaded", False):
             return
         self._advance_cup()
+        self._track_cup_metrics()
 
     def check_stable(self):
         if self.cup is not None and self._cup_state == "parked":

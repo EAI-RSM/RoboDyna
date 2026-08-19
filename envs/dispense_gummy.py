@@ -103,6 +103,7 @@ class dispense_gummy(Base_Task):
         self.blue_dropped = 0
         self._caught_by_color = {name: 0 for name in self.COLORS}
         self._missed_by_color = {name: 0 for name in self.COLORS}
+        self._reset_metric_state()
         self.randomize_gummy_colors = False
         self.distractor_color_name = "blue"
         self.target_color = "yellow"
@@ -659,6 +660,9 @@ class dispense_gummy(Base_Task):
         target_sides = self._current_target_sides()
         target_side = target_sides[0] if len(target_sides) == 1 else None
         bowl_side = self._bowl_aligned_side()
+        # Metrics: the press is the decisive act — the bowl's alignment at THIS
+        # instant is what decides caught vs. discarded.
+        self._latch_dispense_metrics(target_side)
         event = {
             "press_index": int(len(self.press_history)),
             "target_side": target_side,
@@ -793,6 +797,7 @@ class dispense_gummy(Base_Task):
                 self.distractor_color_name = str(others[0])
         self._caught_by_color = {name: 0 for name in self.COLORS}
         self._missed_by_color = {name: 0 for name in self.COLORS}
+        self._reset_metric_state()
 
         # Layout mode (default alternating; Opt 1 = random). Accept legacy difficulty_option.
         layout = cfg.get("layout_mode", None)
@@ -1178,6 +1183,62 @@ class dispense_gummy(Base_Task):
         return self.info
 
     # ------------------------------------------------------------------ success
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_press_steps = []   # step index of every dispense press
+        self._metric_align_errors = []  # alignment error at each press
+
+    def _latch_dispense_metrics(self, target_side):
+        """Record the press step and the bowl's alignment error at that instant.
+
+        Captured here, never recomputed: the bowl keeps riding the belt, so its
+        offset seconds later says nothing about whether the press was well timed.
+        """
+        try:
+            self._metric_press_steps.append(int(getattr(self, "_exp_sim_steps", 0) or 0))
+            if target_side is None:
+                return
+            bowl_xy = np.asarray(self._bowl_center_world()[:2], dtype=np.float64)
+            tube_xy = np.asarray(self.tube_centers[target_side], dtype=np.float64)
+            dist = float(np.linalg.norm(bowl_xy - tube_xy))
+            self._metric_align_errors.append(
+                dist / max(float(self.bowl_align_tol), 1e-9))
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """extra1 = latency to the first dispense press, extra2 = mean aim error.
+
+        ``align_error_norm`` is the bowl-to-target-tube horizontal distance at each
+        press, averaged over presses, as a fraction of ``bowl_align_tol``: 0.0 =
+        the bowl was dead under the tube, 1.0 = exactly on the catch/discard
+        boundary, >1.0 = the gummy was discarded. LOWER IS BETTER. None when no
+        press ever targeted a tube.
+        """
+        errs = list(getattr(self, "_metric_align_errors", []) or [])
+        presses = list(getattr(self, "_metric_press_steps", []) or [])
+        metrics = {
+            "first_press_latency_steps": None,
+            "first_press_latency_s": None,
+            "presses": int(len(presses)),
+            "align_error_norm": (
+                round(float(sum(errs)) / float(len(errs)), 6) if errs else None
+            ),
+            "worst_align_error_norm": (
+                round(float(max(errs)), 6) if errs else None
+            ),
+        }
+        if presses:
+            steps = int(presses[0])
+            metrics["first_press_latency_steps"] = steps
+            try:
+                metrics["first_press_latency_s"] = round(
+                    steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics
+
     def check_success(self):
         target_caught = int(self._caught_by_color.get(self.target_color, 0))
         target_missed = int(self._missed_by_color.get(self.target_color, 0))

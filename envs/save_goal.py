@@ -139,6 +139,7 @@ class save_goal(Base_Task):
         self._ball_blocked = False
         self._ball_live = False
         self._block_was_legal = False
+        self._reset_metric_state()
         self._goal_conceded = False
         self._late_failure = False
         self.goalkeeper = None
@@ -1533,6 +1534,7 @@ class save_goal(Base_Task):
         # Seat where released — stay dynamic so a save bounce can transfer mass.
         self._seat_keeper_dynamic()
         self._keeper_deployed = True
+        self._latch_keeper_deploy_metric()
 
     def _retreat_arm_home(self, arm_tag: ArmTag, lift_z: float = 0.08):
         """After releasing the keeper, clear the goal then return the arm home.
@@ -2040,6 +2042,7 @@ class save_goal(Base_Task):
         super()._update_kinematic_tasks()
         if not getattr(self, "_loaded", False):
             return
+        self._track_save_metrics()
         if not getattr(self, "_ball_motion_active", False):
             return
         if getattr(self, "_ball_live", False):
@@ -2101,6 +2104,7 @@ class save_goal(Base_Task):
         self._ball_blocked = False
         self._ball_live = False
         self._block_was_legal = False
+        self._reset_metric_state()
         self._goal_conceded = False
         self._late_failure = False
         self._ball_crossed_goal = False
@@ -2141,6 +2145,102 @@ class save_goal(Base_Task):
         if self.players_enabled or self.cover_enabled:
             self.info["info"]["{o}"] = self._option_label()
         return self.info
+
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_shot_step = None      # ball started travelling
+        self._metric_deploy_step = None    # keeper let go on the table
+        self._metric_impact_step = None    # ball hit the keeper (or crossed the line)
+        self._metric_intercept_err = None  # keeper-to-shot-line y gap at deploy, metres
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _shot_y_at_goal_line(self) -> float:
+        """Where the scripted shot path crosses the goal line, in world y."""
+        pts = getattr(self, "_ball_waypoints", None)
+        if pts is None or len(pts) < 2:
+            a = np.asarray(self.ball_start_pose, dtype=np.float64)
+            b = np.asarray(self.ball_target_pose, dtype=np.float64)
+            pts = [a, b]
+        pts = [np.asarray(q, dtype=np.float64) for q in pts]
+        gx = float(self.goal_x)
+        d = float(self.travel_dir)
+        for i in range(len(pts) - 1):
+            x0, x1 = float(pts[i][0]), float(pts[i + 1][0])
+            if (d * x0) <= (d * gx) <= (d * x1) and abs(x1 - x0) > 1e-9:
+                t = (gx - x0) / (x1 - x0)
+                return float(pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t)
+        return float(pts[-1][1])
+
+    def _latch_keeper_deploy_metric(self):
+        """Called the moment the keeper is released onto the table.
+
+        Latches the aim error there and then: after this the keeper is dynamic and
+        the bounce moves it, so its final pose no longer reflects the placement.
+        """
+        try:
+            if self._metric_deploy_step is not None:
+                return
+            self._metric_deploy_step = self._metric_step()
+            kp = np.asarray(self.goalkeeper.get_pose().p, dtype=np.float64)
+            self._metric_intercept_err = abs(float(kp[1]) - self._shot_y_at_goal_line())
+        except Exception:
+            self._metric_intercept_err = None
+
+    def _track_save_metrics(self):
+        """Per-step latches: shot start, and the resolving impact / line crossing."""
+        try:
+            if (self._metric_shot_step is None
+                    and getattr(self, "_ball_motion_active", False)
+                    and int(getattr(self, "_ball_step", 0)) > 0):
+                self._metric_shot_step = self._metric_step()
+            if self._metric_impact_step is None and (
+                getattr(self, "_ball_blocked", False)
+                or getattr(self, "_ball_crossed_goal", False)
+            ):
+                self._metric_impact_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `deploy_latency_steps` — steps from the shot starting to roll until the
+        keeper is released on the table. The shot is already in flight, so this is the
+        operator's read-and-commit time; it must beat the ball to the line.
+        extra2 `intercept_error_norm` — |keeper y - shot y at the goal line| at the
+        instant of release, divided by the keeper half-width. LOWER is better; <= 1.0
+        means the block body actually covers the shot line.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a = getattr(self, "_metric_shot_step", None)
+        b = getattr(self, "_metric_deploy_step", None)
+        lat = None if (a is None or b is None) else int(b) - int(a)
+        out["deploy_latency_steps"] = lat
+        out["deploy_latency_s"] = None if lat is None else round(lat * dt, 4)
+
+        c = getattr(self, "_metric_impact_step", None)
+        margin = None if (b is None or c is None) else int(c) - int(b)
+        out["deploy_margin_steps"] = margin  # >0 = keeper was down before the ball arrived
+        out["deploy_margin_s"] = None if margin is None else round(margin * dt, 4)
+
+        err = getattr(self, "_metric_intercept_err", None)
+        try:
+            denom = max(float(self.keeper_half_y), 1e-9)
+            out["intercept_error_norm"] = None if err is None else round(float(err) / denom, 4)
+            out["intercept_error_m"] = None if err is None else round(float(err), 5)
+        except Exception:
+            out["intercept_error_norm"] = None
+            out["intercept_error_m"] = None
+        return out
 
     # ---------------------------------------------------------------- success / obs
     def check_success(self):

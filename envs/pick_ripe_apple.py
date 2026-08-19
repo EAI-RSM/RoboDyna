@@ -125,6 +125,7 @@ class pick_ripe_apple(Base_Task):
 
     def setup_demo(self, **kwags):
         self._cfg = kwags.get("task_args", {}).get("pick_ripe_apple", {})
+        self._reset_metric_state()
         super()._init_task_env_(**kwags)
         # Start ripening only AFTER setup settle (~2000 steps in _init_task_env_).
         self._ripen_started = True
@@ -366,6 +367,7 @@ class pick_ripe_apple(Base_Task):
         self.ripeness = 0.0
         self.spoiled_ripeness = 0.0
         self._ripen_started = False
+        self._reset_metric_state()
         self._apple_attached = True          # good apple still hanging
         self._spoiled_attached = bool(self.two_apples_enabled)
         self.r_grasp = None                  # latched at good-apple detach
@@ -533,6 +535,7 @@ class pick_ripe_apple(Base_Task):
                 self._apple_attached = False
                 if self.r_grasp is None:
                     self.r_grasp = float(self.ripeness)
+                self._latch_detach_metric()
                 self._set_apple_color(self.ripeness)   # freeze visual at current ripeness
         else:
             if getattr(self, "_spoiled_attached", False):
@@ -701,6 +704,7 @@ class pick_ripe_apple(Base_Task):
         if getattr(self, "_spoiled_attached", False):
             self.spoiled_ripeness = min(1.0, self.spoiled_ripeness + step)
             self._set_spoiled_color(self.spoiled_ripeness)
+        self._track_apple_metrics()
 
     def _ripen_until(self, target):
         max_steps = int(self.ripen_steps) + 600
@@ -1021,6 +1025,110 @@ class pick_ripe_apple(Base_Task):
             # Fell off the table entirely — still a miss.
             return True
         return bool(z <= table_z + 0.10)
+
+    # ------------------------------------------------- experiment metrics
+    # Frames of no gripper/apple contact before the release counts as real (finger
+    # contact flickers by a frame or two as the jaws part).
+    RELEASE_DEBOUNCE_STEPS = 4
+
+    def _reset_metric_state(self):
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_window_open_step = None   # ripeness first entered the red window
+        self._metric_detach_step = None        # good apple pulled off the tree
+        self._metric_basket_step = None        # good apple first inside the basket
+        self._metric_release_offset = None     # basket-centre offset at let-go, normalised
+        self._metric_apple_free = False
+        self._metric_held_seen = False         # jaws have actually contacted the apple
+        self._metric_free_frames = 0
+        self._metric_last_held_xy = None
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _latch_detach_metric(self):
+        """Called from _detach_apple the first time the GOOD apple comes off."""
+        try:
+            if self._metric_detach_step is None:
+                self._metric_detach_step = self._metric_step()
+            self._metric_apple_free = True
+        except Exception:
+            pass
+
+    def _track_apple_metrics(self):
+        """Per-step latches: window opening, basket entry, closest release offset."""
+        try:
+            if self._metric_window_open_step is None and getattr(self, "_apple_attached", False):
+                tol = float(getattr(self, "red_tol", self.RED_TOLERANCE_DEFAULT))
+                if float(self.ripeness) >= float(self.red_window) - tol:
+                    self._metric_window_open_step = self._metric_step()
+            if not getattr(self, "_metric_apple_free", False):
+                return
+            bp = np.array(self.basket.get_pose().p, dtype=np.float64)
+            ap = np.array(self.apple.get_pose().p, dtype=np.float64)
+            # Latch the aim the moment the jaws let go — after that the apple is
+            # just falling and its XY no longer reflects the operator's choice.
+            # Gate on having actually been held (detach precedes jaw contact by a
+            # few frames) and debounce, since finger contact flickers as they part.
+            held = self._apple_held_by_gripper(self.apple)
+            if held:
+                self._metric_held_seen = True
+                self._metric_free_frames = 0
+                self._metric_last_held_xy = (float(ap[0]), float(ap[1]))
+            elif self._metric_held_seen:
+                self._metric_free_frames += 1
+            if (self._metric_release_offset is None
+                    and self._metric_held_seen
+                    and self._metric_free_frames >= self.RELEASE_DEBOUNCE_STEPS):
+                rx, ry = self._metric_last_held_xy or (float(ap[0]), float(ap[1]))
+                self._metric_release_offset = float(
+                    np.linalg.norm(np.array([rx, ry], dtype=np.float64) - bp[:2])) / 0.09
+            if self._metric_basket_step is None and self._pose_in_basket(ap, bp[:2]):
+                self._metric_basket_step = self._metric_step()
+        except Exception:
+            pass
+
+    def _compute_metrics(self):
+        """Human-experiment extras.
+
+        extra1 `pick_latency_steps` — steps from the ripeness window opening until the
+        apple is pulled off the tree. Signed: negative means it was picked early, before
+        the window opened. This is the whole task's timing decision.
+        extra2 `ripeness_error_norm` — |r_grasp - red_window| / red_tol at the instant of
+        detach. LOWER is better; <= 1.0 is inside the accepted window.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        w = getattr(self, "_metric_window_open_step", None)
+        d = getattr(self, "_metric_detach_step", None)
+        lat = None if (w is None or d is None) else int(d) - int(w)
+        out["pick_latency_steps"] = lat
+        out["pick_latency_s"] = None if lat is None else round(lat * dt, 4)
+
+        b = getattr(self, "_metric_basket_step", None)
+        drop = None if (d is None or b is None) else max(int(b) - int(d), 0)
+        out["basket_latency_steps"] = drop
+        out["basket_latency_s"] = None if drop is None else round(drop * dt, 4)
+
+        try:
+            r = getattr(self, "r_grasp", None)
+            tol = float(getattr(self, "red_tol", self.RED_TOLERANCE_DEFAULT))
+            out["ripeness_error_norm"] = (
+                None if r is None
+                else round(abs(float(r) - float(self.red_window)) / max(tol, 1e-9), 4)
+            )
+            out["r_grasp"] = None if r is None else round(float(r), 4)
+        except Exception:
+            out["ripeness_error_norm"] = None
+            out["r_grasp"] = None
+
+        off = getattr(self, "_metric_release_offset", None)
+        out["drop_offset_norm"] = None if off is None else round(float(off), 4)
+        return out
 
     def check_success(self):
         # Success = good apple picked inside the ripeness window AND in the basket

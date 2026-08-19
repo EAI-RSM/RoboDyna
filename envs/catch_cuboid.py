@@ -72,6 +72,7 @@ class catch_cuboid(Base_Task):
         self._cuboid_hidden_z = []
         self._cuboid_pin_pose = []
         self._cuboid_stop_at_hidden = []
+        self._reset_metric_state()
         super()._init_task_env_(**kwags)
         self._configure_observer_camera()
 
@@ -305,6 +306,7 @@ class catch_cuboid(Base_Task):
         self.catches = 0
         self.appearances_done = 0
         self._grab_offsets = []
+        self._reset_metric_state()
 
         self.num_appearances = int(self._cfg.get("num_appearances", self.NUM_APPEARANCES_DEFAULT))
         self.pop_steps = int(self._cfg.get("pop_steps", self.POP_STEPS_DEFAULT))
@@ -412,6 +414,10 @@ class catch_cuboid(Base_Task):
                 if reached:
                     self._cuboid_auto_motion[i] = "falling"
                     self._cuboid_raised[i] = True
+                    # Metrics: the first full pop-up opens the grasp window.
+                    if getattr(self, "_metric_first_raise_step", None) is None:
+                        self._metric_first_raise_step = int(
+                            getattr(self, "_exp_sim_steps", 0) or 0)
                 return
             if motion == "falling":
                 next_z = cur_z - self._cuboid_pop_speed * dt
@@ -452,6 +458,7 @@ class catch_cuboid(Base_Task):
             return
         for i in range(len(self._cuboid_rigids)):
             self._step_one_cuboid(i)
+        self._track_pull_out_metric()
 
     # ------------------------------------------------------------- dwell
     def _dwell(self, steps):
@@ -744,3 +751,55 @@ class catch_cuboid(Base_Task):
             "appearances": int(getattr(self, "appearances_done", 0)),
         }
         return obs
+
+    # ------------------------------------------------- human-experiment metrics
+    def _reset_metric_state(self):
+        """Clear the per-episode metric latches (see _compute_metrics)."""
+        self._metric_first_raise_step = None
+        self._metric_pull_out_step = None
+
+    def _track_pull_out_metric(self):
+        """Latch the first frame the required cuboid(s) were held AND clear of the board.
+
+        High-water mark: the grasp can slip afterwards, so only the first True is
+        kept. Skipped entirely until at least one catch has been registered, so
+        the contact queries cost nothing for most of the episode.
+        """
+        if getattr(self, "_metric_pull_out_step", None) is not None:
+            return
+        if int(getattr(self, "catches", 0) or 0) <= 0:
+            return
+        try:
+            if not self.check_success():
+                return
+        except Exception:
+            return
+        self._metric_pull_out_step = int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _compute_metrics(self):
+        """extra1 = pop-up->pull-out latency, extra2 = grasp centring score.
+
+        ``grasp_centering_score`` is the mean over registered catches of
+        ``clip(1 - lateral_offset / grasp_tol, 0, 1)``: 1.0 = the TCP was dead on
+        the cuboid axis, 0.0 = a barely-legal edge pinch. HIGHER IS BETTER. None
+        when nothing was ever caught.
+        """
+        try:
+            score = float(self._catch_score()) if getattr(self, "_grab_offsets", None) else None
+        except Exception:
+            score = None
+        metrics = {
+            "pull_out_latency_steps": None,
+            "pull_out_latency_s": None,
+            "grasp_centering_score": score,
+        }
+        start = getattr(self, "_metric_first_raise_step", None)
+        out = getattr(self, "_metric_pull_out_step", None)
+        if start is not None and out is not None and out >= start:
+            steps = int(out - start)
+            metrics["pull_out_latency_steps"] = steps
+            try:
+                metrics["pull_out_latency_s"] = round(steps * float(self.scene.get_timestep()), 6)
+            except Exception:
+                pass
+        return metrics

@@ -155,6 +155,7 @@ class cook_food(KitchenS_base_task):
         self._food_in_pan = False
         self.turned_on_once = False
         self.turned_off_after_cook = False
+        self._reset_metric_state()
         self._ignore_knob = False
         self._expert_holding_knob = False
         self._cook_phase_done = False
@@ -305,6 +306,7 @@ class cook_food(KitchenS_base_task):
         self._food_in_pan = False
         self.turned_on_once = False
         self.turned_off_after_cook = False
+        self._reset_metric_state()
         self._ignore_knob = False
         self._expert_holding_knob = False
         self._cook_phase_done = False
@@ -925,6 +927,8 @@ class cook_food(KitchenS_base_task):
             )
             self.max_doneness = max(self.max_doneness, self.doneness)
             self._set_food_color(self.doneness)
+
+        self._track_cook_metrics()
 
     def _idle_steps(self, n_steps: int, until=None) -> None:
         save_freq = self.save_freq if self.save_freq is not None else 15
@@ -1759,6 +1763,83 @@ class cook_food(KitchenS_base_task):
         return self.info
 
     # ----------------------------------------------------------- success / obs
+    # ------------------------------------------------- experiment metrics
+    def _reset_metric_state(self) -> None:
+        """Clear every per-episode metric latch (called from each reset site)."""
+        self._metric_on_step = None      # burner first lit
+        self._metric_band_step = None    # doneness first entered the success band
+        self._metric_off_step = None     # burner switched off (decisive event)
+        self._metric_off_doneness = None # doneness frozen at that instant
+        self._metric_was_on = False
+
+    def _metric_step(self) -> int:
+        return int(getattr(self, "_exp_sim_steps", 0) or 0)
+
+    def _track_cook_metrics(self) -> None:
+        """Latch the lit / in-band / shut-off edges.
+
+        The shutoff edge is read here rather than inside ``_apply_knob_angle`` because
+        interactive play drives the knob through the shared wrist-coupled controller,
+        which reaches the same state by a different path.
+        """
+        try:
+            on = bool(getattr(self, "stove_on", False)) and self.fire_intensity > 0.02
+            if on and self._metric_on_step is None:
+                self._metric_on_step = self._metric_step()
+            lo, _hi = self.target_doneness_range
+            if self._metric_band_step is None and float(self.doneness) >= float(lo):
+                self._metric_band_step = self._metric_step()
+            if self._metric_was_on and not on and self._metric_off_step is None:
+                self._metric_off_step = self._metric_step()
+                self._metric_off_doneness = float(
+                    self._grasp_doneness if self._grasp_doneness is not None
+                    else self.doneness)
+            self._metric_was_on = on
+        except Exception:
+            pass
+
+    def _compute_metrics(self) -> dict:
+        """Human-experiment extras.
+
+        extra1 `shutoff_latency_steps` — steps from the doneness first entering the
+        success band until the burner is switched off. The food keeps browning the
+        whole time, so every step here is spent burning through the band.
+        extra2 `doneness_error_norm` — |doneness at shutoff - band center| / band
+        half-width. LOWER is better; <= 1.0 means the cook landed inside the band.
+        """
+        out = {}
+        dt = 0.0
+        try:
+            dt = float(self.scene.get_timestep())
+        except Exception:
+            pass
+
+        a, b = self._metric_band_step, self._metric_off_step
+        lat = None if (a is None or b is None) else max(int(b) - int(a), 0)
+        out["shutoff_latency_steps"] = lat
+        out["shutoff_latency_s"] = None if lat is None else round(float(lat) * dt, 4)
+        cook = (None if (self._metric_on_step is None or a is None)
+                else max(int(a) - int(self._metric_on_step), 0))
+        out["cook_latency_steps"] = cook
+
+        d = self._metric_off_doneness
+        try:
+            lo, hi = map(float, self.target_doneness_range)
+            half = max(0.5 * (hi - lo), 1e-6)
+            center = 0.5 * (lo + hi)
+            out["doneness_error_norm"] = (
+                None if d is None else round(abs(float(d) - center) / half, 4))
+            out["target_doneness_range"] = [round(lo, 4), round(hi, 4)]
+        except Exception:
+            out["doneness_error_norm"] = None
+            out["target_doneness_range"] = None
+        out["shutoff_doneness"] = None if d is None else round(float(d), 4)
+        try:
+            out["max_doneness"] = round(float(self.max_doneness), 4)
+        except Exception:
+            out["max_doneness"] = None
+        return out
+
     def _doneness_in_target_range(self, doneness: float) -> bool:
         lo, hi = self.target_doneness_range
         return float(lo) <= float(doneness) <= float(hi)
