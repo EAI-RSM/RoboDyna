@@ -108,6 +108,7 @@ class trap_bug(Office_base_task):
         self.arm_side = "right"
         self._trap_anchored = False
         self._trap_released = False  # gripper opened / trap left the hand
+        self._partial_score = 0.0  # latched at trap landing (bug keeps running after)
         self._trap_falling = False
         self._trap_welded = False
         self._trap_weld_offset = None
@@ -447,6 +448,7 @@ class trap_bug(Office_base_task):
                 pass
         self._trap_anchored = False
         self._trap_released = False
+        self._partial_score = 0.0
         self._trap_falling = False
         self._trap_welded = False
         self._trap_weld_offset = None
@@ -794,6 +796,12 @@ class trap_bug(Office_base_task):
                     and abs(rp[1] - p[1]) < self.trap_half[1]):
                 self._bug_captured = True
                 self._stop_bug()
+        self._partial_score = self._score_at_landing()
+        print(
+            f"[trap_bug] trap landed: bug {self._bug_trap_edge_distance() * 100:.1f} cm "
+            f"from footprint (ring {min(self.trap_half[0], self.trap_half[1]) * 100:.1f} cm) "
+            f"score={self._partial_score:.2f}"
+        )
 
     # Back-compat name used by interactive helper / older callers.
     def _anchor_trap(self) -> None:
@@ -1203,32 +1211,24 @@ class trap_bug(Office_base_task):
             return False
         return bool(self._bug_under_trap())
 
-    def get_score(self) -> float:
-        """Partial score from how close the bug is to the landed trap.
+    def _score_at_landing(self) -> float:
+        """Score the bug's proximity to the trap at the moment the trap lands.
 
-        Full success (bug under trap) → 1.0. Otherwise score only after the trap
-        has been released and anchored. Outside the footprint, a ring of width
-        equal to the trap half-width is split into three equal bands:
-        closest third → 0.75, middle → 0.5, furthest → 0.25; beyond → 0.
+        Full success (bug under the footprint) → 1.0. Otherwise a ring one trap
+        half-width wide extends out from the footprint edge, split into equal
+        thirds: nearest → 0.75, middle → 0.5, outer → 0.25; beyond the ring → 0.
         """
         if self.trap is None or self.bug is None:
             return 0.0
         if bool(getattr(self, "_bug_escaped", False)):
             return 0.0
-        if not bool(getattr(self, "_trap_released", False)):
-            return 0.0
-        if not bool(getattr(self, "_trap_anchored", False)):
-            return 0.0
         if self._bug_under_trap():
             return 1.0
-        # Half-width of the trap (square by default); ring extends one half-width out.
         r = float(min(self.trap_half[0], self.trap_half[1]))
         if r <= 1e-9:
             return 0.0
         d = self._bug_trap_edge_distance()
         third = r / 3.0
-        # Closest third [0, r/3) → 0.75; middle [r/3, 2r/3) → 0.5;
-        # furthest [2r/3, r] → 0.25; beyond r → 0.
         if d > r + 1e-9:
             return 0.0
         if d < third:
@@ -1236,6 +1236,20 @@ class trap_bug(Office_base_task):
         if d < 2.0 * third:
             return 0.5
         return 0.25
+
+    def get_score(self) -> float:
+        """Latched partial score from the trap's landing frame.
+
+        The bug keeps scuttling (and retreats under the shelf when its walk
+        window expires), so a live distance read at episode end would almost
+        always fall outside the ring. The score is therefore frozen at the
+        landing frame — the same instant ``check_success`` evaluation arms.
+        """
+        if self.check_success():
+            return 1.0
+        if not bool(getattr(self, "_trap_anchored", False)):
+            return 0.0
+        return float(getattr(self, "_partial_score", 0.0))
 
     def get_obs(self):
         obs = super().get_obs()

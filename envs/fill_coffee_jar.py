@@ -58,8 +58,9 @@ class fill_coffee_jar(KitchenS_base_task):
     else failure.
     """
 
-    # Under-target deficit (pp) → partial: [10,8.5) / [8.5,7) / [7,5) → 0.25/0.5/0.75.
-    PARTIAL_BELOW_BANDS = (
+    # Abs error (pp) from target → partial: [10,8.5) / [8.5,7) / [7,5) → 0.25/0.5/0.75.
+    # Under- and over-fill both count; success band is ±5% so partial starts past 5 pp.
+    PARTIAL_ABS_BANDS = (
         (10.0, 8.5, 0.25),
         (8.5, 7.0, 0.5),
         (7.0, 5.0, 0.75),
@@ -2076,11 +2077,11 @@ class fill_coffee_jar(KitchenS_base_task):
         return bool(self.beans_in_jar > 0 and lo - 1e-3 <= fill <= hi + 1e-3)
 
     def get_score(self) -> float:
-        """Partial score from under-fill vs target after idle.
+        """Partial score from |fill − target| after idle (under and over both count).
 
-        Success band → 1.0. Under-target deficits
-        ``[10,8.5)%`` / ``[8.5,7)%`` / ``[7,5)%`` → 0.25 / 0.5 / 0.75.
-        Over-fill outside the success band (or not ready to score) → 0.
+        Success band (±``fill_tol``, default ±5%) → 1.0. Outside it, abs error
+        bands ``[10,8.5)%`` / ``[8.5,7)%`` / ``[7,5)%`` → 0.25 / 0.5 / 0.75.
+        Not ready to score / empty jar / error ≥ 10 pp → 0.
         """
         if not getattr(self, "layout_ok", True):
             return 0.0
@@ -2093,10 +2094,8 @@ class fill_coffee_jar(KitchenS_base_task):
             return 1.0
         fill = float(self._current_fill())
         target = float(self.target_fill)
-        deficit_pct = (target - fill) * 100.0
-        if deficit_pct <= 0.0:
-            return 0.0  # over-target outside success band
-        return float(score_descending_bands(deficit_pct, self.PARTIAL_BELOW_BANDS))
+        err_pct = abs(fill - target) * 100.0
+        return float(score_descending_bands(err_pct, self.PARTIAL_ABS_BANDS))
 
     def get_obs(self):
         obs = super().get_obs()

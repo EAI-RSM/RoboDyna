@@ -39,11 +39,13 @@ from .utils.partial_score import score_open_closed_intervals
 class cook_food(KitchenS_base_task):
     """Drop food into a pre-lit pan, then shut the stove off at target doneness."""
 
-    # Seconds past exact target doneness → partial: (4,5] / (5,6] / (6,7] → 0.75 / 0.5 / 0.25.
+    # Seconds past the upper edge of the 4 s doneness window → partial:
+    # (0,1] / (1,2] / (2,3] → 0.75 / 0.5 / 0.25
+    # (old labels (4,5]/(5,6]/(6,7] included the doneness period; subtract 4 s).
     PARTIAL_OVERCOOK_BANDS = (
-        (4.0, 5.0, 0.75),
-        (5.0, 6.0, 0.5),
-        (6.0, 7.0, 0.25),
+        (0.0, 1.0, 0.75),
+        (1.0, 2.0, 0.5),
+        (2.0, 3.0, 0.25),
     )
 
     COOK_STEPS_DEFAULT: ClassVar[int] = 3076  # 2× prior 1538 (50% slower / mean cook time ×2)
@@ -1812,11 +1814,12 @@ class cook_food(KitchenS_base_task):
         return float(delta_doneness) / rate
 
     def get_score(self) -> float:
-        """Partial score for mild overcook past exact target doneness.
+        """Partial score for mild overcook past the doneness window.
 
-        Scored only after stove shutoff. Full success → 1.0. Seconds past the
-        exact target (``target_doneness``): ``(4,5]`` → 0.75, ``(5,6]`` → 0.5,
-        ``(6,7]`` → 0.25. Undercook or larger overshoot → 0.
+        Scored only after stove shutoff. Full success → 1.0. Additional seconds
+        past the upper edge of the success / doneness band:
+        ``(0,1]`` → 0.75, ``(1,2]`` → 0.5, ``(2,3]`` → 0.25.
+        Undercook or larger overshoot → 0.
         """
         if (
             bool(getattr(self, "stove_on", False))
@@ -1838,10 +1841,11 @@ class cook_food(KitchenS_base_task):
         if self.check_success():
             return 1.0
         doneness = self._scored_doneness()
-        target = float(getattr(self, "target_doneness", 0.5))
-        if doneness <= target + 1e-9:
-            return 0.0  # undercook / at-or-below target (in-band → check_success)
-        past_sec = self._doneness_to_cook_seconds(doneness - target)
+        _, hi = getattr(self, "target_doneness_range", (0.45, 0.55))
+        hi = float(hi)
+        if doneness <= hi + 1e-9:
+            return 0.0  # undercook / still inside or below the doneness band
+        past_sec = self._doneness_to_cook_seconds(doneness - hi)
         return float(
             score_open_closed_intervals(past_sec, self.PARTIAL_OVERCOOK_BANDS)
         )
