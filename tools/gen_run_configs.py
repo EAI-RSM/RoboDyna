@@ -58,7 +58,7 @@ from tests._sweep_household_success import TASKS as _HH_SWEEP_TASKS  # noqa: E40
 CONFIG = "demo_dynamic"  # the shared suite config both sweeps build on
 
 # Household collection = exactly the household sweep's task set, base condition only
-# (household tasks have no opt axis defined). serve_dinner was removed upstream.
+# (household tasks have no opt axis defined).
 HOUSEHOLD_TASKS = list(_HH_SWEEP_TASKS)
 
 # build_args injects these; collect_data.main() recomputes every one of them from

@@ -31,10 +31,6 @@ Office / KitchenS scenes. GUI: `interactive/household_task_gui.py`. Sweep: `test
 - No Opt1/Opt2 matrix; variation is per-episode randomization / seeds.
 - Bases: `envs/_office_base_task.py`, `envs/_kitchens_base_task.py`.
 
-## Extras (not in the 23+12 GUI suites)
-
-Tasks like `serve_dinner`, `catch_rolling_cup` may exist in `envs/` / docs but are **not** in the main GUI TASKS lists unless the user explicitly adds them.
-
 ## Authoritative blurbs
 
 README tables (`## 📋 Tasks`, `## Household Tasks`) are the source for scenario captions shown in GUIs. Keep language instructions scenario-neutral unless a scenario flag is on.
