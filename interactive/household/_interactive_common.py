@@ -597,16 +597,6 @@ class HouseholdController:
         if hit is None:
             return False
         x, y = float(hit[0]), float(hit[1])
-        if abs(x) > float(getattr(e, "table_x_edge", 0.52)) - 0.09:
-            print("[stop_ball] place the bridge farther from the side edge")
-            return True
-        if not (
-            float(getattr(e, "table_edge_y", -0.30)) + 0.07
-            <= y
-            <= float(getattr(e, "table_back_y", 0.35)) - 0.07
-        ):
-            print("[stop_ball] place the bridge farther from the front/back edge")
-            return True
 
         # Turn the bridge across the sampled roll heading, with its opening
         # facing the incoming ball. Local X spans across the path.
@@ -1287,6 +1277,20 @@ def _terminal_failure(env, task):
     return None
 
 
+def _terminal_hold_seconds(env, task: str) -> float:
+    """Wall-clock seconds to keep rendering after a terminal verdict.
+
+    stop_ball closes 1 s after the ball leaves the table: once it is falling
+    there is no settle left to watch, so it must not sit on the shared 2 s hold.
+    """
+    if task == "stop_ball" and (
+        bool(getattr(env, "_fell_off", False))
+        or str(getattr(env, "_ball_state", "")) == "fallen"
+    ):
+        return 1.0
+    return 2.0
+
+
 def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     module_name, class_name, _, _ = PROFILES[task]
     module = importlib.import_module(module_name)
@@ -1356,6 +1360,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
     terminal_fill_detail = ""
     terminal_failure_reason = None
     terminal_partial_score = None  # freeze PS at the terminal decision frame
+    terminal_hold_s = 2.0
     escape_quit = False
     # Match interactive/_interactive_common run_viewer_loop: teleop once per display frame, then
     # fixed-dt physics catch-up so 60 Hz / 240 Hz monitors feel the same speed.
@@ -1376,8 +1381,14 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                         terminal_failure_reason = ESCAPE_QUIT_DETAIL
                         escape_quit = True
                     break
-                if terminal_started_at is not None and time.perf_counter() - terminal_started_at >= 2.0:
-                    print(f"[{task}] closing after 2-second terminal-result display")
+                if (
+                    terminal_started_at is not None
+                    and time.perf_counter() - terminal_started_at >= terminal_hold_s
+                ):
+                    print(
+                        f"[{task}] closing after {terminal_hold_s:g}-second "
+                        "terminal-result display"
+                    )
                     break
                 continue
 
@@ -1409,6 +1420,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                         msg = f"{msg}{format_ps_suffix(terminal_partial_score)}"
                         print_success(msg)
                         terminal_result = True
+                        terminal_hold_s = _terminal_hold_seconds(env, task)
                         terminal_started_at = time.perf_counter()
                     if failure is not None:
                         terminal_partial_score = _env_partial_score(env)
@@ -1422,6 +1434,7 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                             f"{format_ps_suffix(terminal_partial_score)}"
                         )
                         terminal_result = False
+                        terminal_hold_s = _terminal_hold_seconds(env, task)
                         terminal_started_at = time.perf_counter()
 
             env.scene.update_render()
@@ -1438,8 +1451,14 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
             if args.smoke_test and rendered_frames >= 3:
                 print(f"[{task}] smoke test rendered {rendered_frames} frames")
                 break
-            if terminal_started_at is not None and time.perf_counter() - terminal_started_at >= 2.0:
-                print(f"[{task}] closing after 2-second terminal-result display")
+            if (
+                terminal_started_at is not None
+                and time.perf_counter() - terminal_started_at >= terminal_hold_s
+            ):
+                print(
+                    f"[{task}] closing after {terminal_hold_s:g}-second "
+                    "terminal-result display"
+                )
                 break
     finally:
         try:

@@ -80,11 +80,27 @@ class stop_ball(Office_base_task):
     BALL_MASS = 0.05
     MIN_COUPLE_GAP = 0.055  # m; closer than this the ball is inside the gripper
     SETTLE_SPEED_DEFAULT = 0.025
-    SETTLE_HOLD_STEPS_DEFAULT = 12
+    # ~0.3 s at 250 Hz. Must be long enough that a ball reversing off the
+    # blocker (which passes through near-zero speed) cannot latch "stopped"
+    # mid-bounce and report success while it is still moving.
+    SETTLE_HOLD_STEPS_DEFAULT = 75
+    # Above this the ball is unambiguously moving again, so a latched "stopped"
+    # is revoked rather than reported as a stop.
+    RESUME_SPEED_MULT = 3.0
     MAX_LIVE_STEPS_DEFAULT = 520
+    # Confirmation window once the ball has cleared the physical lip; short,
+    # because clearing the lip already means it is going over.
+    OFF_TABLE_HOLD_STEPS_DEFAULT = 8
+    # Depth below the tabletop that counts as a real vertical drop.
+    FALL_Z_DROP_DEFAULT = 0.03
 
     BALL_X_ABS_MIN = 0.14
     BALL_X_ABS_MAX = 0.30
+
+    # Physical tabletop size used to build the table; the fall test uses these
+    # (not the conservative scoring lines) so "fell" means it really left the top.
+    TABLE_LENGTH = 1.2   # x
+    TABLE_WIDTH = 0.7    # y
 
     SHELF_WIDTH = 1.20
     SHELF_DEPTH = 0.18
@@ -124,6 +140,7 @@ class stop_ball(Office_base_task):
         self._ball_state = "parked"
         self._live_steps = 0
         self._settle_steps = 0
+        self._off_table_steps = 0
         self._armed = False
         self._arm_in_place = False
         self._handoff_idx = 0
@@ -201,8 +218,8 @@ class stop_ball(Office_base_task):
         self.table = create_table(
             self.scene,
             sapien.Pose(p=[table_xy_bias[0], table_xy_bias[1], table_height]),
-            length=1.2,
-            width=0.7,
+            length=self.TABLE_LENGTH,
+            width=self.TABLE_WIDTH,
             height=table_height,
             thickness=0.05,
             is_static=True,
@@ -597,6 +614,10 @@ class stop_ball(Office_base_task):
             "settle_hold_steps", self.SETTLE_HOLD_STEPS_DEFAULT,
         ))
         self.max_live_steps = int(c.get("max_live_steps", self.MAX_LIVE_STEPS_DEFAULT))
+        self.off_table_hold_steps = int(c.get(
+            "off_table_hold_steps", self.OFF_TABLE_HOLD_STEPS_DEFAULT,
+        ))
+        self.fall_z_drop = float(c.get("fall_z_drop", self.FALL_Z_DROP_DEFAULT))
         self.ball_scale_mult = float(c.get(
             "ball_scale_mult", self.BALL_SCALE_MULT_DEFAULT,
         ))
@@ -692,6 +713,7 @@ class stop_ball(Office_base_task):
         self._stopper_contacted = False
         self._stopper_placed = False
         self._settle_steps = 0
+        self._off_table_steps = 0
         self._live_steps = 0
         self._armed = False
         self._arm_in_place = False
@@ -1090,12 +1112,39 @@ class stop_ball(Office_base_task):
         self._ball_state = "live"
         self._live_steps = 0
 
+    def _table_lip(self):
+        """(half_x, front_y) of the physical tabletop, including table bias."""
+        bias = list(getattr(self, "table_xy_bias", [0.0, 0.0]) or [0.0, 0.0])
+        half_x = 0.5 * float(self.TABLE_LENGTH) + abs(float(bias[0]))
+        front_y = -0.5 * float(self.TABLE_WIDTH) + float(bias[1])
+        return half_x, front_y
+
+    def _ball_dropped(self, p):
+        """True only for a real vertical drop below the tabletop."""
+        return bool(float(p[2]) < self.table_top - float(self.fall_z_drop))
+
+    def _ball_past_edge_now(self, p):
+        """Ball centre has cleared the physical lip, so it must go over."""
+        half_x, front_y = self._table_lip()
+        return bool(float(p[1]) <= front_y or abs(float(p[0])) >= half_x)
+
     def _ball_off_table(self, p):
-        return bool(
-            float(p[1]) <= self.table_edge_y
-            or abs(float(p[0])) >= self.table_x_edge
-            or float(p[2]) < self.table_top - 0.04
-        )
+        return bool(self._ball_dropped(p) or self._ball_past_edge_now(p))
+
+    def _confirm_fall(self, p):
+        """Latch a fall only for a real drop or a *sustained* off-table exit.
+
+        A single bounce past the edge line (e.g. off the bridge / gripper) that
+        the ball then recovers from must not end the episode as a failure.
+        """
+        if self._ball_dropped(p):
+            self._off_table_steps = 0
+            return True
+        if self._ball_past_edge_now(p):
+            self._off_table_steps += 1
+            return self._off_table_steps >= int(self.off_table_hold_steps)
+        self._off_table_steps = 0
+        return False
 
     def _ball_speed(self):
         if self._ball_rigid is None:
@@ -1168,6 +1217,18 @@ class stop_ball(Office_base_task):
     def _advance_ball(self):
         if not self._loaded or self.ball is None:
             return
+        if self._ball_state == "stopped":
+            # A settled ball can still be nudged off the table afterwards.
+            if self._confirm_fall(self._ball_centre()):
+                self._fell_off = True
+                self._stopped = False
+                self._ball_state = "fallen"
+            elif self._ball_speed() > self.settle_speed * float(self.RESUME_SPEED_MULT):
+                # Clearly rolling again — it was not a stop after all.
+                self._stopped = False
+                self._settle_steps = 0
+                self._ball_state = "live"
+            return
         if self._ball_state == "live":
             # PhysX owns the ball now — watch contacts and whether it stays up.
             self._live_steps += 1
@@ -1176,21 +1237,27 @@ class stop_ball(Office_base_task):
             self._poll_arm_contact()
             blocker_contacted = bool(self._arm_contacted or self._stopper_contacted)
             p = self._ball_centre()
-            if self._ball_off_table(p):
+            if self._confirm_fall(p):
                 self._fell_off = True
                 self._ball_state = "fallen"
             elif self._ball_speed() <= self.settle_speed:
                 # Robot mode uses an arm; keyboard mode uses the placed bridge.
-                # A miss must keep rolling off.
-                if blocker_contacted:
+                # A miss must keep rolling off. A ball already hanging past the
+                # edge must never settle: the fall has to win that race, or the
+                # episode latches "stopped" out of bounds and never terminates.
+                if blocker_contacted and not self._ball_past_edge_now(p):
                     self._settle_steps += 1
                     if self._settle_steps >= self.settle_hold_steps:
                         self._ball_state = "stopped"
                         self._stopped = True
                 else:
                     self._settle_steps = 0
-                    # Never boost while overlapping a hand — that drives through it.
-                    if not self._near_any_arm(dist=max(0.09, float(self.ball_radius) + 0.04)):
+                    # Never boost a contacted ball or one overlapping a hand —
+                    # that would drive it through the blocker.
+                    if (
+                        not blocker_contacted
+                        and not self._near_any_arm(dist=max(0.09, float(self.ball_radius) + 0.04))
+                    ):
                         self._boost_ball_along_path()
             elif (
                 not blocker_contacted
@@ -1425,9 +1492,12 @@ class stop_ball(Office_base_task):
             abs(p[2] - (self.table_top + self.ball_radius)) < 0.05
             and self.table_top - 0.01 <= p[2] <= self.table_top + 2.0 * self.ball_radius + 0.04
         )
+        # Same lip the fall test uses, so a ball resting near the edge is either
+        # a success or a fall — never stuck between the two with no verdict.
+        half_x, front_y = self._table_lip()
         in_xy = (
-            abs(p[0]) <= self.table_x_edge - 0.01
-            and self.table_edge_y + 0.01 <= p[1] <= self.table_back_y + 0.02
+            abs(p[0]) < half_x
+            and front_y < p[1] <= self.table_back_y + 0.02
         )
         # Settle-hold already happened (`_stopped`); residual crawl after an
         # angled deflection is fine so long as the ball stays on the table.

@@ -161,7 +161,8 @@ task_args:
     live_friction: 0.006        # convex-hull ball slides; low mu emulates rolling
     live_restitution: 0.12      # slight liveliness, no rattling off the gripper
     settle_speed: 0.025         # m/s; below this the ball counts as at rest
-    settle_hold_steps: 12       # consecutive slow steps required to call it settled
+    settle_hold_steps: 75       # ~0.3 s of rest; a bounce reversal dips near zero
+                                # briefly and must not report a stop mid-bounce
     max_live_steps: 520         # sim-step budget for the contact + roll-out
     arm_side: random            # random | left | right
   catch_cup:
