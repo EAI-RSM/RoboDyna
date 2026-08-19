@@ -530,10 +530,10 @@
     }
   },
   "demos": {
-    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/pack_fruits/default_sidebyside.mp4",
-    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/pack_fruits/opt1_sidebyside.mp4",
-    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/pack_fruits/opt2_sidebyside.mp4",
-    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/pack_fruits/opt1+2_sidebyside.mp4"
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/pack_fruits/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/pack_fruits/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/pack_fruits/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/pack_fruits/opt1+2_sidebyside.mp4"
   },
   "success_criterion": "all real fruits in color-matched baskets (apple/red \u2192 left, orange/yellow \u2192 right); black distractors ignored"
 }

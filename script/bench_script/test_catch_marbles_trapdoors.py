@@ -6,7 +6,7 @@ Runs:
   - opt1, opt2, opt1+2: 5 episodes each
 
 Then records one side-by-side demo per condition into
-  final_task_demos/catch_marbles_trapdoors/<tag>_sidebyside.mp4
+  docs/final_task_demos/catch_marbles_trapdoors/<tag>_sidebyside.mp4
 """
 from __future__ import annotations
 
@@ -214,7 +214,7 @@ def run_color_coverage():
 
 
 def record_and_export_demos():
-    out_dir = os.path.abspath(f"./final_task_demos/{TASK}")
+    out_dir = os.path.abspath(f"./docs/final_task_demos/{TASK}")
     os.makedirs(out_dir, exist_ok=True)
     # File tag uses opt1_opt2 (filesystem-safe); display name is opt1+2.
     demo_tags = {
@@ -299,7 +299,7 @@ def main():
     else:
         print("\n=== SKIP_DEMOS set; not recording demos in this test run ===")
 
-    report_path = os.path.abspath(f"./final_task_demos/{TASK}/test_report.json")
+    report_path = os.path.abspath(f"./docs/final_task_demos/{TASK}/test_report.json")
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump({"summary": summary, "results": all_results, "demos": exported}, f, indent=2)
     print(f"\nWrote report: {report_path}")

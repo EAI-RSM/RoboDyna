@@ -20,7 +20,7 @@ from PIL import Image, ImageTk
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent / "household"
 TUTORIAL_DIR = Path(__file__).resolve().parent / "Tutorial"
-DEMO_DIR = ROOT / "final_task_demos"
+DEMO_DIR = ROOT / "docs/final_task_demos"
 README_PATH = ROOT / "README.md"
 # Must match interactive._interactive_common.TASK_RESULT_ENV
 TASK_RESULT_ENV = "ROBODYNA_TASK_RESULT_FILE"

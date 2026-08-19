@@ -23,11 +23,11 @@ alwaysApply: true
 | `interactive/tests/` | One-off probes, smoke tests, and helper record scripts |
 | `tests/` | Suite success sweeps, gallery demo publish, and regression tests |
 | `script/bench_script/record_demo.py` | Shared demo recorder |
-| `final_task_demos/` | Curated gallery clips (side-by-side GIFs/MP4s, snapshots) |
+| `docs/final_task_demos/` | Curated gallery clips (side-by-side GIFs/MP4s, snapshots) |
 | `tmp/` / `tmp/tmp_<task>/` | Local scratch for demos, sweeps, probes (gitignored except keep) |
 | `task_gallery` (sibling repo under `Desktop/RoboReal/`) | Published web gallery; sync demos there when updating README cards |
 
-Do not dump probe scripts, one-off mp4s, or sweep junk into `final_task_demos/` or repo root — use `tmp/`.
+Do not dump probe scripts, one-off mp4s, or sweep junk into `docs/final_task_demos/` or repo root — use `tmp/`.
 
 ## Skills to follow
 

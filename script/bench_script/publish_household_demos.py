@@ -12,7 +12,7 @@ sys.path.insert(0, "./")
 from script.bench_script.record_demo import record_demo
 
 ROOT = os.path.abspath(".")
-FINAL = os.path.join(ROOT, "final_task_demos")
+FINAL = os.path.join(ROOT, "docs/final_task_demos")
 
 # Matches interactive/household_task_gui.py + README extras.
 HOUSEHOLD_TASKS = (

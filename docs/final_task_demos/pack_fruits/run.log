@@ -101,7 +101,7 @@ Demo ready:
   head     : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_packing/video/v2_default_head.mp4
   top-down : /home/xuan/Desktop/RoboReal/RoboDyna/tmp_packing/video/v2_default_topdown.mp4
   side-by-side: /home/xuan/Desktop/RoboReal/RoboDyna/tmp_packing/video/v2_default_sidebyside.mp4
-  copied -> /home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/packing/default_sidebyside.mp4
+  copied -> /home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/packing/default_sidebyside.mp4
 
 === recording demo: opt1 (tag=opt1) ===
 Task Name: [34mpacking[0m

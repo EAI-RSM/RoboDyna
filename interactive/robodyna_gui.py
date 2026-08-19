@@ -39,7 +39,7 @@ from experiment_logs import (  # noqa: E402
 from household_task_gui import TASKS as HOUSEHOLD_TASKS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-DEMO_DIR = ROOT / "final_task_demos"
+DEMO_DIR = ROOT / "docs/final_task_demos"
 PAGE_BG = GUI_PAGE_BG
 
 # Brand hues (Base teal, HH orange, Exp coral). Boxes use a softened tint of these.

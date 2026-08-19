@@ -40,10 +40,10 @@ HOUSEHOLD_DEMOS = ROOT / "household_demos"
 GALLERY = Path(
     os.environ.get(
         "TASK_GALLERY_ROOT",
-        "/home/aras/Desktop/workspace/task_gallery/final_task_demos",
+        "/home/aras/Desktop/workspace/task_gallery/docs/final_task_demos",
     )
 )
-REPO_FINAL = ROOT / "final_task_demos"
+REPO_FINAL = ROOT / "docs/final_task_demos"
 
 TASK_BLURBS = {
     "trap_bug": "Trap a scurrying cockroach, spider, or ant under the office bookshelf with a transparent glass box.",

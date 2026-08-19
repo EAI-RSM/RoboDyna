@@ -22,7 +22,7 @@ Suite pass = criteria_consistent + correct option setup on all 20 episodes,
 plus one tagged side-by-side demo per condition.
 
 Demos land in:
-  final_task_demos/play_billiard/<tag>_sidebyside.mp4
+  docs/final_task_demos/play_billiard/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -265,7 +265,7 @@ def run_condition(condition: str, n: int = N_PER_CONDITION):
             flush=True,
         )
         # Persist partial progress so a crash does not lose earlier conditions.
-        out_dir = os.path.abspath(f"./final_task_demos/{TASK}")
+        out_dir = os.path.abspath(f"./docs/final_task_demos/{TASK}")
         os.makedirs(out_dir, exist_ok=True)
         with open(os.path.join(out_dir, "test_report.partial.json"), "w", encoding="utf-8") as f:
             json.dump({"condition": condition, "results_so_far": results}, f, indent=2)
@@ -282,7 +282,7 @@ def run_condition(condition: str, n: int = N_PER_CONDITION):
 
 
 def record_and_export_demos():
-    out_dir = os.path.abspath(f"./final_task_demos/{TASK}")
+    out_dir = os.path.abspath(f"./docs/final_task_demos/{TASK}")
     os.makedirs(out_dir, exist_ok=True)
     exported = {}
     for condition, file_tag in DEMO_FILE_TAGS.items():
@@ -320,7 +320,7 @@ def record_and_export_demos():
 
 
 def main():
-    out_dir = os.path.abspath(f"./final_task_demos/{TASK}")
+    out_dir = os.path.abspath(f"./docs/final_task_demos/{TASK}")
     os.makedirs(out_dir, exist_ok=True)
 
     all_results = {}

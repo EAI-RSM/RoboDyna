@@ -666,9 +666,9 @@
     ]
   },
   "demos": {
-    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/play_billiard/default_sidebyside.mp4",
-    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/play_billiard/opt1_sidebyside.mp4",
-    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/play_billiard/opt2_sidebyside.mp4",
-    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/play_billiard/opt1+2_sidebyside.mp4"
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/play_billiard/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/play_billiard/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/play_billiard/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/play_billiard/opt1+2_sidebyside.mp4"
   }
 }

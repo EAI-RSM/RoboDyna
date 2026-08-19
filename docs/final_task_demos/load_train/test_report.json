@@ -1950,10 +1950,10 @@
     ]
   },
   "demos": {
-    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/default_sidebyside.mp4",
-    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/opt1_sidebyside.mp4",
-    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/opt2_sidebyside.mp4",
-    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/load_train/opt1+2_sidebyside.mp4"
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/load_train/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/load_train/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/load_train/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/load_train/opt1+2_sidebyside.mp4"
   },
   "success_criterion": "SUCCESS iff the ball is seated in an allowed wagon: Default/Opt2 = any open cargo wagon; Opt1/Opt1+2 = the nominated (red) target wagon only. Option setup (target_wagon_mode / tunnel) must match the condition."
 }

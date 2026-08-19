@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record all save_goal condition demos into final_task_demos/save_goal/."""
+"""Record all save_goal condition demos into docs/final_task_demos/save_goal/."""
 from __future__ import annotations
 
 import os
@@ -11,7 +11,7 @@ sys.path.insert(0, "./script/bench_script")
 
 from script.bench_script.record_demo import record_demo
 
-OUT = os.path.abspath("./final_task_demos/save_goal")
+OUT = os.path.abspath("./docs/final_task_demos/save_goal")
 CONDS = {
     "default": ["players_enabled=false", "cover_enabled=false"],
     "opt1": ["players_enabled=true", "cover_enabled=false"],

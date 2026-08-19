@@ -39,7 +39,7 @@ from script.collect_data import class_decorator, get_embodiment_config
 
 TASK = "sort_apples_belt"
 CONFIG = "demo_dynamic"
-FINAL_DIR = os.path.join("final_task_demos", TASK)
+FINAL_DIR = os.path.join("docs/final_task_demos", TASK)
 
 # Opt2: rotten_prob>0 always yields ≥1 rotten; P=rotten_prob may add a second.
 # Demos use the suite so the garbage-bin behavior is visible.
@@ -247,7 +247,7 @@ def gif_from_mp4(mp4: str, gif: str) -> None:
 
 
 def publish_demo(cond: dict, out: dict) -> dict:
-    """Copy tagged demos into final_task_demos/sort_apples_belt/."""
+    """Copy tagged demos into docs/final_task_demos/sort_apples_belt/."""
     os.makedirs(FINAL_DIR, exist_ok=True)
     tag = cond["tag"]
     published = {}

@@ -20,7 +20,7 @@ sys.path.insert(0, "./script/bench_script")
 from script.bench_script.record_demo import record_demo
 
 TASK = "marble_shelf_maze"
-OUT = os.path.abspath(f"./final_task_demos/{TASK}")
+OUT = os.path.abspath(f"./docs/final_task_demos/{TASK}")
 NEED_MIB = 7000
 
 CONDS = {

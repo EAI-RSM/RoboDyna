@@ -20,7 +20,7 @@ from script.collect_data import class_decorator
 
 TASK = "catch_marbles_trapdoors"
 CONFIG = "demo_dynamic"
-OUT = os.path.abspath(f"./final_task_demos/{TASK}")
+OUT = os.path.abspath(f"./docs/final_task_demos/{TASK}")
 SAVE_ROOT = os.path.abspath(f"./tmp/tmp_{TASK}")
 VIDEO_DIR = os.path.join(SAVE_ROOT, "video")
 

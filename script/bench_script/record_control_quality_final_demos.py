@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record tagged control_quality demos into final_task_demos/control_quality/.
+"""Record tagged control_quality demos into docs/final_task_demos/control_quality/.
 
 Uses known-good seeds from the 5×4 controller suite so recording does not
 retry-forever under GPU contention.
@@ -24,7 +24,7 @@ from script.collect_data import class_decorator
 
 TASK = "control_quality"
 CONFIG = "demo_dynamic"
-OUT = os.path.abspath(f"./final_task_demos/{TASK}")
+OUT = os.path.abspath(f"./docs/final_task_demos/{TASK}")
 SAVE_ROOT = os.path.abspath(f"./tmp/tmp_{TASK}")
 VIDEO_DIR = os.path.join(SAVE_ROOT, "video")
 

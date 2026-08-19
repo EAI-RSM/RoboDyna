@@ -22,7 +22,7 @@ Path validity (required every episode — the shot must go through the goal fram
   - with Opt 1, a bounce waypoint exists and the post-bounce target is still on-frame
 
 Demos land in:
-  final_task_demos/save_goal/<tag>_sidebyside.mp4
+  docs/final_task_demos/save_goal/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -256,7 +256,7 @@ def run_condition(condition: str, n: int = N_PER_CONDITION):
 
 
 def record_and_export_demos():
-    out_dir = os.path.abspath(f"./final_task_demos/{TASK}")
+    out_dir = os.path.abspath(f"./docs/final_task_demos/{TASK}")
     os.makedirs(out_dir, exist_ok=True)
     exported = {}
     for condition, file_tag in DEMO_FILE_TAGS.items():
@@ -296,7 +296,7 @@ def record_and_export_demos():
 
 
 def main():
-    out_dir = os.path.abspath(f"./final_task_demos/{TASK}")
+    out_dir = os.path.abspath(f"./docs/final_task_demos/{TASK}")
     os.makedirs(out_dir, exist_ok=True)
 
     all_results = {}

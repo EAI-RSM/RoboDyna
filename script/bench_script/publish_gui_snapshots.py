@@ -3,18 +3,18 @@
 
 Suite (base interactive) tasks write four condition stills::
 
-    final_task_demos/<task>/scene_snapshot_default.png
-    final_task_demos/<task>/scene_snapshot_opt1.png
-    final_task_demos/<task>/scene_snapshot_opt2.png
-    final_task_demos/<task>/scene_snapshot_opt1+2.png
+    docs/final_task_demos/<task>/scene_snapshot_default.png
+    docs/final_task_demos/<task>/scene_snapshot_opt1.png
+    docs/final_task_demos/<task>/scene_snapshot_opt2.png
+    docs/final_task_demos/<task>/scene_snapshot_opt1+2.png
 
 plus ``scene_snapshot.png`` (copy of default) for compatibility.
 
 Keyboard+mouse GUI cards get a parallel set with arms stripped::
 
-    final_task_demos/<task>/scene_snapshot_kb_default.png
+    docs/final_task_demos/<task>/scene_snapshot_kb_default.png
     ...
-    final_task_demos/<task>/scene_snapshot_kb.png   (copy of kb default)
+    docs/final_task_demos/<task>/scene_snapshot_kb.png   (copy of kb default)
 
 Household GUI tasks write ``scene_snapshot.png`` (robot) and
 ``scene_snapshot_kb.png`` (keyboard+mouse).
@@ -56,7 +56,7 @@ from interactive.base_task_gui import (
 from interactive.household_task_gui import TASKS as HOUSEHOLD_GUI_TASKS
 
 ROOT = os.path.abspath(".")
-FINAL = os.path.join(ROOT, "final_task_demos")
+FINAL = os.path.join(ROOT, "docs/final_task_demos")
 TUTORIAL_DIR = os.path.join(ROOT, "interactive", "Tutorial")
 # Opening setup for each GUI card. Parts 1–2 are empty-table; 3 = cube; 4 = ball.
 TUTORIAL_PART_STAGES = {1: None, 2: None, 3: "grasp", 4: "ball"}

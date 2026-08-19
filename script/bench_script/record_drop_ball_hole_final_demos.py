@@ -73,7 +73,7 @@ def record_condition(tag: str, values: dict[str, bool]) -> None:
         if not (env.plan_success and env.check_success()):
             raise RuntimeError(f"{tag} did not complete successfully")
         cache = scratch / ".cache" / "episode0"
-        out_dir = Path("final_task_demos") / TASK
+        out_dir = Path("docs/final_task_demos") / TASK
         _encode_available_views(cache, out_dir, tag, 250.0 / float(args["save_freq"]))
         print(f"Recorded {tag}: {out_dir / f'{tag}_sidebyside.mp4'}")
     finally:

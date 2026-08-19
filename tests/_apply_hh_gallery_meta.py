@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _GALLERY_ROOT = Path(
     os.environ.get(
         "TASK_GALLERY_ROOT",
-        "/home/aras/Desktop/workspace/task_gallery/final_task_demos",
+        "/home/aras/Desktop/workspace/task_gallery/docs/final_task_demos",
     )
 )
 GALLERY_HTML = _GALLERY_ROOT.parent / "index.html"
@@ -83,7 +83,7 @@ def readme_cell(task: str, m: dict) -> str:
     parts = []
     for f, cap in zip(files, captions):
         parts.append(
-            f'<div align="center"><img src="final_task_demos/{task}/{f}" '
+            f'<div align="center"><img src="docs/final_task_demos/{task}/{f}" '
             f'width="160" height="120"/><br><sub>{cap}</sub></div>'
         )
     return " ".join(parts) if parts else "—"
@@ -156,7 +156,7 @@ def update_hh_readme(meta: list[dict]) -> None:
         if not m:
             continue
         imgs = " ".join(
-            f'<img src="../final_task_demos/{task}/{f}" width="200"/>'
+            f'<img src="../docs/final_task_demos/{task}/{f}" width="200"/>'
             for f in m["files"]
         )
         rows.append(f"| **`{task}`** | {imgs} |")

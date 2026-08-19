@@ -31,8 +31,8 @@ python script/bench_script/record_demo.py <task>
 
 | Suite | Record / publish | Landing paths |
 |-------|------------------|---------------|
-| Base | `tests/run_basic_test_and_demos.py` (sweep + fill missing scenario GIFs) | `final_task_demos/<task>/<stem>_sidebyside.gif` (+ sync `/home/xuan/Desktop/RoboReal/task_gallery/final_task_demos/`) |
-| Household | `script/bench_script/publish_household_demos.py` or `tests/run_hh_test_and_demos.py` | `final_task_demos/<task>/`, `household_demos/`, same gallery tree |
+| Base | `tests/run_basic_test_and_demos.py` (sweep + fill missing scenario GIFs) | `docs/final_task_demos/<task>/<stem>_sidebyside.gif` (+ sync `/home/xuan/Desktop/RoboReal/task_gallery/docs/final_task_demos/`) |
+| Household | `script/bench_script/publish_household_demos.py` or `tests/run_hh_test_and_demos.py` | `docs/final_task_demos/<task>/`, `household_demos/`, same gallery tree |
 
 - Base stems are usually `default_sidebyside`, `opt1_sidebyside`, `opt2_sidebyside`, `opt1+2_sidebyside` (exceptions in `run_basic_test_and_demos.SCENARIO_STEMS`).
 - Household publish pattern: on mixed results → 1 success + 1 failure; all-pass → 2 successes (prefer distinct seeds).

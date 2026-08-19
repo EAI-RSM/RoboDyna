@@ -370,7 +370,7 @@ def main():
     ap.add_argument("--disk-only", action="store_true", help="fixed mode: thin disk only")
     ap.add_argument(
         "--out",
-        default=str(ROOT / "final_task_demos" / "clean_table" / "coffee_graphics"),
+        default=str(ROOT / "docs/final_task_demos" / "clean_table" / "coffee_graphics"),
     )
     args = ap.parse_args()
     use_column = bool(args.column) and not bool(args.disk_only)

@@ -15,7 +15,7 @@ Success: good apple picked inside the ripeness window AND in basket;
 spoiled (if any) NOT in basket.
 
 Demos land in:
-  final_task_demos/pick_ripe_apple/<tag>_sidebyside.mp4
+  docs/final_task_demos/pick_ripe_apple/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ from script.collect_data import class_decorator
 TASK = "pick_ripe_apple"
 CONFIG = "demo_dynamic"
 N_PER_CONDITION = 5
-OUT = os.path.abspath(f"./final_task_demos/{TASK}")
+OUT = os.path.abspath(f"./docs/final_task_demos/{TASK}")
 SAVE_ROOT = os.path.abspath(f"./tmp/tmp_{TASK}_suite")
 VIDEO_DIR = os.path.join(SAVE_ROOT, "video")
 
@@ -264,7 +264,7 @@ def _clean_scratch():
 
 
 def record_seeded_demo(condition: str, seed: int, file_tag: str) -> str | None:
-    """Record one dual-view demo for a known seed; copy to final_task_demos."""
+    """Record one dual-view demo for a known seed; copy to docs/final_task_demos."""
     overrides = _overrides(condition)
     print(
         f"\n=== recording demo: {condition} tag={file_tag} seed={seed} ===",

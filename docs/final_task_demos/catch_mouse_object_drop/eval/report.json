@@ -35,7 +35,7 @@
         0.05,
         0.81
       ],
-      "video": "final_task_demos/catch_mouse_object_drop/eval/seed11_sidebyside.mp4"
+      "video": "docs/final_task_demos/catch_mouse_object_drop/eval/seed11_sidebyside.mp4"
     },
     {
       "seed": 23,
@@ -69,7 +69,7 @@
         0.05,
         0.81
       ],
-      "video": "final_task_demos/catch_mouse_object_drop/eval/seed23_sidebyside.mp4"
+      "video": "docs/final_task_demos/catch_mouse_object_drop/eval/seed23_sidebyside.mp4"
     },
     {
       "seed": 37,
@@ -103,7 +103,7 @@
         0.05,
         0.81
       ],
-      "video": "final_task_demos/catch_mouse_object_drop/eval/seed37_sidebyside.mp4"
+      "video": "docs/final_task_demos/catch_mouse_object_drop/eval/seed37_sidebyside.mp4"
     },
     {
       "seed": 41,
@@ -137,7 +137,7 @@
         0.05,
         0.81
       ],
-      "video": "final_task_demos/catch_mouse_object_drop/eval/seed41_sidebyside.mp4"
+      "video": "docs/final_task_demos/catch_mouse_object_drop/eval/seed41_sidebyside.mp4"
     },
     {
       "seed": 59,
@@ -171,7 +171,7 @@
         0.05,
         0.81
       ],
-      "video": "final_task_demos/catch_mouse_object_drop/eval/seed59_sidebyside.mp4"
+      "video": "docs/final_task_demos/catch_mouse_object_drop/eval/seed59_sidebyside.mp4"
     }
   ]
 }

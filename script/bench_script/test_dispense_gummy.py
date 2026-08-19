@@ -11,7 +11,7 @@ Success: bowl collects every target-colored gummy; any distractor in the bowl
 fails the episode. Missed targets also fail.
 
 Demos land in:
-  final_task_demos/dispense_gummy/<tag>_sidebyside.mp4
+  docs/final_task_demos/dispense_gummy/<tag>_sidebyside.mp4
   with tags: default, opt1, opt2, opt1+2
 """
 from __future__ import annotations
@@ -272,7 +272,7 @@ def run_condition(condition: str, n: int = N_PER_CONDITION):
 
 
 def record_and_export_demos():
-    out_dir = os.path.abspath(f"./final_task_demos/{TASK}")
+    out_dir = os.path.abspath(f"./docs/final_task_demos/{TASK}")
     os.makedirs(out_dir, exist_ok=True)
     exported = {}
     for condition, file_tag in DEMO_FILE_TAGS.items():
@@ -363,7 +363,7 @@ def main():
             "any missed target → fail"
         ),
     }
-    out_dir = os.path.abspath(f"./final_task_demos/{TASK}")
+    out_dir = os.path.abspath(f"./docs/final_task_demos/{TASK}")
     os.makedirs(out_dir, exist_ok=True)
     report_path = os.path.join(out_dir, "test_report.json")
     with open(report_path, "w", encoding="utf-8") as f:

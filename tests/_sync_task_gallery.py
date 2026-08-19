@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync final_task_demos → task_gallery and refresh index.html from sweep results."""
+"""Sync docs/final_task_demos → task_gallery and refresh index.html from sweep results."""
 from __future__ import annotations
 
 import json
@@ -9,11 +9,11 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO = ROOT / "final_task_demos"
+REPO = ROOT / "docs/final_task_demos"
 _GALLERY_ROOT = Path(
     os.environ.get(
         "TASK_GALLERY_ROOT",
-        "/home/aras/Desktop/workspace/task_gallery/final_task_demos",
+        "/home/aras/Desktop/workspace/task_gallery/docs/final_task_demos",
     )
 )
 GALLERY = _GALLERY_ROOT

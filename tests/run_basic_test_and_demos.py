@@ -5,7 +5,7 @@ For each base task / scenario:
   - Run seeds 0..n-1 (default n=5 → 20 runs/task).
   - If the scenario has a successful seed AND the gallery is missing that
     scenario's GIF (or --force-record), record a head-camera demo and publish
-    GIF into repo final_task_demos + task_gallery (``*_head`` stems).
+    GIF into repo docs/final_task_demos + task_gallery (``*_head`` stems).
 """
 from __future__ import annotations
 
@@ -48,10 +48,10 @@ FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 GALLERY = Path(
     os.environ.get(
         "TASK_GALLERY_ROOT",
-        "/home/aras/Desktop/workspace/task_gallery/final_task_demos",
+        "/home/aras/Desktop/workspace/task_gallery/docs/final_task_demos",
     )
 )
-REPO_FINAL = ROOT / "final_task_demos"
+REPO_FINAL = ROOT / "docs/final_task_demos"
 
 # Filename stems for gallery / README (head-camera demos).
 SCENARIO_STEMS: dict[str, dict[str, str]] = {

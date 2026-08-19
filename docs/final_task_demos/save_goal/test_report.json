@@ -28,10 +28,10 @@
     }
   },
   "demos": {
-    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/save_goal/default_sidebyside.mp4",
-    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/save_goal/opt1_sidebyside.mp4",
-    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/save_goal/opt2_sidebyside.mp4",
-    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/save_goal/opt1+2_sidebyside.mp4"
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/save_goal/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/save_goal/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/save_goal/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/save_goal/opt1+2_sidebyside.mp4"
   },
   "success_criterion": "SUCCESS iff: keeper in green zone before red deadline; ball blocked on keeper front face; ball does NOT enter the goal; grippers open. Every episode also requires an on-frame shot (ball target inside the goal mouth), including after Opt-1 bounce.",
   "notes": "Controller suite PASSED 20/20. Episode success = save (ball does not enter goal). Path validity separately asserts the shot would go through the goal frame if unsaved."

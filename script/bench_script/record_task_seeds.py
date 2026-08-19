@@ -104,7 +104,7 @@ def record_seed(task_name: str, seed: int, config_name: str = "demo_dynamic") ->
     task.merge_pkl_to_hdf5_video()
     task.close_env()
 
-    final_dir = os.path.abspath(f"./final_task_demos/{task_name}/eval")
+    final_dir = os.path.abspath(f"./docs/final_task_demos/{task_name}/eval")
     os.makedirs(final_dir, exist_ok=True)
     for src, name in (
         (out_head, f"seed{seed}_head.mp4"),

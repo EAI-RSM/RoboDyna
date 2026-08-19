@@ -886,7 +886,7 @@ export default function MetricDetailApproval() {
       <Stack gap={6}>
         <H1>metric_detail approval catalog</H1>
         <Text tone="secondary">
-          Proposed keys for all 21 final_task_demos tasks. Shared fields apply
+          Proposed keys for all 21 task demos. Shared fields apply
           to every task; task tables are additive. No implementation yet —
           approve or edit this list.
         </Text>

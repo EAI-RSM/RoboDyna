@@ -914,10 +914,10 @@
     }
   },
   "demos": {
-    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/dispense_gummy/default_sidebyside.mp4",
-    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/dispense_gummy/opt1_sidebyside.mp4",
-    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/dispense_gummy/opt2_sidebyside.mp4",
-    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/final_task_demos/dispense_gummy/opt1+2_sidebyside.mp4"
+    "default": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/dispense_gummy/default_sidebyside.mp4",
+    "opt1": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/dispense_gummy/opt1_sidebyside.mp4",
+    "opt2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/dispense_gummy/opt2_sidebyside.mp4",
+    "opt1+2": "/home/xuan/Desktop/RoboReal/RoboDyna/docs/final_task_demos/dispense_gummy/opt1+2_sidebyside.mp4"
   },
   "success_criterion": "bowl collects all target gummies; any distractor in bowl \u2192 fail; any missed target \u2192 fail"
 }
