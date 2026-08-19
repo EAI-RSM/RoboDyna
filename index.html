@@ -168,7 +168,7 @@ pip install https://github.com/haosulab/SAPIEN/releases/download/3.0.3/sapien-3.
 
 # collect a task
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json; unset DISPLAY
-bash collect_data.sh &lt;task&gt; demo_dynamic 0</code></pre>
+bash scripts/collect_data.sh &lt;task&gt; demo_dynamic 0</code></pre>
     <p class="note">Authoring a new task touches only a few files and plugs into the shared config; a bundled
       Claude Code skill (<code>.claude/skills/SAPIEN-task-creator</code>) automates the process. See the
       <a href="https://github.com/EAI-RSM/RoboDyna#-adding-a-task">repo README</a> for details.</p>

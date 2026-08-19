@@ -54,7 +54,7 @@ interactive_params:
   max_joint_speed: 4.8     # rad/s; joint slew cap near singularities (+20%)
 # ---------------------------------------------------------------------------
 # Per-task params, namespaced by task name. This is the SHARED config for the
-# whole suite: invoke as `collect_data.sh <task> demo_dynamic 0` -- the task arg
+# whole suite: invoke as `scripts/collect_data.sh <task> demo_dynamic 0` -- the task arg
 # selects which block below is read (kwags["task_args"][<task>]); all other tasks'
 # blocks are ignored. (debug_dynamic.yml mirrors this block with debug run knobs.)
 # ---------------------------------------------------------------------------

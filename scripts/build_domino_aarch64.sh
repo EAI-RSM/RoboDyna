@@ -78,4 +78,4 @@ cd "$REPO"; $PY script/update_embodiment_config_path.py
 
 echo "== DONE. Runtime env REQUIRED before collection: =="
 echo "   export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json; unset DISPLAY"
-echo "   conda activate $ENV && bash collect_data.sh adjust_bottle demo_clean_dynamic 0"
+echo "   conda activate $ENV && bash scripts/collect_data.sh adjust_bottle demo_clean_dynamic 0"

@@ -37,7 +37,7 @@ bash script/install_robodyna.sh
 conda activate robodyna
 ```
 
-Override the env name with `ROBODYNA_ENV=myenv bash script/install_robodyna.sh` if needed. On aarch64 / GB10, use `./build_domino_aarch64.sh` instead.
+Override the env name with `ROBODYNA_ENV=myenv bash script/install_robodyna.sh` if needed. On aarch64 / GB10, use `scripts/build_domino_aarch64.sh` instead.
 
 ### Download RoboTwin assets
 
@@ -68,11 +68,11 @@ conda activate robodyna
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 unset DISPLAY
 
-bash collect_data.sh <task> <task_config> <gpu_id>
+bash scripts/collect_data.sh <task> <task_config> <gpu_id>
 
 # Examples
-bash collect_data.sh cook_meat demo_dynamic 0
-bash collect_data.sh boil_milk demo_dynamic 0
+bash scripts/collect_data.sh cook_meat demo_dynamic 0
+bash scripts/collect_data.sh boil_milk demo_dynamic 0
 ```
 
 Output lands under `data/<task>/<task_config>/` (HDF5 + mp4) and an inline LeRobot v2.1 dataset under `data_lerobot/`. Task-specific knobs live in `task_config/demo_dynamic.yml` under `task_args.<task>` (do not add a separate per-task config file).

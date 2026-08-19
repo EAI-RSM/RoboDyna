@@ -54,7 +54,7 @@ interactive_params:
   max_joint_speed: 4.8     # rad/s; joint slew cap near singularities (+20%)
 # ---------------------------------------------------------------------------
 # DEBUG mirror of demo_dynamic.yml: same per-task params, smaller batch + save-failed
-# so jobs terminate while tuning. Invoke as `collect_data.sh <task> debug_dynamic 0`.
+# so jobs terminate while tuning. Invoke as `scripts/collect_data.sh <task> debug_dynamic 0`.
 # Keep this task_args block in sync with demo_dynamic.yml.
 # ---------------------------------------------------------------------------
 task_args:
