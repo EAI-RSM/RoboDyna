@@ -21,7 +21,7 @@ from ._base_task import Base_Task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils import *
 from .utils.actor_utils import Actor
-from .utils.create_actor import create_box, create_visual_box
+from .utils.create_actor import create_box, create_visual_box, resolve_texture_file
 
 
 class KitchenS_base_task(Base_Task):
@@ -29,7 +29,7 @@ class KitchenS_base_task(Base_Task):
 
     FURNITURE_NAMES = {"table", "wall", "ground"}
 
-    # Flush CC0 4-burner gas cooktop (assets/objects/268_countertop_gas_stove).
+    # Flush CC0 4-burner gas cooktop (assets/dyna_assets/268_countertop_gas_stove).
     COOKTOP_ASSET = "268_countertop_gas_stove"
     # World-frame offsets from cooktop center (grate clusters on 268).
     RANGE_BURNER_OFFSETS = {
@@ -241,7 +241,12 @@ class KitchenS_base_task(Base_Task):
     # ------------------------------------------------------------------
     def _counter_material(self):
         if self.table_texture is not None:
-            texture_path = f"./assets/background_texture/{self.table_texture}.png"
+            tex = resolve_texture_file(self.table_texture)
+            texture_path = (
+                str(tex)
+                if tex is not None
+                else f"./assets/background_texture/{self.table_texture}.png"
+            )
             texture2d = sapien.render.RenderTexture2D(texture_path)
             mat = sapien.render.RenderMaterial()
             mat.set_base_color_texture(texture2d)
@@ -490,12 +495,7 @@ class KitchenS_base_task(Base_Task):
         x = rel_x + table_xy_bias[0]
         y = rel_y + table_xy_bias[1]
 
-        asset_dir = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "assets",
-            "objects",
-            self.COOKTOP_ASSET,
-        )
+        asset_dir = str(resolve_model_dir(self.COOKTOP_ASSET))
         with open(os.path.join(asset_dir, "model_data0.json"), "r") as f:
             model_data = json.load(f)
         scale_mult = float(getattr(self, "range_scale_mult", 1.0))

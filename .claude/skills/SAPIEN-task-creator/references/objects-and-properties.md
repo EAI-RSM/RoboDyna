@@ -3,24 +3,24 @@
 Two separate things: adding a new **object asset** (mesh + annotation) vs. tuning **physical
 properties** (mass, friction, damping, scale, static/dynamic) of objects already in a task.
 Derived from `envs/utils/create_actor.py`, `envs/utils/actor_utils.py`, `envs/_base_task.py`,
-`script/create_object_data.py`, and the `assets/objects/` layout.
+`script/create_object_data.py`, and the `assets/objects/` + `assets/dyna_assets/` layout.
 
 ## 1. Adding a new object asset
 
 ### Where it lives
 ```
-assets/objects/<NNN_name>/            e.g. 001_bottle, 050_bell
+assets/dyna_assets/<NNN_name>/        custom RoboDyna meshes (ids ≥ 200), e.g. 200_steak
+assets/objects/<NNN_name>/            stock RoboTwin library, e.g. 001_bottle, 050_bell
 ├── visual/      base<id>.glb         # render mesh(es)
 ├── collision/   base<id>.glb         # collision mesh(es); convex decomposition or nonconvex
 ├── model_data<id>.json               # ONE per instance variant (the model_id you pass)
 └── points_info.json                  # human-readable catalog of the points (doc, not used at runtime)
 ```
-`create_actor(scene, pose, modelname, model_id, convex, is_static, scale, scale_mult=1.0)` resolves
-`assets/objects/<modelname>/model_data<model_id>.json` and the matching `visual/`+`collision/`
-`base<model_id>.glb`. If `collision/` or `visual/` subdirs are absent it falls back to a mesh in
-the model dir. So to add an object:
+`create_actor(...)` resolves `assets/dyna_assets/<modelname>/` first, then falls back to
+`assets/objects/<modelname>/`. If `collision/` or `visual/` subdirs are absent it falls back to a mesh in
+the model dir. So to add a custom object:
 
-1. Create `assets/objects/<NNN_yourname>/` with `visual/base0.glb` and `collision/base0.glb`
+1. Create `assets/dyna_assets/<NNN_yourname>/` with `visual/base0.glb` and `collision/base0.glb`
    (a watertight/convex-decomposed collision mesh; use `convex=True` at spawn for multi-convex).
 2. Write `model_data0.json` (see schema below).
 3. Reference it from a task: `create_actor(self, pose, modelname="<NNN_yourname>", model_id=0, convex=True)`.
@@ -125,7 +125,7 @@ important "property" lever for the benchmark's difficulty. See `punch_dual_holes
 
 ## Quick recipes
 
-- **New graspable object:** make `assets/objects/<NNN_name>/{visual,collision}/base0.glb` +
+- **New graspable object:** make `assets/dyna_assets/<NNN_name>/{visual,collision}/base0.glb` +
   `model_data0.json` with at least one `contact_points_pose` (and a `functional_point` if it must be
   placed) + `points_info.json`; then `create_actor(self, pose, modelname="<NNN_name>", model_id=0, convex=True)`.
 - **Make an existing object heavier/slippery in a task:** in `load_actors`, `actor.set_mass(...)`;
@@ -160,7 +160,7 @@ The library has gaps (e.g. no raw meat). Download a **CC0** mesh:
   `https://static.poly.pizza/<uuid>.glb` (curl it). Mixed CC0/CC-BY — record attribution in `NOTICE`.
 - **Sketchfab CC0** — higher fidelity (PBR textures); download usually needs login/token.
 
-`scripts/integrate_object.py` places it under `assets/objects/<id_name>/`, **bakes the scene-graph
+`scripts/integrate_object.py` places it under `assets/dyna_assets/<id_name>/`, **bakes the scene-graph
 transform into the vertices** (trimesh `bounds` includes node transforms but `geometry[0]` does not —
 exporting bare geometry yields a microscopic mesh in SAPIEN), scales to a real-world size, and writes
 `model_data0.json` (grasp at top-center, functional point at bottom-center by default) +

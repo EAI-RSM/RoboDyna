@@ -27,7 +27,7 @@ sys.path[:0] = [
     str(ROOT),
     str(ROOT / "script"),
     str(ROOT / "script/bench_script"),
-    str(ROOT / "script_exp"),
+    str(ROOT / "tests"),
 ]
 
 from _sweep_basic_success import (  # noqa: E402

@@ -146,7 +146,7 @@ def update_hh_readme(meta: list[dict]) -> None:
     text = HH_README.read_text()
     start = text.find("| Task | Demo |")
     if start < 0:
-        raise SystemExit("script_hh_exp README table not found")
+        raise SystemExit("household README table not found")
     end = text.find("\nRefresh GUI", start)
     if end < 0:
         end = text.find("\n```", start)

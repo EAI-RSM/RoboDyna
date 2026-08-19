@@ -602,8 +602,8 @@ class clean_table(Base_Task):
         self._sponge_spawn_pose = pose
 
     def _create_bench_glb(self, model_name: str, pose: sapien.Pose, scale, mass=0.1):
-        """Static décor from ``assets/objects_bench`` (office file holder, etc.)."""
-        model_dir = Path("assets/objects_bench") / model_name
+        """Static décor from ``assets/dyna_assets`` (office file holder, etc.)."""
+        model_dir = resolve_model_dir(model_name)
         glb = model_dir / "base.glb"
         if not glb.exists():
             candidates = sorted(model_dir.glob("*.glb"))

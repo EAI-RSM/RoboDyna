@@ -242,7 +242,7 @@ class fill_coffee_jar(KitchenS_base_task):
     @classmethod
     def _ensure_kettle_assets(cls):
         """Ensure ``009_kettle`` has create_actor-compatible model_data + collision."""
-        root = Path("assets/objects") / cls.KETTLE_MODEL
+        root = resolve_model_dir(cls.KETTLE_MODEL)
         visual = root / "visual"
         if not visual.exists():
             return
@@ -514,13 +514,13 @@ class fill_coffee_jar(KitchenS_base_task):
 
     @staticmethod
     def _model_data(modelname: str, model_id: int) -> dict:
-        path = Path("assets/objects") / modelname / f"model_data{model_id}.json"
+        path = resolve_model_dir(modelname) / f"model_data{model_id}.json"
         with open(path) as f:
             return json.load(f)
 
     @classmethod
     def _available_model_ids(cls, modelname: str) -> list[int]:
-        root = Path("assets/objects") / modelname
+        root = resolve_model_dir(modelname)
         ids = []
         for p in root.glob("model_data*.json"):
             try:
@@ -1031,7 +1031,7 @@ class fill_coffee_jar(KitchenS_base_task):
 
         # One packed mesh containing many individual coffee beans (not a solid block).
         self._add_static_mesh_visual(
-            filename=Path("assets/objects/252_coffee_bean/reservoir_fill.glb"),
+            filename=resolve_model_dir("252_coffee_bean") / "reservoir_fill.glb",
             pose=sapien.Pose([x, y, box_z]),
             material=self._opaque_material(self.BEAN_BROWN),
             name="dispenser_reservoir_beans",
@@ -1343,9 +1343,7 @@ class fill_coffee_jar(KitchenS_base_task):
         x, y = self.jar_xy
         z0 = self.table_top + 0.001
 
-        col_path = Path(
-            f"assets/objects/{self.JAR_MODEL}/collision/base0.glb"
-        ).resolve()
+        col_path = (resolve_model_dir(self.JAR_MODEL) / "collision" / "base0.glb").resolve()
         builder = self.scene.create_actor_builder()
         builder.set_physx_body_type("static")
         builder.add_nonconvex_collision_from_file(filename=str(col_path), scale=[1, 1, 1])
@@ -1390,7 +1388,7 @@ class fill_coffee_jar(KitchenS_base_task):
         """Three thick red rings at 25% / 50% / 75% of the jar fill height."""
         x, y = self.jar_xy
         ring_material = self._ring_material()
-        ring_mesh = Path(f"assets/objects/{self.JAR_MODEL}/rings/thin_ring.glb")
+        ring_mesh = resolve_model_dir(self.JAR_MODEL) / "rings" / "thin_ring.glb"
         outer_r = float(self.JAR_INNER_R) + 0.0035
         xy = float(self.RING_XY_SCALE) * (outer_r / float(self.RING_MESH_RADIUS))
         z_sc = float(self.RING_Z_SCALE)

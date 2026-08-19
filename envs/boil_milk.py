@@ -446,7 +446,7 @@ class boil_milk(KitchenS_base_task):
 
     @staticmethod
     def _model_data(modelname: str, model_id: int) -> dict:
-        path = Path("assets/objects") / modelname / f"model_data{model_id}.json"
+        path = resolve_model_dir(modelname) / f"model_data{model_id}.json"
         with open(path) as f:
             return json.load(f)
 
@@ -650,7 +650,7 @@ class boil_milk(KitchenS_base_task):
 
     # ---------------------------------------------------------------- target ring
     # Same thin torus mesh as measure_ingredient / fill_coffee_jar (native R≈0.0388).
-    _RING_MESH = Path("assets/objects/253_glass_jar/rings/thin_ring.glb")
+    _RING_MESH = resolve_model_dir("253_glass_jar") / "rings" / "thin_ring.glb"
     _RING_MESH_RADIUS = 0.0388
 
     def _clear_target_ring(self):

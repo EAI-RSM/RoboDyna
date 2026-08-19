@@ -57,8 +57,10 @@ and how the collector drives an episode) read `references/task-anatomy-and-api.m
 
 ## Step 2 — Get the objects
 
-Objects live in `assets/objects/<NNN_name>/` with `visual/base<id>.glb`, `collision/base<id>.glb`,
-a per-variant `model_data<id>.json` (grasp/placement points + scale), and `points_info.json`.
+Objects live in `assets/dyna_assets/<NNN_name>/` (custom RoboDyna meshes) or
+`assets/objects/<NNN_name>/` (stock RoboTwin library). Layout is the same: `visual/base<id>.glb`,
+`collision/base<id>.glb`, a per-variant `model_data<id>.json` (grasp/placement points + scale), and
+`points_info.json`. `create_actor` checks `dyna_assets` first.
 
 - **Reuse first.** If an annotated object fits, just `create_actor(self, pose, modelname=..., model_id=..., convex=True)`. Check it has the `contact_points_pose` (graspable) and `functional_matrix`
   (placeable) you need.
@@ -66,8 +68,8 @@ a per-variant `model_data<id>.json` (grasp/placement points + scale), and `point
   `006_hamburg` is a wrapped burger). Source a **CC0** mesh (Poly Pizza `static.poly.pizza/<id>.glb`
   is scriptable and login-free; Sketchfab CC0 for higher fidelity), then integrate it with
   `scripts/integrate_object.py` (bakes scene-graph transforms, optionally strips the texture, scales
-  to a real-world size, and writes `model_data0.json` + `points_info.json` + a `NOTICE`). User
-  preference on this deployment: **new object ids start at 200**.
+  to a real-world size, and writes `model_data0.json` + `points_info.json` + a `NOTICE`). **New
+  custom objects go in `assets/dyna_assets/` with ids ≥ 200.**
 - For the full asset format, the `model_data` schema, and how to set physical properties
   (mass/friction/damping/static), read `references/objects-and-properties.md`.
 
@@ -257,7 +259,7 @@ above before adding complexity.
 
 ## Files you end up adding (checklist)
 
-- `assets/objects/<NNN_name>/` — only if adding an object (visual+collision glb, `model_data0.json`,
+- `assets/dyna_assets/<NNN_name>/` — only if adding a custom object (visual+collision glb, `model_data0.json`,
   `points_info.json`, `NOTICE`).
 - `envs/<task>.py` — the task class (name == filename == CLI arg).
 - `description/task_instruction/<task>.json` — language templates.

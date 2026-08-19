@@ -314,7 +314,7 @@ class stop_ball(Office_base_task):
 
     @staticmethod
     def _resolve_scale(modelname, model_id, scale_mult=1.0, fallback=0.05):
-        path = Path(f"assets/objects/{modelname}/model_data{int(model_id)}.json")
+        path = resolve_model_dir(modelname) / f"model_data{int(model_id)}.json"
         data = json.loads(path.read_text())
         base = data.get("scale")
         if not base:

@@ -20,7 +20,7 @@ manipulations tanked the success rate. The lesson — not the plate — is what'
 
 The object library had **no raw meat** (`006_hamburg` is a wrapped burger; `005_french-fries` is a
 fries carton). So a new asset was sourced: a CC0 low-poly steak from Poly Pizza
-(`static.poly.pizza/<uuid>.glb`), integrated as `assets/objects/200_steak/`. Two integration lessons:
+(`static.poly.pizza/<uuid>.glb`), integrated as `assets/dyna_assets/200_steak/`. Two integration lessons:
 - The GLB had a **node-scale transform**; exporting `scene.geometry[0]` dropped it and SAPIEN loaded a
   ~1 mm mesh. Fix: bake transforms (`scene.to_geometry()` / `dump(concatenate=True)`) before export.
 - The steak's **texture overrode `base_color`**, so recoloring did nothing. Fix: strip the texture

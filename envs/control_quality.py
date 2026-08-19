@@ -73,7 +73,7 @@ class control_quality(Base_Task):
     KEY_HOVER_DIS = 0.06
     KEY_PRESS_DEPTH = 0.065
     EE_TO_TCP = 0.12
-    # Success stamp: create_box texture_id → assets/background_texture/<id>.png
+    # Success stamp: create_box texture_id → assets/dyna_textures/<id>.png
     # (cube-UV atlas with "Robo"/"Dyna" in the +Z/-Z tiles). Slightly inset on the tile.
     STAMP_MARK_TEXTURE_ID = "custom/robodyna_stamp"
     STAMP_MARK_HALF = (0.024, 0.028, 0.0015)

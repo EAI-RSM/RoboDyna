@@ -93,7 +93,7 @@ class punch_dual_holes(Base_Task):
     PAGE_EXIT_MARGIN = 0.002
     HIDE_Z = -10.0
     PUNCH_REST_Z_EXTRA = 0.03
-    # Stamp image: create_box texture_id → assets/background_texture/<id>.png
+    # Stamp image: create_box texture_id → assets/dyna_textures/<id>.png
     # (cube-UV atlas with the robot head in the +Z/-Z tiles). Sized to sit on
     # the card face (slightly inset from PAGE_HALF).
     PUNCH_MARK_TEXTURE_ID = "custom/robot_head_punch"

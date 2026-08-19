@@ -102,26 +102,26 @@
     <p class="sub">Built end-to-end on the dual-UR5 setup. ✅ = 100-episode production dataset collected.</p>
     <div class="grid">
       <div class="card">
-        <img src="assets/static/demos/cook_meat.gif" alt="cook_meat demo" loading="lazy">
+        <img src="assets/dyna_textures/demos/cook_meat.gif" alt="cook_meat demo" loading="lazy">
         <div class="body"><h3>cook_meat<span class="pill done">done</span></h3>
           <p>Grasp a raw steak, cook it on the pan to a randomized target doneness (the colour browns over
             time), then lift it off at the right moment.</p></div>
       </div>
       <div class="card">
-        <img src="assets/static/demos/catch_ramp_ball.gif" alt="catch_ramp_ball demo" loading="lazy">
+        <img src="assets/dyna_textures/demos/catch_ramp_ball.gif" alt="catch_ramp_ball demo" loading="lazy">
         <div class="body"><h3>catch_ramp_ball<span class="pill done">done</span></h3>
           <p>A ball rolls down a ramp and off the front edge; the arm predicts the landing point and
             pre-positions a cup to catch it.</p></div>
       </div>
       <div class="card">
-        <img src="assets/static/demos/sort_apples_belt.gif" alt="sort_apples_belt demo" loading="lazy">
+        <img src="assets/dyna_textures/demos/sort_apples_belt.gif" alt="sort_apples_belt demo" loading="lazy">
         <div class="body"><h3>sort_apples_belt<span class="pill done">done</span></h3>
           <p>Red/green apples stream down a conveyor; press the matching side button to aim a pivoting
             diverter blade that routes each into its colour-matched bowl. The button physically drives
             the diverter.</p></div>
       </div>
       <div class="card">
-        <img src="assets/static/demos/pick_ripe_apple.gif" alt="pick_ripe_apple demo" loading="lazy">
+        <img src="assets/dyna_textures/demos/pick_ripe_apple.gif" alt="pick_ripe_apple demo" loading="lazy">
         <div class="body"><h3>pick_ripe_apple<span class="pill done">done</span></h3>
           <p>Two apples hang on a tree: one ripens green→red→black (pick it); the other green→yellow→black
             (ignore). The basket slides left↔right under the branches; the matching arm drops the red apple in.</p></div>
@@ -135,22 +135,22 @@
     <h2>Prototype tasks</h2>
     <p class="sub">Built and runnable; tuning / validation in progress. Clips are partial.</p>
     <div class="grid proto">
-      <div class="card proto"><img src="assets/static/demos/hit_target.gif" alt="hit_target demo" loading="lazy"><div class="body"><h3>hit_target</h3><p>A moving target sways across the table; stick the dart tip in the yellow center (optional moving blocker).</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/place_block_belt.gif" alt="place_block_belt demo" loading="lazy"><div class="body"><h3>place_block_belt</h3><p>Set a tall, top-heavy block onto a moving conveyor so it rides upright into a bowl at the exit.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/drop_ball_hole.gif" alt="drop_ball_hole demo" loading="lazy"><div class="body"><h3>drop_ball_hole</h3><p>Drop three prisms into their matching holes on a continuously rotating sorter cap.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/hit_target.gif" alt="hit_target demo" loading="lazy"><div class="body"><h3>hit_target</h3><p>A moving target sways across the table; stick the dart tip in the yellow center (optional moving blocker).</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/place_block_belt.gif" alt="place_block_belt demo" loading="lazy"><div class="body"><h3>place_block_belt</h3><p>Set a tall, top-heavy block onto a moving conveyor so it rides upright into a bowl at the exit.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/drop_ball_hole.gif" alt="drop_ball_hole demo" loading="lazy"><div class="body"><h3>drop_ball_hole</h3><p>Drop three prisms into their matching holes on a continuously rotating sorter cap.</p></div></div>
       <div class="card proto"><img src="final_task_demos/whack_moles/default_sidebyside.gif" alt="whack_moles mallet demo" loading="lazy"><div class="body"><h3>whack_moles</h3><p>Strike popping moles with the flat face of a vertically aligned mallet head; touching a rabbit distractor fails.</p></div></div>
       <div class="card proto"><img src="final_task_demos/catch_valley_ball/default_sidebyside.gif" alt="catch_valley_ball push-box demo" loading="lazy"><div class="body"><h3>catch_valley_ball</h3><p>Push an open box beyond the line to catch a red ball leaving a curved ramp.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/catch_cuboid.gif" alt="catch_cuboid demo" loading="lazy"><div class="body"><h3>catch_cuboid</h3><p>Grasp the cuboid (or both cuboids) during timed pop-up windows from a hole board; optional opaque lattice.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/catch_marbles_trapdoors.gif" alt="catch_marbles_trapdoors demo" loading="lazy"><div class="body"><h3>catch_marbles_trapdoors</h3><p>Time button presses to drop marbles through trapdoors as they pass.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/put_cup_belt.gif" alt="put_cup_belt demo" loading="lazy"><div class="body"><h3>put_cup_belt</h3><p>Carry a cup through a swaying curtain of strips and into a slot.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/punch_dual_holes.gif" alt="punch_dual_holes demo" loading="lazy"><div class="body"><h3>punch_dual_holes</h3><p>Both arms press buttons to hole-punch files on two belts (default: discrete stop under stamps).</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/assemble_markers_cylinder.gif" alt="assemble_markers_cylinder demo" loading="lazy"><div class="body"><h3>assemble_markers_cylinder</h3><p>Attach four markers evenly (90° apart) around a vertical cylinder.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/control_quality.gif" alt="control_quality demo" loading="lazy"><div class="body"><h3>control_quality</h3><p>Stamp red/green tiles that stop under a gantry (max 2s). Default alternating; Opt1 random colors; Opt2 black distractors. Missed tile fails.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/save_goal.gif" alt="save_goal demo" loading="lazy"><div class="body"><h3>save_goal</h3><p>Place a square blocker in the green zone before the red deadline line to keep a moving ball out of the goal.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/dispense_gummy.gif" alt="dispense_gummy demo" loading="lazy"><div class="body"><h3>dispense_gummy</h3><p>Press dispense and belt keys so only the target-colored gummies land in the bowl.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/play_billiard.gif" alt="play_billiard demo" loading="lazy"><div class="body"><h3>play_billiard</h3><p>Strike the red primary ball into a pocket with a cue stick.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/pack_fruits.gif" alt="pack_fruits demo" loading="lazy"><div class="body"><h3>pack_fruits</h3><p>Pack apples and oranges from two belts into color-matched baskets.</p></div></div>
-      <div class="card proto"><img src="assets/static/demos/cook_food_timer.gif" alt="cook_food_timer demo" loading="lazy"><div class="body"><h3>cook_food_timer</h3><p>Cook food on the KitchenS stove while a pie timer advances only while the burner is on, then plate it.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/catch_cuboid.gif" alt="catch_cuboid demo" loading="lazy"><div class="body"><h3>catch_cuboid</h3><p>Grasp the cuboid (or both cuboids) during timed pop-up windows from a hole board; optional opaque lattice.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/catch_marbles_trapdoors.gif" alt="catch_marbles_trapdoors demo" loading="lazy"><div class="body"><h3>catch_marbles_trapdoors</h3><p>Time button presses to drop marbles through trapdoors as they pass.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/put_cup_belt.gif" alt="put_cup_belt demo" loading="lazy"><div class="body"><h3>put_cup_belt</h3><p>Carry a cup through a swaying curtain of strips and into a slot.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/punch_dual_holes.gif" alt="punch_dual_holes demo" loading="lazy"><div class="body"><h3>punch_dual_holes</h3><p>Both arms press buttons to hole-punch files on two belts (default: discrete stop under stamps).</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/assemble_markers_cylinder.gif" alt="assemble_markers_cylinder demo" loading="lazy"><div class="body"><h3>assemble_markers_cylinder</h3><p>Attach four markers evenly (90° apart) around a vertical cylinder.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/control_quality.gif" alt="control_quality demo" loading="lazy"><div class="body"><h3>control_quality</h3><p>Stamp red/green tiles that stop under a gantry (max 2s). Default alternating; Opt1 random colors; Opt2 black distractors. Missed tile fails.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/save_goal.gif" alt="save_goal demo" loading="lazy"><div class="body"><h3>save_goal</h3><p>Place a square blocker in the green zone before the red deadline line to keep a moving ball out of the goal.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/dispense_gummy.gif" alt="dispense_gummy demo" loading="lazy"><div class="body"><h3>dispense_gummy</h3><p>Press dispense and belt keys so only the target-colored gummies land in the bowl.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/play_billiard.gif" alt="play_billiard demo" loading="lazy"><div class="body"><h3>play_billiard</h3><p>Strike the red primary ball into a pocket with a cue stick.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/pack_fruits.gif" alt="pack_fruits demo" loading="lazy"><div class="body"><h3>pack_fruits</h3><p>Pack apples and oranges from two belts into color-matched baskets.</p></div></div>
+      <div class="card proto"><img src="assets/dyna_textures/demos/cook_food_timer.gif" alt="cook_food_timer demo" loading="lazy"><div class="body"><h3>cook_food_timer</h3><p>Cook food on the KitchenS stove while a pie timer advances only while the burner is on, then plate it.</p></div></div>
     </div>
   </div>
 </section>

@@ -28,18 +28,14 @@ tmp/*
 # custom task assets below are whitelisted for tracking.
 assets/*
 !assets/_download.py
-!assets/static/
-!assets/static/**
 
-# Sphere / actor textures (e.g. soccer_ball.png for save_goal)
-!assets/textures/
-!assets/textures/**
+# Custom RoboDyna images / textures (logos, stamps, soccer ball, README gifs)
+!assets/dyna_textures/
+!assets/dyna_textures/**
 
-# Custom background textures only (not HF seen/unseen)
+# Stock RoboTwin wall/table textures (HF download: seen/unseen)
 !assets/background_texture/
 assets/background_texture/*
-!assets/background_texture/custom/
-!assets/background_texture/custom/**
 
 # Stock RoboTwin objects (HF download). Custom RoboDyna meshes live in dyna_assets.
 !assets/objects/

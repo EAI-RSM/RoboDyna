@@ -29,7 +29,7 @@ sys.path[:0] = [
     str(ROOT),
     str(ROOT / "script"),
     str(ROOT / "script/bench_script"),
-    str(ROOT / "script_hh_exp"),
+    str(ROOT / "tests"),
 ]
 
 from _record_layout_seeds import record_one  # noqa: E402

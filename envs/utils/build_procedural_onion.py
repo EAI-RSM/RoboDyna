@@ -6,7 +6,7 @@ Three centered groove rings on the top face; each ring diameter is 70% of
 the previous (30% smaller), starting from the cylinder diameter, plus one
 extra ring halfway between the cylinder edge and the first scaled ring.
 
-Writes assets/objects/270_onion_half/
+Writes assets/dyna_assets/270_onion_half/
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import trimesh
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OBJ_NAME = "270_onion_half"
-DEST = os.path.join(ROOT, "assets", "objects", OBJ_NAME)
+DEST = os.path.join(ROOT, "assets", "dyna_assets", OBJ_NAME)
 
 RADIUS = 0.0234  # 4.68 cm diameter (+30% from 3.6 cm)
 HEIGHT = 0.012   # 1.2 cm tall (+20% from 1 cm)

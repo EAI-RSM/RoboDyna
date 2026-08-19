@@ -12,6 +12,7 @@ Run inside the domino env with the Vulkan vars set:
 Writes PNGs to --out and prints object pixel coverage + (with --recolor) whether raw vs cooked differ.
 """
 import argparse, json, os
+from pathlib import Path
 os.environ.setdefault("VK_ICD_FILENAMES", "/usr/share/vulkan/icd.d/nvidia_icd.json")
 os.environ.pop("DISPLAY", None)
 import numpy as np
@@ -22,9 +23,10 @@ from PIL import Image
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--name", required=True, help="object dir under assets/objects, e.g. 200_steak")
+    ap.add_argument("--name", required=True, help="object dir under assets/dyna_assets, e.g. 200_steak")
     ap.add_argument("--model-id", type=int, default=0)
-    ap.add_argument("--root", default="/shared_work/markhsp/DOMINO/assets/objects")
+    _repo = Path(__file__).resolve().parents[4]
+    ap.add_argument("--root", default=str(_repo / "assets" / "dyna_assets"))
     ap.add_argument("--recolor", action="store_true", help="test a base_color raw->cooked change")
     ap.add_argument("--out", default="/tmp/asset_validate")
     args = ap.parse_args()

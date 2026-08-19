@@ -56,8 +56,8 @@ class Office_base_task(Base_Task):
         super()._init_task_env_(**kwags)
 
     def _create_bench_glb(self, model_name, pose, scale, mass=0.1):
-        """Load one of the office-only GLBs under assets/objects_bench."""
-        model_dir = Path("assets/objects_bench") / model_name
+        """Load one of the office-only GLBs under assets/dyna_assets."""
+        model_dir = resolve_model_dir(model_name)
         glb = model_dir / "base.glb"
         if not glb.exists():
             candidates = sorted(model_dir.glob("*.glb"))
@@ -79,7 +79,7 @@ class Office_base_task(Base_Task):
         ``042_wooden_box/model_data0.json`` has no authored scale, so this
         direct builder preserves the exact office-base scale.
         """
-        model_dir = Path("assets/objects") / model_name
+        model_dir = resolve_model_dir(model_name)
         collision_path = model_dir / "collision" / f"base{model_id}.glb"
         visual = model_dir / "visual" / f"base{model_id}.glb"
         if not visual.exists():

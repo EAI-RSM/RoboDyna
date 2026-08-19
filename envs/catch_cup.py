@@ -543,7 +543,7 @@ class catch_cup(Office_base_task):
         """World-frame height of a prop under ``PROP_UPRIGHT_Q`` (y extent → z)."""
         try:
             data = json.loads(
-                Path(f"assets/objects/{modelname}/model_data{int(model_id)}.json").read_text()
+                Path(resolve_model_dir(modelname) / f"model_data{int(model_id)}.json").read_text()
             )
             size = (
                 np.asarray(data["extents"], dtype=np.float64)

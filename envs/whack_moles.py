@@ -686,12 +686,11 @@ class whack_moles(Base_Task):
         geometric center — raised/hidden poses must use these offsets.
         """
         import json
-        from pathlib import Path
 
         if scale_mult is None:
             scale_mult = float(
                 self._cfg.get("mole_scale_mult", self.MOLE_SCALE_MULT))
-        path = Path("assets/objects") / self.MOLE_MODEL / "model_data0.json"
+        path = resolve_model_dir(self.MOLE_MODEL) / "model_data0.json"
         with open(path, "r") as f:
             data = json.load(f)
         # Authored Y-up; MOLE_Q maps model Y → world Z.

@@ -17,6 +17,7 @@ or bread). Validate with validate_asset.py and a smoke collection; tune the fram
 fails.
 """
 import argparse, json, os, shutil, subprocess, sys
+from pathlib import Path
 import numpy as np
 import trimesh
 
@@ -40,7 +41,12 @@ def main():
     ap.add_argument("--width", type=float, default=0.10, help="target footprint (m) on the larger XZ axis")
     ap.add_argument("--strip-texture", action="store_true", help="bake a plain material (recolorable)")
     ap.add_argument("--base-color", default="220,220,220", help="plain material color when stripping")
-    ap.add_argument("--dest-root", default="/shared_work/markhsp/DOMINO/assets/objects")
+    _repo = Path(__file__).resolve().parents[4]
+    ap.add_argument(
+        "--dest-root",
+        default=str(_repo / "assets" / "dyna_assets"),
+        help="object library root (default: <repo>/assets/dyna_assets)",
+    )
     ap.add_argument("--source-url", default="(unknown)")
     ap.add_argument("--author", default="(unknown)")
     ap.add_argument("--license", default="(unknown — verify before use)")

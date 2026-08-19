@@ -89,7 +89,8 @@ x-sign (`"right" if pose.p[0] > 0 else "left"`).
 
 ## Objects and their annotation points (the crux)
 
-Objects live in `assets/objects/<NNN_name>/` with multiple `model_data<id>.json` variants (the
+Objects live in `assets/dyna_assets/<NNN_name>/` (custom) or `assets/objects/<NNN_name>/` (stock)
+with multiple `model_data<id>.json` variants (the
 `model_id`/`base{id}` you choose). Each json carries, in object-local coordinates:
 - `scale`, `center`, `extents`, `transform_matrix`
 - `contact_points_pose` — list of 4×4 grasp frames → `actor.get_contact_point(id)`
@@ -100,7 +101,7 @@ Objects live in `assets/objects/<NNN_name>/` with multiple `model_data<id>.json`
 `get_contact_point(id)` / `get_functional_point(id)` return these transformed to **world** coords
 (matrix/list/`sapien.Pose`). Grasping targets a contact point; placing aligns a functional point to
 `target_pose`. **A new task can only manipulate objects that have the contact/functional points it
-needs** — so either reuse annotated objects from `assets/objects/` or annotate new meshes
+needs** — so either reuse annotated objects from `assets/dyna_assets/` / `assets/objects/` or annotate new meshes
 (`script/create_object_data.py` helps build these). `points_info.json` in each object dir catalogs
 the available points.
 
@@ -143,7 +144,7 @@ itself is parameterized by the config knobs `dynamic_level` (1–3) and `dynamic
 
 ## Concrete checklist for a new task
 
-1. Pick/annotate objects in `assets/objects/` that have the contact + functional points you need.
+1. Pick/annotate objects in `assets/dyna_assets/` (custom) or `assets/objects/` (stock) that have the contact + functional points you need.
 2. Write `envs/<task_name>.py` with `class <task_name>(Base_Task)` and the four methods.
 3. (Optional) add `_play_once_dynamic` + `get_dynamic_motion_config` for the dynamic variant.
 4. Write/generate `description/task_instruction/<task_name>.json`.

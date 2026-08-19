@@ -23,7 +23,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "script_exp"))
+sys.path.insert(0, str(REPO_ROOT / "interactive"))
 
 from envs import CONFIGS_PATH
 from envs.sort_apples_belt import sort_apples_belt

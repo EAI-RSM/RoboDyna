@@ -9,6 +9,38 @@ import tempfile
 
 from .actor_utils import Actor, ArticulationActor
 
+# Stock RoboTwin library vs custom RoboDyna meshes. create_actor prefers dyna_assets.
+OBJECTS_ROOT = Path("assets/objects")
+DYNA_ASSETS_ROOT = Path("assets/dyna_assets")
+DYNA_TEXTURES_ROOT = Path("assets/dyna_textures")
+BACKGROUND_TEXTURE_ROOT = Path("assets/background_texture")
+
+
+def resolve_model_dir(modelname: str) -> Path:
+    """Return the object folder, preferring ``assets/dyna_assets`` over stock ``assets/objects``."""
+    name = str(modelname)
+    custom = DYNA_ASSETS_ROOT / name
+    if custom.exists():
+        return custom
+    return OBJECTS_ROOT / name
+
+
+def resolve_texture_file(texture_id: str, *, sphere: bool = False) -> Path | None:
+    """Resolve a PNG/JPG for boxes, tables, and spheres.
+
+    Custom files live in ``assets/dyna_textures``. Stock wall/table maps stay
+    under ``assets/background_texture/{seen,unseen}/``.
+    """
+    stem = str(texture_id)
+    names = [stem] if Path(stem).suffix else [f"{stem}.png", f"{stem}.jpg", f"{stem}.jpeg"]
+    roots = [DYNA_TEXTURES_ROOT] if sphere else [DYNA_TEXTURES_ROOT, BACKGROUND_TEXTURE_ROOT]
+    for root in roots:
+        for name in names:
+            path = root / name
+            if path.is_file():
+                return path
+    return None
+
 
 class UnStableError(Exception):
 
@@ -50,7 +82,8 @@ def create_entity_box(
     if texture_id is not None:
 
         # test for both .png and .jpg
-        texturepath = f"./assets/background_texture/{texture_id}.png"
+        tex = resolve_texture_file(texture_id)
+        texturepath = str(tex) if tex is not None else f"./assets/background_texture/{texture_id}.png"
         # create texture from file
         texture2d = sapien.render.RenderTexture2D(texturepath)
         material = sapien.render.RenderMaterial()
@@ -756,17 +789,11 @@ def create_sphere(
     rigid_component.attach(
         sapien.physx.PhysxCollisionShapeSphere(radius=radius, material=scene.default_physical_material))
 
-    # Add texture (classic soccer panel map under assets/textures/<id>.png).
+    # Add texture (classic soccer panel map under assets/dyna_textures/<id>.png).
     if texture_id is not None:
-        texturepath = f"./assets/textures/{texture_id}.png"
-        if not os.path.isfile(texturepath):
-            # Also accept repo-absolute resolution when cwd is not the root.
-            alt = os.path.join(
-                os.path.dirname(__file__), "..", "..", "assets", "textures", f"{texture_id}.png"
-            )
-            if os.path.isfile(alt):
-                texturepath = alt
-        if os.path.isfile(texturepath):
+        tex = resolve_texture_file(texture_id, sphere=True)
+        texturepath = str(tex) if tex is not None else ""
+        if texturepath and os.path.isfile(texturepath):
             texture2d = sapien.render.RenderTexture2D(texturepath)
             material = sapien.render.RenderMaterial()
             material.set_base_color_texture(texture2d)
@@ -900,7 +927,8 @@ def create_table(
     if texture_id is not None:
 
         # test for both .png and .jpg
-        texturepath = f"./assets/background_texture/{texture_id}.png"
+        tex = resolve_texture_file(texture_id)
+        texturepath = str(tex) if tex is not None else f"./assets/background_texture/{texture_id}.png"
         # create texture from file
         texture2d = sapien.render.RenderTexture2D(texturepath)
         material = sapien.render.RenderMaterial()
@@ -947,7 +975,7 @@ def create_obj(
 ) -> Actor:
     scene, pose = preprocess(scene, pose)
 
-    modeldir = Path("assets/objects") / modelname
+    modeldir = resolve_model_dir(modelname)
     if model_id is None:
         file_name = modeldir / "textured.obj"
         json_file_path = modeldir / "model_data.json"
@@ -993,7 +1021,7 @@ def create_glb(
 ) -> Actor:
     scene, pose = preprocess(scene, pose)
 
-    modeldir = Path("./assets/objects") / modelname
+    modeldir = resolve_model_dir(modelname)
     if model_id is None:
         file_name = modeldir / "base.glb"
         json_file_path = modeldir / "model_data.json"
@@ -1058,7 +1086,7 @@ def create_actor(
     # editing it (e.g. a small apple from the regular 035_apple). It scales the mesh AND the stored
     # scale so contact/functional points (which multiply by model_data["scale"]) stay consistent.
     scene, pose = preprocess(scene, pose)
-    modeldir = Path("assets/objects") / modelname
+    modeldir = resolve_model_dir(modelname)
 
     if model_id is None:
         json_file_path = modeldir / "model_data.json"
@@ -1130,7 +1158,7 @@ def create_actor(
 def create_urdf_obj(scene, pose: sapien.Pose, modelname: str, scale=1.0, fix_root_link=True) -> ArticulationActor:
     scene, pose = preprocess(scene, pose)
 
-    modeldir = Path("./assets/objects") / modelname
+    modeldir = resolve_model_dir(modelname)
     json_file_path = modeldir / "model_data.json"
     loader: sapien.URDFLoader = scene.create_urdf_loader()
     loader.scale = scale
@@ -1161,7 +1189,7 @@ def create_sapien_urdf_obj(
 ) -> ArticulationActor:
     scene, pose = preprocess(scene, pose)
 
-    modeldir = Path("assets") / "objects" / modelname
+    modeldir = resolve_model_dir(modelname)
     if modelid is not None:
         model_list = [model for model in modeldir.iterdir() if model.is_dir() and model.name != "visual"]
 

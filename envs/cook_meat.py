@@ -17,7 +17,7 @@ import trimesh
 from ._base_task import Base_Task
 from ._GLOBAL_CONFIGS import GRASP_DIRECTION_DIC
 from .utils.action import ArmTag
-from .utils.create_actor import UnStableError, create_actor, create_box
+from .utils.create_actor import UnStableError, create_actor, create_box, resolve_model_dir
 from .utils.key_symbol import attach_key_symbol, sync_key_symbol
 from .utils.rand_create_actor import rand_pose
 from .utils.reactive_button import ReactivePushButtons
@@ -226,7 +226,7 @@ class cook_meat(Base_Task):
         # Assets with no "scale" key (e.g. 104_board) get authored scale 1.0, matching create_actor's
         # (1,1,1) default for that case.
         try:
-            model_data_path = f"assets/objects/{modelname}/model_data{model_id}.json"
+            model_data_path = str(resolve_model_dir(modelname) / f"model_data{model_id}.json")
             with open(model_data_path, encoding="utf-8") as model_data_file:
                 model_data = json.load(model_data_file)
             authored = float(model_data["scale"][0])

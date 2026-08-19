@@ -608,7 +608,7 @@ class pour_beer(KitchenS_base_task):
 
     @staticmethod
     def _model_data(modelname: str, model_id: int) -> dict:
-        path = Path("assets/objects") / modelname / f"model_data{int(model_id)}.json"
+        path = resolve_model_dir(modelname) / f"model_data{int(model_id)}.json"
         with open(path) as f:
             return json.load(f)
 

@@ -422,7 +422,7 @@ class catch_mouse_object_drop(Office_base_task):
 
     @staticmethod
     def _model_size(modelname, model_id, scale_mult=1.0):
-        path = Path(f"assets/objects/{modelname}/model_data{int(model_id)}.json")
+        path = resolve_model_dir(modelname) / f"model_data{int(model_id)}.json"
         data = json.loads(path.read_text())
         size = (
             np.asarray(data["extents"], dtype=np.float64)
@@ -490,7 +490,7 @@ class catch_mouse_object_drop(Office_base_task):
         )
         try:
             data = json.loads(
-                Path(f"assets/objects/{modelname}/model_data{int(model_id)}.json").read_text()
+                (resolve_model_dir(modelname) / f"model_data{int(model_id)}.json").read_text()
             )
             base = data.get("scale") or [1.0, 1.0, 1.0]
             scale = [float(s) * float(scale_mult) for s in base]

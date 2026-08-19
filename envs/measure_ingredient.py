@@ -1554,7 +1554,7 @@ class measure_ingredient(KitchenS_base_task):
         outer_r = self.JAR_INNER_R + 0.0035
         h = self.JAR_HEIGHT
 
-        md_path = Path("assets/objects/253_glass_jar/model_data0.json")
+        md_path = resolve_model_dir("253_glass_jar") / "model_data0.json"
         with open(md_path, "r") as f:
             md = json.load(f)
 
@@ -1615,7 +1615,7 @@ class measure_ingredient(KitchenS_base_task):
         """Three thick red rings at 25% / 50% / 75% that follow the jar pose."""
         self._ring_entities = []
         ring_material = self._ring_material()
-        ring_mesh = str(Path("assets/objects/253_glass_jar/rings/thin_ring.glb").resolve())
+        ring_mesh = str((resolve_model_dir("253_glass_jar") / "rings" / "thin_ring.glb").resolve())
         x, y = self.jar_xy
         outer_r = float(self.JAR_INNER_R) + 0.0035
         xy = float(self.RING_XY_SCALE) * (outer_r / float(self.RING_MESH_RADIUS))
