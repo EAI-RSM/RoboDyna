@@ -14,25 +14,24 @@ that the viewer was closed before a result, so another task can be launched.
 
 ## Demos
 
-Each interactive scenario has a head-camera expert demo
-under `docs/final_task_demos/<task>/`. The GUI prefers the head-camera `scene_snapshot.png`
-for robot-control card previews (or `scene_snapshot_kb.png` when Control is
-keyboard+mouse), falling back to `default_sidebyside.gif`.
+Each interactive scenario has a representative head-camera expert demo
+under `docs/final_task_demos/<task>/`. The GUI uses `scene_snapshot.png` for
+card previews in both control modes.
 
 | Task | Demo |
 |---|---|
-| **`trap_bug`** | <img src="../../docs/final_task_demos/trap_bug/success1_head.gif" width="200"/> <img src="../../docs/final_task_demos/trap_bug/success2_head.gif" width="200"/> |
-| **`catch_cup`** | <img src="../../docs/final_task_demos/catch_cup/success1_head.gif" width="200"/> <img src="../../docs/final_task_demos/catch_cup/success2_head.gif" width="200"/> |
-| **`catch_mouse_object_drop`** | <img src="../../docs/final_task_demos/catch_mouse_object_drop/success_head.gif" width="200"/> <img src="../../docs/final_task_demos/catch_mouse_object_drop/success2_head.gif" width="200"/> |
-| **`stop_ball`** | <img src="../../docs/final_task_demos/stop_ball/success_head.gif" width="200"/> <img src="../../docs/final_task_demos/stop_ball/failure_head.gif" width="200"/> |
-| **`clean_table`** | <img src="../../docs/final_task_demos/clean_table/success1_head.gif" width="200"/> <img src="../../docs/final_task_demos/clean_table/success2_head.gif" width="200"/> |
-| **`fill_coffee_jar`** | <img src="../../docs/final_task_demos/fill_coffee_jar/success1_head.gif" width="200"/> <img src="../../docs/final_task_demos/fill_coffee_jar/success2_head.gif" width="200"/> |
-| **`pour_beer`** | <img src="../../docs/final_task_demos/pour_beer/success_head.gif" width="200"/> <img src="../../docs/final_task_demos/pour_beer/failure_head.gif" width="200"/> |
-| **`boil_milk`** | <img src="../../docs/final_task_demos/boil_milk/success_head.gif" width="200"/> <img src="../../docs/final_task_demos/boil_milk/failure_head.gif" width="200"/> |
-| **`cook_food`** | <img src="../../docs/final_task_demos/cook_food/success_head.gif" width="200"/> <img src="../../docs/final_task_demos/cook_food/success2_head.gif" width="200"/> |
-| **`cook_food_timer`** | <img src="../../docs/final_task_demos/cook_food_timer/success_head.gif" width="200"/> <img src="../../docs/final_task_demos/cook_food_timer/success2_head.gif" width="200"/> |
-| **`make_soup`** | <img src="../../docs/final_task_demos/make_soup/success_head.gif" width="200"/> <img src="../../docs/final_task_demos/make_soup/success2_head.gif" width="200"/> |
-| **`measure_ingredient`** | <img src="../../docs/final_task_demos/measure_ingredient/success1_head.gif" width="200"/> <img src="../../docs/final_task_demos/measure_ingredient/success2_head.gif" width="200"/> |
+| **`trap_bug`** | <img src="../../docs/final_task_demos/trap_bug/success1_head.gif" width="200"/> |
+| **`catch_cup`** | <img src="../../docs/final_task_demos/catch_cup/success1_head.gif" width="200"/> |
+| **`catch_mouse_object_drop`** | <img src="../../docs/final_task_demos/catch_mouse_object_drop/success_head.gif" width="200"/> |
+| **`stop_ball`** | <img src="../../docs/final_task_demos/stop_ball/success_head.gif" width="200"/> |
+| **`clean_table`** | <img src="../../docs/final_task_demos/clean_table/success1_head.gif" width="200"/> |
+| **`fill_coffee_jar`** | <img src="../../docs/final_task_demos/fill_coffee_jar/success1_head.gif" width="200"/> |
+| **`pour_beer`** | <img src="../../docs/final_task_demos/pour_beer/success_head.gif" width="200"/> |
+| **`boil_milk`** | <img src="../../docs/final_task_demos/boil_milk/success_head.gif" width="200"/> |
+| **`cook_food`** | <img src="../../docs/final_task_demos/cook_food/success_head.gif" width="200"/> |
+| **`cook_food_timer`** | <img src="../../docs/final_task_demos/cook_food_timer/success_head.gif" width="200"/> |
+| **`make_soup`** | <img src="../../docs/final_task_demos/make_soup/success_head.gif" width="200"/> |
+| **`measure_ingredient`** | <img src="../../docs/final_task_demos/measure_ingredient/success1_head.gif" width="200"/> |
 
 
 Refresh GUI head-camera card snapshots:
