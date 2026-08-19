@@ -350,15 +350,18 @@ TASK_BRIEFING: dict[str, dict] = {
         ],
     },
     "stop_ball": {
-        "instruction": "Stop the rolling ball before it falls off the table.",
+        "instruction": (
+            "Place the gripper-shaped bridge so it stops the rolling ball "
+            "before the ball falls off the table."
+        ),
         "success": "The ball is stopped on the table.",
         "keyboard": [
-            ("mouse click", "on the ball while it is rolling on the table"),
+            ("mouse click", "on the table to place the bridge"),
         ],
         "notes": [
             {
-                "text": "An earlier click will result in failure.",
-                "red": ["failure"],
+                "text": "The bridge can be placed only once.",
+                "red": ["once"],
             },
         ],
     },

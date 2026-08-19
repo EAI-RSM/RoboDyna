@@ -180,6 +180,8 @@ class HouseholdController:
         self._click_via_handler = False
         self._prev_mouse = False
         self._catcher_placed = False
+        self._stop_ball_bridge = None
+        self._stop_ball_bridge_placed = False
         # catch_cup / make_soup robot: keep the prop dynamic so gripper contact is real.
         # Keyboard+mouse drives props via click / keys (arms are hidden).
         if robot and task == "catch_cup" and self.actor is not None:
@@ -262,6 +264,8 @@ class HouseholdController:
             self._hover_sponge()
         elif t == "make_soup" and getattr(e, "board", None) is not None:
             _set_pose(e.board, e.board.get_pose().p, kinematic=True)
+        elif t == "stop_ball":
+            self._create_stop_ball_bridge()
         elif self.actor is not None and t not in ("stop_ball",):
             _set_pose(self.actor, self.actor.get_pose().p, kinematic=True)
         if t == "pour_beer":
@@ -279,6 +283,49 @@ class HouseholdController:
                 return orig() if callable(orig) else None
 
             e._button_press_signal = _keyboard_button_signal
+
+    def _create_stop_ball_bridge(self):
+        """Create a movable U-shaped WSG surrogate for keyboard control."""
+        e = self.env
+        builder = e.scene.create_actor_builder()
+        builder.set_physx_body_type("dynamic")
+
+        # Match the open WSG silhouette: two fingers with a connecting palm.
+        # The ball is slightly wider than this inner gap, as in robot mode.
+        gap = float(getattr(e, "WSG_OPEN_FINGER_GAP", 0.110))
+        finger_half = np.array([0.012, 0.022, 0.045], dtype=float)
+        finger_x = 0.5 * gap + finger_half[0]
+        palm_half = np.array([finger_x + finger_half[0], 0.022, 0.010], dtype=float)
+        palm_z = 2.0 * finger_half[2] - palm_half[2]
+        material = sapien.render.RenderMaterial(
+            base_color=[0.16, 0.20, 0.24, 1.0],
+        )
+        try:
+            material.set_roughness(0.42)
+            material.set_metallic(0.55)
+        except Exception:
+            pass
+
+        parts = (
+            (sapien.Pose([-finger_x, 0.0, finger_half[2]]), finger_half),
+            (sapien.Pose([finger_x, 0.0, finger_half[2]]), finger_half),
+            (sapien.Pose([0.0, 0.0, palm_z]), palm_half),
+        )
+        for pose, half_size in parts:
+            builder.add_box_collision(
+                pose=pose,
+                half_size=half_size.tolist(),
+                material=e.scene.default_physical_material,
+            )
+            builder.add_box_visual(
+                pose=pose,
+                half_size=half_size.tolist(),
+                material=material,
+            )
+
+        builder.set_initial_pose(sapien.Pose([0.0, 0.0, -10.0]))
+        self._stop_ball_bridge = builder.build(name="keyboard_stop_ball_bridge")
+        _set_pose(self._stop_ball_bridge, [0.0, 0.0, -10.0], kinematic=True)
 
     def _seat_food_in_pan(self):
         e = self.env
@@ -544,28 +591,37 @@ class HouseholdController:
 
     def _click_stop_ball(self, viewer, pixel_x, pixel_y):
         e = self.env
-        if not self._click_hits(viewer, pixel_x, pixel_y, getattr(e, "ball", None)):
+        if self._stop_ball_bridge_placed or self._stop_ball_bridge is None:
             return False
-        state = str(getattr(e, "_ball_state", ""))
-        land = int(getattr(e, "_land_idx", 0))
-        step = int(getattr(e, "_traj_step", 0))
-        on_table = state == "live" or (state == "rolling" and step > land)
-        if not on_table:
-            e._keyboard_early_click = True
-            print("[stop_ball] clicked too early — failure")
+        hit = table_xy_from_click(viewer, pixel_x, pixel_y, self._table_z())
+        if hit is None:
+            return False
+        x, y = float(hit[0]), float(hit[1])
+        if abs(x) > float(getattr(e, "table_x_edge", 0.52)) - 0.09:
+            print("[stop_ball] place the bridge farther from the side edge")
             return True
-        rigid = getattr(e, "_ball_rigid", None)
-        if rigid is not None:
-            try:
-                rigid.set_linear_velocity(np.zeros(3))
-                rigid.set_angular_velocity(np.zeros(3))
-                rigid.set_kinematic(True)
-            except Exception:
-                pass
-        e._arm_contacted = True
-        e._stopped = True
-        e._ball_state = "stopped"
-        print("[stop_ball] ball stopped")
+        if not (
+            float(getattr(e, "table_edge_y", -0.30)) + 0.07
+            <= y
+            <= float(getattr(e, "table_back_y", 0.35)) - 0.07
+        ):
+            print("[stop_ball] place the bridge farther from the front/back edge")
+            return True
+
+        # Turn the bridge across the sampled roll heading, with its opening
+        # facing the incoming ball. Local X spans across the path.
+        direction = np.asarray(getattr(e, "_roll_dir", [0.0, -1.0]), dtype=float)
+        yaw = float(np.arctan2(direction[1], direction[0]) - np.pi / 2.0)
+        quat = [float(np.cos(0.5 * yaw)), 0.0, 0.0, float(np.sin(0.5 * yaw))]
+        _set_pose(
+            self._stop_ball_bridge,
+            [x, y, float(e.table_top)],
+            quat=quat,
+            kinematic=True,
+        )
+        self._stop_ball_bridge_placed = True
+        e._stopper_placed = True
+        print(f"[stop_ball] gripper bridge placed at ({x:.3f}, {y:.3f})")
         return True
 
     def _click_sponge(self, viewer, pixel_x, pixel_y):
@@ -1006,6 +1062,9 @@ class HouseholdController:
     def after_step(self):
         """Post-physics hooks (release arming, catch/miss latch, trap freeze)."""
         env = self.env
+        if self.task == "stop_ball":
+            self._poll_stop_ball_bridge_contact()
+            return
         if self.task == "catch_mouse_object_drop":
             # Catch/miss is evaluated before scene.step inside
             # _update_kinematic_tasks; re-check after the step so a table
@@ -1025,6 +1084,29 @@ class HouseholdController:
         if bool(getattr(env, "_trap_anchored", False)) and not getattr(self, "_trap_land_logged", False):
             self._trap_land_logged = True
             print("[trap_bug] trap landed; pose frozen as-is")
+
+    def _poll_stop_ball_bridge_contact(self):
+        """Latch real PhysX contact between the ball and placed bridge."""
+        if (
+            not self._stop_ball_bridge_placed
+            or bool(getattr(self.env, "_stopper_contacted", False))
+            or getattr(self.env, "ball", None) is None
+        ):
+            return
+        ball_name = self.env.ball.get_name()
+        bridge_name = self._stop_ball_bridge.get_name()
+        try:
+            for contact in self.env.scene.get_contacts():
+                names = {
+                    contact.bodies[0].entity.name,
+                    contact.bodies[1].entity.name,
+                }
+                if ball_name in names and bridge_name in names:
+                    self.env._stopper_contacted = True
+                    print("[stop_ball] ball contacted the gripper bridge")
+                    return
+        except Exception:
+            pass
 
 
 def _fill_level_detail(env, task: str) -> str:
@@ -1197,8 +1279,6 @@ def _terminal_failure(env, task):
         if bool(getattr(env, "_fell_on_table", False)) or getattr(env, "_obj_state", "") == "fallen":
             return "object fell on the table"
     elif task == "stop_ball":
-        if bool(getattr(env, "_keyboard_early_click", False)):
-            return "clicked the ball too early"
         if bool(getattr(env, "_fell_off", False)) or getattr(env, "_ball_state", "") == "fallen":
             return "ball fell off the table without being stopped"
     elif task == "clean_table":

@@ -7,7 +7,8 @@ except ImportError:
 
 KEYBOARD = """
   Ball starts rolling as soon as the viewer is ready.
-  Click the ball on the table to stop it. Clicking too early fails.
+  Click once on the table to place a gripper-shaped bridge.
+  Position the bridge so the rolling ball hits it before reaching an edge.
 """
 ROBOT = """
   Space             open / close selected gripper(s) only

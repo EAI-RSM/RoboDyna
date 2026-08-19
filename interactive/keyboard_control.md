@@ -72,7 +72,7 @@ make_soup: click somewhere with mouse. That identifies where center of the top o
 
 catch_cup and catch_mouse object drop: click on the table and teleport pillow/box there on the surface of the table
 
-stop_ball: click on the ball while rolling on the table. earlier click will result in failure. clicking on the ball make it stop. 
+stop_ball: click once on the table to place a U-shaped, gripper-like bridge. The ball must physically hit the bridge and settle on the table; clicking no longer stops the ball directly.
 
 clean_table: sponge hovers 5 cm over the table. where clicked on the table by mouse, the sponge makes contact with the table. if over stain cleans as usual
 

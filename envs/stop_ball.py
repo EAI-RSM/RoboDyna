@@ -24,9 +24,6 @@ class stop_ball(Office_base_task):
     catch it.
     """
 
-    # After arm contact, fall past the table edge by at most this → partial 0.25.
-    PARTIAL_FALL_EDGE_M = 0.02
-
     BALL_IDS = [0]  # orange table-tennis (id 1 is hard to see in head cam)
     # Asset has no authored scale; 0.02 × mean(extents) ≈ 4.36 cm diameter.
     BALL_BASE_SCALE = 0.02
@@ -134,6 +131,8 @@ class stop_ball(Office_base_task):
         self._fell_off = False
         self._stopped = False
         self._arm_contacted = False
+        self._stopper_contacted = False
+        self._stopper_placed = False
         self._table_start_idx = 0
         self._roll_start_idx = 0
         self._intercept_idx = 0
@@ -690,6 +689,8 @@ class stop_ball(Office_base_task):
         self._fell_off = False
         self._stopped = False
         self._arm_contacted = False
+        self._stopper_contacted = False
+        self._stopper_placed = False
         self._settle_steps = 0
         self._live_steps = 0
         self._armed = False
@@ -1173,13 +1174,15 @@ class stop_ball(Office_base_task):
             if self._is_interactive() and self._robot_groups_backup is not None:
                 self._recouple_ball_to_robot()
             self._poll_arm_contact()
+            blocker_contacted = bool(self._arm_contacted or self._stopper_contacted)
             p = self._ball_centre()
             if self._ball_off_table(p):
                 self._fell_off = True
                 self._ball_state = "fallen"
             elif self._ball_speed() <= self.settle_speed:
-                # Only the arm may stop the ball. A miss must keep rolling off.
-                if self._arm_contacted:
+                # Robot mode uses an arm; keyboard mode uses the placed bridge.
+                # A miss must keep rolling off.
+                if blocker_contacted:
                     self._settle_steps += 1
                     if self._settle_steps >= self.settle_hold_steps:
                         self._ball_state = "stopped"
@@ -1190,7 +1193,7 @@ class stop_ball(Office_base_task):
                     if not self._near_any_arm(dist=max(0.09, float(self.ball_radius) + 0.04)):
                         self._boost_ball_along_path()
             elif (
-                not self._arm_contacted
+                not blocker_contacted
                 and not self._near_any_arm(dist=max(0.09, float(self.ball_radius) + 0.04))
                 and self._ball_speed() < 0.55 * float(self.roll_speed)
             ):
@@ -1403,16 +1406,17 @@ class stop_ball(Office_base_task):
         return self.info
 
     def check_success(self):
-        """Success = arm stopped the ball and it stayed on the table.
+        """Success = a valid blocker stopped the ball and it stayed on the table.
 
-        Merely touching the arm is not enough: a deflection that then falls off
-        any edge or drops below the tabletop fails. Settling under the shelf or
-        at the back of the table is success. Settling without arm contact
-        (e.g. against décor) still fails — only the robot may be the stopper.
+        Merely touching the robot arm or keyboard bridge is not enough: a
+        deflection that then falls off any edge or drops below the tabletop
+        fails. Settling under the shelf / at the back is success. Settling
+        without contact with the active control mode's blocker still fails.
         """
         if self._fell_off or self._ball_state == "fallen":
             return False
-        if not self._arm_contacted or self.ball is None:
+        blocker_contacted = bool(self._arm_contacted or self._stopper_contacted)
+        if not blocker_contacted or self.ball is None:
             return False
         if not self._stopped:
             return False
@@ -1429,45 +1433,26 @@ class stop_ball(Office_base_task):
         # angled deflection is fine so long as the ball stays on the table.
         return bool(on_table and in_xy)
 
-    def _ball_past_edge_m(self) -> float:
-        """How far the ball is outside the table XY footprint (meters, ≥0)."""
-        if self.ball is None:
-            return float("inf")
-        p = self._ball_centre()
-        past_x = max(0.0, abs(float(p[0])) - float(self.table_x_edge))
-        past_y = max(0.0, float(self.table_edge_y) - float(p[1]))
-        return float(max(past_x, past_y))
-
-    def _ball_on_table_xy(self) -> bool:
-        if self.ball is None:
-            return False
-        p = self._ball_centre()
-        return bool(
-            abs(float(p[0])) <= float(self.table_x_edge) - 0.01
-            and float(self.table_edge_y) + 0.01 <= float(p[1])
-            <= float(getattr(self, "table_back_y", 0.35)) + 0.02
-            and float(p[2]) >= float(self.table_top) - 0.01
-        )
-
     def get_score(self) -> float:
-        """Partial score; requires arm contact for any credit.
+        """Partial score for stop_ball.
 
-        Stopped on table → 1. Arm contact, still on table, not fully stopped →
-        0.5. Arm contact then fell ≤2 cm past an edge → 0.25. Else → 0.
+        Stopped on table after arm/bridge contact → 1.
+        Contacted the gripper (or keyboard bridge) but still fell off → 0.5.
+        No contact → 0. No other partial scores.
         """
         if self.ball is None:
             return 0.0
-        if not bool(getattr(self, "_arm_contacted", False)):
-            return 0.0
         if self.check_success():
             return 1.0
+        contacted = bool(
+            getattr(self, "_arm_contacted", False)
+            or getattr(self, "_stopper_contacted", False)
+        )
+        if not contacted:
+            return 0.0
         fell = bool(getattr(self, "_fell_off", False)) or self._ball_state == "fallen"
-        if not fell and self._ball_on_table_xy():
-            # Contacted but not yet (or not fully) stopped on the table.
-            return 0.5
         if fell or self._ball_off_table(self._ball_centre()):
-            if self._ball_past_edge_m() <= float(self.PARTIAL_FALL_EDGE_M) + 1e-9:
-                return 0.25
+            return 0.5
         return 0.0
 
     def get_obs(self):
@@ -1477,6 +1462,8 @@ class stop_ball(Office_base_task):
             "fell_off": bool(self._fell_off),
             "stopped": bool(self._stopped),
             "arm_contacted": bool(self._arm_contacted),
+            "stopper_placed": bool(self._stopper_placed),
+            "stopper_contacted": bool(self._stopper_contacted),
             "traj_step": int(self._traj_step),
             "intercept_idx": int(self._intercept_idx),
             "arm_side": str(self.arm_side),
