@@ -1,8 +1,8 @@
 """Shared fixed-seed protocol setup for local and client policy evaluators."""
 from __future__ import annotations
 
-from interactive.base_task_gui import SCENARIO_OVERRIDES
 from interactive.experiment_config import evaluation_seeds_for, evaluation_suite
+from task_config.scenario_overrides import apply_base_scenario
 
 
 def configure_evaluation(
@@ -18,18 +18,7 @@ def configure_evaluation(
     suite = evaluation_suite(task)
     task = str(task).strip().replace("-", "_")
     if suite == "base":
-        selected = str(scenario or "default").strip().lower()
-        overrides = SCENARIO_OVERRIDES.get(task, {}).get(selected)
-        if overrides is None:
-            raise ValueError(
-                f"Unknown base scenario {scenario!r} for {task!r}; "
-                "choose default, opt1, opt2, or opt1+2."
-            )
-        args.setdefault("task_args", {}).setdefault(task, {}).update(overrides)
-        # Some environments use this marker in addition to task_args.
-        args["interactive_scenario"] = selected
-        args["interactive_task"] = task
-        scenario = selected
+        scenario = apply_base_scenario(args, task, scenario)
     else:
         scenario = None
 

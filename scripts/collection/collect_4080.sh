@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local (4080) equivalent of scripts/slurm/collect.sbatch: run a manifest of combos one at a time on the
+# Local (4080) equivalent of scripts/slurm/collect.sbatch: run a task/scenario manifest one at a time on the
 # single RTX 4080S, with the same attempt/timeout/zero-progress guards, then finalize LeRobot.
 # Usage: collect_4080.sh <manifest>
 set -u
@@ -27,18 +27,19 @@ export PYTHONWARNINGS=ignore::UserWarning
 export PYTHONPATH="$REPO:$REPO/script:$REPO/script/bench_script:${PYTHONPATH:-}"
 mkdir -p "$REPO/run_results" "$REPO/logs"
 
-while read -r TASK CFG FAM OP; do
+while read -r TASK SCENARIO FAM; do
   [ -z "${TASK:-}" ] && continue
-  DATADIR="$REPO/data/$TASK/$CFG/data"
-  SEEDFILE="$REPO/data/$TASK/$CFG/seed.txt"
-  LOG="$REPO/logs/local4080-${TASK}__${OP}.log"
+  CFG=demo_dynamic
+  DATADIR="$REPO/data/$TASK/$SCENARIO/data"
+  SEEDFILE="$REPO/data/$TASK/$SCENARIO/seed.txt"
+  LOG="$REPO/logs/local4080-${TASK}__${SCENARIO}.log"
   count_hdf5() { find "$DATADIR" -name 'episode*.hdf5' 2>/dev/null | wc -l | tr -d ' '; }
   count_seeds() { [ -f "$SEEDFILE" ] && wc -w < "$SEEDFILE" 2>/dev/null | tr -d ' ' || echo 0; }
   count_progress() { echo $(( $(count_seeds) + $(count_hdf5) )); }
   # Move every trajectory already fed to pass 2 into _traj_used/ so no later attempt replays it --
   # see the call site below for why a plain retry otherwise writes duplicate episodes.
   retire_consumed() {
-    local t n=0 cdir="$REPO/data/$TASK/$CFG"
+    local t n=0 cdir="$REPO/data/$TASK/$SCENARIO"
     [ -s "$LOG" ] || return 0
     mkdir -p "$cdir/_traj_used"
     for t in $(tr '\r' '\n' < "$LOG" 2>/dev/null | grep -ao 'traj: episode[0-9]*' | grep -o '[0-9]*' | sort -un); do
@@ -50,15 +51,15 @@ while read -r TASK CFG FAM OP; do
     return 0
   }
 
-  mkdir -p "$DATADIR" "$REPO/data_lerobot/prod_run/${TASK}__${OP}"
-  echo "[local4080] $(date -Is) task=$TASK cfg=$CFG op=$OP target=$TARGET" | tee -a "$LOG"
+  mkdir -p "$DATADIR" "$REPO/data_lerobot/prod_run/${TASK}__${SCENARIO}"
+  echo "[local4080] $(date -Is) task=$TASK scenario=$SCENARIO config=$CFG target=$TARGET" | tee -a "$LOG"
   t0=$SECONDS; have=$(count_hdf5); prog=$(count_progress); SKIP_REASON=""; zero_streak=0
   for try in $(seq 1 "$MAX_TRIES"); do
     [ "$have" -ge "$TARGET" ] && break
     if [ $((SECONDS - t0)) -ge "$MAX_WALL" ]; then SKIP_REASON="wall>${MAX_WALL}s"; break; fi
     before=$prog
     echo "[local4080] attempt $try/$MAX_TRIES (hdf5 $have/$TARGET, progress=$before) $(date -Is)" | tee -a "$LOG"
-    timeout "$PER_TRY_TIMEOUT" python -u -X faulthandler script/collect_data.py "$TASK" "$CFG" >> "$LOG" 2>&1 &
+    timeout "$PER_TRY_TIMEOUT" python -u -X faulthandler script/collect_data.py "$TASK" "$CFG" --scenario "$SCENARIO" --production >> "$LOG" 2>&1 &
     run_pid=$!
     stalled=0
     # CPU-idle wedge detector. The Vulkan readback deadlock (camera.get_picture -> do_poll on a
@@ -120,12 +121,12 @@ while read -r TASK CFG FAM OP; do
       # with fresh seeds in its phase-2 block. Touches no task code.
       if [ "$rc" = STALL ] && [ "$zero_streak" -ge 2 ]; then
         poison=$(count_hdf5)
-        ptraj="$REPO/data/$TASK/$CFG/_traj_data/episode${poison}.pkl"
+        ptraj="$REPO/data/$TASK/$SCENARIO/_traj_data/episode${poison}.pkl"
         if [ -f "$ptraj" ]; then
-          mkdir -p "$REPO/data/$TASK/$CFG/_traj_quarantine"
-          mv "$ptraj" "$REPO/data/$TASK/$CFG/_traj_quarantine/" && \
+          mkdir -p "$REPO/data/$TASK/$SCENARIO/_traj_quarantine"
+          mv "$ptraj" "$REPO/data/$TASK/$SCENARIO/_traj_quarantine/" && \
             echo "[local4080] QUARANTINE traj episode${poison}.pkl (wedged x${zero_streak}) -> skip + regenerate" | tee -a "$LOG"
-          rm -rf "$REPO/data/$TASK/$CFG/.cache/episode${poison}" 2>/dev/null
+          rm -rf "$REPO/data/$TASK/$SCENARIO/.cache/episode${poison}" 2>/dev/null
           zero_streak=0
         fi
       fi
@@ -134,20 +135,20 @@ while read -r TASK CFG FAM OP; do
       zero_streak=0
     fi
   done
-  rm -rf "$REPO/data/$TASK/$CFG/.cache" 2>/dev/null
+  rm -rf "$REPO/data/$TASK/$SCENARIO/.cache" 2>/dev/null
 
   have=$(count_hdf5); STATUS=OK
   [ "$have" -ge "$TARGET" ] || STATUS=PARTIAL
   [ "$have" -eq 0 ] && STATUS=EMPTY
-  echo "LOCAL4080 task=$TASK cfg=$CFG op=$OP status=$STATUS hdf5=$have/$TARGET secs=$((SECONDS-t0)) skip=${SKIP_REASON:-none}" \
-    | tee "$REPO/run_results/local4080_${CFG}.txt" | tee -a "$LOG"
+  echo "LOCAL4080 task=$TASK scenario=$SCENARIO config=$CFG status=$STATUS hdf5=$have/$TARGET secs=$((SECONDS-t0)) skip=${SKIP_REASON:-none}" \
+    | tee "$REPO/run_results/local4080_${TASK}__${SCENARIO}.txt" | tee -a "$LOG"
 
-  LRROOT="$REPO/data_lerobot/prod_run/${TASK}__${OP}"
+  LRROOT="$REPO/data_lerobot/prod_run/${TASK}__${SCENARIO}"
   if ls "$LRROOT"/data/task-*/*.parquet >/dev/null 2>&1 || ls "$LRROOT"/data/chunk-*/*.parquet >/dev/null 2>&1; then
     python "$REPO/scripts/rebuild_lerobot_parts.py" --root "$LRROOT" >> "$LOG" 2>&1
     python "$REPO/scripts/merge_lerobot_meta.py" --root "$LRROOT" >> "$LOG" 2>&1 \
-      || echo "[local4080] lerobot merge FAILED for ${TASK}__${OP}" | tee -a "$LOG"
+      || echo "[local4080] lerobot merge FAILED for ${TASK}__${SCENARIO}" | tee -a "$LOG"
   fi
-  echo "[local4080] DONE $(date -Is) $TASK/$OP status=$STATUS hdf5=$have/$TARGET" | tee -a "$LOG"
+  echo "[local4080] DONE $(date -Is) $TASK/$SCENARIO status=$STATUS hdf5=$have/$TARGET" | tee -a "$LOG"
 done < "$MANIFEST"
 echo "[local4080] MANIFEST COMPLETE $(date -Is)"

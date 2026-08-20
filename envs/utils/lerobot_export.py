@@ -8,10 +8,10 @@ writes directly into the shared dataset's task-{TT}/ folders. See envs/utils/ler
 import os
 import glob
 import pickle
-import json
 import numpy as np
 
 from .lerobot_v21 import LeRobotV21Writer, build_features
+from task_config.task_instructions import instruction_for
 
 # Stable task_index assignment for the 15-task suite (task_index == episode_chunk folder).
 SUITE_TASK_INDEX = {name: i for i, name in enumerate([
@@ -84,16 +84,9 @@ class LeRobotEpisodeExporter:
         self.writer = None  # lazily built on first episode (needs camera keys + rgb size from the cache)
 
     def _canonical_instruction(self, args):
-        """One constant instruction per task (-> tasks.jsonl). Per-episode phrasing goes in the annotation."""
-        path = os.path.join("description", "task_instruction", f"{self.task_name}.json")
-        try:
-            d = json.load(open(path))
-            txt = (d.get("full_description") or "").strip()
-            if not txt and d.get("seen"):
-                txt = d["seen"][0]
-            return txt or self.task_name.replace("_", " ")
-        except Exception:
-            return self.task_name.replace("_", " ")
+        """One stable task instruction for LeRobot tasks.jsonl and annotations."""
+        del args
+        return instruction_for(self.task_name)
 
     def _build_writer(self, cam_feature_names, rgb_hw):
         feats = build_features(cam_feature_names, rgb_hw, state_dim=14, endpose_dim=16,

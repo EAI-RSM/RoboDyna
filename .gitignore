@@ -2,6 +2,7 @@ models/
 !policy/PUMA/PUMA/model/modules/grounding_sam/grounding_dino/groundingdino/models/
 !policy/PUMA/PUMA/model/modules/grounding_sam/grounding_dino/groundingdino/models/**
 data/*
+!data/task_instructions.json
 converted_data/*
 data_lerobot/*
 !data/process_stuck.py

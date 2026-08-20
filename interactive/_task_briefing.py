@@ -19,7 +19,7 @@ from _briefing_copy import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INSTRUCTION_DIR = REPO_ROOT / "description" / "task_instruction"
+INSTRUCTION_CATALOG = REPO_ROOT / "task_config" / "task_instructions.json"
 _TEXTURE_DIR = REPO_ROOT / "assets" / "dyna_textures"
 # Same Robo/Dyna stamp mark as control_quality tiles (cropped + upright).
 APP_ICON_PATH = _TEXTURE_DIR / "robodyna_app_icon.png"
@@ -292,21 +292,17 @@ _NOTE_RED = "#c0392b"
 
 
 def load_task_instruction(task: str) -> str:
-    """Return the task's full instruction text from ``description/task_instruction``."""
-    path = INSTRUCTION_DIR / f"{task}.json"
-    if not path.exists():
+    """Return the one canonical instruction from ``task_config``."""
+    if not INSTRUCTION_CATALOG.exists():
         return ""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(INSTRUCTION_CATALOG.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, TypeError):
         return ""
-    full = str(data.get("full_description") or "").strip()
-    if full:
-        return full[0].upper() + full[1:] if full else full
-    seen = data.get("seen")
-    if isinstance(seen, list) and seen:
-        return str(seen[0]).strip()
-    return ""
+    tasks = data.get("tasks")
+    if not isinstance(tasks, dict):
+        return ""
+    return str(tasks.get(str(task).strip().replace("-", "_")) or "").strip()
 
 
 def _extract_string_constant(source: str, name: str) -> str:
@@ -739,7 +735,7 @@ def build_briefing_text(
     def _amt(text: str) -> str:
         return fill_amount_placeholders(str(text or ""), amount)
 
-    instruction = _amt(str(spec.get("instruction") or "").strip() or load_task_instruction(task))
+    instruction = _amt(load_task_instruction(task))
     option_heading = str(scenario_label or scenario or "").strip()
     option_body = _amt(str(scenario_desc or "").strip())
     success_line = ""

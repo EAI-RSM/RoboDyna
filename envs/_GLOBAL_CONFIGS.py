@@ -10,7 +10,6 @@ EMBODIMENTS_PATH = os.path.join(ASSETS_PATH, "embodiments/")
 TEXTURES_PATH = os.path.join(ASSETS_PATH, "background_texture/")
 CONFIGS_PATH = os.path.join(ROOT_PATH, "task_config/")
 SCRIPT_PATH = os.path.join(ROOT_PATH, "script/")
-DESCRIPTION_PATH = os.path.join(ROOT_PATH, "description/")
 
 # Euler angles in world coordinates
 # t3d.euler.quat2euler(quat) returns (theta_x, theta_y, theta_z)

@@ -1,81 +1,104 @@
-catch_marbles_trapdoors _run_catch_marbles_trapdoors_base conceptual base
-catch_marbles_trapdoors _run_catch_marbles_trapdoors_opt1 conceptual opt1
-catch_marbles_trapdoors _run_catch_marbles_trapdoors_opt2 conceptual opt2
-catch_ramp_ball _run_catch_ramp_ball_base conceptual base
-catch_ramp_ball _run_catch_ramp_ball_opt1 conceptual opt1
-catch_ramp_ball _run_catch_ramp_ball_opt2 conceptual opt2
-catch_cuboid _run_catch_cuboid_base conceptual base
-catch_cuboid _run_catch_cuboid_opt1 conceptual opt1
-catch_cuboid _run_catch_cuboid_opt2 conceptual opt2
-catch_shelf_marble _run_catch_shelf_marble_base conceptual base
-catch_shelf_marble _run_catch_shelf_marble_opt1 conceptual opt1
-catch_shelf_marble _run_catch_shelf_marble_opt2 conceptual opt2
-catch_valley_ball _run_catch_valley_ball_base conceptual base
-catch_valley_ball _run_catch_valley_ball_opt1 conceptual opt1
-catch_valley_ball _run_catch_valley_ball_opt2 conceptual opt2
-stop_valley_ball _run_stop_valley_ball_base conceptual base
-stop_valley_ball _run_stop_valley_ball_opt1 conceptual opt1
-stop_valley_ball _run_stop_valley_ball_opt2 conceptual opt2
-cook_meat _run_cook_meat_base conceptual base
-cook_meat _run_cook_meat_opt1 conceptual opt1
-cook_meat _run_cook_meat_opt2 conceptual opt2
-cook_meat_timer _run_cook_meat_timer_base conceptual base
-cook_meat_timer _run_cook_meat_timer_opt1 conceptual opt1
-cook_meat_timer _run_cook_meat_timer_opt2 conceptual opt2
-put_cup_belt _run_put_cup_belt_base conceptual base
-put_cup_belt _run_put_cup_belt_opt1 conceptual opt1
-put_cup_belt _run_put_cup_belt_opt2 conceptual opt2
-dispense_gummy _run_dispense_gummy_base conceptual base
-dispense_gummy _run_dispense_gummy_opt1 conceptual opt1
-dispense_gummy _run_dispense_gummy_opt2 conceptual opt2
-punch_dual_holes _run_punch_dual_holes_base conceptual base
-punch_dual_holes _run_punch_dual_holes_opt1 conceptual opt1
-punch_dual_holes _run_punch_dual_holes_opt2 conceptual opt2
-save_goal _run_save_goal_base conceptual base
-save_goal _run_save_goal_opt1 conceptual opt1
-save_goal _run_save_goal_opt2 conceptual opt2
-hit_target _run_hit_target_base conceptual base
-hit_target _run_hit_target_opt1 conceptual opt1
-hit_target _run_hit_target_opt2 conceptual opt2
-load_train _run_load_train_base conceptual base
-load_train _run_load_train_opt1 conceptual opt1
-load_train _run_load_train_opt2 conceptual opt2
-marble_shelf_maze _run_marble_shelf_maze_base conceptual base
-marble_shelf_maze _run_marble_shelf_maze_opt1 conceptual opt1
-marble_shelf_maze _run_marble_shelf_maze_opt2 conceptual opt2
-pack_fruits _run_pack_fruits_base conceptual base
-pack_fruits _run_pack_fruits_opt1 conceptual opt1
-pack_fruits _run_pack_fruits_opt2 conceptual opt2
-pick_ripe_apple _run_pick_ripe_apple_base conceptual base
-pick_ripe_apple _run_pick_ripe_apple_opt1 conceptual opt1
-pick_ripe_apple _run_pick_ripe_apple_opt2 conceptual opt2
-place_block_belt _run_place_block_belt_base conceptual base
-place_block_belt _run_place_block_belt_opt1 conceptual opt1
-place_block_belt _run_place_block_belt_opt2 conceptual opt2
-play_billiard _run_play_billiard_base conceptual base
-play_billiard _run_play_billiard_opt1 conceptual opt1
-play_billiard _run_play_billiard_opt2 conceptual opt2
-control_quality _run_control_quality_base conceptual base
-control_quality _run_control_quality_opt1 conceptual opt1
-control_quality _run_control_quality_opt2 conceptual opt2
-drop_ball_hole _run_drop_ball_hole_base conceptual base
-drop_ball_hole _run_drop_ball_hole_opt1 conceptual opt1
-drop_ball_hole _run_drop_ball_hole_opt2 conceptual opt2
-sort_apples_belt _run_sort_apples_belt_base conceptual base
-sort_apples_belt _run_sort_apples_belt_opt1 conceptual opt1
-sort_apples_belt _run_sort_apples_belt_opt2 conceptual opt2
-whack_moles _run_whack_moles_base conceptual base
-whack_moles _run_whack_moles_opt1 conceptual opt1
-whack_moles _run_whack_moles_opt2 conceptual opt2
-trap_bug _run_trap_bug_base household base
-boil_milk _run_boil_milk_base household base
-fill_coffee_jar _run_fill_coffee_jar_base household base
-pour_beer _run_pour_beer_base household base
-cook_food _run_cook_food_base household base
-cook_food_timer _run_cook_food_timer_base household base
-measure_ingredient _run_measure_ingredient_base household base
-make_soup _run_make_soup_base household base
-catch_cup _run_catch_cup_base household base
-catch_mouse_object_drop _run_catch_mouse_object_drop_base household base
-stop_ball _run_stop_ball_base household base
-clean_table _run_clean_table_base household base
+catch_marbles_trapdoors default base
+catch_marbles_trapdoors opt1 base
+catch_marbles_trapdoors opt2 base
+catch_marbles_trapdoors opt1+2 base
+catch_ramp_ball default base
+catch_ramp_ball opt1 base
+catch_ramp_ball opt2 base
+catch_ramp_ball opt1+2 base
+catch_cuboid default base
+catch_cuboid opt1 base
+catch_cuboid opt2 base
+catch_cuboid opt1+2 base
+catch_shelf_marble default base
+catch_shelf_marble opt1 base
+catch_shelf_marble opt2 base
+catch_shelf_marble opt1+2 base
+catch_valley_ball default base
+catch_valley_ball opt1 base
+catch_valley_ball opt2 base
+catch_valley_ball opt1+2 base
+stop_valley_ball default base
+stop_valley_ball opt1 base
+stop_valley_ball opt2 base
+stop_valley_ball opt1+2 base
+cook_meat default base
+cook_meat opt1 base
+cook_meat opt2 base
+cook_meat opt1+2 base
+cook_meat_timer default base
+cook_meat_timer opt1 base
+cook_meat_timer opt2 base
+cook_meat_timer opt1+2 base
+put_cup_belt default base
+put_cup_belt opt1 base
+put_cup_belt opt2 base
+put_cup_belt opt1+2 base
+dispense_gummy default base
+dispense_gummy opt1 base
+dispense_gummy opt2 base
+dispense_gummy opt1+2 base
+punch_dual_holes default base
+punch_dual_holes opt1 base
+punch_dual_holes opt2 base
+punch_dual_holes opt1+2 base
+save_goal default base
+save_goal opt1 base
+save_goal opt2 base
+save_goal opt1+2 base
+hit_target default base
+hit_target opt1 base
+hit_target opt2 base
+hit_target opt1+2 base
+load_train default base
+load_train opt1 base
+load_train opt2 base
+load_train opt1+2 base
+marble_shelf_maze default base
+marble_shelf_maze opt1 base
+marble_shelf_maze opt2 base
+marble_shelf_maze opt1+2 base
+pack_fruits default base
+pack_fruits opt1 base
+pack_fruits opt2 base
+pack_fruits opt1+2 base
+pick_ripe_apple default base
+pick_ripe_apple opt1 base
+pick_ripe_apple opt2 base
+pick_ripe_apple opt1+2 base
+place_block_belt default base
+place_block_belt opt1 base
+place_block_belt opt2 base
+place_block_belt opt1+2 base
+play_billiard default base
+play_billiard opt1 base
+play_billiard opt2 base
+play_billiard opt1+2 base
+control_quality default base
+control_quality opt1 base
+control_quality opt2 base
+control_quality opt1+2 base
+drop_ball_hole default base
+drop_ball_hole opt1 base
+drop_ball_hole opt2 base
+drop_ball_hole opt1+2 base
+sort_apples_belt default base
+sort_apples_belt opt1 base
+sort_apples_belt opt2 base
+sort_apples_belt opt1+2 base
+whack_moles default base
+whack_moles opt1 base
+whack_moles opt2 base
+whack_moles opt1+2 base
+trap_bug default household
+boil_milk default household
+fill_coffee_jar default household
+pour_beer default household
+cook_food default household
+cook_food_timer default household
+measure_ingredient default household
+make_soup default household
+catch_cup default household
+catch_mouse_object_drop default household
+stop_ball default household
+clean_table default household

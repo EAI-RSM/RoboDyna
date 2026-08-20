@@ -16,6 +16,7 @@ import os
 import shutil
 import time
 from argparse import ArgumentParser
+from task_config.scenario_overrides import apply_collection_scenario
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
@@ -38,13 +39,57 @@ def get_embodiment_config(robot_file):
     return embodiment_args
 
 
-def main(task_name=None, task_config=None):
+def apply_production_collection_profile(args, task_name, collection_id):
+    """Set the durable corpus settings formerly generated per task/scenario."""
+    args.update(
+        episode_num=50,
+        save_freq=15,
+        collect_data=True,
+        # Pass 1 must remain unrendered so its success rate and timeout match
+        # the expert sweep. Pass 2 enables saving itself.
+        save_data=False,
+        eval_video_log=False,
+        use_seed=False,
+        save_failed_cases=False,
+        check_render_success=False,
+        export_lerobot=True,
+        save_path="./data",
+        lerobot_root=f"./data_lerobot/prod_run/{task_name}__{collection_id}",
+    )
+    camera = args.setdefault("camera", {})
+    camera.update(
+        collect_head_camera=True,
+        collect_wrist_camera=True,
+        head_camera_type="D435",
+        wrist_camera_type="D435",
+    )
+    args.setdefault("data_type", {}).update(rgb=True, third_view=False)
 
+
+def main(
+    task_name=None,
+    task_config=None,
+    scenario="default",
+    production=False,
+    use_seed=False,
+    episode_num=None,
+):
+    task_name = str(task_name).strip().replace("-", "_")
     task = class_decorator(task_name)
     config_path = f"./task_config/{task_config}.yml"
 
     with open(config_path, "r", encoding="utf-8") as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
+
+    scenario = apply_collection_scenario(args, task_name, scenario)
+    if production:
+        apply_production_collection_profile(args, task_name, scenario)
+    if use_seed:
+        args["use_seed"] = True
+    if episode_num is not None:
+        if episode_num < 1:
+            raise ValueError("--episode-num must be positive")
+        args["episode_num"] = episode_num
 
     args['task_name'] = task_name
 
@@ -104,8 +149,10 @@ def main(task_name=None, task_config=None):
     print("\n==================================")
 
     args["embodiment_name"] = embodiment_name
-    args['task_config'] = task_config
-    args["save_path"] = os.path.join(args["save_path"], str(args["task_name"]), args["task_config"])
+    # task_config is the data-directory identifier used by collection outputs.
+    args["task_config"] = scenario
+    args["collection_scenario"] = scenario
+    args["save_path"] = os.path.join(args["save_path"], str(args["task_name"]), scenario)
     run(task, args)
 
 
@@ -515,10 +562,6 @@ def run(TASK_ENV, args):
         if failed_episode_indices:
             print(f"\033[93mNote: {len(failed_episode_indices)} episodes failed during render\033[0m")
 
-        command = f"cd description && bash gen_episode_instructions.sh {args['task_name']} {args['task_config']} {args['language_num']}"
-        os.system(command)
-
-
 if __name__ == "__main__":
     from test_render import Sapien_TEST
     Sapien_TEST()
@@ -529,8 +572,31 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("task_name", type=str)
     parser.add_argument("task_config", type=str)
+    parser.add_argument(
+        "--scenario",
+        default="default",
+        help="Base: default, opt1, opt2, or opt1+2; Household: default only.",
+    )
+    parser.add_argument(
+        "--production",
+        action="store_true",
+        help="Use the standard 50-episode training-corpus profile.",
+    )
+    parser.add_argument(
+        "--use-seed",
+        action="store_true",
+        help="Replay the existing seed list instead of searching for new seeds.",
+    )
+    parser.add_argument("--episode-num", type=int, default=None)
     parser = parser.parse_args()
     task_name = parser.task_name
     task_config = parser.task_config
 
-    main(task_name=task_name, task_config=task_config)
+    main(
+        task_name=task_name,
+        task_config=task_config,
+        scenario=parser.scenario,
+        production=parser.production,
+        use_seed=parser.use_seed,
+        episode_num=parser.episode_num,
+    )

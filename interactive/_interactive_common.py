@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -555,7 +553,6 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
         "lerobot_root": "./data_lerobot/domino_suite",
         "lerobot_chunks_size": 1000,
         "lerobot_task_state_dim": 32,
-        "language_num": 100,
         "data_type": dict(env.data_type),
     }
 
@@ -860,25 +857,6 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
     if preview:
         print(f"[record-data] preview video {preview}")
 
-    if want_data:
-        try:
-            language_num = int(args.get("language_num", 100) or 100)
-            task_name = args.get("task_name") or meta["task_name"]
-            task_config = args.get("task_config") or meta["folder"]
-            if task_name and task_config:
-                cmd = (
-                    "cd description && bash gen_episode_instructions.sh "
-                    f"{shlex.quote(str(task_name))} {shlex.quote(str(task_config))} "
-                    f"{int(language_num)}"
-                )
-                result = subprocess.run(cmd, shell=True, cwd=str(REPO_ROOT))
-                if result.returncode != 0:
-                    print(
-                        "[record-data] instruction generation skipped "
-                        f"(exit {result.returncode})"
-                    )
-        except Exception as exc:
-            print(f"[record-data] instruction generation skipped: {exc}")
     return hdf5
 
 def folder_name_from_save_dir(save_dir: str) -> str:

@@ -70,14 +70,34 @@ conda activate robodyna
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 unset DISPLAY
 
-bash scripts/collect_data.sh <task> <task_config> <gpu_id>
+bash scripts/collect_data.sh <task> <task_config> <gpu_id> [scenario]
 
 # Examples
-bash scripts/collect_data.sh cook_meat demo_dynamic 0
+bash scripts/collect_data.sh cook_meat demo_dynamic 0 opt1
 bash scripts/collect_data.sh boil_milk demo_dynamic 0
 ```
 
-Output lands under `data/<task>/<task_config>/` (HDF5 + mp4) and an inline LeRobot v2.1 dataset under `data_lerobot/`. Task-specific knobs live in `task_config/demo_dynamic.yml` under `task_args.<task>` (do not add a separate per-task config file).
+Output lands under `data/<task>/<scenario>/` (HDF5 + mp4) and an inline LeRobot v2.1 dataset under `data_lerobot/`.
+
+#### Collection configuration and batch jobs
+
+The collector deliberately uses one shared YAML rather than generated per-task YAMLs:
+
+- `task_config/demo_dynamic.yml` holds common collection settings and each task's continuous parameters.
+- `task_config/scenario_overrides.py` is the single source of truth for Base condition flags. Base tasks support `default`, `opt1`, `opt2`, and `opt1+2`; Household tasks support `default` only and use static household collection settings.
+- Passing `demo_dynamic` through `scripts/collect_data.sh` enables the standard production profile: 50 successful episodes, head + wrist D435 cameras, no pass-1 rendering, and a per-task/scenario LeRobot export at `data_lerobot/prod_run/<task>__<scenario>/`. `debug_dynamic` keeps its short debug settings.
+
+`task_config/manifest_collect.txt` contains the complete 104-entry corpus plan: 23 Base tasks × 4 scenarios, plus 12 Household tasks. Each row is:
+
+```text
+<task> <scenario> <family>
+```
+
+Both `scripts/slurm/collect.sbatch` and `scripts/collection/collect_4080.sh` read this manifest directly; no preparatory config-generation step is required. The salvage job uses a separate user-supplied manifest with rows `<task> <scenario> <seed_count>` and replays the saved seeds without editing any YAML.
+
+#### Task language instructions
+
+Each of the 35 RoboDyna tasks has exactly one canonical language instruction in [`task_config/task_instructions.json`](task_config/task_instructions.json). The GUI, policy evaluation, and LeRobot export all read this same catalog; there are no per-episode paraphrases or seen/unseen instruction variants. [`data/task_instructions.json`](data/task_instructions.json) is a checked-in, read-only copy for data consumers and identifies `task_config/task_instructions.json` as its source. Update the `task_config` file first, then keep the data copy identical.
 
 ### Interactive GUIs
 

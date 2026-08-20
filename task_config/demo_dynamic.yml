@@ -3,7 +3,6 @@ episode_num: 1
 use_seed: false
 save_freq: 15
 embodiment: [ur5-wsg, ur5-wsg, 0.6] #[aloha-agilex] #
-language_num: 100
 # Shared episode cutoff (policy take_action_cnt / collection). Applied to every task.
 eval_step_limit: 15000
 domain_randomization:

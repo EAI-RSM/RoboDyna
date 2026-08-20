@@ -5,7 +5,7 @@ task_config: null
 ckpt_setting: null
 seed: null
 scenario: default
-instruction_type: unseen
+instruction_type: canonical
 
 # Add Parameters You Need
 train_config_name: null

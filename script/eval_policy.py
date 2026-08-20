@@ -4,9 +4,9 @@ import subprocess
 
 sys.path.append("./")
 sys.path.append(f"./policy")
-sys.path.append("./description/utils")
 from envs import CONFIGS_PATH
 from envs.utils.create_actor import UnStableError
+from task_config.task_instructions import instruction_for
 
 import numpy as np
 from pathlib import Path
@@ -20,7 +20,6 @@ import importlib
 import argparse
 import pdb
 
-from generate_episode_instructions import *
 from eval_metrics import EvalMetricsTracker, AggregatedMetrics, EpisodeMetrics, env_uses_dynamic
 from evaluation_protocol import configure_evaluation
 
@@ -71,7 +70,7 @@ def main(usr_args):
     ckpt_setting = usr_args["ckpt_setting"]
     # checkpoint_num = usr_args['checkpoint_num']
     policy_name = usr_args["policy_name"]
-    instruction_type = usr_args["instruction_type"]
+    instruction_type = "canonical"
     save_dir = None
     video_save_dir = None
     video_size = None
@@ -327,9 +326,7 @@ def eval_policy(task_name,
         if saved_dynamic_motion_info is not None:
             TASK_ENV._saved_dynamic_motion_info = saved_dynamic_motion_info
         
-        episode_info_list = [episode_info["info"]]
-        results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
-        instruction = np.random.choice(results[0][instruction_type])
+        instruction = instruction_for(args["task_name"])
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
 
         episode_uses_dynamic = env_uses_dynamic(TASK_ENV, args)
