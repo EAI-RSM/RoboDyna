@@ -474,6 +474,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.show_briefing = tk.BooleanVar(value=True)
         self.record_data = tk.BooleanVar(value=False)
         self.save_video = tk.BooleanVar(value=False)
+        self.show_metrics = tk.BooleanVar(value=True)
         self.briefing_check = self._header_tick(
             self.option_group, "Instructions", self.show_briefing
         )
@@ -482,6 +483,9 @@ class HouseholdTaskLauncher(tk.Tk):
         )
         self.video_check = self._header_tick(
             self.option_group, "Save video", self.save_video
+        )
+        self.metrics_check = self._header_tick(
+            self.option_group, "Trial metrics", self.show_metrics
         )
 
         self.seed_group = tk.Frame(self.controls, bg=HEADER_BG)
@@ -597,7 +601,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self._ui_scale_job = self.after(80, self._apply_ui_scale)
 
     def _header_tick(self, parent, text, variable):
-        """Square checkbox used for Instructions / Record data / Save video."""
+        """Square checkbox used for Instructions / Record data / Save video / Trial metrics."""
         btn = tk.Checkbutton(
             parent,
             text=text,
@@ -620,7 +624,12 @@ class HouseholdTaskLauncher(tk.Tk):
         return btn
 
     def _set_option_checks(self, state: str) -> None:
-        for widget in (self.briefing_check, self.record_check, self.video_check):
+        for widget in (
+            self.briefing_check,
+            self.record_check,
+            self.video_check,
+            self.metrics_check,
+        ):
             widget.configure(state=state)
 
     def _capture_run_note(self) -> str:
@@ -696,6 +705,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
         self.record_check.configure(font=self._scaled_font(14, "bold", s))
         self.video_check.configure(font=self._scaled_font(14, "bold", s))
+        self.metrics_check.configure(font=self._scaled_font(14, "bold", s))
         self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
         self.control_caption.configure(font=self._scaled_font(13, "bold", s))
         self.seed_entry.configure(font=self._scaled_font(13, "bold", s))
@@ -1583,7 +1593,7 @@ class HouseholdTaskLauncher(tk.Tk):
                         "#e6a15c",
                         sticky=True,
                     )
-                if code in (0, 10):
+                if code in (0, 10) and bool(self.show_metrics.get()):
                     show_trial_metrics(self, payload, run_meta)
             else:
                 cond = self._read_result_condition()
@@ -1651,6 +1661,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.briefing_check.configure(state="normal")
         self.record_check.configure(state="disabled")
         self.video_check.configure(state="disabled")
+        self.metrics_check.configure(state="normal")
 
     def _slot_locked(self, suite: str, task: str, scenario: str | None = None) -> bool:
         cfg = self._experiment_cfg or load_experiment_config()
