@@ -558,8 +558,13 @@ def eval_policy(task_name,
         TASK_ENV._metrics_tracker = None
         
         # Print episode metrics summary
+        partial_score_text = (
+            "N/A" if episode_metrics.partial_score is None
+            else f"{episode_metrics.partial_score:.2f}"
+        )
         print(f"  MS: \033[96m{episode_metrics.manipulation_score:.1f}\033[0m | "
-              f"RC: \033[96m{episode_metrics.route_completion:.1f}%\033[0m")
+              f"RC: \033[96m{episode_metrics.route_completion:.1f}%\033[0m | "
+              f"PS: \033[96m{partial_score_text}\033[0m")
         # print(f"  MS: \033[96m{episode_metrics.manipulation_score:.1f}\033[0m | "
         #       f"RC: \033[96m{episode_metrics.route_completion:.1f}%\033[0m | "
         #       f"Eff: \033[96m{episode_metrics.efficiency:.1f}\033[0m | "
@@ -580,12 +585,17 @@ def eval_policy(task_name,
 
         # Print running statistics
         summary = aggregated_metrics.get_summary()
+        average_partial_score = summary["partial_score_mean"]
+        average_partial_score_text = (
+            "N/A" if average_partial_score is None else f"{average_partial_score:.3f}"
+        )
         print(
             f"\033[93m{task_name}\033[0m | \033[94m{args['policy_name']}\033[0m | "
             f"\033[92m{args['task_config']}\033[0m | \033[91m{args['ckpt_setting']}\033[0m\n"
             f"Success rate: \033[96m{TASK_ENV.suc}/{TASK_ENV.test_num}\033[0m => "
             f"\033[95m{round(TASK_ENV.suc/TASK_ENV.test_num*100, 1)}%\033[0m | "
             f"Avg MS: \033[95m{summary['manipulation_score_mean']:.1f}\033[0m | "
+            f"Avg PS: \033[95m{average_partial_score_text}\033[0m | "
             f"current seed: \033[90m{now_seed}\033[0m\n"
         )
         now_seed += 1

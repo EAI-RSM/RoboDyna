@@ -3,9 +3,10 @@ Evaluation Metrics Module for Dynamic Manipulation Tasks.
 
 Metrics:
 1. Manipulation Score (MS): Route completion with penalty factors
-2. Efficiency (E_eff): Steps efficiency score
-3. Comfort Score (C_comf): Motion smoothness based on jerk
-4. Penalty Events: Collision, joint limits, target loss
+2. Task Partial Score (PS): environment-defined completed-action progress
+3. Efficiency (E_eff): Steps efficiency score
+4. Comfort Score (C_comf): Motion smoothness based on jerk
+5. Penalty Events: Collision, joint limits, target loss
 """
 
 import numpy as np
@@ -49,6 +50,9 @@ class EpisodeMetrics:
     
     # Manipulation Score
     manipulation_score: float = 0.0
+
+    # Environment-defined, task-specific completed-action score in [0, 1].
+    partial_score: Optional[float] = None
     
     # Efficiency (0-100 if success, 0 if fail)
     # efficiency: float = 0.0
@@ -582,6 +586,10 @@ class EvalMetricsTracker:
         success: bool,
         route_completion: float,
         manipulation_score: float,
+        partial_score: Optional[float] = None,
+        partial_score_detail: Optional[Dict[str, Any]] = None,
+        task_metrics: Optional[Dict[str, Any]] = None,
+        fail_reason: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build the per-episode detailed-metrics payload."""
         total_steps = self._get_total_steps()
@@ -594,7 +602,14 @@ class EvalMetricsTracker:
             "route_completion": float(route_completion),
             "manipulation_score": float(manipulation_score),
             "total_penalty_factor": float(self.compute_total_penalty_factor()),
+            "fail_reason": fail_reason or "",
         }
+        if partial_score is not None:
+            metric_detail["partial_score"] = float(partial_score)
+        if partial_score_detail:
+            metric_detail["partial_score_detail"] = partial_score_detail
+        if task_metrics:
+            metric_detail["task_metrics"] = task_metrics
 
         info = getattr(self.env, "info", {}) or {}
         existing_detail = info.get("metric_detail")
@@ -613,6 +628,46 @@ class EvalMetricsTracker:
         except Exception:
             pass
         return metric_detail
+
+    def _collect_task_outcomes(
+        self,
+    ) -> Tuple[Optional[float], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Read the task's terminal partial score and task-specific metrics.
+
+        This mirrors the interactive-result collection path so policy evaluation
+        reports carry the same completed-action score, explanation, and metrics.
+        A task without either optional API remains evaluable.
+        """
+        partial_score: Optional[float] = None
+        score_getter = getattr(self.env, "get_score", None)
+        if callable(score_getter):
+            try:
+                score = float(score_getter())
+                if np.isfinite(score):
+                    partial_score = float(np.clip(score, 0.0, 1.0))
+            except Exception:
+                pass
+
+        partial_score_detail: Optional[Dict[str, Any]] = None
+        detail_getter = getattr(self.env, "get_score_detail", None)
+        if callable(detail_getter):
+            try:
+                detail = detail_getter()
+                if isinstance(detail, dict) and detail:
+                    partial_score_detail = detail
+            except Exception:
+                pass
+
+        task_metrics: Optional[Dict[str, Any]] = None
+        metrics_getter = getattr(self.env, "_compute_metrics", None)
+        if callable(metrics_getter):
+            try:
+                metrics = metrics_getter()
+                if isinstance(metrics, dict):
+                    task_metrics = metrics
+            except Exception:
+                pass
+        return partial_score, partial_score_detail, task_metrics
     
     def get_episode_metrics(self, success: bool, fail_reason: Optional[str] = None, seed: Optional[int] = None) -> EpisodeMetrics:
         """
@@ -634,7 +689,16 @@ class EvalMetricsTracker:
         # Manipulation score
         manipulation_score = route_completion * total_penalty
 
-        metric_detail = self.build_metric_detail(success, route_completion, manipulation_score)
+        partial_score, partial_score_detail, task_metrics = self._collect_task_outcomes()
+        metric_detail = self.build_metric_detail(
+            success,
+            route_completion,
+            manipulation_score,
+            partial_score=partial_score,
+            partial_score_detail=partial_score_detail,
+            task_metrics=task_metrics,
+            fail_reason=fail_reason,
+        )
         
         # Efficiency
         # efficiency = self.compute_efficiency(success, self.step_count, max_steps)
@@ -649,6 +713,7 @@ class EvalMetricsTracker:
             seed=seed,
             route_completion=route_completion,
             manipulation_score=manipulation_score,
+            partial_score=partial_score,
             # efficiency=efficiency,
             # comfort_score=comfort_score,
             # avg_jerk=avg_jerk,
@@ -680,6 +745,7 @@ class AggregatedMetrics:
         # Average metrics (only for valid values)
         ms_scores = [e.manipulation_score for e in self.episodes]
         rc_scores = [e.route_completion for e in self.episodes]
+        ps_scores = [e.partial_score for e in self.episodes if e.partial_score is not None]
         sim_times = [e.metric_detail.get("total_time_sim_s", 0.0) for e in self.episodes]
         wall_times = [e.metric_detail.get("total_time_wall_s", 0.0) for e in self.episodes]
         total_steps = [e.metric_detail.get("total_steps", e.steps_taken) for e in self.episodes]
@@ -712,6 +778,10 @@ class AggregatedMetrics:
             "route_completion_mean": np.mean(rc_scores) if rc_scores else 0,
             "route_completion_std": np.std(rc_scores) if rc_scores else 0,
 
+            "partial_score_count": len(ps_scores),
+            "partial_score_mean": np.mean(ps_scores) if ps_scores else None,
+            "partial_score_std": np.std(ps_scores) if ps_scores else None,
+
             "total_time_sim_s_mean": np.mean(sim_times) if sim_times else 0,
             "total_time_sim_s_std": np.std(sim_times) if sim_times else 0,
             "total_time_wall_s_mean": np.mean(wall_times) if wall_times else 0,
@@ -743,6 +813,16 @@ class AggregatedMetrics:
         """Generate detailed text report."""
         summary = self.get_summary()
         
+        partial_score_lines = ["--- Task Partial Score ---"]
+        if summary["partial_score_mean"] is None:
+            partial_score_lines.append("  Not reported by this task")
+        else:
+            partial_score_lines.extend([
+                f"  Mean: {summary['partial_score_mean']:.3f}",
+                f"  Std:  {summary['partial_score_std']:.3f}",
+                f"  Episodes with score: {summary['partial_score_count']}/{summary['total_episodes']}",
+            ])
+
         lines = [
             "=" * 60,
             "EVALUATION METRICS REPORT",
@@ -758,6 +838,8 @@ class AggregatedMetrics:
             "--- Route Completion ---",
             f"  Mean: {summary['route_completion_mean']:.2f}%",
             f"  Std:  {summary['route_completion_std']:.2f}",
+            "",
+            *partial_score_lines,
             "",
             "--- Timing ---",
             f"  Sim Time Mean:  {summary['total_time_sim_s_mean']:.2f}s",
@@ -801,6 +883,7 @@ class AggregatedMetrics:
                 "max_steps": episode.max_steps,
                 "route_completion": episode.route_completion,
                 "manipulation_score": episode.manipulation_score,
+                "partial_score": episode.partial_score,
                 # "efficiency": episode.efficiency if episode.success else None,  # None for failed episodes
                 # "comfort_score": episode.comfort_score,
                 # "avg_jerk": episode.avg_jerk,
