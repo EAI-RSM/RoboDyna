@@ -96,3 +96,62 @@ def completed_action_score(
         "final_score": final,
     }
     return final
+
+
+def _humanize_metric_key(key: str) -> str:
+    return str(key or "").replace("_", " ").strip()
+
+
+def _fraction_incomplete(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if "/" not in text:
+        return None
+    left, right = text.split("/", 1)
+    try:
+        done, total = float(left), float(right)
+    except (TypeError, ValueError):
+        return None
+    if total <= 0 or done >= total:
+        return None
+    return text
+
+
+def fail_reason_from_score_detail(detail: Mapping[str, Any] | None) -> str:
+    """Turn a ``get_score_detail()`` payload into a compact failure cause.
+
+    Penalty events are preferred (they are the recorded errors). Otherwise
+    unmet completed-action flags / incomplete fractions are listed.
+    """
+    if not isinstance(detail, Mapping):
+        return ""
+    if str(detail.get("strategy") or "") == "binary_success_fallback":
+        return ""
+    parts: list[str] = []
+    for penalty in detail.get("penalties") or []:
+        if not isinstance(penalty, Mapping):
+            continue
+        event = _humanize_metric_key(str(penalty.get("event") or ""))
+        if not event:
+            continue
+        try:
+            count = int(penalty.get("count", 1) or 1)
+        except (TypeError, ValueError):
+            count = 1
+        parts.append(event if count <= 1 else f"{event} ×{count}")
+
+    unmet: list[str] = []
+    actions = detail.get("completed_actions")
+    if isinstance(actions, Mapping):
+        for key, value in actions.items():
+            label = _humanize_metric_key(str(key))
+            if not label:
+                continue
+            if value is False:
+                unmet.append(label)
+                continue
+            fraction = _fraction_incomplete(value)
+            if fraction is not None:
+                unmet.append(f"{label} {fraction}")
+    if unmet:
+        parts.append("did not complete: " + ", ".join(unmet))
+    return "; ".join(parts)

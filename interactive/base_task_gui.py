@@ -42,6 +42,7 @@ from experiment_logs import (  # noqa: E402
     is_slot_locked,
     load_user_assignment,
     log_controller_tag,
+    payload_fail_reason,
     session_control_mode,
     slot_success_label,
     stamp_child_env,
@@ -1697,9 +1698,7 @@ class InteractiveTaskLauncher(tk.Tk):
                 recorded = record_status_note(payload)
                 ps_note = ps_status_note(payload)
                 if isinstance(payload, dict):
-                    detail = payload.get("detail")
-                    if isinstance(detail, str) and detail.strip():
-                        reason = detail.strip()
+                    reason = payload_fail_reason(payload) or None
                 self._run_status_base = None
                 self._shown_episode_condition = None
                 self._record_experiment_play(run_meta, payload, exit_code=code)

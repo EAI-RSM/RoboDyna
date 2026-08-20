@@ -78,9 +78,14 @@ def format_trial_metrics(
     lines = ["Trial summary"]
     lines.extend(f"{name}: {_value(value)}" for name, value in summary if value is not None)
 
+    fail_reason = payload.get("fail_reason") or metrics.get("fail_reason")
     detail = payload.get("detail")
-    if detail:
+    if ok is False and fail_reason:
+        lines.append(f"Fail reason: {_value(fail_reason)}")
+    elif detail:
         lines.append(f"Detail: {_value(detail)}")
+    elif fail_reason:
+        lines.append(f"Fail reason: {_value(fail_reason)}")
 
     if partial_detail:
         lines.append("")

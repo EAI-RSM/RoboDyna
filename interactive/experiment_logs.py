@@ -1030,6 +1030,22 @@ def counts_as_completed(result: str) -> bool:
     return result in ("SUCCESS", "FAILURE")
 
 
+def payload_fail_reason(payload: dict[str, Any] | None) -> str:
+    """Cause of failure from a task-result JSON payload, if any."""
+    if not isinstance(payload, dict):
+        return ""
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    for value in (
+        payload.get("fail_reason"),
+        metrics.get("fail_reason"),
+        payload.get("detail"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def progress_counts(
     log: dict[str, Any] | None = None,
     *,
@@ -1192,6 +1208,11 @@ def append_play(
     if option and not metrics.get("option_label"):
         metrics["option_label"] = option
 
+    fail_reason = payload_fail_reason(payload) if result == "FAILURE" else ""
+    if fail_reason and not metrics.get("fail_reason"):
+        metrics["fail_reason"] = fail_reason
+    detail = str(payload.get("detail") or fail_reason or "").strip()
+
     entry = {
         "played_at": iso_now(),
         "suite": suite,
@@ -1202,7 +1223,8 @@ def append_play(
         "controller": controller or payload.get("controller") or "",
         "seed": seed if seed is not None else payload.get("seed"),
         "result": result,
-        "detail": payload.get("detail") or "",
+        "detail": detail,
+        "fail_reason": fail_reason,
         "condition": payload.get("condition") or "",
         "partial_score": metrics.get("partial_score", payload.get("partial_score")),
         "exit_code": exit_code,

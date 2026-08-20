@@ -835,6 +835,15 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
             extras = getattr(env, "_last_result_extras", None)
             if isinstance(extras, dict) and isinstance(extras.get("metrics"), dict):
                 entry["metrics"] = dict(extras["metrics"])
+                fail_reason = str(
+                    extras.get("fail_reason")
+                    or entry["metrics"].get("fail_reason")
+                    or ""
+                ).strip()
+                if fail_reason:
+                    entry["fail_reason"] = fail_reason
+            elif _LAST_TASK_RESULT is False and _LAST_TASK_DETAIL:
+                entry["fail_reason"] = str(_LAST_TASK_DETAIL)
             info_db[f"episode_{ep_num}"] = entry
             Path(info_path).write_text(
                 json.dumps(info_db, ensure_ascii=False, indent=4, default=_json_safe),
@@ -1187,6 +1196,26 @@ def _normalize_result_detail(detail: str | None) -> str | None:
     return text or None
 
 
+def _resolve_fail_reason(env, ok: bool | None, detail: str | None) -> str | None:
+    """Cause of a failed episode: caller detail, then ``env.get_fail_reason()``."""
+    if ok is True:
+        return None
+    text = _normalize_result_detail(detail)
+    if text:
+        return text
+    getter = getattr(env, "get_fail_reason", None)
+    if callable(getter):
+        try:
+            return _normalize_result_detail(getter())
+        except Exception:
+            return None
+    for attr in ("_last_fail_reason", "_fail_reason"):
+        text = _normalize_result_detail(getattr(env, attr, None))
+        if text:
+            return text
+    return None
+
+
 def _json_safe(value):
     if isinstance(value, Path):
         return str(value)
@@ -1346,9 +1375,10 @@ def format_ps_suffix(score: float | None) -> str:
 
 
 def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
+    fail_reason = _resolve_fail_reason(env, ok, detail) if ok is not True else None
     metrics: dict = {
         "success": None if ok is None else bool(ok),
-        "fail_reason": detail or "",
+        "fail_reason": fail_reason or "",
         "condition": _LAST_EPISODE_CONDITION or "",
         "task": _resolve_task_name(env),
     }
@@ -1374,6 +1404,17 @@ def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
             partial_detail = detail_getter()
             if isinstance(partial_detail, dict) and partial_detail:
                 metrics["partial_score_detail"] = partial_detail
+                if ok is not True and not metrics.get("fail_reason"):
+                    try:
+                        from envs.utils.partial_score import fail_reason_from_score_detail
+
+                        nested = _normalize_result_detail(
+                            fail_reason_from_score_detail(partial_detail)
+                        )
+                    except Exception:
+                        nested = None
+                    if nested:
+                        metrics["fail_reason"] = nested
         except Exception:
             pass
     tracker = getattr(env, "_metrics_tracker", None)
@@ -1381,7 +1422,7 @@ def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
         try:
             episode = tracker.get_episode_metrics(
                 bool(ok),
-                fail_reason=detail,
+                fail_reason=metrics.get("fail_reason") or detail,
                 seed=metrics.get("seed"),
             )
             metrics.update(
@@ -1410,6 +1451,10 @@ def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
             extra = compute()
             if isinstance(extra, dict):
                 metrics["task_metrics"] = extra
+                if ok is not True and not metrics.get("fail_reason"):
+                    nested = _normalize_result_detail(extra.get("fail_reason"))
+                    if nested:
+                        metrics["fail_reason"] = nested
         except Exception:
             pass
     return metrics
@@ -1439,6 +1484,8 @@ def _interactive_result_extras(env, ok: bool | None, detail: str | None) -> dict
     timing = _frozen_episode_timing(env)
     extras["time"] = _timing_payload(timing)
     extras["metrics"] = _collect_episode_metrics(env, ok, detail)
+    fail_reason = extras["metrics"].get("fail_reason") or ""
+    extras["fail_reason"] = fail_reason if ok is not True else ""
     ps = _env_partial_score(env)
     if ps is not None:
         extras["partial_score"] = float(ps)
@@ -1460,27 +1507,32 @@ def _persist_task_result(
     path = os.environ.get(TASK_RESULT_ENV)
     if not path:
         return
-    payload = {
-        "ok": ok,
-        "detail": detail or "",
-        "condition": _LAST_EPISODE_CONDITION or "",
-    }
     try:
         existing = json.loads(Path(path).read_text(encoding="utf-8") or "{}")
     except Exception:
         existing = {}
-    if isinstance(existing, dict):
-        for key in (
-            "record_path",
-            "record_episode",
-            "record_hdf5",
-            "record_video",
-            "record_viewer",
-        ):
-            if key in existing and key not in payload:
-                payload[key] = existing[key]
+    payload = dict(existing) if isinstance(existing, dict) else {}
+    payload["ok"] = ok
+    payload["detail"] = detail or ""
+    payload["condition"] = _LAST_EPISODE_CONDITION or ""
     if extra:
         payload.update(extra)
+    if ok is not True:
+        fail_reason = (
+            _normalize_result_detail(payload.get("fail_reason"))
+            or _normalize_result_detail(
+                (payload.get("metrics") or {}).get("fail_reason")
+                if isinstance(payload.get("metrics"), dict)
+                else None
+            )
+            or payload.get("detail")
+            or ""
+        )
+        payload["fail_reason"] = fail_reason
+        if not payload.get("detail") and fail_reason:
+            payload["detail"] = fail_reason
+    elif "fail_reason" not in payload:
+        payload["fail_reason"] = ""
     try:
         Path(path).write_text(
             json.dumps(payload, ensure_ascii=False, default=_json_safe),
@@ -1677,8 +1729,8 @@ def report_task_result(env, detail: str | None = None, *, ok: bool | None = None
         _persist_task_result(False, detail, extra=_interactive_result_extras(env, False, detail))
         return False
     detail = _normalize_result_detail(detail)
-    if detail is None and not ok:
-        detail = _normalize_result_detail(getattr(env, "_last_fail_reason", None))
+    if not ok:
+        detail = _resolve_fail_reason(env, False, detail)
     status = "SUCCESS" if ok else "FAILURE"
     ps_note = format_ps_suffix(_env_partial_score(env))
     msg = f"Task complete: {status}" + (f" ({detail})" if detail else "") + ps_note

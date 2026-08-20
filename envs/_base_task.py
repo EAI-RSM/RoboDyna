@@ -302,6 +302,23 @@ class Base_Task(gym.Env):
         detail = getattr(self, "_partial_score_detail", None)
         return dict(detail) if isinstance(detail, dict) else {}
 
+    def get_fail_reason(self) -> str:
+        """Best-effort human-readable cause when the episode did not succeed.
+
+        Prefers a task-latched string (``_last_fail_reason`` / ``_fail_reason``),
+        then synthesizes from the partial-score explanation.
+        """
+        for attr in ("_last_fail_reason", "_fail_reason"):
+            text = str(getattr(self, attr, "") or "").strip()
+            if text:
+                return text
+        try:
+            from .utils.partial_score import fail_reason_from_score_detail
+
+            return str(fail_reason_from_score_detail(self.get_score_detail()) or "")
+        except Exception:
+            return ""
+
     def setup_scene(self, **kwargs):
         """
         Set the scene
