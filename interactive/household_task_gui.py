@@ -1679,15 +1679,19 @@ class HouseholdTaskLauncher(tk.Tk):
         """Gray out tasks that have used up their experiment play budget."""
         if not experiment_mode():
             return
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
         for i, button in enumerate(self.task_buttons):
             orig = self._visible_task_indices[i]
             if keep_active and self.active_index == orig:
                 continue
             task = TASKS[orig][1]
             if self._slot_locked("household", task):
+                limit = cfg.max_plays("household", task)
+                skipped = limit is not None and int(limit) <= 0
                 button.configure(
                     state="disabled",
-                    text=slot_success_label("household", task),
+                    text="Play" if skipped else slot_success_label("household", task),
                     bg="#59616b",
                     activebackground="#59616b",
                 )

@@ -24,6 +24,9 @@ eval_result/
 # Local task scratch (demos, sweeps, snapshots, probes)
 tmp/*
 !tmp/.gitkeep
+/final_task_demos/
+/household_demos/
+/task_config/.interactive_gui_*.yml
 
 # Code Generation — stock RoboTwin trees stay ignored (HF download);
 # custom task assets below are whitelisted for tracking.

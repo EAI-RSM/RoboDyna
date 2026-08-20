@@ -313,14 +313,14 @@ def _is_unlimited(value) -> bool:
 
 
 def _as_play_limit(value) -> int | None:
-    """Positive int, or None for unlimited."""
+    """Play budget: positive int, ``0`` to skip/gray out, or ``None`` for unlimited."""
     if _is_unlimited(value):
         return None
     try:
         number = int(value)
     except (TypeError, ValueError):
         return 1
-    if number <= 0:
+    if number < 0:
         return None
     return number
 
@@ -557,10 +557,10 @@ def _ingest_int_suite(policy: SlotPolicy, suite: str, spec) -> None:
 
 
 def parse_int_policy(raw, default: int | None = 1) -> SlotPolicy:
-    """Parse a play-limit integer, ``null`` (unlimited), or a per-slot map.
+    """Parse a play-limit integer, ``0`` (skip), ``null`` (unlimited), or a map.
 
-    An explicit ``None`` / ``null`` means unlimited. Omit the yaml key to keep
-    the constructor default (1).
+    ``0`` grays the option out from the start. An explicit ``None`` / ``null``
+    means unlimited. Omit the yaml key to keep the constructor default (1).
 
     Map form (scenario kind applies to every task)::
 
@@ -941,7 +941,10 @@ class ExperimentConfig:
         return [lookup[n] for n in ones if n in lookup]
 
     def max_plays(self, suite: str, task: str, scenario: str | None = None) -> int | None:
-        """Allowed SUCCESS/FAILURE plays for this slot. ``None`` = unlimited."""
+        """Allowed SUCCESS/FAILURE plays for this slot.
+
+        ``0`` = skip (grayed out). ``None`` = unlimited.
+        """
         return self.plays_policy.resolve(suite, task, scenario)
 
     def should_log(self, suite: str, task: str, scenario: str | None = None) -> bool:

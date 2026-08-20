@@ -1858,6 +1858,8 @@ class InteractiveTaskLauncher(tk.Tk):
         """Gray out scenarios that have used up their experiment play budget."""
         if not experiment_mode():
             return
+        cfg = self._experiment_cfg or load_experiment_config()
+        self._experiment_cfg = cfg
         for display_i, row in enumerate(self.task_buttons):
             orig = self._visible_task_indices[display_i]
             task = TASKS[orig][1]
@@ -1865,9 +1867,15 @@ class InteractiveTaskLauncher(tk.Tk):
                 if keep_active and self.active_selection == (orig, scenario):
                     continue
                 if self._slot_locked("base", task, scenario):
+                    limit = cfg.max_plays("base", task, scenario)
+                    skipped = limit is not None and int(limit) <= 0
                     button.configure(
                         state="disabled",
-                        text=slot_success_label("base", task, scenario),
+                        text=(
+                            SCENARIO_LABELS[scenario]
+                            if skipped
+                            else slot_success_label("base", task, scenario)
+                        ),
                         bg=LOCKED_GRAY,
                         activebackground=LOCKED_GRAY,
                         disabledbackground=LOCKED_GRAY,

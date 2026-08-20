@@ -14,6 +14,7 @@
 
 # ---------------------------------------------------------------------------
 # How many SUCCESS/FAILURE plays before a slot grays out.
+# 0 = skip that option (grayed out from the start).
 # Stop / close the viewer does not count.
 #
 # One number — every visible slot:
@@ -22,7 +23,7 @@
 # By scenario kind (applies to EVERY base task). This is the usual form:
 #   plays_per_scenario:
 #     default: 1          # Default column
-#     opt1: 2             # Opt 1
+#     opt1: 0             # gray out Opt 1
 #     opt2: 2             # Opt 2
 #     opt1+2: 5           # Opt 1+2
 #     household: 1        # household tasks (no variants)
@@ -43,14 +44,15 @@
 #     base:
 #       1: {opt1+2: 8}    # task 01 Opt 1+2: 8 plays; other tasks keep opt1+2: 5
 #
-# null / unlimited = replay forever. Base keys: default, opt1, opt2, opt1+2.
+# 0 = gray out. null / unlimited = replay forever.
+# Base keys: default, opt1, opt2, opt1+2.
 # ---------------------------------------------------------------------------
 plays_per_scenario: 
   default: 1
   opt1: 1
   opt2: 1
   Opt1+2: 5
-  household: 10
+  household: 12
 
 # Write terminal plays to data/exp_logs/<user>/user.json
 # true / false = all or none. Same map form as plays_per_scenario, e.g.
@@ -58,7 +60,7 @@ plays_per_scenario:
 log_plays: true
 
 # HDF5 / LeRobot episode under data/<task>/  (true / false / slot map)
-record_data: false
+record_data: true
 
 # head-camera preview mp4 after the viewer closes  (true / false / slot map)
 save_video: false

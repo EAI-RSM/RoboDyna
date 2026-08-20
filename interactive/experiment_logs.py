@@ -1000,7 +1000,7 @@ def is_slot_locked(
     max_plays: int | None,
     log: dict[str, Any] | None = None,
 ) -> bool:
-    """True when this slot has used up its SUCCESS/FAILURE play budget."""
+    """True when this slot is skipped (``0`` plays) or has used its play budget."""
     if max_plays is None:
         return False
     try:
@@ -1008,7 +1008,7 @@ def is_slot_locked(
     except (TypeError, ValueError):
         return False
     if limit <= 0:
-        return False
+        return True
     return terminal_play_count(suite, task, scenario, log=log) >= limit
 
 
@@ -1040,7 +1040,8 @@ def progress_counts(
 ) -> dict[str, Any]:
     """Slots that have reached their play limit vs slots that have a limit.
 
-    Unlimited slots (``plays_per_scenario: null``) are omitted from the totals.
+    Unlimited slots (``plays_per_scenario: null``) and skipped slots (``0``)
+    are omitted from the totals.
     """
     try:
         from experiment_config import (
@@ -1074,7 +1075,7 @@ def progress_counts(
     for task in base_names:
         for scenario in scenarios:
             limit = cfg.max_plays("base", task, scenario)
-            if limit is None:
+            if limit is None or int(limit) <= 0:
                 continue
             base_total += 1
             scenario_total[scenario] += 1
@@ -1085,7 +1086,7 @@ def progress_counts(
     household_total = 0
     for task in household_names:
         limit = cfg.max_plays("household", task)
-        if limit is None:
+        if limit is None or int(limit) <= 0:
             continue
         household_total += 1
         if terminal_play_count("household", task, log=log) >= int(limit):
