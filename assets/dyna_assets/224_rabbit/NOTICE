@@ -1,9 +1,0 @@
-Asset: 224_rabbit
-Source: "Easter rabbit" by Junior IT
-URL: https://poly.pizza/m/eggdSyUWa03
-License: Creative Commons Attribution (CC-BY) — attribution required.
-Attribution: Junior IT (https://poly.pizza/m/eggdSyUWa03)
-Notes: Texture stripped to a plain base_color material so runtime recolor
-       (brown → red on illegal touch) works for whack_a_mole distractors.
-       Compact loaf pose (limbs tucked) chosen to fit hole openings like 221_mole.
-Use: rabbit distractor actors for the whack_a_mole DOMINO task (replaces 222_rabbit).

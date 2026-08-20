@@ -1,18 +1,8 @@
-cd assets
-python _download.py
+#!/usr/bin/env bash
+# Download the minimal asset package needed by the shipped RoboDyna tasks.
+set -euo pipefail
 
-# background_texture
-unzip background_texture.zip
-rm -rf background_texture.zip
-
-# embodiments
-unzip embodiments.zip
-rm -rf embodiments.zip
-
-# objects
-unzip objects.zip
-rm -rf objects.zip
-
-cd ..
-echo "Configuring Path ..."
-python ./script/update_embodiment_config_path.py
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+python "$ROOT/assets/_download.py" "$@"
+echo "Configuring local embodiment paths ..."
+python "$ROOT/script/update_embodiment_config_path.py"

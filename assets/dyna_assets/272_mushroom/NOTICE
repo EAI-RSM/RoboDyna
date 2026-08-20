@@ -1,6 +1,0 @@
-Asset: 272_mushroom
-Source: https://opengameart.org/content/food-kit (mushroom.glb)
-Author: Kenney
-License: CC0 1.0
-Notes: Centered geometric origin; scaled for make_soup board produce.
-Collision: 2.4cm cube hull (matches prior make_soup produce cubes).
