@@ -39,13 +39,12 @@ SUITE_ICONS = {
 # Set by ``setup_gui_app_icon`` so later windows (briefing dialog) match the suite.
 _active_icon_path = APP_ICON_PATH
 
-# Sampled from robodyna_logo.png corners (RGB 238, 238, 242).
+# Sampled from docs/robodyna_logo.png corners (RGB 238, 238, 242).
 GUI_PAGE_BG = "#eeeef2"
 GUI_INK = "#002d56"
 GUI_MUTED = "#5a6a7c"
 LOGO_PATHS = (
-    REPO_ROOT / "assets" / "dyna_textures" / "robodyna_logo.png",
-    REPO_ROOT / "robodyna_logo.png",
+    REPO_ROOT / "docs" / "robodyna_logo.png",
 )
 
 # Tk lowercases everything after the first letter for WM_CLASS class, so pass the
@@ -225,7 +224,7 @@ def setup_gui_app_icon(
 
 
 def apply_gui_logo(label: tk.Label, *, height: int) -> None:
-    """Put ``robodyna_logo.png`` on ``label``, scaled to ``height`` pixels."""
+    """Put the docs-owned RoboDyna logo on ``label``, scaled to ``height`` pixels."""
     height = max(28, int(height))
     cache = getattr(label, "_robodyna_logo", None)
     if isinstance(cache, dict) and cache.get("height") == height and cache.get("photo") is not None:

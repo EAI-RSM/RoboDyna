@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="robodyna_logo.png" alt="RoboDyna" width="520"/>
+  <img src="docs/robodyna_logo.png" alt="RoboDyna" width="520"/>
 </div>
 
 # RoboDyna
@@ -7,6 +7,8 @@
 **RoboDyna** is a dual-arm robotic manipulation benchmark for **highly dynamic** environments. Tasks emphasize timing, prediction, and reactive control — moving objects, time-limited windows, distractors, and household physics — rather than static pick-and-place.
 
 Built on [RoboTwin 2.0](https://github.com/RoboTwin-Platform/RoboTwin) / DOMINO with **SAPIEN 3.0.3** and a dual-UR5 (`ur5-wsg`) embodiment. The suite includes **23 base** tabletop tasks (each with Default / Opt 1 / Opt 2 / Opt 1+2 variants) and **12 household** office/kitchen tasks. You can explore tasks interactively (robot or keyboard+mouse), collect expert trajectories (HDF5 + LeRobot), and run guided human-evaluation experiments.
+
+The documentation landing page is [`docs/index.html`](docs/index.html); its public logo and task media are also kept under `docs/`.
 
 ## Sample tasks
 

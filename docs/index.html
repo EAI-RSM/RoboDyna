@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="RoboDyna: a benchmark for dynamic dual-arm robotic manipulation.">
+  <title>RoboDyna — Dynamic Dual-Arm Manipulation</title>
+  <style>
+    :root { --ink:#102436; --muted:#526477; --paper:#f5f8fb; --white:#fff; --line:#d9e2ea; --blue:#1769aa; --blue-dark:#0b416e; --accent:#e27d32; --max:1160px; }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.6 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    a { color:var(--blue); } a:hover { color:var(--blue-dark); }
+    .wrap { width:min(calc(100% - 40px),var(--max)); margin:0 auto; }
+    .hero { padding:56px 0 52px; text-align:center; background:radial-gradient(circle at 50% -20%,#dceefb 0,#f8fbfe 47%,var(--paper) 100%); border-bottom:1px solid var(--line); }
+    .logo { display:block; width:min(520px,92%); height:auto; margin:0 auto 22px; }
+    h1,h2,h3,p { margin-top:0; } h1 { font-size:clamp(2rem,5vw,3.4rem); line-height:1.08; letter-spacing:-.04em; } h2 { font-size:clamp(1.7rem,3vw,2.25rem); line-height:1.15; letter-spacing:-.03em; } h3 { font-size:1.08rem; margin-bottom:8px; }
+    .lead { max-width:760px; margin:0 auto; color:var(--muted); font-size:1.15rem; }
+    .actions { display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:26px; }
+    .button { display:inline-block; padding:10px 17px; border:1px solid var(--blue); border-radius:9px; background:var(--blue); color:var(--white); font-weight:700; text-decoration:none; }
+    .button:hover { background:var(--blue-dark); color:var(--white); text-decoration:none; } .button.secondary { background:transparent; color:var(--blue); }
+    section { padding:54px 0; } .section-intro { max-width:720px; color:var(--muted); margin-bottom:26px; }
+    .facts,.gallery { display:grid; gap:18px; } .facts { grid-template-columns:repeat(3,1fr); } .gallery { grid-template-columns:repeat(3,1fr); }
+    .fact,.card { overflow:hidden; background:var(--white); border:1px solid var(--line); border-radius:14px; box-shadow:0 3px 13px rgb(24 59 87 / 5%); }
+    .fact { padding:22px; } .fact p,.card p { margin-bottom:0; color:var(--muted); font-size:.94rem; }
+    .card img { display:block; width:100%; aspect-ratio:4/3; object-fit:cover; background:#071521; } .card-body { padding:16px 17px 19px; }
+    .tag { display:inline-block; margin-bottom:8px; padding:2px 8px; border-radius:999px; background:#e4f1fb; color:var(--blue-dark); font-size:.72rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+    .how { display:grid; grid-template-columns:1.2fr .8fr; gap:24px; align-items:start; }
+    pre { margin:0; padding:20px; overflow:auto; border-radius:12px; background:#102436; color:#e9f2f9; font:.88rem/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .note { padding:22px; border-left:4px solid var(--accent); background:#fff7ef; color:#6c3b16; }
+    footer { padding:30px 0 42px; border-top:1px solid var(--line); color:var(--muted); text-align:center; }
+    @media (max-width:820px) { .facts,.gallery { grid-template-columns:repeat(2,1fr); } .how { grid-template-columns:1fr; } }
+    @media (max-width:520px) { .wrap { width:min(calc(100% - 28px),var(--max)); } .hero { padding:40px 0; } section { padding:40px 0; } .facts,.gallery { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <img class="logo" src="robodyna_logo.png" alt="RoboDyna">
+      <h1>Dynamic manipulation that cannot wait.</h1>
+      <p class="lead">RoboDyna is a dual-arm robotic manipulation benchmark for scenes that keep changing: objects fall, move, cook, ripen, and distract the robot while it acts.</p>
+      <div class="actions">
+        <a class="button" href="https://github.com/EAI-RSM/RoboDyna">View repository</a>
+        <a class="button secondary" href="../README.md">Installation and usage</a>
+      </div>
+    </div>
+  </header>
+  <main>
+    <section>
+      <div class="wrap">
+        <h2>What the benchmark measures</h2>
+        <p class="section-intro">The suite tests perception, prediction, timing, and closed-loop control under changing physical state—not static pick-and-place geometry alone.</p>
+        <div class="facts">
+          <article class="fact"><h3>Time-evolving scenes</h3><p>Targets move, belts run, timers advance, and objects change state at every physics step.</p></article>
+          <article class="fact"><h3>Scenario variants</h3><p>23 Base tasks each include Default, Opt 1, Opt 2, and Opt 1+2 conditions; 12 Household tasks add grounded scenes.</p></article>
+          <article class="fact"><h3>Comparable evaluation</h3><p>Human experiments and policy evaluation share fixed, expert-validated seeds for each task and scenario.</p></article>
+        </div>
+      </div>
+    </section>
+    <section>
+      <div class="wrap">
+        <h2>Selected tasks</h2>
+        <p class="section-intro">All media below is stored with this documentation site under <code>docs/final_task_demos</code>.</p>
+        <div class="gallery">
+          <article class="card"><img src="final_task_demos/catch_marbles_trapdoors/default_head.gif" alt="Catch Marbles Trapdoors"><div class="card-body"><span class="tag">Dynamic pattern</span><h3>Catch Marbles Trapdoors</h3><p>Time the control of trapdoors as marbles pass overhead.</p></div></article>
+          <article class="card"><img src="final_task_demos/catch_cuboid/default_transparent_1cuboid_head.gif" alt="Catch Cuboid"><div class="card-body"><span class="tag">Prediction</span><h3>Catch Cuboid</h3><p>Intercept cuboids during brief pop-up windows.</p></div></article>
+          <article class="card"><img src="final_task_demos/pick_ripe_apple/default_head.gif" alt="Pick Ripe Apple"><div class="card-body"><span class="tag">State transition</span><h3>Pick Ripe Apple</h3><p>Choose a ripe apple while its visual state evolves over time.</p></div></article>
+          <article class="card"><img src="final_task_demos/cook_meat/default_head.gif" alt="Cook Meat"><div class="card-body"><span class="tag">Timing</span><h3>Cook Meat</h3><p>Cook to a target doneness and remove the steak at the right time.</p></div></article>
+          <article class="card"><img src="final_task_demos/save_goal/default_head.gif" alt="Save Goal"><div class="card-body"><span class="tag">Motion prediction</span><h3>Save Goal</h3><p>Block a moving shot before the deadline.</p></div></article>
+          <article class="card"><img src="final_task_demos/whack_moles/default_head.gif" alt="Whack Moles"><div class="card-body"><span class="tag">Dynamic avoidance</span><h3>Whack Moles</h3><p>Strike moving moles while avoiding a distractor.</p></div></article>
+          <article class="card"><img src="final_task_demos/boil_milk/success_head.gif" alt="Boil Milk"><div class="card-body"><span class="tag">Household</span><h3>Boil Milk</h3><p>Heat milk, then turn the stove off before it overflows.</p></div></article>
+          <article class="card"><img src="final_task_demos/catch_cup/success1_head.gif" alt="Catch Cup"><div class="card-body"><span class="tag">Household</span><h3>Catch Cup</h3><p>Push a pillow under a tipping cup before impact.</p></div></article>
+          <article class="card"><img src="final_task_demos/clean_table/success1_head.gif" alt="Clean Table"><div class="card-body"><span class="tag">Household</span><h3>Clean Table</h3><p>Contain a spreading spill before it reaches a laptop.</p></div></article>
+        </div>
+      </div>
+    </section>
+    <section>
+      <div class="wrap how">
+        <div>
+          <h2>Get started</h2>
+          <pre><code>git clone https://github.com/EAI-RSM/RoboDyna.git
+cd RoboDyna
+conda activate robodyna
+bash script/install_robodyna.sh
+
+# Explore the benchmark
+python interactive/robodyna_gui.py</code></pre>
+        </div>
+        <aside class="note"><strong>Documentation assets live here.</strong><br>Keep public imagery, this page, and demo media under <code>docs/</code>. Runtime meshes and task assets remain under <code>assets/</code>.</aside>
+      </div>
+    </section>
+  </main>
+  <footer><div class="wrap">RoboDyna · built on RoboTwin 2.0 / DOMINO and SAPIEN 3.0.3</div></footer>
+</body>
+</html>
