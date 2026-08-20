@@ -33,7 +33,7 @@ sys.path[:0] = [
 ]
 
 from _record_layout_seeds import record_one  # noqa: E402
-from _sweep_household_success import TASKS, run_seed  # noqa: E402
+from sweep_household_success import TASKS, run_seed  # noqa: E402
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 HOUSEHOLD_DEMOS = ROOT / "household_demos"

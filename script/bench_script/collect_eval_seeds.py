@@ -12,10 +12,10 @@ import json
 import os
 from pathlib import Path
 
-from tests._sweep_basic_success import SCENARIOS, TASKS as CONCEPTUAL_TASKS
-from tests._sweep_basic_success import run_seed as run_conceptual_seed
-from tests._sweep_household_success import TASKS as HOUSEHOLD_TASKS
-from tests._sweep_household_success import run_seed as run_household_seed
+from sweep_base_success import SCENARIOS, TASKS as CONCEPTUAL_TASKS
+from sweep_base_success import run_seed as run_conceptual_seed
+from sweep_household_success import TASKS as HOUSEHOLD_TASKS
+from sweep_household_success import run_seed as run_household_seed
 
 
 def main() -> None:

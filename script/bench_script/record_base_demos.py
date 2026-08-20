@@ -30,7 +30,7 @@ sys.path[:0] = [
     str(ROOT / "tests"),
 ]
 
-from _sweep_basic_success import (  # noqa: E402
+from sweep_base_success import (  # noqa: E402
     SCENARIO_OVERRIDES,
     SCENARIOS,
     TASKS,

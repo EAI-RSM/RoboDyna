@@ -45,12 +45,12 @@ if (( id < 92 )); then
   task=${conceptual[$((id / 4))]}
   scenario=${scenarios[$((id % 4))]}
   echo "[seed-search] task=$task scenario=$scenario start=10000 target=10 node=$(hostname) gpu=${CUDA_VISIBLE_DEVICES:-unset}"
-  python -u tests/collect_eval_seeds.py --task "$task" --family conceptual --scenario "$scenario" \
+  python -u script/bench_script/collect_eval_seeds.py --task "$task" --family conceptual --scenario "$scenario" \
     --start-seed 10000 --target 10 --output-dir "$ROBODYNA_SWEEP_ROOT"
 else
   task=${household[$((id - 92))]}
   echo "[seed-search] task=$task family=household start=10000 target=10 node=$(hostname) gpu=${CUDA_VISIBLE_DEVICES:-unset}"
-  python -u tests/collect_eval_seeds.py --task "$task" --family household --scenario base \
+  python -u script/bench_script/collect_eval_seeds.py --task "$task" --family household --scenario base \
     --start-seed 10000 --target 10 --output-dir "$ROBODYNA_SWEEP_ROOT"
 fi
 echo "[seed-sweep] DONE task=$task array_id=$id $(date -Is)"
