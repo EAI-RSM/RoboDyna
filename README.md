@@ -11,7 +11,7 @@ The benchmark contains 23 Base tabletop tasks with four conditions each (Default
 
 ## Project page
 
-The [project page and task gallery](https://eai-rsm.github.io/RoboDyna/) contain every task demo. The interactive gallery covers all 104 Base conditions and all 12 Household tasks, so large media tables do not live in this README.
+The [project page and task gallery](https://eai-rsm.github.io/RoboDyna/) contain every task demo. The interactive gallery covers all 104 Base conditions and all 12 Household tasks, so large media tables do not live in this README. It also links to [RoboDyna Arcade](https://eai-rsm.github.io/RoboDyna/arcade.html), a browser-native conceptual mini-game collection inspired by the benchmark.
 
 ## Quick start
 

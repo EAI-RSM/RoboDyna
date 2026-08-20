@@ -30,11 +30,14 @@
     .tag { display:inline-block; margin-bottom:8px; padding:2px 8px; border-radius:999px; background:#e4f1fb; color:var(--blue-dark); font-size:.72rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
     .variant-tabs { gap:6px; } .variant { padding:4px 8px; border-radius:7px; font-size:.74rem; }
     .gallery-meta { display:flex; justify-content:space-between; align-items:center; gap:16px; margin:20px 0; color:var(--muted); }
+    .arcade-panel { display:grid; grid-template-columns:1.3fr .7fr; gap:24px; align-items:center; padding:28px; border:1px solid #273a4c; border-radius:16px; color:#d9e5ec; background:linear-gradient(135deg,#0b1016,#162533); box-shadow:0 12px 34px rgb(8 20 30 / 18%); }
+    .arcade-panel h2 { color:#fff; } .arcade-panel p { color:#aebdca; margin-bottom:0; } .arcade-panel code { color:#ffb238; }
+    .arcade-panel .button { justify-self:end; background:#ffb238; border-color:#ffb238; color:#18222c; } .arcade-panel .button:hover { background:#ffd17a; color:#18222c; }
     .how { display:grid; grid-template-columns:1.2fr .8fr; gap:24px; align-items:start; }
     pre { margin:0; padding:20px; overflow:auto; border-radius:12px; background:#102436; color:#e9f2f9; font:.88rem/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
     .note { padding:22px; border-left:4px solid var(--accent); background:#fff7ef; color:#6c3b16; }
     footer { padding:30px 0 42px; border-top:1px solid var(--line); color:var(--muted); text-align:center; }
-    @media (max-width:820px) { .facts,.gallery { grid-template-columns:repeat(2,1fr); } .how { grid-template-columns:1fr; } }
+    @media (max-width:820px) { .facts,.gallery { grid-template-columns:repeat(2,1fr); } .how,.arcade-panel { grid-template-columns:1fr; } .arcade-panel .button { justify-self:start; } }
     @media (max-width:520px) { .wrap { width:min(calc(100% - 28px),var(--max)); } .hero { padding:40px 0; } section { padding:40px 0; } .facts,.gallery { grid-template-columns:1fr; } .gallery-meta { align-items:flex-start; flex-direction:column; } }
   </style>
 </head>
@@ -47,6 +50,7 @@
       <div class="actions">
         <a class="button" href="https://github.com/EAI-RSM/RoboDyna">View repository</a>
         <a class="button secondary" href="#gallery">Explore all tasks</a>
+        <a class="button secondary" href="arcade.html">Play RoboDyna Arcade</a>
         <a class="button secondary" href="https://github.com/EAI-RSM/RoboDyna#quick-start">Quick start</a>
       </div>
     </div>
@@ -74,6 +78,17 @@
         </div>
         <div class="gallery-meta"><span id="gallery-count" aria-live="polite"></span><span>GIFs load only as you browse.</span></div>
         <div id="task-gallery" class="gallery"></div>
+      </div>
+    </section>
+    <section id="arcade">
+      <div class="wrap">
+        <div class="arcade-panel">
+          <div>
+            <h2>RoboDyna Arcade</h2>
+            <p>Play 26 lightweight browser mini-games inspired by RoboDyna tasks. Each cabinet retains a task's signature reflex—catching, timing, sorting, aiming, or reacting—but uses simplified game logic. It is an outreach concept, not the SAPIEN physics benchmark.</p>
+          </div>
+          <a class="button" href="arcade.html">Launch the arcade →</a>
+        </div>
       </div>
     </section>
     <section>
