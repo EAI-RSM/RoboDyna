@@ -235,6 +235,15 @@ class cook_meat(Base_Task):
             authored = 1.0
         return authored * float(scale_mult)
 
+    def _require_actor(self, actor: Any, modelname: str):
+        """Raise if ``create_actor`` failed to load a mesh (None has no ``set_name``)."""
+        if actor is None:
+            raise UnStableError(
+                f"cook_meat: missing asset {modelname} "
+                "(install with bash script/_download_assets.sh)"
+            )
+        return actor
+
     @classmethod
     def _mesh_vertices(cls, collision_path: str) -> np.ndarray:
         """Load and cache vertices from a collision mesh."""
@@ -610,14 +619,17 @@ class cook_meat(Base_Task):
             raise UnStableError(
                 f"cook_meat: pan not placeable ({tag}, seed {self._ep_seed}) -- skip"
             )
-        skillet = create_actor(
-            self,
-            pose=skillet_pose,
-            modelname="106_skillet",
-            model_id=skillet_id,
-            convex=True,
-            is_static=True,
-            scale_mult=self.pan_scale,
+        skillet = self._require_actor(
+            create_actor(
+                self,
+                pose=skillet_pose,
+                modelname="106_skillet",
+                model_id=skillet_id,
+                convex=True,
+                is_static=True,
+                scale_mult=self.pan_scale,
+            ),
+            "106_skillet",
         )
         skillet_name = f"106_skillet_{tag}"
         skillet.set_name(skillet_name)
@@ -685,14 +697,17 @@ class cook_meat(Base_Task):
             "assets/objects/104_board/model_data0.json", encoding="utf-8"
         ) as board_data_file:
             board_data = json.load(board_data_file)
-        board = create_actor(
-            self,
-            pose=board_pose,
-            modelname="104_board",
-            model_id=0,
-            convex=True,
-            is_static=True,
-            scale_mult=board_scale_mult,
+        board = self._require_actor(
+            create_actor(
+                self,
+                pose=board_pose,
+                modelname="104_board",
+                model_id=0,
+                convex=True,
+                is_static=True,
+                scale_mult=board_scale_mult,
+            ),
+            "104_board",
         )
         board.set_name(f"104_board_{tag}")
         board.config = {
@@ -712,14 +727,17 @@ class cook_meat(Base_Task):
             ),
             rotate_rand=False,
         )
-        steak = create_actor(
-            self,
-            pose=steak_pose,
-            modelname="200_steak",
-            model_id=0,
-            convex=True,
-            is_static=False,
-            scale_mult=(1.0, self.steak_thick, 1.0),
+        steak = self._require_actor(
+            create_actor(
+                self,
+                pose=steak_pose,
+                modelname="200_steak",
+                model_id=0,
+                convex=True,
+                is_static=False,
+                scale_mult=(1.0, self.steak_thick, 1.0),
+            ),
+            "200_steak",
         )
         steak_name = f"200_steak_{tag}"
         steak.set_name(steak_name)
