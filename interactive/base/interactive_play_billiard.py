@@ -302,13 +302,9 @@ class RobotCueController:
         _default_aim(env)
 
     def update(self, window):
-        if self.env._strike_done or self.env._primary_pocketed:
-            if not self.struck:
-                print(
-                    "Tip hit registered."
-                    if self.env._strike_done
-                    else "Ball pocketed."
-                )
+        del window
+        if self.env._strike_done and not self.struck:
+            print("Tip hit registered.")
             self.struck = True
 
 
@@ -391,6 +387,12 @@ def main():
                     break
                 continue
 
+            # Scoring starts only after a real hit (Space or tip contact).
+            # Spawn / settle must not succeed or fail the episode on its own.
+            has_struck = bool(getattr(controller, "struck", False)) or bool(
+                getattr(env, "_strike_done", False)
+            )
+
             if env._robot_ball_contact and use_robot:
                 report_task_result(env, "robot touched ball")
                 terminal_started_at = time.perf_counter()
@@ -399,17 +401,19 @@ def main():
                 if not use_robot and getattr(controller, "_tip_xy", None) is None:
                     env._cue_distractor_contact = False
                     continue
+                if not has_struck and not use_robot:
+                    env._cue_distractor_contact = False
+                    continue
                 report_task_result(env, "cue touched non-target ball")
                 terminal_started_at = time.perf_counter()
+                continue
+            if not has_struck:
                 continue
             if getattr(env, "_distractor_pocketed", False):
                 report_task_result(env, "non-target ball pocketed")
                 terminal_started_at = time.perf_counter()
                 continue
             if env._strike_done or env._primary_pocketed:
-                if not getattr(controller, "struck", False) and not use_robot:
-                    # Ignore leftover strike flags from spawn; wait for Space.
-                    continue
                 if settle_after is None:
                     settle_after = time.perf_counter()
                     print("Ball in motion; settling…")

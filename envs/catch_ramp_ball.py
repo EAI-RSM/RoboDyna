@@ -81,9 +81,10 @@ class catch_ramp_ball(Base_Task):
         self.enable_distractor = False
         self.wall_bounce_enabled = False
         super()._init_task_env_(**kwags)
-        # Keep the ball frozen at the drop pose until play_once. Starting motion
-        # here (with expert_demo=False) lets setup stepping finish the whole roll
-        # before the robot moves — which also starves demo frame capture.
+        # After settle: start here so policy eval / interactive see the roll
+        # without play_once. Starting *during* _init_task_env_ would finish the
+        # roll before the episode begins.
+        self._start_ball_motion(expert_demo=False)
 
     # ---------------------------------------------------------------- helpers
     @staticmethod
@@ -730,6 +731,11 @@ class catch_ramp_ball(Base_Task):
     # ---------------------------------------------------------- ball motion
     def _start_ball_motion(self, expert_demo):
         if not getattr(self, "_loaded", False):
+            return
+        # load_actors parks the ball as "frozen". That is not a started run —
+        # skip only if the drop/roll is already live (interactive calls this
+        # again after setup_demo).
+        if self._ball_phase in ("dropping", "rolling", "released") and not expert_demo:
             return
         self._expert_demo = bool(expert_demo)
         self._cup_ready = False

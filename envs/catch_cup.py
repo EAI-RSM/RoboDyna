@@ -170,6 +170,8 @@ class catch_cup(Office_base_task):
         # expert push both displace it only through gripper contact.
         if self.pillow is not None:
             self._enable_pillow_physics()
+        # Cup rolls from episode start so policy eval does not wait for play_once.
+        self._release_cup()
 
     # --------------------------------------------------------------- scene
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):

@@ -106,6 +106,9 @@ class punch_dual_holes(Base_Task):
         self._apply_legacy_option()
         self._reset_metric_state()
         super()._init_task_env_(**kwags)
+        # Belts run from episode start (policy eval never calls play_once).
+        self._belt_active = True
+        self._belt_running = True
 
     def _apply_legacy_option(self):
         """Map record_demo ``--option`` / config ``option`` onto named toggles.

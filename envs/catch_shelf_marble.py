@@ -201,6 +201,11 @@ class catch_shelf_marble(Base_Task):
         self._bowl_drive_clamp = None
         super()._init_task_env_(**kwags)
         self._configure_observer_camera()
+        # After settle: osc must not run during check_stable. Policy eval never
+        # calls play_once. Default marble still waits for a physical key press.
+        self._osc_armed = True
+        if bool(getattr(self, "reactive_marble", False)):
+            self._release_marble()
 
     def _configure_observer_camera(self):
         """Frame the whole belt + shelf stack from the table's upper-right corner (third-person

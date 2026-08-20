@@ -147,6 +147,8 @@ class play_billiard(Base_Task):
         # Invalidate per-step state before _init_task_env_ (it may call
         # _update_kinematic_tasks during camera load, before load_actors).
         self._loaded = False
+        # False through check_stable so spawn contacts cannot strike or sink.
+        self._billiard_live = False
         self._cue_welded = False
         self._primary_pocketed = False
         self._primary_pocket_id = None
@@ -171,6 +173,9 @@ class play_billiard(Base_Task):
         self._target_arrow_parts = []
         self._blocked_pocket_id = None
         super()._init_task_env_(**kwags)
+        # After settle: balls rest, cue is on the stand. Scoring starts only
+        # from a real tip hit / Space — never from leftover spawn contacts.
+        self._billiard_live = True
 
     def setup_scene(self, **kwargs):
         """Create the scene with a low bounce threshold so ball–ball hits rebound.
@@ -1638,6 +1643,9 @@ class play_billiard(Base_Task):
             return
         self._update_welded_cue()
         self._track_billiard_metrics()
+        if not getattr(self, "_billiard_live", False):
+            self._ensure_balls_dynamic()
+            return
         if getattr(self, "_interactive_robot_mode", True) is False:
             self._check_cue_distractor_contact()
             self._ensure_balls_dynamic()

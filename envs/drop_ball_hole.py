@@ -126,6 +126,8 @@ class drop_ball_hole(Base_Task):
         self.ball_color = list(self.BALL_COLOR_DEFAULT)
         self.ball = None
         super()._init_task_env_(**kwags)
+        # Platform spin starts here so policy eval sees it without play_once.
+        self._cap_tracking = True
 
     @staticmethod
     def _as_bool(value, default=False):

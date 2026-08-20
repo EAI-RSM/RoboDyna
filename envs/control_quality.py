@@ -105,6 +105,11 @@ class control_quality(Base_Task):
         self._stamp_active = False
         self._reset_metric_state()
         super()._init_task_env_(**kwags)
+        # Tile belt runs from episode start (policy eval never calls play_once).
+        if getattr(self, "_stamp_ready", False):
+            self.enable_interactive_tile_pause()
+            self._belt_running = True
+            self._stamp_active = True
 
     def _apply_legacy_option(self):
         """Map record_demo ``--option`` / config ``option`` onto named toggles.

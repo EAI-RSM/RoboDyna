@@ -228,6 +228,10 @@ class catch_mouse_object_drop(Office_base_task):
         self._occ_table = []
         super().setup_demo(**kwags)
         self._configure_observer_camera()
+        # Mouse + shelf objects go live after settle (policy eval never calls play_once).
+        self._allow_shove = True
+        self._activate_target()
+        self._release_mouse()
 
     # --------------------------------------------------------------- scene
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):

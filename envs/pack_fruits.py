@@ -190,6 +190,9 @@ class pack_fruits(Base_Task):
         self._belt_running = False
         self._reset_metric_state()
         super()._init_task_env_(**kwags)
+        # Stream fruit from episode start (policy eval never calls play_once).
+        if getattr(self, "_belt_ready", False):
+            self._belt_running = True
 
     # --------------------------------------------------------------- actors
     def load_actors(self):

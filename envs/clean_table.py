@@ -139,6 +139,8 @@ class clean_table(Base_Task):
         self.mug_avoid_margin = self.MUG_AVOID_MARGIN
 
         super()._init_task_env_(**kwags)
+        # Mug tips after settle so policy eval does not wait for play_once.
+        self._animate_tip()
 
     # ------------------------------------------------------------------ actors
     def load_actors(self):
@@ -1234,6 +1236,8 @@ class clean_table(Base_Task):
         a fixed +90° swings the mouth onto spill_dir for both left and right
         laptop placements (same as the original working left-laptop scene).
         """
+        if bool(getattr(self, "cup_tipped", False)):
+            return
         upright = np.asarray(self.MUG_UPRIGHT_Q, dtype=float)
         axis = self._tip_axis()
         tip_ang = 0.5 * np.pi

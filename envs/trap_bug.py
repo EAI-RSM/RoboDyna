@@ -130,6 +130,8 @@ class trap_bug(Office_base_task):
             self._office_arr_choices = [0, 2]
         super().setup_demo(**kwags)
         self._configure_observer_camera()
+        # After settle so the bug is not moving during check_stable.
+        self._start_bug()
 
     def _configure_observer_camera(self):
         cams = getattr(self, "cameras", None)
@@ -1018,6 +1020,8 @@ class trap_bug(Office_base_task):
                 self._take_picture()
 
     def _start_bug(self):
+        if getattr(self, "_bug_moving", False):
+            return
         self._bug_moving = True
         self._bug_walk_elapsed = 0.0
         self._bug_escaped = False

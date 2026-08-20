@@ -168,8 +168,9 @@ class save_goal(Base_Task):
         self._keeper_deployed = False
         self._keeper_drop_pose = None
         super()._init_task_env_(**kwags)
-        # Ball starts in play_once so grasp/place planning time does not burn the shot clock.
-        self._ball_motion_active = False
+        # After settle so check_stable does not see a moving ball. Policy eval
+        # never calls play_once, so the shot must start here.
+        self._start_shot()
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
@@ -2097,9 +2098,10 @@ class save_goal(Base_Task):
         if progress >= 1.0:
             self._ball_motion_active = False
 
-    # ----------------------------------------------------------------- policy
-    def play_once(self):
-        # Start the shot when the expert begins acting (deterministic across collector passes).
+    def _start_shot(self):
+        """Begin the kinematic shot. Idempotent after setup_demo."""
+        if getattr(self, "_ball_motion_active", False):
+            return
         self._ball_step = 0
         self._ball_blocked = False
         self._ball_live = False
@@ -2112,7 +2114,12 @@ class save_goal(Base_Task):
         self._keeper_drop_pose = None
         self._players_hit = set()
         self._ball_motion_active = True
-        self._set_collision_enabled(self.ball, False)
+        if getattr(self, "ball", None) is not None:
+            self._set_collision_enabled(self.ball, False)
+
+    # ----------------------------------------------------------------- policy
+    def play_once(self):
+        self._start_shot()
 
         arm_tag = ArmTag("left" if self.mirrored else "right")
         grasp_contact_id = [0, 1, 2, 3]

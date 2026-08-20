@@ -149,6 +149,8 @@ class marble_shelf_maze(Base_Task):
         self._hold_tilt_shelf_idx = None   # shelf kept tilted until release after a drop
         self._button_arrows = {"left": [], "right": []}
         super()._init_task_env_(**kwags)
+        # Opt 2 bowl motion from episode start (policy eval never calls play_once).
+        self._bowl_armed = bool(getattr(self, "osc_bowl_enabled", False))
 
     # ------------------------------------------------------------------ helpers
     @staticmethod

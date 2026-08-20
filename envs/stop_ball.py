@@ -168,6 +168,8 @@ class stop_ball(Office_base_task):
         self._robot_groups_backup = None
         super().setup_demo(**kwags)
         self._configure_observer_camera()
+        # Ball rolls from episode start so policy eval does not wait for play_once.
+        self._release_ball()
 
     # --------------------------------------------------------------- scene
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):
