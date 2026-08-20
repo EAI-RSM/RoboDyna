@@ -1,6 +1,0 @@
-Asset: 273_broccoli
-Source: https://opengameart.org/content/food-kit (broccoli.glb); https://poly.pizza/m/q4S5AWvhlW
-Author: Kenney
-License: CC0 1.0
-Notes: Centered geometric origin; scaled for make_soup board produce.
-Collision: 2.4cm cube hull (matches prior make_soup produce cubes).

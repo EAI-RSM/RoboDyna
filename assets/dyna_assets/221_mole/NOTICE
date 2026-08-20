@@ -1,6 +1,0 @@
-Asset: 221_mole
-Source: "Smackem Mole" by mess110
-URL: https://opengameart.org/content/smackem-mole
-License: CC0 1.0 (Public Domain Dedication)
-Notes: Texture stripped for runtime recolor (black → green on hit).
-Use: mole actors for whack_a_mole.

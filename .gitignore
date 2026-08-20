@@ -25,29 +25,16 @@ eval_result/
 tmp/*
 !tmp/.gitkeep
 
-# Code Generation — stock RoboTwin trees stay ignored (HF download);
-# custom task assets below are whitelisted for tracking.
+# Runtime assets are published separately at Hugging Face. The only checked-in
+# files here are the manifest, downloader, attribution, and embodiment templates.
 assets/*
 !assets/_download.py
+!assets/asset_manifest.json
+!assets/ASSET_NOTICE.md
+!assets/robodyna-assets-v1.sha256
 
-# Custom RoboDyna images / textures (logos, stamps, soccer ball, README gifs)
-!assets/dyna_textures/
-!assets/dyna_textures/**
-
-# Stock RoboTwin wall/table textures (HF download: seen/unseen)
-!assets/background_texture/
-assets/background_texture/*
-
-# Stock RoboTwin objects (HF download). Custom RoboDyna meshes live in dyna_assets.
-!assets/objects/
-assets/objects/*
-
-# Custom RoboDyna objects + office fixtures used by dynamic / household tasks
-!assets/dyna_assets/
-!assets/dyna_assets/**
-
-# Embodiment configs + locally-modified ur5-wsg URDF. Meshes / other embodiment
-# assets still come from the HF embodiments.zip download.
+# Embodiment configuration templates and the compact URDF are versioned. Meshes
+# are delivered by the runtime asset archive.
 !assets/embodiments/
 assets/embodiments/*
 !assets/embodiments/ur5-wsg/

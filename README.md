@@ -25,7 +25,8 @@ cd RoboDyna
 bash script/install_robodyna.sh
 conda activate robodyna
 
-# Downloads RoboTwin meshes, embodiments, and background textures.
+# Downloads the checked, minimal runtime asset package (~1.2 GiB).
+# It includes only assets used by RoboDyna's shipped tasks.
 bash script/_download_assets.sh
 ```
 
@@ -68,6 +69,7 @@ bash scripts/collect_data.sh boil_milk demo_dynamic 0
 | `scripts/` | Shell and Slurm launchers |
 | `policy/pi0/`, `policy/pi05/` | Supported policy integrations |
 | `docs/` | Project page, logo, and published task media |
+| [`RoboDyna/RoboDyna-assets`](https://huggingface.co/datasets/RoboDyna/RoboDyna-assets) | Versioned minimal runtime meshes and textures |
 
 There is one fixed language instruction per task in [`task_config/task_instructions.json`](task_config/task_instructions.json). The GUI, policy evaluation, and LeRobot export use this shared catalog. [`task_config/eval_seeds.yml`](task_config/eval_seeds.yml) holds the fixed seeds shared by human experiments and policy evaluation.
 
