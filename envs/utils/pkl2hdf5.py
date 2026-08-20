@@ -170,14 +170,15 @@ def pkl_files_to_hdf5_and_video(
             if vid is None:
                 missing = ", ".join(video_cameras)
                 raise RuntimeError(f"No RGB frames for video cameras: {missing}")
+        elif "head_camera" in obs and "rgb" in obs["head_camera"]:
+            # Default interactive / training view (elevated head; formerly called top-down).
+            vid = np.array(obs["head_camera"]["rgb"])
         elif "demo_camera" in obs and "rgb" in obs["demo_camera"]:
-            # Prefer third-person demo_camera (visualize_task_scene view) when present; else
-            # head + countertop side-by-side; else any single static camera.
             vid = np.array(obs["demo_camera"]["rgb"])
         else:
             vid = _stack_camera_streams(obs, ["head_camera", "countertop_camera"])
         if vid is None:
-            _vid_cam = next((c for c in ("countertop_camera", "head_camera", "front_camera")
+            _vid_cam = next((c for c in ("head_camera", "countertop_camera", "front_camera")
                              if c in obs and "rgb" in obs[c]), None)
             vid = np.array(obs[_vid_cam]["rgb"])
         # fps = 250/save_freq -> the preview video plays at REAL sim time (so its length == the actual

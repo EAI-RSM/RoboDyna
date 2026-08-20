@@ -602,6 +602,7 @@ def _replay_interactive_cameras(meta: dict):
     Camera / ``data_type`` flags follow the same yaml as ``collect_data.py``
     (head + wrists + embodiment static cams such as ``demo_camera`` /
     ``front_camera``) so the HDF5 schema matches planner collection.
+    The companion ``episode*.mp4`` is the interactive default ``head_camera``.
     """
     snapshots = meta.get("snapshots") or []
     if not snapshots:
@@ -651,6 +652,13 @@ def _replay_interactive_cameras(meta: dict):
     replay.task_config = folder
     replay._record_write_hdf5 = bool(meta.get("write_hdf5", True))
     replay._record_write_video = bool(meta.get("write_video", True))
+    replay._record_preview_head_only = True
+    try:
+        from envs.utils.household_view import configure_standard_head_camera
+
+        configure_standard_head_camera(replay)
+    except Exception:
+        pass
     if data_type:
         replay.data_type = dict(data_type)
     try:
