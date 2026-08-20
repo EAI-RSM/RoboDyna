@@ -1383,6 +1383,14 @@ def _collect_episode_metrics(env, ok: bool | None, detail: str | None) -> dict:
     ps = _env_partial_score(env)
     if ps is not None:
         metrics["partial_score"] = float(ps)
+    detail_getter = getattr(env, "get_score_detail", None)
+    if callable(detail_getter):
+        try:
+            partial_detail = detail_getter()
+            if isinstance(partial_detail, dict) and partial_detail:
+                metrics["partial_score_detail"] = partial_detail
+        except Exception:
+            pass
     tracker = getattr(env, "_metrics_tracker", None)
     if tracker is not None:
         try:

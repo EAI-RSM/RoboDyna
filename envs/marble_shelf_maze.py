@@ -116,6 +116,9 @@ class marble_shelf_maze(Base_Task):
         self.ball = None
         self._ball_rigid = None
         self.active_shelf_idx = 0
+        # Completed-action partial score: retain the deepest shelf reached even
+        # if the marble later falls.  This is not a distance-to-goal measure.
+        self._partial_deepest_shelf = 0
         self._ball_mode = "resting"      # resting | sliding | falling | done | missed
         self._reset_metric_state()
         self._sliding_shelf_idx = -1
@@ -520,6 +523,7 @@ class marble_shelf_maze(Base_Task):
             except Exception:
                 pass
         self.active_shelf_idx = 0
+        self._partial_deepest_shelf = 0
         self._ball_mode = "resting"
         self._sliding_shelf_idx = -1
         self._reset_metric_state()
@@ -1079,6 +1083,9 @@ class marble_shelf_maze(Base_Task):
             except Exception:
                 pass
         self._ball_mode = "resting"
+        self._partial_deepest_shelf = max(
+            int(getattr(self, "_partial_deepest_shelf", 0) or 0), int(idx)
+        )
         if advance_active:
             self.active_shelf_idx = idx
             self._sliding_shelf_idx = -1

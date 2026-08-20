@@ -31,6 +31,7 @@ from _task_briefing import (  # noqa: E402
     setup_gui_app_icon,
     show_task_briefing,
 )
+from _trial_metrics import show_trial_metrics  # noqa: E402
 from experiment_config import load_experiment_config  # noqa: E402
 from experiment_logs import (  # noqa: E402
     append_play,
@@ -1873,6 +1874,8 @@ class InteractiveTaskLauncher(tk.Tk):
                         "#e6a15c",
                         sticky=True,
                     )
+                if code in (0, 10):
+                    show_trial_metrics(self, payload, run_meta)
             else:
                 # While running, surface the episode-specific condition once available.
                 cond = self._read_result_condition()

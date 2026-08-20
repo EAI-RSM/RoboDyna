@@ -246,11 +246,41 @@ class Base_Task(gym.Env):
         pass
 
     def get_score(self) -> float:
-        """Partial / full task score in ``[0, 1]``. Default: 1 on success else 0."""
+        """Partial / full task score in ``[0, 1]``.
+
+        Base / Conceptual tasks with registered completed-action milestones use
+        those rules.  Household tasks keep their own overrides; all remaining
+        tasks retain the historical binary success fallback.
+        """
         try:
-            return 1.0 if bool(self.check_success()) else 0.0
+            from .utils.base_partial_scores import score_for_task
+
+            score = score_for_task(self)
+            if score is not None:
+                return float(score)
         except Exception:
-            return 0.0
+            pass
+        try:
+            score = 1.0 if bool(self.check_success()) else 0.0
+        except Exception:
+            score = 0.0
+        self._partial_score_detail = {
+            "strategy": "binary_success_fallback",
+            "base_progress": score,
+            "completed_actions": {"task_success": bool(score)},
+            "penalties": [],
+            "final_score": score,
+        }
+        return score
+
+    def get_score_detail(self) -> dict:
+        """Return the latest partial-score calculation for interactive display."""
+        # Recalculate only when a task has not already produced its explanation.
+        # This preserves the terminal frame calculation latched by the UI loop.
+        if not isinstance(getattr(self, "_partial_score_detail", None), dict):
+            self.get_score()
+        detail = getattr(self, "_partial_score_detail", None)
+        return dict(detail) if isinstance(detail, dict) else {}
 
     def setup_scene(self, **kwargs):
         """
