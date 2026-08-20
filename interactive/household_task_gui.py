@@ -123,6 +123,7 @@ KEYBOARD_TUTORIAL_PARTS = (
 PLAY_BLUE = "#3182bd"
 PLAY_BLUE_ACTIVE = "#4295d0"
 LOCKED_GRAY = "#59616b"
+RECORDING_GREEN = "#2a7a52"
 PAGE_BG = GUI_PAGE_BG
 HEADER_BG = GUI_PAGE_BG
 HEADER_FG = GUI_INK
@@ -292,6 +293,9 @@ class RoundedButton(tk.Canvas):
             self.disabled_text = options.pop("disabledforeground")
         if "state" in options:
             self.button_state = options.pop("state")
+            options.setdefault(
+                "cursor", "arrow" if self.button_state != "normal" else "hand2"
+            )
         if "font" in options:
             self._font = options.pop("font")
         if "radius" in options:
@@ -333,6 +337,8 @@ class HouseholdTaskLauncher(tk.Tk):
         self.active_tutorial: int | None = None
         self.result_file: Path | None = None
         self._run_meta: dict | None = None
+        self._recording_run = False
+        self._recording_phase = False
         self.preview_sources: list[Image.Image | None] = []
         self.preview_photos: list[ImageTk.PhotoImage | None] = []
         self.preview_labels: list[tk.Label] = []
@@ -479,14 +485,14 @@ class HouseholdTaskLauncher(tk.Tk):
         self.briefing_check = self._header_tick(
             self.option_group, "Instructions", self.show_briefing
         )
+        self.metrics_check = self._header_tick(
+            self.option_group, "Trial metrics", self.show_metrics
+        )
         self.record_check = self._header_tick(
             self.option_group, "Record data", self.record_data
         )
         self.video_check = self._header_tick(
             self.option_group, "Save video", self.save_video
-        )
-        self.metrics_check = self._header_tick(
-            self.option_group, "Trial metrics", self.show_metrics
         )
 
         self.seed_group = tk.Frame(self.controls, bg=HEADER_BG)
@@ -602,7 +608,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self._ui_scale_job = self.after(80, self._apply_ui_scale)
 
     def _header_tick(self, parent, text, variable):
-        """Square checkbox used for Instructions / Record data / Save video / Trial metrics."""
+        """Square checkbox used for Instructions / Trial metrics / Record data / Save video."""
         btn = tk.Checkbutton(
             parent,
             text=text,
@@ -627,9 +633,9 @@ class HouseholdTaskLauncher(tk.Tk):
     def _set_option_checks(self, state: str) -> None:
         for widget in (
             self.briefing_check,
+            self.metrics_check,
             self.record_check,
             self.video_check,
-            self.metrics_check,
         ):
             widget.configure(state=state)
 
@@ -683,6 +689,7 @@ class HouseholdTaskLauncher(tk.Tk):
             command.append("--record-data")
         elif want_video:
             child_env["ROBODYNA_RECORD_CONFIG"] = "demo_dynamic"
+        self._recording_run = bool(experiment_mode() and want_data)
 
     def _apply_ui_scale(self):
         self._ui_scale_job = None
@@ -704,9 +711,9 @@ class HouseholdTaskLauncher(tk.Tk):
         self.title_label.configure(font=self._scaled_font(34, "bold", s))
         self.subtitle_label.configure(font=self._scaled_font(14, scale=s))
         self.briefing_check.configure(font=self._scaled_font(14, "bold", s))
+        self.metrics_check.configure(font=self._scaled_font(14, "bold", s))
         self.record_check.configure(font=self._scaled_font(14, "bold", s))
         self.video_check.configure(font=self._scaled_font(14, "bold", s))
-        self.metrics_check.configure(font=self._scaled_font(14, "bold", s))
         self.seed_caption.configure(font=self._scaled_font(13, "bold", s))
         self.control_caption.configure(font=self._scaled_font(13, "bold", s))
         self.seed_entry.configure(font=self._scaled_font(13, "bold", s))
@@ -1272,6 +1279,9 @@ class HouseholdTaskLauncher(tk.Tk):
             )
             return
         if self.child is not None:
+            if self._run_uninterruptible():
+                self._refuse_recording_interrupt()
+                return
             if self.active_index == index and self.active_tutorial is None:
                 self._stop_task("Task stopped. Select another task when ready.")
             else:
@@ -1292,6 +1302,9 @@ class HouseholdTaskLauncher(tk.Tk):
             )
             return
         if self.child is not None:
+            if self._run_uninterruptible():
+                self._refuse_recording_interrupt()
+                return
             if self.active_tutorial == index:
                 self._stop_task("Tutorial stopped. Select a part or task when ready.")
             else:
@@ -1303,15 +1316,83 @@ class HouseholdTaskLauncher(tk.Tk):
             return
         self._start_tutorial(index)
 
+    def _run_uninterruptible(self) -> bool:
+        """HDF5 write after the viewer closes cannot be stopped from the launcher."""
+        return bool(
+            self.child is not None
+            and getattr(self, "_recording_run", False)
+            and getattr(self, "_recording_phase", False)
+        )
+
+    def _refuse_recording_interrupt(self) -> None:
+        self._set_status(
+            "Recording data. This step cannot be interrupted.",
+            "#e6a15c",
+            sticky=True,
+        )
+
+    def _active_run_button(self) -> "RoundedButton | None":
+        try:
+            if self.active_tutorial is not None:
+                return self.tutorial_buttons[int(self.active_tutorial)]
+            if self.active_index is None:
+                return None
+            display = self._visible_task_indices.index(self.active_index)
+            return self.task_buttons[display]
+        except (IndexError, ValueError, TypeError):
+            return None
+
+    def _enter_recording_phase(self) -> None:
+        if getattr(self, "_recording_phase", False):
+            return
+        if not getattr(self, "_recording_run", False):
+            return
+        self._recording_phase = True
+        self._mark_running_buttons()
+        button = self._active_run_button()
+        if button is not None:
+            self._style_active_run_button(button)
+        note = "Recording data. This step cannot be interrupted."
+        self._run_status_base = note
+        self._set_status(note, "#70d6a2", sticky=True)
+
+    def _style_active_run_button(self, button: "RoundedButton") -> None:
+        if self._run_uninterruptible():
+            button.configure(
+                state="disabled",
+                text="Recording",
+                bg=RECORDING_GREEN,
+                activebackground=RECORDING_GREEN,
+                disabledbackground=RECORDING_GREEN,
+                disabledforeground="white",
+            )
+            self.exit_button.configure(state="disabled")
+            return
+        button.configure(
+            state="normal",
+            text="Stop",
+            bg="#b06a20",
+            activebackground="#d0842b",
+        )
+        self.exit_button.configure(state="normal")
+
     def _mark_running_buttons(self):
-        """Disable every Play control except the active Stop button."""
+        """Disable every Play control except the active Stop button.
+
+        After the viewer closes, an experiment HDF5 write has no Stop control.
+        """
+        lock_stop = self._run_uninterruptible()
         for i, button in enumerate(self.task_buttons):
             orig = self._visible_task_indices[i]
             is_active = self.active_index == orig and self.active_tutorial is None
-            button.configure(state="normal" if is_active else "disabled")
+            button.configure(
+                state="normal" if is_active and not lock_stop else "disabled"
+            )
         for part_index, button in enumerate(self.tutorial_buttons):
             is_active = self.active_tutorial == part_index
-            button.configure(state="normal" if is_active else "disabled")
+            button.configure(
+                state="normal" if is_active and not lock_stop else "disabled"
+            )
 
     def _start_tutorial(self, index: int):
         label, script_stem, hint = self._tutorial_parts()[index]
@@ -1429,6 +1510,7 @@ class HouseholdTaskLauncher(tk.Tk):
             child_env["ROBODYNA_SAVE_VIDEO"] = "0"
             child_env.pop("ROBODYNA_RECORD_DATA", None)
             child_env.pop("ROBODYNA_RECORD_CONFIG", None)
+            self._recording_run = False
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
             )
@@ -1436,6 +1518,7 @@ class HouseholdTaskLauncher(tk.Tk):
             self._remove_result_file()
             messagebox.showerror("Could not start tutorial", str(exc))
             self.child = None
+            self._recording_run = False
             return
 
         self.active_index = None
@@ -1444,9 +1527,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.control.configure(state="disabled")
         self.seed_entry.configure(state="disabled")
         self._set_option_checks("disabled")
-        self.tutorial_buttons[index].configure(
-            text="Stop", bg="#b06a20", activebackground="#d0842b"
-        )
+        self._style_active_run_button(self.tutorial_buttons[index])
         run_text = (
             f"Running Tutorial / {label} with seed {seed}. "
             "Close its viewer or press Stop."
@@ -1519,6 +1600,7 @@ class HouseholdTaskLauncher(tk.Tk):
             self._remove_result_file()
             messagebox.showerror("Could not start task", str(exc))
             self.child = None
+            self._recording_run = False
             return
         self.active_index = index
         self.active_tutorial = None
@@ -1528,7 +1610,7 @@ class HouseholdTaskLauncher(tk.Tk):
         self.seed_entry.configure(state="disabled")
         self._set_option_checks("disabled")
         display = self._visible_task_indices.index(index)
-        self.task_buttons[display].configure(text="Stop", bg="#b06a20", activebackground="#d0842b")
+        self._style_active_run_button(self.task_buttons[display])
         run_text = (
             f"Running {label} with seed {seed}. Close its viewer or press Stop to return."
         )
@@ -1545,6 +1627,8 @@ class HouseholdTaskLauncher(tk.Tk):
                 self.child = None
                 self.active_index = None
                 self.active_tutorial = None
+                self._recording_run = False
+                self._recording_phase = False
                 payload = self._read_result_payload()
                 reason = None
                 recorded = record_status_note(payload)
@@ -1595,14 +1679,21 @@ class HouseholdTaskLauncher(tk.Tk):
                 if code in (0, 10) and bool(self.show_metrics.get()):
                     show_trial_metrics(self, payload, run_meta)
             else:
-                cond = self._read_result_condition()
-                if cond and cond != getattr(self, "_shown_episode_condition", None):
-                    self._shown_episode_condition = cond
-                    base = getattr(self, "_run_status_base", None) or "Running task."
-                    self._set_status(f"{base}  Condition: {cond}", "#70d6a2", sticky=True)
+                payload = self._read_result_payload()
+                if isinstance(payload, dict) and payload.get("recording"):
+                    self._enter_recording_phase()
+                if not getattr(self, "_recording_phase", False):
+                    cond = self._read_result_condition()
+                    if cond and cond != getattr(self, "_shown_episode_condition", None):
+                        self._shown_episode_condition = cond
+                        base = getattr(self, "_run_status_base", None) or "Running task."
+                        self._set_status(f"{base}  Condition: {cond}", "#70d6a2", sticky=True)
         self.after(250, self._poll_child)
 
     def _reset_task_buttons(self):
+        self._recording_run = False
+        self._recording_phase = False
+        self.exit_button.configure(state="normal")
         if experiment_mode():
             self._apply_experiment_protocol()
         else:
@@ -1793,6 +1884,9 @@ class HouseholdTaskLauncher(tk.Tk):
                 pass
 
     def _stop_task(self, status=None):
+        if self._run_uninterruptible():
+            self._refuse_recording_interrupt()
+            return
         child = self.child
         run_meta = self._run_meta
         payload = self._read_result_payload()
@@ -1811,6 +1905,8 @@ class HouseholdTaskLauncher(tk.Tk):
             self.child = None
             self.active_index = None
             self.active_tutorial = None
+            self._recording_run = False
+            self._recording_phase = False
             self._record_experiment_play(run_meta, payload, stopped=True)
             self._run_meta = None
             self._remove_result_file()
@@ -1819,6 +1915,13 @@ class HouseholdTaskLauncher(tk.Tk):
             self._set_status(status, "#e6a15c", sticky=True)
 
     def exit_app(self):
+        if self._run_uninterruptible():
+            messagebox.showinfo(
+                "Recording in progress",
+                "Data is being recorded and cannot be interrupted. "
+                "Wait until the write finishes.",
+            )
+            return
         self._stop_task()
         self.destroy()
 

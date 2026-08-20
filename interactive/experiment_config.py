@@ -103,7 +103,11 @@ _SCENARIO_ALIASES = {
     "opt1+2": "opt1+2",
     "opt1+opt2": "opt1+2",
     "opt 1+2": "opt1+2",
+    "opt1 + 2": "opt1+2",
     "opt12": "opt1+2",
+    "opt1_2": "opt1+2",
+    "opt1_opt2": "opt1+2",
+    "option1+2": "opt1+2",
 }
 
 
@@ -458,8 +462,32 @@ class SlotPolicy:
         return False
 
 
+def _listed_bool(value) -> bool:
+    """Listed whitelist keys default to on; explicit false/off stays off."""
+    return _as_bool(value, True)
+
+
+def _ingest_bool_names(policy: SlotPolicy, items) -> None:
+    for item in items:
+        if isinstance(item, bool):
+            continue
+        text = str(item or "").strip().lower()
+        if text in ("base", "household"):
+            policy.suite[text] = True
+            continue
+        scenario = _normalize_scenario(item)
+        if scenario:
+            policy.scenario_kind[scenario] = True
+
+
+def _bool_whitelist_from_names(items) -> SlotPolicy:
+    policy = SlotPolicy(default=False, bool_mode=True, missing_slot=False)
+    _ingest_bool_names(policy, items)
+    return policy
+
+
 def _ingest_bool_task(policy: SlotPolicy, suite: str, task: str, spec) -> None:
-    if isinstance(spec, (list, tuple)):
+    if isinstance(spec, (list, tuple, set, frozenset)):
         policy.slot_explicit_tasks.add((suite, task))
         for item in spec:
             scenario = _normalize_scenario(item)
@@ -471,15 +499,24 @@ def _ingest_bool_task(policy: SlotPolicy, suite: str, task: str, spec) -> None:
         for raw_scenario, raw_value in spec.items():
             scenario = _normalize_scenario(raw_scenario)
             if scenario:
-                policy.slot[(suite, task, scenario)] = _as_bool(raw_value, False)
+                policy.slot[(suite, task, scenario)] = _listed_bool(raw_value)
         return
-    policy.task[(suite, task)] = _as_bool(spec, False)
+    scenario = _normalize_scenario(spec)
+    if scenario:
+        policy.slot_explicit_tasks.add((suite, task))
+        policy.slot[(suite, task, scenario)] = True
+        return
+    policy.task[(suite, task)] = _listed_bool(spec)
 
 
 def _ingest_bool_suite(policy: SlotPolicy, suite: str, spec) -> None:
-    if isinstance(spec, (list, tuple)):
+    if isinstance(spec, (list, tuple, set, frozenset)):
         for item in spec:
+            scenario = _normalize_scenario(item)
             task = resolve_task_name(suite, item)
+            if scenario and not task:
+                policy.suite_scenario[(suite, scenario)] = True
+                continue
             if task:
                 policy.task[(suite, task)] = True
         return
@@ -488,16 +525,39 @@ def _ingest_bool_suite(policy: SlotPolicy, suite: str, spec) -> None:
             scenario = _normalize_scenario(raw_key)
             task = resolve_task_name(suite, raw_key)
             if scenario and not task:
-                policy.suite_scenario[(suite, scenario)] = _as_bool(raw_value, False)
+                policy.suite_scenario[(suite, scenario)] = _listed_bool(raw_value)
                 continue
             if task:
                 _ingest_bool_task(policy, suite, task, raw_value)
         return
-    policy.suite[suite] = _as_bool(spec, False)
+    scenario = _normalize_scenario(spec)
+    if scenario:
+        policy.suite_scenario[(suite, scenario)] = True
+        return
+    policy.suite[suite] = _listed_bool(spec)
 
 
 def parse_bool_policy(raw, default: bool = False) -> SlotPolicy:
-    """Parse ``true`` / ``false`` or a suite/task/scenario map (whitelist unless ``default`` is set)."""
+    """Parse ``true`` / ``false`` or a suite/task/scenario whitelist.
+
+    Unlisted slots stay off. Listing a name without a value turns that slot on::
+
+        true                         # every suite / scenario
+        false                        # none
+        opt1+2                       # Opt 1+2 only
+        [opt1, opt2]                 # those columns
+        {opt1+2: true}               # Opt 1+2 only; household off
+        {opt1+2: true, household: true}
+    """
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        return _bool_whitelist_from_names(raw)
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in ("base", "household"):
+            return _bool_whitelist_from_names([text])
+        scenario = _normalize_scenario(raw)
+        if scenario:
+            return _bool_whitelist_from_names([raw])
     if _is_policy_map(raw):
         has_opts = _top_level_has_opt_keys(raw)
         if "all" in raw:
@@ -525,7 +585,7 @@ def parse_bool_policy(raw, default: bool = False) -> SlotPolicy:
                 continue
             if text == "default" and not has_opts and "all" not in raw:
                 continue
-            policy.scenario_kind[scenario] = _as_bool(value, False)
+            policy.scenario_kind[scenario] = _listed_bool(value)
         return policy
     return SlotPolicy(default=_as_bool(raw, default), bool_mode=True, missing_slot=False)
 

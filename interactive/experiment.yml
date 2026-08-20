@@ -55,14 +55,26 @@ plays_per_scenario:
   household: 12
 
 # Write terminal plays to data/exp_logs/<user>/user.json
-# true / false = all or none. Same map form as plays_per_scenario, e.g.
+# true / false = all slots or none. Same subset form as record_data, e.g.
 #   log_plays: {opt1+2: true}     # only log Opt 1+2
 log_plays: true
 
-# HDF5 / LeRobot episode under data/<task>/  (true / false / slot map)
+# HDF5 / LeRobot episode under data/<task>/ after a play.
+# true / false = every slot or none. To record a subset, use the same map
+# as plays_per_scenario (unlisted slots stay off):
+#   record_data: true
+#   record_data: false
+#   record_data: opt1+2                      # Opt 1+2 only
+#   record_data: [opt1, opt2]                # those columns
+#   record_data: {opt1+2: true}              # Opt 1+2 only; household off
+#   record_data: {opt1+2: true, household: true}
+#   record_data:                             # per-task override
+#     opt1+2: true
+#     base:
+#       1: {opt1: true}                      # task 01 Opt 1 as well
 record_data: true
 
-# head-camera preview mp4 after the viewer closes  (true / false / slot map)
+# head-camera preview mp4 after the viewer closes (same true / false / subset form)
 save_video: false
 
 # ---------------------------------------------------------------------------

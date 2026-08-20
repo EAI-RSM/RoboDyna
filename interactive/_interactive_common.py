@@ -746,6 +746,9 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
         print("[record-data] no frames captured; nothing to save")
         return None
 
+    if bool(getattr(env, "_interactive_record_write_hdf5", True)):
+        _mark_interactive_recording_started()
+
     replay = None
     try:
         replay = _replay_interactive_cameras(meta)
@@ -1540,6 +1543,15 @@ def _persist_task_result(
         )
     except OSError:
         pass
+
+
+def _mark_interactive_recording_started() -> None:
+    """Tell the parent GUI the viewer is done and HDF5 write has begun."""
+    _persist_task_result(
+        _LAST_TASK_RESULT,
+        _LAST_TASK_DETAIL,
+        extra={"recording": True},
+    )
 
 
 def _resolve_task_name(env, task: str | None = None) -> str:

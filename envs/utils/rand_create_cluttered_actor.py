@@ -12,28 +12,34 @@ from pathlib import Path
 def get_all_cluttered_objects():
     cluttered_objects_info = {}
     cluttered_objects_name = []
+    objects_dir = Path("./assets/objects")
 
-    # load from cluttered_objects
-    cluttered_objects_config = json.load(open(Path("./assets/objects/objaverse/list.json"), "r", encoding="utf-8"))
-    cluttered_objects_name += cluttered_objects_config["item_names"]
-    for model_name, model_ids in cluttered_objects_config["list_of_items"].items():
-        cluttered_objects_info[model_name] = {
-            "ids": model_ids,
-            "type": "urdf",
-            "root": f"objects/objaverse/{model_name}",
-        }
-        params = {}
-        for model_id in model_ids:
-            model_full_name = f"{model_name}_{model_id}"
-            params[model_id] = {
-                "z_max": cluttered_objects_config["z_max"][model_full_name],
-                "radius": cluttered_objects_config["radius"][model_full_name],
-                "z_offset": cluttered_objects_config["z_offset"][model_full_name],
+    # Optional Objaverse clutter pool. The RoboDyna runtime asset package
+    # omits it; shipped task configs also keep cluttered_table: false.
+    objaverse_list = objects_dir / "objaverse" / "list.json"
+    if objaverse_list.is_file():
+        with open(objaverse_list, "r", encoding="utf-8") as file:
+            cluttered_objects_config = json.load(file)
+        cluttered_objects_name += cluttered_objects_config["item_names"]
+        for model_name, model_ids in cluttered_objects_config["list_of_items"].items():
+            cluttered_objects_info[model_name] = {
+                "ids": model_ids,
+                "type": "urdf",
+                "root": f"objects/objaverse/{model_name}",
             }
-        cluttered_objects_info[model_name]["params"] = params
+            params = {}
+            for model_id in model_ids:
+                model_full_name = f"{model_name}_{model_id}"
+                params[model_id] = {
+                    "z_max": cluttered_objects_config["z_max"][model_full_name],
+                    "radius": cluttered_objects_config["radius"][model_full_name],
+                    "z_offset": cluttered_objects_config["z_offset"][model_full_name],
+                }
+            cluttered_objects_info[model_name]["params"] = params
 
     # load from objects
-    objects_dir = Path("./assets/objects")
+    if not objects_dir.is_dir():
+        return cluttered_objects_info, cluttered_objects_name, {}
     for model_dir in objects_dir.iterdir():
         if not model_dir.is_dir():
             continue
@@ -81,7 +87,12 @@ def get_all_cluttered_objects():
             "params": params,
         }
 
-    same_obj = json.load(open(Path("./assets/objects/same.json"), "r", encoding="utf-8"))
+    same_path = objects_dir / "same.json"
+    if same_path.is_file():
+        with open(same_path, "r", encoding="utf-8") as file:
+            same_obj = json.load(file)
+    else:
+        same_obj = {}
     cluttered_objects_name = list(cluttered_objects_name)
     cluttered_objects_name.sort()
     return cluttered_objects_info, cluttered_objects_name, same_obj

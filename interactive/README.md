@@ -38,7 +38,7 @@ A task/scenario is locked (gray, not selectable) only after a terminal **SUCCESS
 
 Edit `interactive/experiment.yml` to set:
 
-- `record_data` / `save_video`
+- `record_data` / `save_video` — `true` / `false`, or a scenario subset (`opt1+2`, `{opt1+2: true}`, `[opt1, opt2]`)
 - `controller` (`robot` or `keyboard`)
 - `base_tasks` / `household_tasks` — 1-based card numbers (see the tables in that file)
 
