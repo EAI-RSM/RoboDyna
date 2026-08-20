@@ -1576,7 +1576,7 @@ class InteractiveTaskLauncher(tk.Tk):
             messagebox.showerror("Task unavailable", f"Missing launcher:\n{script}")
             return
         try:
-            seed = resolve_seed(self.seed_entry.get())
+            seed = self._resolve_launch_seed("base", task, scenario)
         except ValueError as exc:
             messagebox.showerror("Invalid seed", str(exc))
             self.seed_entry.focus_set()
