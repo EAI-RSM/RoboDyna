@@ -95,7 +95,7 @@ echo "COLLECT task=$TASK cfg=$CFG op=$OP fam=$FAM status=$STATUS hdf5=$have/$TAR
 LRROOT="$REPO/data_lerobot/prod_run/${TASK}__${OP}"
 if ls "$LRROOT"/data/task-*/*.parquet >/dev/null 2>&1 || ls "$LRROOT"/data/chunk-*/*.parquet >/dev/null 2>&1; then
   echo "[collect] finalize lerobot for ${TASK}__${OP} (rebuild _parts from disk + merge)"
-  python "$REPO/rebuild_lerobot_parts.py" --root "$LRROOT" 2>&1 | tail -3
+  python "$REPO/scripts/rebuild_lerobot_parts.py" --root "$LRROOT" 2>&1 | tail -3
   python "$REPO/scripts/merge_lerobot_meta.py" --root "$LRROOT" 2>&1 | tail -3 || echo "[collect] lerobot merge FAILED for ${TASK}__${OP}"
 else
   echo "[collect] no parquet under $LRROOT -- skipping lerobot finalize (status=$STATUS)"

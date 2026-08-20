@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local (4080) equivalent of collect.sbatch: run a manifest of combos one at a time on the
+# Local (4080) equivalent of scripts/slurm/collect.sbatch: run a manifest of combos one at a time on the
 # single RTX 4080S, with the same attempt/timeout/zero-progress guards, then finalize LeRobot.
 # Usage: collect_4080.sh <manifest>
 set -u
@@ -144,7 +144,7 @@ while read -r TASK CFG FAM OP; do
 
   LRROOT="$REPO/data_lerobot/prod_run/${TASK}__${OP}"
   if ls "$LRROOT"/data/task-*/*.parquet >/dev/null 2>&1 || ls "$LRROOT"/data/chunk-*/*.parquet >/dev/null 2>&1; then
-    python "$REPO/rebuild_lerobot_parts.py" --root "$LRROOT" >> "$LOG" 2>&1
+    python "$REPO/scripts/rebuild_lerobot_parts.py" --root "$LRROOT" >> "$LOG" 2>&1
     python "$REPO/scripts/merge_lerobot_meta.py" --root "$LRROOT" >> "$LOG" 2>&1 \
       || echo "[local4080] lerobot merge FAILED for ${TASK}__${OP}" | tee -a "$LOG"
   fi

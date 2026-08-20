@@ -11,6 +11,8 @@ import yaml
 
 CONFIG_PATH = Path(__file__).resolve().parent / "experiment.yml"
 CONFIG_ENV = "ROBODYNA_EXPERIMENT_CONFIG"
+EVALUATION_SEEDS_PATH = Path(__file__).resolve().parents[1] / "task_config" / "eval_seeds.yml"
+EVALUATION_SEEDS_ENV = "ROBODYNA_EVAL_SEEDS_CONFIG"
 
 BASE_SCENARIOS = ("default", "opt1", "opt2", "opt1+2")
 
@@ -665,6 +667,57 @@ def parse_seed_policy(raw) -> SlotPolicy:
     return SlotPolicy(default=_as_seeds(raw), bool_mode=False, missing_slot=[])
 
 
+def evaluation_seeds_path() -> Path:
+    """Path to the shared, fixed human-and-policy evaluation seed protocol."""
+    raw = os.environ.get(EVALUATION_SEEDS_ENV, "").strip()
+    return Path(raw) if raw else EVALUATION_SEEDS_PATH
+
+
+def load_evaluation_seed_policy(path: Path | None = None) -> SlotPolicy:
+    """Load the fixed benchmark seed policy from ``task_config/eval_seeds.yml``.
+
+    The loader deliberately accepts only the ``seed`` section from the shared
+    protocol file.  A missing or malformed file resolves to no seeds, which
+    callers treat as a configuration error rather than silently randomizing a
+    benchmark run.
+    """
+    path = path or evaluation_seeds_path()
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return parse_seed_policy(None)
+    if not isinstance(raw, dict):
+        return parse_seed_policy(None)
+    return parse_seed_policy(raw.get("seed"))
+
+
+def evaluation_suite(task: str) -> str:
+    """Return the evaluation suite containing a canonical task name."""
+    key = str(task or "").strip().replace("-", "_")
+    if key in {name for _number, name, _label in BASE_TASK_TABLE}:
+        return "base"
+    if key in {name for _number, name, _label in HOUSEHOLD_TASK_TABLE}:
+        return "household"
+    raise ValueError(f"Task {task!r} is not in the RoboDyna evaluation protocol.")
+
+
+def evaluation_seeds_for(
+    task: str,
+    scenario: str | None = None,
+    *,
+    path: Path | None = None,
+) -> list[int]:
+    """Return the exact fixed seed list for one benchmark task slot."""
+    suite = evaluation_suite(task)
+    if suite == "base":
+        scenario = _normalize_scenario(scenario) or "default"
+    else:
+        scenario = None
+    policy = load_evaluation_seed_policy(path)
+    resolved = policy.resolve(suite, str(task).strip().replace("-", "_"), scenario)
+    return list(resolved) if isinstance(resolved, list) else _as_seeds(resolved)
+
+
 @dataclass
 class ExperimentConfig:
     record_data_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(False))
@@ -930,7 +983,9 @@ def load_experiment_config(path: Path | None = None) -> ExperimentConfig:
     cfg.log_plays_policy = parse_bool_policy(log_raw, True)
     if "plays_per_scenario" in raw:
         cfg.plays_policy = parse_int_policy(raw.get("plays_per_scenario"), 1)
-    cfg.seed_policy = parse_seed_policy(raw.get("seed"))
+    # Evaluation seeds are benchmark data, not a GUI-local preference.  Both
+    # the experiment launcher and policy evaluators read this one shared file.
+    cfg.seed_policy = load_evaluation_seed_policy()
     cfg.seeds = list(cfg.seed_policy.default or [])
     if "base_tasks" in raw:
         cfg.base_tasks = _as_int_list(raw.get("base_tasks"), DEFAULT_BASE_TASKS)

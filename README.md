@@ -137,14 +137,15 @@ python interactive/robodyna_gui.py
 
 ### Config
 
-Protocol settings live in [`interactive/experiment.yml`](interactive/experiment.yml) (override path with `ROBODYNA_EXPERIMENT_CONFIG=/path/to.yml`):
+GUI protocol settings live in [`interactive/experiment.yml`](interactive/experiment.yml) (override path with `ROBODYNA_EXPERIMENT_CONFIG=/path/to.yml`). Fixed task/scenario seeds live in [`task_config/eval_seeds.yml`](task_config/eval_seeds.yml) and are shared unchanged with policy evaluation:
 
-- `seed` — `null` (random each play), a fixed int, or a cycling list
 - `plays_per_scenario` — how many terminal SUCCESS/FAILURE plays lock a slot
 - `record_data` / `save_video` / `log_plays` — recording and logging (locked in the task GUIs during experiment mode)
 - `base_tasks` / `household_tasks` — candidate pools (1-based card numbers)
 - `base_scenarios_per_experiment` / `household_scenarios_per_experiment` — how many tasks to sample per participant
 - `base_task_categories` / `household_task_categories` — skill / difficulty buckets used for balanced sampling
+
+Policy evaluation runs the exact ten seeds for the requested task and scenario. The optional seventh argument to `policy/pi0/eval.sh` or `policy/pi05/eval.sh` selects `default`, `opt1`, `opt2`, or `opt1+2` (default: `default`); household tasks have one scenario.
 
 ### Task sampling
 

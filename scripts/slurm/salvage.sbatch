@@ -59,11 +59,11 @@ STATUS=OK
 [ "$have" -eq 0 ] && STATUS=EMPTY
 echo "SALVAGE task=$TASK cfg=$CFG op=$OP status=$STATUS hdf5=$have/$NSEED before=$b4 rc=$rc node=$(hostname)" | tee "$REPO/run_results/salv_${CFG}.txt"
 
-# finalize LeRobot from disk (same as collect.sbatch tail)
+# finalize LeRobot from disk (same as scripts/slurm/collect.sbatch tail)
 LRROOT="$REPO/data_lerobot/prod_run/${TASK}__${OP}"
 if ls "$LRROOT"/data/task-*/*.parquet >/dev/null 2>&1 || ls "$LRROOT"/data/chunk-*/*.parquet >/dev/null 2>&1; then
   echo "[salvage] finalize lerobot ${TASK}__${OP}"
-  python "$REPO/rebuild_lerobot_parts.py" --root "$LRROOT" 2>&1 | tail -3
+  python "$REPO/scripts/rebuild_lerobot_parts.py" --root "$LRROOT" 2>&1 | tail -3
   python "$REPO/scripts/merge_lerobot_meta.py" --root "$LRROOT" 2>&1 | tail -3 || echo "[salvage] merge FAILED ${TASK}__${OP}"
 fi
 echo "[salvage] DONE $(date -Is) task=$TASK status=$STATUS hdf5=$have/$NSEED"

@@ -4,6 +4,7 @@ task_name: null
 task_config: null
 ckpt_setting: null
 seed: null
+scenario: default
 instruction_type: unseen
 
 # Add Parameters You Need

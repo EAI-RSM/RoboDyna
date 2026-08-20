@@ -21,7 +21,7 @@ PROPERTIES
     it is safe to run alongside live collection and safe to re-run.
 
 USAGE
-    python rebuild_lerobot_parts.py --root data_lerobot/prod_run/<cfg>
+    python scripts/rebuild_lerobot_parts.py --root data_lerobot/prod_run/<cfg>
         [--full]             recompute every episode, ignore existing slices
         [--no-image-stats]   skip decoding videos for per-channel image stats (much faster)
 """

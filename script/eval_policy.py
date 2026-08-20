@@ -22,6 +22,7 @@ import pdb
 
 from generate_episode_instructions import *
 from eval_metrics import EvalMetricsTracker, AggregatedMetrics, EpisodeMetrics, env_uses_dynamic
+from evaluation_protocol import configure_evaluation
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
@@ -83,6 +84,9 @@ def main(usr_args):
     args['task_name'] = task_name
     args["task_config"] = task_config
     args["ckpt_setting"] = ckpt_setting
+    suite, scenario, evaluation_seeds = configure_evaluation(
+        task_name, args, usr_args.get("scenario")
+    )
 
     embodiment_type = args.get("embodiment")
     embodiment_config_path = os.path.join(CONFIGS_PATH, "_embodiment_config.yml")
@@ -158,12 +162,15 @@ def main(usr_args):
     usr_args["left_arm_dim"] = len(args["left_embodiment_config"]["arm_joints_name"][0])
     usr_args["right_arm_dim"] = len(args["right_embodiment_config"]["arm_joints_name"][1])
 
-    seed = usr_args["seed"]
-
-    st_seed = 100000 * (1 + seed)
+    st_seed = evaluation_seeds[0]
     suc_nums = []
-    test_num = 100
+    test_num = len(evaluation_seeds)
     topk = 1
+
+    print(
+        f"Fixed evaluation protocol: suite={suite}, scenario={scenario or 'default'}, "
+        f"seeds={evaluation_seeds}"
+    )
 
     model = get_model(usr_args)
     st_seed, suc_num, aggregated_metrics = eval_policy(
@@ -174,7 +181,8 @@ def main(usr_args):
         st_seed,
         test_num=test_num,
         video_size=video_size,
-        instruction_type=instruction_type
+        instruction_type=instruction_type,
+        evaluation_seeds=evaluation_seeds,
     )
     suc_nums.append(suc_num)
 
@@ -185,6 +193,9 @@ def main(usr_args):
     with open(file_path, "w") as file:
         file.write(f"Timestamp: {current_time}\n\n")
         file.write(f"Instruction Type: {instruction_type}\n\n")
+        file.write(f"Evaluation suite: {suite}\n")
+        file.write(f"Scenario: {scenario or 'default'}\n")
+        file.write(f"Seeds: {','.join(map(str, evaluation_seeds))}\n\n")
         file.write("\n".join(map(str, np.array(suc_nums) / test_num)))
 
     # Save detailed metrics report
@@ -200,6 +211,11 @@ def main(usr_args):
         for k, v in summary.items():
             if isinstance(v, float) and np.isnan(v):
                 summary[k] = None
+        summary["evaluation_protocol"] = {
+            "suite": suite,
+            "scenario": scenario or "default",
+            "seeds": evaluation_seeds,
+        }
         json.dump(summary, file, indent=2)
     
     # Save per-episode detailed results
@@ -221,7 +237,8 @@ def eval_policy(task_name,
                 st_seed,
                 test_num=100,
                 video_size=None,
-                instruction_type=None):
+                instruction_type=None,
+                evaluation_seeds=None):
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
 
@@ -237,7 +254,11 @@ def eval_policy(task_name,
     eval_func = eval_function_decorator(policy_name, "eval")
     reset_func = eval_function_decorator(policy_name, "reset_model")
 
-    now_seed = st_seed
+    fixed_seeds = [int(seed) for seed in (evaluation_seeds or [])]
+    fixed_seed_index = 0
+    if fixed_seeds:
+        test_num = len(fixed_seeds)
+    now_seed = fixed_seeds[0] if fixed_seeds else st_seed
     task_total_reward = 0
     clear_cache_freq = args["clear_cache_freq"]
 
@@ -247,6 +268,11 @@ def eval_policy(task_name,
     aggregated_metrics = AggregatedMetrics()
 
     while succ_seed < test_num:
+        if fixed_seeds:
+            if fixed_seed_index >= len(fixed_seeds):
+                break
+            now_seed = fixed_seeds[fixed_seed_index]
+            fixed_seed_index += 1
         render_freq = args["render_freq"]
         args["render_freq"] = 0
 
@@ -260,6 +286,8 @@ def eval_policy(task_name,
                 # print("Error: ", e)
                 # print(" -------------")
                 TASK_ENV.close_env()
+                if fixed_seeds:
+                    raise RuntimeError(f"Fixed evaluation seed {now_seed} is unstable.") from e
                 now_seed += 1
                 args["render_freq"] = render_freq
                 continue
@@ -269,6 +297,8 @@ def eval_policy(task_name,
                 # print("Error: ", e)
                 # print(" -------------")
                 TASK_ENV.close_env()
+                if fixed_seeds:
+                    raise RuntimeError(f"Fixed evaluation seed {now_seed} failed expert setup.") from e
                 now_seed += 1
                 args["render_freq"] = render_freq
                 # print("error occurs !")
@@ -278,6 +308,10 @@ def eval_policy(task_name,
             succ_seed += 1
             suc_test_seed_list.append(now_seed)
         else:
+            if fixed_seeds:
+                raise RuntimeError(
+                    f"Fixed evaluation seed {now_seed} no longer passes the expert check."
+                )
             now_seed += 1
             args["render_freq"] = render_freq
             continue
@@ -307,6 +341,10 @@ def eval_policy(task_name,
                 print(f"Error: Failed to initialize dynamic motion for seed {now_seed}, skipping...")
                 TASK_ENV.close_env()
                 TASK_ENV.release_episode_resources()
+                if fixed_seeds:
+                    raise RuntimeError(
+                        f"Fixed evaluation seed {now_seed} failed dynamic-motion initialization."
+                    )
                 now_seed += 1
                 succ_seed -= 1
                 continue
@@ -462,7 +500,8 @@ def eval_policy(task_name,
             f"Avg PS: \033[95m{average_partial_score_text}\033[0m | "
             f"current seed: \033[90m{now_seed}\033[0m\n"
         )
-        now_seed += 1
+        if not fixed_seeds:
+            now_seed += 1
 
     return now_seed, TASK_ENV.suc, aggregated_metrics
 

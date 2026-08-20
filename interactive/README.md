@@ -40,7 +40,10 @@ Edit `interactive/experiment.yml` to set:
 
 - `record_data` / `save_video`
 - `controller` (`robot` or `keyboard`)
-- `seed` (`null` = random each play)
 - `base_tasks` / `household_tasks` — 1-based card numbers (see the tables in that file)
+
+Fixed evaluation seeds are defined separately in
+[`task_config/eval_seeds.yml`](../task_config/eval_seeds.yml). The human GUI
+and policy evaluators use this same task/scenario seed list.
 
 Those controls are locked in the task GUIs during an experiment session. The standalone base / household launchers are unchanged.
