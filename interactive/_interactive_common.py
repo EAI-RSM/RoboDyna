@@ -620,8 +620,15 @@ def _replay_interactive_cameras(meta: dict):
     if config_name.startswith(".interactive_gui_"):
         config_name = "demo_dynamic"
     use_robot = bool(meta.get("use_robot", True))
+    # Rasterize this pass: the rt camera shader can deadlock on a GPU fence
+    # partway through, which would stall the HDF5 / video write forever. Set the
+    # variable to 0 beforehand to record with ray tracing anyway.
+    os.environ.setdefault("ROBODYNA_DISABLE_RAY_TRACING", "1")
+    from envs._base_task import ray_tracing_disabled
+
+    shading = "rasterized" if ray_tracing_disabled() else "ray-traced"
     print(
-        f"[record-data] rendering {len(snapshots)} frames offscreen "
+        f"[record-data] rendering {len(snapshots)} frames offscreen, {shading} "
         f"(same cameras as collect_data / {config_name})..."
     )
     config = configure_task(task_name, config_name, seed, use_robot)

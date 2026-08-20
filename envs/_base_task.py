@@ -42,6 +42,26 @@ def resolve_ray_tracing_denoiser(default: str = "none") -> str:
     return denoiser
 
 
+# Rasterization shader shipped with SAPIEN, used when ray tracing is turned off.
+RASTER_CAMERA_SHADER = "default"
+
+
+def ray_tracing_disabled() -> bool:
+    """True when cameras should rasterize instead of path-trace.
+
+    The ``rt`` camera shader intermittently deadlocks mid-episode: the render
+    thread parks on a GPU fence that never signals, so a recording stalls
+    forever instead of failing. Interactive / experiment recording sets
+    ``ROBODYNA_DISABLE_RAY_TRACING=1`` to avoid that; ``0`` forces ray tracing.
+    """
+    return str(os.getenv("ROBODYNA_DISABLE_RAY_TRACING", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class Base_Task(gym.Env):
 
     def __init__(self):
@@ -296,10 +316,13 @@ class Base_Task(gym.Env):
         # give renderer to sapien sim
         self.engine.set_renderer(self.renderer)
 
-        sapien.render.set_camera_shader_dir("rt")
-        sapien.render.set_ray_tracing_samples_per_pixel(32)
-        sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser(resolve_ray_tracing_denoiser())
+        if ray_tracing_disabled():
+            sapien.render.set_camera_shader_dir(RASTER_CAMERA_SHADER)
+        else:
+            sapien.render.set_camera_shader_dir("rt")
+            sapien.render.set_ray_tracing_samples_per_pixel(32)
+            sapien.render.set_ray_tracing_path_depth(8)
+            sapien.render.set_ray_tracing_denoiser(resolve_ray_tracing_denoiser())
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()
