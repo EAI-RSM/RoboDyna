@@ -213,6 +213,7 @@ def configure_task(task_name: str, config_name: str, seed: int, use_robot: bool,
     config["left_embodiment_config"] = embodiment_config(config["left_robot_file"])
     config["right_embodiment_config"] = embodiment_config(config["right_robot_file"])
     config["task_config"] = config_name
+    use_capture_camera(config)
     return config
 
 
@@ -286,6 +287,27 @@ def disable_rt_for_interactive_capture() -> None:
 
 
 disable_rt_for_interactive_capture()
+
+CAPTURE_CAMERA_TYPE = "HD_D435"
+
+
+def capture_camera_type() -> str:
+    """Head-camera preset for interactive / experiment capture.
+
+    The recorded mp4 is the head camera, and the collect_data default (``D435``,
+    320x240) reads as blurry next to the viewer window. ``HD_D435`` keeps that
+    framing at 1280x960. Set ``ROBODYNA_CAPTURE_CAMERA_TYPE`` to any key in
+    ``task_config/_camera_config.yml`` (e.g. ``D435``) to override; this also
+    changes the head_camera resolution stored in the HDF5.
+    """
+    return os.environ.get("ROBODYNA_CAPTURE_CAMERA_TYPE", "").strip() or CAPTURE_CAMERA_TYPE
+
+
+def use_capture_camera(config: dict) -> None:
+    """Raise head-camera resolution when this run will record data or video."""
+    if not interactive_capture_requested():
+        return
+    config.setdefault("camera", {})["head_camera_type"] = capture_camera_type()
 
 
 def _argv_value(flag: str, default: str | None = None) -> str | None:

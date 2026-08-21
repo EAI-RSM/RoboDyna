@@ -23,3 +23,10 @@ Demo_D435:
   fovy: 42
   w: 640
   h: 480
+
+# Interactive / experiment capture. Same framing as D435 (fovy and 4:3 aspect
+# unchanged), 4x the pixels, so the recorded mp4 is not softer than the viewer.
+HD_D435:
+  fovy: 37
+  w: 1280
+  h: 960
