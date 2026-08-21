@@ -299,26 +299,35 @@ def disable_rt_for_interactive_capture() -> None:
 
 disable_rt_for_interactive_capture()
 
-CAPTURE_CAMERA_TYPE = "HD_D435"
+CAPTURE_DEMO_CAMERA_TYPE = "Demo_HD"
 
 
-def capture_camera_type() -> str:
-    """Head-camera preset for interactive / experiment capture.
+def capture_demo_camera_type() -> str:
+    """demo_camera preset for interactive / experiment capture.
 
-    The recorded mp4 is the head camera, and the collect_data default (``D435``,
-    320x240) reads as blurry next to the viewer window. ``HD_D435`` keeps that
-    framing at 1280x960. Set ``ROBODYNA_CAPTURE_CAMERA_TYPE`` to any key in
-    ``task_config/_camera_config.yml`` (e.g. ``D435``) to override; this also
-    changes the head_camera resolution stored in the HDF5.
+    Head stays collect_data ``D435`` (320x240). The third-person ``demo_camera``
+    uses ``Demo_HD`` (1280x960, same fovy as ``Demo_D435``) so HDF5 and the
+    preview mp4 are sharp. Override with ``ROBODYNA_CAPTURE_DEMO_CAMERA_TYPE``.
     """
-    return os.environ.get("ROBODYNA_CAPTURE_CAMERA_TYPE", "").strip() or CAPTURE_CAMERA_TYPE
+    return os.environ.get("ROBODYNA_CAPTURE_DEMO_CAMERA_TYPE", "").strip() or CAPTURE_DEMO_CAMERA_TYPE
 
 
 def use_capture_camera(config: dict) -> None:
-    """Raise head-camera resolution when this run will record data or video."""
+    """Raise demo-camera resolution when this run will record data or video."""
     if not interactive_capture_requested():
         return
-    config.setdefault("camera", {})["head_camera_type"] = capture_camera_type()
+    demo_type = capture_demo_camera_type()
+    for key in ("left_embodiment_config", "right_embodiment_config"):
+        emb = config.get(key)
+        if not isinstance(emb, dict):
+            continue
+        for cam in emb.get("static_camera_list") or []:
+            if str(cam.get("name") or "") == "demo_camera":
+                cam["type"] = demo_type
+
+
+def _interactive_preview_cameras():
+    return ["demo_camera"]
 
 
 def _argv_value(flag: str, default: str | None = None) -> str | None:
@@ -679,7 +688,7 @@ def _render_logged_snapshots_on_live_env(env, snapshots: list) -> int:
     env._interactive_record_now = True
     env._record_write_hdf5 = bool(getattr(env, "_interactive_record_write_hdf5", True))
     env._record_write_video = bool(getattr(env, "_interactive_record_write_video", True))
-    env._record_preview_head_only = True
+    env._record_preview_cameras = _interactive_preview_cameras()
     try:
         from envs.utils.household_view import configure_standard_head_camera
 
@@ -771,7 +780,7 @@ def _replay_interactive_cameras(meta: dict):
     replay.task_config = folder
     replay._record_write_hdf5 = bool(meta.get("write_hdf5", True))
     replay._record_write_video = bool(meta.get("write_video", True))
-    replay._record_preview_head_only = True
+    replay._record_preview_cameras = _interactive_preview_cameras()
     try:
         from envs.utils.household_view import configure_standard_head_camera
 

@@ -24,8 +24,14 @@ Demo_D435:
   w: 640
   h: 480
 
-# Interactive / experiment capture. Same framing as D435 (fovy and 4:3 aspect
-# unchanged), 4x the pixels, so the recorded mp4 is not softer than the viewer.
+# Interactive / experiment capture of demo_camera. Same fovy/aspect as Demo_D435,
+# 4x the pixels (1280x960; 4:3). Head camera stays D435 320x240.
+Demo_HD:
+  fovy: 42
+  w: 1280
+  h: 960
+
+# Optional head-camera HD (same framing as D435). Not used by default capture.
 HD_D435:
   fovy: 37
   w: 1280

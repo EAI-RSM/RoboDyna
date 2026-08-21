@@ -1161,7 +1161,10 @@ class Base_Task(gym.Env):
         # so it aligns with the HDF5/LeRobot data instead of the upstream 30 fps (which plays 1.8x fast)
         _rt_fps = 250.0 / float(self.save_freq) if self.save_freq else 30.0
         video_cameras = None
-        if getattr(self, "_record_preview_head_only", False):
+        preview_cams = getattr(self, "_record_preview_cameras", None)
+        if preview_cams:
+            video_cameras = list(preview_cams)
+        elif getattr(self, "_record_preview_head_only", False):
             video_cameras = ["head_camera"]
         write_hdf5 = bool(getattr(self, "_record_write_hdf5", True))
         write_video = bool(getattr(self, "_record_write_video", True))
