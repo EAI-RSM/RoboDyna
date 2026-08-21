@@ -163,7 +163,7 @@ CARD_BG = "#202c38"
 CARD_BORDER = "#405367"
 TEXT_PRIMARY = "#f4f8fb"
 TEXT_SECONDARY = "#aebdca"
-RANDOM_SEED_MAX = 500
+RANDOM_SEED_MAX = 100000
 
 # Tasks whose README row lives under a different name (or is shared).
 README_TASK_ALIASES: dict[str, str] = {}

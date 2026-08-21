@@ -133,7 +133,7 @@ CARD_BORDER = "#405367"
 TEXT_PRIMARY = "#f4f8fb"
 TEXT_SECONDARY = "#aebdca"
 HINT_FG = "#7fb6dc"
-RANDOM_SEED_MAX = 500
+RANDOM_SEED_MAX = 100000
 
 def load_task_descriptions(readme_path: Path = README_PATH) -> dict[str, str]:
     """Parse README household-task ``<sub>…</sub>`` blurbs into task → description."""
