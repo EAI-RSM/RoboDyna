@@ -382,16 +382,15 @@ def main():
             on_table_since = None
             return
 
-        bp = np.array(env.basket.get_pose().p)
-        basket_xy = np.array([bp[0], bp[1]], dtype=np.float64)
+        basket_xy = env._basket_xy_now()
         good_in = bool(
             env.r_grasp is not None
-            and env._pose_in_basket(np.array(env.apple.get_pose().p), basket_xy)
+            and env._pose_in_basket(env._apple_eval_p(env.apple), basket_xy)
         )
         spoiled = getattr(env, "spoiled_apple", None)
         spoiled_in = bool(
             spoiled is not None
-            and env._pose_in_basket(np.array(spoiled.get_pose().p), basket_xy)
+            and env._pose_in_basket(env._apple_eval_p(spoiled), basket_xy)
         )
         if good_in or spoiled_in:
             if in_basket_since is None:
@@ -403,7 +402,6 @@ def main():
         if env._good_apple_dropped_on_table():
             if on_table_since is None:
                 on_table_since = step
-                print("Good apple missed the basket (on table) — terminating…")
         else:
             on_table_since = None
 
@@ -411,15 +409,11 @@ def main():
         if _keyboard_holding():
             return False
         settle = max(1, int(getattr(env, "DROP_SETTLE_STEPS", 80)))
-        if on_table_since is not None and step - on_table_since >= settle:
-            return True, "good apple dropped on table (missed basket)"
+        # Let check_success own the printed reason (ripeness vs table miss).
         if in_basket_since is not None and step - in_basket_since >= settle:
-            return True, (
-                f"r_grasp={env.r_grasp}, window={env.red_window:.3f}"
-                f"±{float(getattr(env, 'red_tol', env.RED_TOLERANCE_DEFAULT)):.3f}, "
-                f"ripeness_ok={env._grasp_in_red_window()}, "
-                f"ripeness_score={env._ripeness_score():.3f}"
-            )
+            return True
+        if on_table_since is not None and step - on_table_since >= settle:
+            return True
         if (
             getattr(env, "_apple_attached", False)
             and float(env.ripeness) >= 0.95

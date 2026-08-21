@@ -358,6 +358,7 @@ class pick_ripe_apple(Base_Task):
         self.basket_top_z = self.basket_base_z + basket_height
         self.basket_center = np.array(
             [self.basket_x, self.basket_y], dtype=np.float64)
+        self.basket_half_xy = self._basket_mouth_half_xy(extents, scale)
 
         for apple in self.apples.values():
             self.add_prohibit_area(apple, padding=0.03)
@@ -616,7 +617,7 @@ class pick_ripe_apple(Base_Task):
                 and not getattr(self, "_apple_attached", True)
                 and getattr(self, "apple", None) is not None):
             ap = self.apple.get_pose()
-            if self._apple_resting_in_basket(ap.p, next_x - dx):
+            if self._apple_resting_in_basket(self._apple_eval_p(self.apple), next_x - dx):
                 carried = sapien.Pose(
                     [float(ap.p[0]) + dx, float(ap.p[1]), float(ap.p[2])],
                     list(ap.q))
@@ -742,6 +743,62 @@ class pick_ripe_apple(Base_Task):
         center_local = np.asarray(fruit.config["center"], dtype=np.float64) * scale
         R = t3d.quaternions.quat2mat(np.asarray(pose.q, dtype=np.float64))
         return np.asarray(pose.p, dtype=np.float64) + R @ center_local
+
+    def _apple_eval_p(self, apple=None):
+        """Mesh-center pose used for in-basket / on-table tests (not the actor origin)."""
+        fruit = self.apple if apple is None else apple
+        if fruit is None:
+            return np.zeros(3, dtype=np.float64)
+        try:
+            return np.asarray(self._apple_grasp_center(fruit), dtype=np.float64)
+        except Exception:
+            return np.array(fruit.get_pose().p, dtype=np.float64)
+
+    def _basket_mouth_half_xy(self, extents, scale):
+        """World-XY half-extents of the basket mouth after ``BASKET_Q``."""
+        ext = np.asarray(extents, dtype=np.float64)
+        sc = np.asarray(scale, dtype=np.float64)
+        hx = 0.5 * float(ext[0]) * float(sc[0])
+        hy = float(ext[1]) * float(sc[1])
+        hz = 0.5 * float(ext[2]) * float(sc[2])
+        if hx <= 1e-6 or hz <= 1e-6:
+            return (0.078, 0.111)
+        q = np.asarray(self.basket.get_pose().q, dtype=np.float64)
+        R = t3d.quaternions.quat2mat(q)
+        corners = np.array(
+            [[sx * hx, sy * hy, sz * hz]
+             for sx in (-1.0, 1.0) for sy in (0.0, 1.0) for sz in (-1.0, 1.0)],
+            dtype=np.float64,
+        )
+        world = (R @ corners.T).T
+        half_x = 0.5 * float(world[:, 0].max() - world[:, 0].min())
+        half_y = 0.5 * float(world[:, 1].max() - world[:, 1].min())
+        if half_x <= 1e-6 or half_y <= 1e-6:
+            return (0.078, 0.111)
+        return (half_x, half_y)
+
+    def _basket_xy_now(self):
+        bp = np.array(self.basket.get_pose().p, dtype=np.float64)
+        return np.array([float(bp[0]), float(bp[1])], dtype=np.float64)
+
+    def _xy_in_basket_mouth(self, xy, basket_xy=None, margin=0.0):
+        """True when XY sits inside the rectangular basket mouth."""
+        c = (self._basket_xy_now() if basket_xy is None
+             else np.asarray(basket_xy, dtype=np.float64)[:2])
+        half_x, half_y = getattr(self, "basket_half_xy", (0.078, 0.111))
+        d = np.abs(np.asarray(xy, dtype=np.float64)[:2] - c)
+        return bool(
+            d[0] <= max(0.0, float(half_x) - float(margin))
+            and d[1] <= max(0.0, float(half_y) - float(margin))
+        )
+
+    def _ripeness_fail_reason(self):
+        return (
+            f"picked outside ripeness window (r_grasp="
+            f"{-1.0 if self.r_grasp is None else float(self.r_grasp):.3f}, "
+            f"window={self.red_window:.3f}±"
+            f"{float(getattr(self, 'red_tol', self.RED_TOLERANCE_DEFAULT)):.3f})"
+        )
 
     def _front_grasp_quat_keys(self, arm_tag):
         """Quat order for a horizontal front pinch.
@@ -965,16 +1022,18 @@ class pick_ripe_apple(Base_Task):
 
     # ------------------------------------------------------------- success
     def _pose_in_basket(self, apple_p, basket_xy):
-        """True when the apple center is inside the basket volume, below the rim.
+        """True when the apple mesh center sits in the basket mouth.
 
-        A bounce on the lip or an invisible convex lid sits at/above ``basket_top_z``
-        and must not count as packed.
+        The breadbasket is a shallow rectangle; the actor origin is the mesh tip,
+        so callers should pass ``_apple_eval_p`` (bbox center). A seated fruit's
+        center is near the rim — do not require it to sit a full centimetre below
+        ``basket_top_z``. Lip bounces are rejected by the mouth margin, not Z.
         """
         ap = np.asarray(apple_p, dtype=np.float64)
-        xy_close = float(np.linalg.norm(ap[:2] - basket_xy)) < 0.09
-        above_floor = float(ap[2]) > (float(self.basket_base_z) + 0.005)
-        below_rim = float(ap[2]) < (float(self.basket_top_z) - 0.01)
-        return bool(xy_close and above_floor and below_rim)
+        in_xy = self._xy_in_basket_mouth(ap[:2], basket_xy, margin=0.005)
+        above_floor = float(ap[2]) > (float(self.basket_base_z) - 0.02)
+        below_rim = float(ap[2]) < (float(self.basket_top_z) + 0.03)
+        return bool(in_xy and above_floor and below_rim)
 
     def _actor_speed(self, actor) -> float:
         if actor is None:
@@ -1010,19 +1069,16 @@ class pick_ripe_apple(Base_Task):
             return False
         if self._apple_held_by_gripper(self.apple):
             return False
-        ap = np.array(self.apple.get_pose().p, dtype=np.float64)
-        bp = np.array(self.basket.get_pose().p, dtype=np.float64)
-        basket_xy = np.array([bp[0], bp[1]], dtype=np.float64)
-        if self._pose_in_basket(ap, basket_xy):
+        ap = self._apple_eval_p(self.apple)
+        basket_xy = self._basket_xy_now()
+        # Over the mouth (falling in / seated near the rim) is not a table miss.
+        if self._xy_in_basket_mouth(ap[:2], basket_xy) or self._pose_in_basket(ap, basket_xy):
             return False
         table_z = float(getattr(self, "_z0", 0.74 + float(self.table_z_bias)))
-        # Near tabletop (resting) — not still mid-air above the basket lip.
         z = float(ap[2])
-        # Still falling / bouncing above the rim — wait until it lands.
         if z > float(self.basket_top_z) + 0.08:
             return False
         if z < table_z - 0.08:
-            # Fell off the table entirely — still a miss.
             return True
         return bool(z <= table_z + 0.10)
 
@@ -1064,7 +1120,7 @@ class pick_ripe_apple(Base_Task):
             if not getattr(self, "_metric_apple_free", False):
                 return
             bp = np.array(self.basket.get_pose().p, dtype=np.float64)
-            ap = np.array(self.apple.get_pose().p, dtype=np.float64)
+            ap = self._apple_eval_p(self.apple)
             # Latch the aim the moment the jaws let go — after that the apple is
             # just falling and its XY no longer reflects the operator's choice.
             # Gate on having actually been held (detach precedes jaw contact by a
@@ -1133,11 +1189,11 @@ class pick_ripe_apple(Base_Task):
     def check_success(self):
         # Success = good apple picked inside the ripeness window AND in the basket
         # AND spoiled (if any) not in basket.
-        bp = np.array(self.basket.get_pose().p)
-        basket_xy = np.array([bp[0], bp[1]], dtype=np.float64)
+        basket_xy = self._basket_xy_now()
         self.basket_center = basket_xy
 
-        ap = np.array(self.apple.get_pose().p)
+        ap = self._apple_eval_p(self.apple)
+        over_basket = self._xy_in_basket_mouth(ap[:2], basket_xy)
         settled = (
             self._pose_in_basket(ap, basket_xy)
             and (not self._apple_held_by_gripper(self.apple))
@@ -1151,19 +1207,16 @@ class pick_ripe_apple(Base_Task):
         spoiled_in = False
         if spoiled is not None:
             spoiled_in = bool(self._pose_in_basket(
-                np.array(spoiled.get_pose().p), basket_xy))
+                self._apple_eval_p(spoiled), basket_xy))
 
         success = bool(good_in and ripeness_ok and not spoiled_in)
         if not success:
-            if on_table:
+            # An in/over-basket drop must not be labeled "on table" — that hid
+            # ripeness misses and false-negatived seated fruit (seed 10000).
+            if not ripeness_ok and self.r_grasp is not None and (good_in or over_basket):
+                self._last_fail_reason = self._ripeness_fail_reason()
+            elif on_table:
                 self._last_fail_reason = "good apple dropped on table (missed basket)"
-            elif good_in and not ripeness_ok:
-                self._last_fail_reason = (
-                    f"picked outside ripeness window (r_grasp="
-                    f"{-1.0 if self.r_grasp is None else float(self.r_grasp):.3f}, "
-                    f"window={self.red_window:.3f}±"
-                    f"{float(getattr(self, 'red_tol', self.RED_TOLERANCE_DEFAULT)):.3f})"
-                )
             elif spoiled_in:
                 self._last_fail_reason = "spoiled apple in basket"
             elif not good_in:
