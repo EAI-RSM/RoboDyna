@@ -385,6 +385,127 @@ def _cli_seed_for_record(env) -> int:
     return 0
 
 
+def _render_shape_materials(shape) -> list:
+    """Materials on one render shape. Multi-part meshes expose one per part."""
+    try:
+        return [shape.get_material()]
+    except Exception:
+        pass
+    out = []
+    try:
+        parts = list(shape.get_parts())
+    except Exception:
+        return out
+    for part in parts:
+        try:
+            out.append(part.get_material())
+        except Exception:
+            continue
+    return out
+
+
+def _interactive_record_materials(env) -> list:
+    """Render materials in the scene, cached once so per-frame logging is flat.
+
+    Built at first use and never rebuilt, so indices stay aligned between the
+    play-time log and the restore pass. Materials whose entity is removed later
+    stay in the list (harmless); visuals created later are not tracked and are
+    handled by the task's own visual-state hook.
+    """
+    cached = getattr(env, "_interactive_record_mat_cache", None)
+    if cached is not None:
+        return cached
+    import sapien
+
+    mats: list = []
+    seen: set[int] = set()
+    scene = getattr(env, "scene", None)
+    getter = getattr(scene, "get_entities", None) if scene is not None else None
+    try:
+        entities = list(getter()) if callable(getter) else list(getattr(scene, "entities", []) or [])
+    except Exception:
+        entities = []
+    for entity in entities:
+        try:
+            components = entity.get_components()
+        except Exception:
+            continue
+        for comp in components:
+            if not isinstance(comp, sapien.render.RenderBodyComponent):
+                continue
+            try:
+                shapes = list(comp.render_shapes)
+            except Exception:
+                continue
+            for shape in shapes:
+                for mat in _render_shape_materials(shape):
+                    if mat is None or id(mat) in seen:
+                        continue
+                    seen.add(id(mat))
+                    mats.append(mat)
+    env._interactive_record_mat_cache = mats
+    return mats
+
+
+def _mat_base_color(mat):
+    try:
+        return mat.get_base_color()
+    except Exception:
+        try:
+            return mat.base_color
+        except Exception:
+            return (0.0, 0.0, 0.0, 1.0)
+
+
+def _interactive_record_color_state(env):
+    """Base colors as a full baseline on the first frame, then sparse deltas.
+
+    Task code that recolors render shapes (cook doneness, whacked moles, cook
+    keys, stove flame) is not replayed, so without this every saved frame would
+    show the final color.
+    """
+    mats = _interactive_record_materials(env)
+    if not mats:
+        return None
+    cur = np.empty((len(mats), 4), dtype=np.float32)
+    for i, mat in enumerate(mats):
+        cur[i] = np.asarray(_mat_base_color(mat), dtype=np.float32)[:4]
+    prev = getattr(env, "_interactive_record_color_prev", None)
+    env._interactive_record_color_prev = cur
+    if prev is None or prev.shape != cur.shape:
+        return ("full", None, cur, len(mats))
+    changed = np.nonzero(np.any(cur != prev, axis=1))[0]
+    if changed.size == 0:
+        return None
+    return ("delta", changed.astype(np.int32), cur[changed].copy(), len(mats))
+
+
+def _interactive_record_restore_colors(env, entry) -> None:
+    """Apply a logged color baseline / delta. Deltas accumulate in frame order."""
+    if not entry:
+        return
+    mats = _interactive_record_materials(env)
+    if not mats:
+        return
+    kind, idx, vals, n_mats = entry
+    # A different scene (headless replay fallback) must not take these indices.
+    if int(n_mats) != len(mats):
+        return
+    if kind == "full":
+        for mat, color in zip(mats, vals):
+            try:
+                mat.set_base_color([float(c) for c in color])
+            except Exception:
+                continue
+        return
+    for i, color in zip(idx, vals):
+        if 0 <= int(i) < len(mats):
+            try:
+                mats[int(i)].set_base_color([float(c) for c in color])
+            except Exception:
+                continue
+
+
 def _interactive_record_log_state(env) -> None:
     """Cheap per-frame snapshot: robot qpos + actor/articulation poses. No cameras."""
     robot = getattr(env, "robot", None)
@@ -430,6 +551,17 @@ def _interactive_record_log_state(env) -> None:
                 )
             except Exception:
                 arts.append(None)
+    try:
+        colors = _interactive_record_color_state(env)
+    except Exception:
+        colors = None
+    vis = None
+    getter = getattr(env, "interactive_record_visual_state", None)
+    if callable(getter):
+        try:
+            vis = getter()
+        except Exception:
+            vis = None
     log = getattr(env, "_interactive_record_log", None)
     if log is None:
         env._interactive_record_log = []
@@ -444,6 +576,8 @@ def _interactive_record_log_state(env) -> None:
             "rg": float(robot.get_right_gripper_val()),
             "actors": actors,
             "arts": arts,
+            "cols": colors,
+            "vis": vis,
         }
     )
 
@@ -524,6 +658,16 @@ def _interactive_record_restore_state(env, snap: dict) -> None:
                     pass
             except Exception:
                 continue
+
+    _interactive_record_restore_colors(env, snap.get("cols"))
+    # Visuals rebuilt by the task (liquid columns, followers) come last so they
+    # can key off the actor poses restored above.
+    restore_vis = getattr(env, "interactive_restore_visual_state", None)
+    if callable(restore_vis) and snap.get("vis") is not None:
+        try:
+            restore_vis(snap.get("vis"))
+        except Exception:
+            pass
     try:
         scene.update_render()
     except Exception:
@@ -695,6 +839,7 @@ def _render_logged_snapshots_on_live_env(env, snapshots: list) -> int:
         configure_standard_head_camera(env)
     except Exception:
         pass
+    align_demo_camera_to_head(env)
     n = len(snapshots)
     from envs._base_task import ray_tracing_disabled
 
@@ -706,13 +851,6 @@ def _render_logged_snapshots_on_live_env(env, snapshots: list) -> int:
     for i, snap in enumerate(snapshots):
         _interactive_record_restore_state(env, snap)
         env._take_picture()
-        viewer = getattr(env, "viewer", None)
-        if viewer is not None and not bool(getattr(viewer, "closed", True)):
-            try:
-                env.scene.update_render()
-                viewer.render()
-            except Exception:
-                pass
         if i == 0:
             nuniq = _head_rgb_unique_colors(env)
             preview = (_interactive_preview_cameras() or ["head_camera"])[0]
@@ -803,6 +941,7 @@ def _replay_interactive_cameras(meta: dict):
         configure_standard_head_camera(replay)
     except Exception:
         pass
+    align_demo_camera_to_head(replay)
     if data_type:
         replay.data_type = dict(data_type)
     try:
@@ -1963,6 +2102,32 @@ def resolve_named_static_camera(env, name: str):
     return None
 
 
+def align_demo_camera_to_head(env) -> bool:
+    """Point the HD ``demo_camera`` at the ``head_camera`` view.
+
+    Interactive / experiment capture records ``demo_camera`` at 1280x960 while
+    ``head_camera`` stays 320x240 for the dataset. Both are 4:3, so copying pose
+    + fovy makes the HD stream show exactly what the viewer showed. Call after
+    ``configure_standard_head_camera``.
+    """
+    head = resolve_named_static_camera(env, "head_camera")
+    demo = resolve_named_static_camera(env, "demo_camera")
+    if head is None or demo is None:
+        return False
+    try:
+        demo.entity.set_pose(head.entity.get_pose())
+    except Exception:
+        return False
+    try:
+        demo.set_fovy(float(head.fovy))
+    except Exception:
+        try:
+            demo.fovy = float(head.fovy)
+        except Exception:
+            pass
+    return True
+
+
 def resolve_wrist_camera_link(env, side: str):
     """Return the robot wrist/camera link for ``left`` or ``right``, if any."""
     robot = getattr(env, "robot", None) if env is not None else None
@@ -2474,6 +2639,7 @@ def make_viewer_view_toggle(
         configure_standard_head_camera(env)
     except Exception:
         pass
+    align_demo_camera_to_head(env)
     robot_controls = None
     robot_mode = bool(getattr(env, "_interactive_robot_mode", False))
     control_from_argv = None

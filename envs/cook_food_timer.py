@@ -235,6 +235,27 @@ class cook_food_timer(cook_food):
         super()._update_kinematic_tasks()
         self._update_pie_timer()
 
+    # -------------------------------------------------- interactive capture hooks
+    def interactive_record_visual_state(self) -> dict:
+        """Doneness — the only input the pie timer needs."""
+        return {"doneness": float(getattr(self, "doneness", 0.0))}
+
+    def interactive_restore_visual_state(self, state) -> None:
+        """Re-light the pie wedges for a logged frame during offscreen capture.
+
+        Wedges are visual-only boxes toggled by pose, so restoring physx actor
+        poses alone leaves the dial stuck on its end-of-episode reading. The
+        phase / n_lit latch is cleared so the refresh is not skipped.
+        """
+        if not state:
+            return
+        self.doneness = float(state.get("doneness", getattr(self, "doneness", 0.0)))
+        timer = getattr(self, "pie_timer", None)
+        if timer:
+            timer["phase"] = None
+            timer["n_lit"] = -1
+        self._update_pie_timer()
+
     def get_obs(self) -> dict[str, Any]:
         """Include pie-timer phase / fill in the cooking obs."""
         obs = super().get_obs()

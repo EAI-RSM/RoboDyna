@@ -1483,7 +1483,10 @@ def run_task(task, args, keyboard_controls, robot_controls, post_setup=None):
                 report_ok = None
             report_task_result(env, detail=detail, ok=report_ok)
         finally:
-            # Record while the viewer is still open (close_env closes it after).
+            try:
+                viewer.close()
+            except Exception:
+                pass
             env.close_env()
     return terminal_result
 

@@ -1933,6 +1933,35 @@ class measure_ingredient(KitchenS_base_task):
         self.jar_xy = np.asarray(pose.p[:2], dtype=float)
         self.jar_bottom_z = float(pose.p[2]) + self.JAR_BOTTOM_T
 
+    # -------------------------------------------------- interactive capture hooks
+    def interactive_record_visual_state(self) -> dict:
+        """Scalars driving the render-only oil visuals (see restore below)."""
+        return {
+            "liquid_level": float(self.liquid_level),
+            "spill_amount": float(self.spill_amount),
+            "tab_open": bool(self.tab_open),
+        }
+
+    def interactive_restore_visual_state(self, state) -> None:
+        """Rebuild the oil visuals for a logged frame during offscreen capture.
+
+        The jar glass, oil column, stream, and spill puddle are render-only
+        entities rebuilt by task code, so restoring actor poses alone would leave
+        them frozen at the end-of-episode state. Assigning ``tab_open`` directly
+        keeps ``_set_tab_open`` scoring latches out of the replay.
+        """
+        if not state:
+            return
+        self.liquid_level = float(state.get("liquid_level", self.liquid_level))
+        self.spill_amount = float(state.get("spill_amount", self.spill_amount))
+        self.tab_open = bool(state.get("tab_open", self.tab_open))
+        self._liquid_half_h_cached = -1.0
+        self._spill_radius_cached = -1.0
+        self._rebuild_liquid(force=True)
+        self._rebuild_spill(force=True)
+        self._sync_stream()
+        self._sync_jar_followers()
+
     # ------------------------------------------------------------------ oil visuals / dynamics
     def _set_tab_open(self, open_: bool):
         """Latch pour state; key stays down/red when ON, up/green when OFF."""

@@ -260,6 +260,34 @@ class cook_meat_timer(cook_meat):
         super()._advance_station_cook(station)
         self._update_station_pie_timer(station)
 
+    # -------------------------------------------------- interactive capture hooks
+    def interactive_record_visual_state(self) -> dict:
+        """Per-station doneness — the only input the pie timer needs."""
+        return {
+            "doneness": [
+                float(st.get("doneness", 0.0))
+                for st in (getattr(self, "stations", None) or [])
+            ]
+        }
+
+    def interactive_restore_visual_state(self, state) -> None:
+        """Re-light the pie wedges for a logged frame during offscreen capture.
+
+        Wedges are visual-only boxes toggled by pose, so restoring physx actor
+        poses alone leaves the dial stuck on its end-of-episode reading. The
+        phase / n_lit latch is cleared so the refresh is not skipped.
+        """
+        if not state:
+            return
+        levels = state.get("doneness") or []
+        for station, level in zip(getattr(self, "stations", None) or [], levels):
+            station["doneness"] = float(level)
+            timer = station.get("pie_timer")
+            if timer:
+                timer["phase"] = None
+                timer["n_lit"] = -1
+            self._update_station_pie_timer(station)
+
     def get_obs(self) -> dict[str, Any]:
         """Include per-station pie-timer phase / fill in the cooking obs."""
         obs = super().get_obs()
