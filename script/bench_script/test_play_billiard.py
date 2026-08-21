@@ -9,7 +9,7 @@ Conditions (5 episodes each):
   opt2    : specific_hole=false, enable_distractors=true
             (up to 2 distractors; any pocket; distractor pocketed → fail)
   opt1+2  : specific_hole=true,  enable_distractors=true
-            (distractors block one hole; nominated open hole + arrow)
+            (distractors occupy a different hole; nominated hole stays open)
 
 Success criteria (validated every episode against check_success):
   - primary red ball falls into an allowed pocket
@@ -156,6 +156,15 @@ def _independent_criteria(env) -> dict:
         if blocked is None or int(blocked) == int(target_id):
             setup_ok = False
             setup_notes.append("blocked_hole_not_distinct")
+        for ball in getattr(env, "extra_balls", []) or []:
+            try:
+                xy = env._ball_xy(ball)
+            except Exception:
+                continue
+            if env._obstructs_target_hole(xy):
+                setup_ok = False
+                setup_notes.append("distractor_blocks_target")
+                break
 
     return {
         "specific_hole": specific,
@@ -310,7 +319,7 @@ def record_and_export_demos():
             "opt2     : specific_hole=false, enable_distractors=true\n"
             "           (up to 2 distractors; any pocket; distractor pocketed fails)\n"
             "opt1+2   : specific_hole=true,  enable_distractors=true\n"
-            "           (distractors block one hole; nominated open hole + arrow)\n\n"
+            "           (distractors occupy a different hole; nominated hole stays open)\n\n"
             "Success: primary red ball in an allowed pocket; no robot-ball contact;\n"
             "any distractor ball in any pocket fails the episode.\n\n"
             "Files: <tag>_sidebyside.mp4, <tag>_head.mp4, <tag>_topdown.mp4\n"

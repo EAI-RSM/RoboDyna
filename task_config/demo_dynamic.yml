@@ -752,7 +752,8 @@ task_args:
     #     CLI: --task-arg specific_hole=true   or   --option 1
     #   Opt 2 — enable_distractors: up to 2 colored balls; any pocket still OK
     #     CLI: --task-arg enable_distractors=true   or   --option 2
-    #   Opt 1+2 — distractors block exactly one hole; target = random open top pocket
+    #   Opt 1+2 — specific hole + arrow; distractors occupy a different top pocket
+    #             (nominated hole and the shot into it stay clear)
     # Legacy: pocket_mode=top_three → Opt1; blocker_mode=path_to_top|... → Opt2
     specific_hole: True
     enable_distractors: True
