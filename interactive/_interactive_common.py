@@ -174,6 +174,7 @@ def prepare_interactive_control(env, control) -> str:
 def configure_task(task_name: str, config_name: str, seed: int, use_robot: bool,
                    task_arg_overrides: dict | None = None):
     """Load ``task_config/<config_name>.yml`` and wire embodiment paths."""
+    disable_rt_for_interactive_capture()
     from envs import CONFIGS_PATH
 
     config_path = REPO_ROOT / "task_config" / f"{config_name}.yml"
@@ -268,6 +269,23 @@ def interactive_save_video_requested() -> bool:
 def interactive_capture_requested() -> bool:
     """True when Record data and/or Save video should run after the viewer closes."""
     return interactive_record_data_requested() or interactive_save_video_requested()
+
+
+def disable_rt_for_interactive_capture() -> None:
+    """Use raster cameras for interactive record/video.
+
+    Ray-traced cameras deadlock mid-episode, and a second raster Engine created
+    *after* the SAPIEN viewer closes leaves static cameras on a clear-color
+    buffer (blank HDF5 / mp4). Rasterize the live env from the start so the
+    record pass can reuse those cameras. Set ``ROBODYNA_DISABLE_RAY_TRACING=0``
+    before launch to force ray tracing anyway.
+    """
+    if not interactive_capture_requested():
+        return
+    os.environ.setdefault("ROBODYNA_DISABLE_RAY_TRACING", "1")
+
+
+disable_rt_for_interactive_capture()
 
 
 def _argv_value(flag: str, default: str | None = None) -> str | None:
@@ -442,29 +460,32 @@ def _interactive_record_restore_state(env, snap: dict) -> None:
             continue
 
     getter = getattr(scene, "get_all_articulations", None)
-    if not callable(getter):
-        return
-    robot_ids = {id(robot.left_entity), id(robot.right_entity)}
-    try:
-        articulations = [art for art in getter() if id(art) not in robot_ids]
-    except Exception:
-        return
-    for art, pose in zip(articulations, snap.get("arts") or []):
-        if pose is None:
-            continue
-        p, q, qpos = pose
+    if callable(getter):
+        robot_ids = {id(robot.left_entity), id(robot.right_entity)}
         try:
-            if hasattr(art, "set_root_pose"):
-                art.set_root_pose(sapien.Pose(p, q))
-            else:
-                art.set_pose(sapien.Pose(p, q))
-            art.set_qpos(np.asarray(qpos, dtype=np.float64))
-            try:
-                art.set_qvel(np.zeros_like(qpos, dtype=np.float64))
-            except Exception:
-                pass
+            articulations = [art for art in getter() if id(art) not in robot_ids]
         except Exception:
-            continue
+            articulations = []
+        for art, pose in zip(articulations, snap.get("arts") or []):
+            if pose is None:
+                continue
+            p, q, qpos = pose
+            try:
+                if hasattr(art, "set_root_pose"):
+                    art.set_root_pose(sapien.Pose(p, q))
+                else:
+                    art.set_pose(sapien.Pose(p, q))
+                art.set_qpos(np.asarray(qpos, dtype=np.float64))
+                try:
+                    art.set_qvel(np.zeros_like(qpos, dtype=np.float64))
+                except Exception:
+                    pass
+            except Exception:
+                continue
+    try:
+        scene.update_render()
+    except Exception:
+        pass
 
 
 def _interactive_record_after_step(env):
@@ -594,6 +615,71 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
         f"cameras (collect_data yaml) render after the viewer closes → {dest}"
     )
     return True
+
+
+def _head_rgb_unique_colors(env) -> int | None:
+    try:
+        rgb = env.cameras.get_rgb().get("head_camera", {}).get("rgb")
+        if rgb is None:
+            return None
+        img = np.asarray(rgb)
+        if img.ndim != 3:
+            return None
+        return int(np.unique(img.reshape(-1, img.shape[-1]), axis=0).shape[0])
+    except Exception:
+        return None
+
+
+def _render_logged_snapshots_on_live_env(env, snapshots: list) -> int:
+    """Restore logged poses on the live env and take camera pictures.
+
+    A second Engine after ``Viewer.close()`` leaves static cameras on a
+    clear-color buffer, so this must run on the same scene the user played in.
+    """
+    if not snapshots:
+        return 0
+    if getattr(env, "cameras", None) is None or getattr(env, "scene", None) is None:
+        raise RuntimeError("live env has no cameras/scene")
+    env.save_data = True
+    env.FRAME_IDX = 0
+    env._interactive_record_via_step = False
+    env._interactive_record_now = True
+    env._record_write_hdf5 = bool(getattr(env, "_interactive_record_write_hdf5", True))
+    env._record_write_video = bool(getattr(env, "_interactive_record_write_video", True))
+    env._record_preview_head_only = True
+    try:
+        from envs.utils.household_view import configure_standard_head_camera
+
+        configure_standard_head_camera(env)
+    except Exception:
+        pass
+    n = len(snapshots)
+    from envs._base_task import ray_tracing_disabled
+
+    shading = "rasterized" if ray_tracing_disabled() else "ray-traced"
+    print(
+        f"[record-data] rendering {n} frames on live cameras, {shading}...",
+        flush=True,
+    )
+    for i, snap in enumerate(snapshots):
+        _interactive_record_restore_state(env, snap)
+        env._take_picture()
+        if i == 0:
+            nuniq = _head_rgb_unique_colors(env)
+            if nuniq is not None and nuniq < 32:
+                print(
+                    f"[record-data] warning: head_camera looks empty "
+                    f"({nuniq} unique colors) on the first saved frame",
+                    flush=True,
+                )
+        if (i + 1) % 20 == 0 or i + 1 == n:
+            print(
+                f"[record-data] offscreen {i + 1}/{n}",
+                end="\r",
+                flush=True,
+            )
+    print()
+    return int(getattr(env, "FRAME_IDX", 0) or 0)
 
 
 def _replay_interactive_cameras(meta: dict):
@@ -743,7 +829,9 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
         "live_info": live_info,
     }
 
-    if live_close is not None:
+    def _run_live_close():
+        if live_close is None:
+            return
         fn, args, kwargs = live_close
         try:
             fn(*args, **kwargs)
@@ -752,29 +840,47 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
 
     if not snapshots or not save_dir:
         print("[record-data] no frames captured; nothing to save")
+        _run_live_close()
         return None
 
     if bool(getattr(env, "_interactive_record_write_hdf5", True)):
         _mark_interactive_recording_started()
 
-    replay = None
+    replay = env
+    n_frames = 0
     try:
-        replay = _replay_interactive_cameras(meta)
+        # Keep the live renderer/cameras. Closing the SAPIEN viewer first
+        # and then creating a new Engine was what produced blank frames.
+        n_frames = _render_logged_snapshots_on_live_env(env, snapshots)
     except Exception as exc:
-        print(f"[record-data] camera replay failed: {exc}")
-        return None
-    if replay is None:
-        return None
+        print(f"[record-data] live camera render failed: {exc}")
+        replay = None
 
-    n_frames = int(getattr(replay, "FRAME_IDX", 0) or 0)
+    if replay is None or n_frames <= 0:
+        _run_live_close()
+        try:
+            replay = _replay_interactive_cameras(meta)
+        except Exception as exc:
+            print(f"[record-data] camera replay failed: {exc}")
+            return None
+        if replay is None:
+            return None
+        n_frames = int(getattr(replay, "FRAME_IDX", 0) or 0)
+        live_already_closed = True
+    else:
+        live_already_closed = False
+
     try:
         replay.merge_pkl_to_hdf5_video()
     except Exception as exc:
         print(f"[record-data] HDF5 merge failed: {exc}")
-        try:
-            replay.close_env()
-        except Exception:
-            pass
+        if not live_already_closed:
+            _run_live_close()
+        else:
+            try:
+                replay.close_env()
+            except Exception:
+                pass
         return None
 
     args = dict(meta.get("args") or {})
@@ -792,10 +898,13 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
         replay.remove_data_cache()
     except Exception:
         pass
-    try:
-        replay.close_env()
-    except Exception:
-        pass
+    if live_already_closed:
+        try:
+            replay.close_env()
+        except Exception:
+            pass
+    else:
+        _run_live_close()
 
     seed = int(meta["seed"])
     if want_data:

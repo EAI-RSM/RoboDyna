@@ -1638,6 +1638,8 @@ class InteractiveTaskLauncher(tk.Tk):
             want_data = bool(self.record_data.get())
             want_video = bool(self.save_video.get())
         child_env["ROBODYNA_SAVE_VIDEO"] = "1" if want_video else "0"
+        if want_data or want_video:
+            child_env.setdefault("ROBODYNA_DISABLE_RAY_TRACING", "1")
         if want_data:
             child_env["ROBODYNA_RECORD_DATA"] = "1"
             child_env["ROBODYNA_RECORD_CONFIG"] = "demo_dynamic"
