@@ -2,8 +2,8 @@
 """Interactive sandbox for ``pack_fruits``.
 
 Pack red apples into the left basket and green apples into the right
-(when both colors are present). Opt2 black distractors can be click-dropped
-the same way; they still do not count toward success.
+(when both colors are present). Opt2 black distractors pinch and drop
+the same way as colored fruit; packing one into a basket fails the task.
 
 Keyboard+mouse: click a fruit (highlights lighter), then click a basket.
 Robot: physical pinch grasp (no teleport / no EE weld).
@@ -52,18 +52,22 @@ CLOSE_WIDTH = 0.45
 OPEN_WIDTH = 0.55
 
 
-def _tcp_fruit_gap(env, idx, arm_name: str):
+def _tcp_fruit_gap(env, key, arm_name: str):
+    kind, i = key
+    actor = env.distractors[i] if kind == "dist" else env.items[i]
     tcp = env._tcp_pos(arm_name)
-    fp = np.array(env.items[idx].get_pose().p, dtype=float)
+    fp = np.array(actor.get_pose().p, dtype=float)
     xy = float(np.linalg.norm(fp[:2] - tcp[:2]))
     dz = float(tcp[2] - fp[2])
     return xy, dz
 
 
 def _nearest_graspable(env, arm_name: str):
-    """Closest belt apple under the gripper (never black distractors / held)."""
+    """Closest belt apple under the gripper, including Opt2 black fruit."""
     best = None
     best_score = 1e9
+    grasping_d = getattr(env, "_grasping_dist_slots", set()) or set()
+    candidates = []
     for idx in range(env.n_items):
         if (
             not env._spawned_mask[idx]
@@ -74,19 +78,90 @@ def _nearest_graspable(env, arm_name: str):
             or env._item_y[idx] is None
         ):
             continue
-        xy, dz = _tcp_fruit_gap(env, idx, arm_name)
+        candidates.append(("item", idx))
+    for slot in range(int(getattr(env, "n_distractor_slots", 0) or 0)):
+        if env._distractor_y[slot] is None or slot in grasping_d:
+            continue
+        candidates.append(("dist", slot))
+    for key in candidates:
+        xy, dz = _tcp_fruit_gap(env, key, arm_name)
         if xy > PINCH_XY or dz < -0.02 or dz > PINCH_Z_MAX:
             continue
         score = xy + 0.5 * max(0.0, dz)
         if score < best_score:
             best_score = score
-            best = idx
+            best = key
     return best
 
 
-def _near_fruit(env, idx, arm_name: str) -> bool:
-    xy, dz = _tcp_fruit_gap(env, idx, arm_name)
+def _near_fruit(env, key, arm_name: str) -> bool:
+    xy, dz = _tcp_fruit_gap(env, key, arm_name)
     return xy <= PINCH_XY and -0.02 <= dz <= PINCH_Z_MAX
+
+
+def _held_by_gripper(env, key) -> bool:
+    kind, i = key
+    if kind == "dist":
+        return bool(env._distractor_held_by_gripper(i))
+    return bool(env._fruit_held_by_gripper(i))
+
+
+def _on_belt(env, key) -> bool:
+    kind, i = key
+    if kind == "dist":
+        return env._distractor_y[i] is not None
+    return env._item_y[i] is not None
+
+
+def _free_for_grasp(env, key) -> None:
+    kind, i = key
+    if kind == "dist":
+        env._free_distractor_for_physical_grasp(i)
+        env._grasping_dist_slots.add(i)
+        env._enable_distractor_gravity(i)
+        return
+    env._free_fruit_for_physical_grasp(i)
+    env._grasping_idxs.add(i)
+    env._enable_fruit_gravity(i)
+
+
+def _reseat_key(env, key) -> None:
+    kind, i = key
+    if kind == "dist":
+        env._reseat_distractor_on_belt(i)
+        return
+    env._reseat_on_belt(i)
+
+
+def _discard_grasping(env, key) -> None:
+    kind, i = key
+    if kind == "dist":
+        env._grasping_dist_slots.discard(i)
+        return
+    env._grasping_idxs.discard(i)
+
+
+def _calm_key(env, key, damping=(2.5, 12.0)) -> None:
+    kind, i = key
+    if kind == "dist":
+        env._calm_distractor(i, damping=damping)
+        return
+    env._calm_fruit(i, damping=damping)
+
+
+def _enable_gravity_key(env, key) -> None:
+    kind, i = key
+    if kind == "dist":
+        env._enable_distractor_gravity(i)
+        return
+    env._enable_fruit_gravity(i)
+
+
+def _label_key(env, key) -> str:
+    kind, i = key
+    if kind == "dist":
+        return f"black_{i}"
+    return f"{env.item_types[i]}_{i}"
 
 
 def _lighter_rgb(rgb):
@@ -253,6 +328,7 @@ class FruitClickController:
         else:
             # Leave the belt stream so _advance_distractors does not yank it back.
             self.env._distractor_y[i] = None
+            self.env._grasping_dist_slots.add(i)
             self.env._set_distractor_pose(i, x, y, z)
         self._enable_drop_gravity(key)
         self._restore_color(key)
@@ -291,25 +367,15 @@ class FruitClickController:
             print(f"{self._label(key)} left on the table.")
             return
 
+        self.env._grasping_dist_slots.discard(i)
         if self._in_any_basket(key):
             print(f"{self._label(key)} landed in a basket — that fails the task.")
             return
-        p = np.array(self.env.distractors[i].get_pose().p, dtype=float)
-        over = None
-        try:
-            # Reuse colored-fruit belt XY test with a temporary pose check.
-            over = None
-            for side, cx in self.env.belt_cx.items():
-                if abs(float(p[0]) - float(cx)) <= self.env.BELT_HALF_WID + 0.03:
-                    if self.env.BELT_Y_NEAR - 0.03 <= float(p[1]) <= self.env.BELT_Y_FAR + 0.03:
-                        over = side
-                        break
-        except Exception:
-            over = None
-        if over is not None:
-            self.env._spawn_distractor(slot=i, side=over, prefer_behind_colored=False)
+        if self.env._distractor_over_belt(i) is not None:
+            self.env._reseat_distractor_on_belt(i)
             print(f"{self._label(key)} missed — back on the belt.")
             return
+        self.env._mark_distractor_table_rest(i)
         print(f"{self._label(key)} left on the table.")
 
     def update(self) -> None:
@@ -345,7 +411,7 @@ class FruitPinchMonitor:
     def __init__(self, env):
         self.env = env
         self._prev_width = {"left": 1.0, "right": 1.0}
-        self._held = {}  # arm_name -> fruit idx
+        self._held = {}  # arm_name -> ("item", idx) | ("dist", slot)
         self._pending = {}
         self._settle = None
         self._announced = set()
@@ -353,100 +419,126 @@ class FruitPinchMonitor:
     def _try_pinch(self, arm_name: str, step: int) -> None:
         if arm_name in self._held or arm_name in self._pending:
             return
-        idx = _nearest_graspable(self.env, arm_name)
-        if idx is None:
+        key = _nearest_graspable(self.env, arm_name)
+        if key is None:
             return
-        self._pending[arm_name] = (idx, step + GRASP_SETTLE_STEPS)
+        self._pending[arm_name] = (key, step + GRASP_SETTLE_STEPS)
 
-    def _confirm_or_abort_pinch(self, arm_name: str, idx: int) -> None:
-        held = self.env._fruit_held_by_gripper(idx)
-        near = _near_fruit(self.env, idx, arm_name)
+    def _confirm_or_abort_pinch(self, arm_name: str, key) -> None:
+        held = _held_by_gripper(self.env, key)
+        near = _near_fruit(self.env, key, arm_name)
         closed = gripper_width(self.env, arm_name) <= CLOSE_WIDTH
-        on_belt = self.env._item_y[idx] is not None
+        on_belt = _on_belt(self.env, key)
 
         if closed and (held or near):
-            self.env._free_fruit_for_physical_grasp(idx)
-            self.env._grasping_idxs.add(idx)
-            self.env._enable_fruit_gravity(idx)
-            self._held[arm_name] = idx
-            if idx not in self._announced:
-                self._announced.add(idx)
-                ftype = self.env.item_types[idx]
-                print(
-                    f"Pinched {ftype}_{idx} with {arm_name}. "
-                    f"Lift with E over the "
-                    f"{'red' if ftype == 'apple' else 'green'} basket, "
-                    f"Space to release."
-                )
+            _free_for_grasp(self.env, key)
+            self._held[arm_name] = key
+            if key not in self._announced:
+                self._announced.add(key)
+                kind, i = key
+                if kind == "dist":
+                    print(
+                        f"Pinched black_{i} with {arm_name}. "
+                        f"Lift with E; Space to release. "
+                        f"Packing a black apple fails the task."
+                    )
+                else:
+                    ftype = self.env.item_types[i]
+                    print(
+                        f"Pinched {ftype}_{i} with {arm_name}. "
+                        f"Lift with E over the "
+                        f"{'red' if ftype == 'apple' else 'green'} basket, "
+                        f"Space to release."
+                    )
             return
 
         if on_belt:
             return
-        self.env._reseat_on_belt(idx)
+        _reseat_key(self.env, key)
 
     def _begin_release(self, arm_name: str) -> None:
-        idx = self._held.pop(arm_name, None)
-        if idx is None:
+        key = self._held.pop(arm_name, None)
+        if key is None:
             return
         self._pending.pop(arm_name, None)
-        self.env._calm_fruit(idx, damping=(2.5, 12.0))
-        self.env._enable_fruit_gravity(idx)
-        self._settle = (idx, arm_name, DROP_SETTLE_STEPS)
-        print(f"Released fruit_{idx} — dropping under gravity…")
+        _calm_key(self.env, key, damping=(2.5, 12.0))
+        _enable_gravity_key(self.env, key)
+        self._settle = (key, arm_name, DROP_SETTLE_STEPS)
+        print(f"Released {_label_key(self.env, key)} — dropping under gravity…")
 
     def _tick_settle(self) -> None:
         if self._settle is None:
             return
-        idx, arm_name, left = self._settle
+        key, arm_name, left = self._settle
         if left > DROP_SETTLE_STEPS - 12:
-            self.env._calm_fruit(idx, damping=(3.0, 14.0))
+            _calm_key(self.env, key, damping=(3.0, 14.0))
         left -= 1
         if left > 0:
-            self._settle = (idx, arm_name, left)
+            self._settle = (key, arm_name, left)
             return
         self._settle = None
-        self.env._grasping_idxs.discard(idx)
+        _discard_grasping(self.env, key)
 
-        if self.env._fruit_held_by_gripper(idx) or _near_fruit(self.env, idx, arm_name):
+        if _held_by_gripper(self.env, key) or _near_fruit(self.env, key, arm_name):
             if gripper_width(self.env, arm_name) <= CLOSE_WIDTH:
-                self._held[arm_name] = idx
-                self.env._grasping_idxs.add(idx)
-                print(f"fruit_{idx} still in the jaws — open Space fully to drop.")
+                self._held[arm_name] = key
+                kind, i = key
+                if kind == "dist":
+                    self.env._grasping_dist_slots.add(i)
+                else:
+                    self.env._grasping_idxs.add(i)
+                print(
+                    f"{_label_key(self.env, key)} still in the jaws — "
+                    f"open Space fully to drop."
+                )
                 return
 
-        if self.env._fruit_in_basket(idx):
-            self.env._mark_packed(idx, freeze=False)
-            print(f"Packed {self.env.item_types[idx]}_{idx} into the matching basket.")
+        kind, i = key
+        if kind == "dist":
+            if self.env._distractor_in_any_basket(i):
+                print(f"black_{i} landed in a basket — that fails the task.")
+                return
+            if self.env._distractor_over_belt(i) is not None:
+                self.env._reseat_distractor_on_belt(i)
+                print(f"black_{i} back on the belt.")
+                return
+            self.env._mark_distractor_table_rest(i)
+            print(f"black_{i} left on the table.")
             return
 
-        p = np.array(self.env.items[idx].get_pose().p, dtype=float)
+        if self.env._fruit_in_basket(i):
+            self.env._mark_packed(i, freeze=False)
+            print(f"Packed {self.env.item_types[i]}_{i} into the matching basket.")
+            return
+
+        p = np.array(self.env.items[i].get_pose().p, dtype=float)
         in_any = any(
             self.env._xy_inside_basket(p[:2], btype) for btype in self.env.baskets
         )
         if in_any:
-            self.env._mark_packed(idx, freeze=False)
-            print(f"{self.env.item_types[idx]}_{idx} landed in the wrong basket.")
+            self.env._mark_packed(i, freeze=False)
+            print(f"{self.env.item_types[i]}_{i} landed in the wrong basket.")
             return
 
-        if self.env._fruit_over_belt(idx) is not None:
-            self.env._reseat_on_belt(idx)
-            print(f"{self.env.item_types[idx]}_{idx} back on the belt — keep packing.")
+        if self.env._fruit_over_belt(i) is not None:
+            self.env._reseat_on_belt(i)
+            print(f"{self.env.item_types[i]}_{i} back on the belt — keep packing.")
             return
 
-        self.env._mark_table_rest(idx)
-        print(f"{self.env.item_types[idx]}_{idx} left on the table.")
+        self.env._mark_table_rest(i)
+        print(f"{self.env.item_types[i]}_{i} left on the table.")
 
     def update(self, step: int) -> None:
         env = self.env
         self._tick_settle()
 
-        for arm, (idx, at) in list(self._pending.items()):
+        for arm, (key, at) in list(self._pending.items()):
             if step < at:
                 continue
             del self._pending[arm]
             if arm in self._held:
                 continue
-            self._confirm_or_abort_pinch(arm, idx)
+            self._confirm_or_abort_pinch(arm, key)
 
         for arm in ("left", "right"):
             w = gripper_width(env, arm)
@@ -538,7 +630,7 @@ def main():
                 f"config: {args.config}  |  seed: {args.seed}"
                 + (f"  |  scenario: {args.scenario}" if args.scenario else ""),
                 goal,
-                "Never pack black distractors (Opt2).",
+                "Black apples pinch like the others; packing one fails the task (Opt2).",
                 "1 / 2 / 3 — select left / right / both arms (selected gripper turns green)",
                 "Arrows / E / Q — teleop the selected arm(s)",
                 "Space — close to pinch; apple keeps moving until a real grasp",

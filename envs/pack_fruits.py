@@ -22,8 +22,9 @@ class pack_fruits(Base_Task):
       match). Still only one colored apple at a time (no dual grasp).
     - **Opt 2** (``distractor_enabled``): same as default, plus ≥1 black
       distractor apple (must not end in a basket); 30% chance of a second black apple.
-      Black fruit may ride with a colored apple (same belt behind it, or the
-      other belt).
+      Black fruit is graspable like the colored apples (pinch / carry / drop) but
+      packing one into a basket fails. It may ride with a colored apple (same
+      belt behind it, or the other belt).
     - **Opt 1+2**: two colors, dedicated belts (2–3 each color), ≥1 black
       distractor (either belt); one colored apple at a time (black may
       co-appear).
@@ -188,6 +189,8 @@ class pack_fruits(Base_Task):
         # guards: _update_kinematic_tasks runs before load_actors finishes
         self._belt_ready = False
         self._belt_running = False
+        self._grasping_dist_slots = set()
+        self.n_distractor_slots = 0
         self._reset_metric_state()
         super()._init_task_env_(**kwags)
         # Stream fruit from episode start (policy eval never calls play_once).
@@ -511,7 +514,8 @@ class pack_fruits(Base_Task):
 
         # ---- distractor fruits: episode plans ≥1 (+ optional 2nd) when Opt 2
         # is on. Scheduled to co-appear with specific colored waves (same belt
-        # behind the colored apple, or the other belt). Never packed/counted.
+        # behind the colored apple, or the other belt). Graspable like colored
+        # fruit (physical pinch); packing one into a basket fails the episode.
         if self.distractor_enabled:
             n_dist = 1 + (1 if bool(np.random.rand() < self.distractor_extra_prob) else 0)
         else:
@@ -538,6 +542,7 @@ class pack_fruits(Base_Task):
         self._distractor_y = [None] * self.n_distractor_slots
         self._distractor_roll = [0.0] * self.n_distractor_slots
         self._distractor_side = [None] * self.n_distractor_slots
+        self._grasping_dist_slots = set()  # black apples mid-pinch / carry
         for s in range(self.n_distractor_slots):
             distractor = create_actor(
                 self,
@@ -752,6 +757,7 @@ class pack_fruits(Base_Task):
     # -------------------------------------------------------- distractors
     def _hide_distractor(self, slot):
         """Off-table park (mirrors ``_hide``, but for a distractor slot)."""
+        self._grasping_dist_slots.discard(slot)
         self.distractors[slot].actor.set_pose(sapien.Pose(
             [self._stage_pose.p[0] + 0.05 * slot + 0.5,
              self._stage_pose.p[1] + 0.5,
@@ -778,18 +784,28 @@ class pack_fruits(Base_Task):
         ``side`` may be forced (Opt 2 schedule). When a colored fruit is
         already on that belt, place the black apple behind it (farther +y)
         with ``distractor_min_gap_mult`` × diameter clearance so they ride
-        together without overlapping. Fully independent of colored-fruit
-        spawn-gating / grasp / success bookkeeping.
+        together without overlapping. Independent of colored-fruit spawn-gating
+        / success bookkeeping; a currently pinched distractor is not respawned.
         """
         if slot is None:
+            grasping = getattr(self, "_grasping_dist_slots", set()) or set()
             for s in range(self.n_distractor_slots):
-                if self._distractor_y[s] is None:
-                    slot = s
-                    break
+                if self._distractor_y[s] is not None or s in grasping:
+                    continue
+                try:
+                    z = float(self.distractors[s].get_pose().p[2])
+                except Exception:
+                    z = self.HIDE_Z
+                if z > 0.0:
+                    continue  # on table / in a basket — do not recycle the slot
+                slot = s
+                break
         if slot is None:
             return  # every slot busy; skip
         if self._distractor_y[slot] is not None:
             return
+        if slot in getattr(self, "_grasping_dist_slots", set()):
+            return  # currently pinched / carried — do not yank back onto the belt
 
         if side is None:
             side = str(np.random.choice(["left", "right"]))
@@ -846,13 +862,15 @@ class pack_fruits(Base_Task):
         return
 
     def _advance_distractors(self):
-        """Mirror of the real-fruit belt-ride step below, but fully
-        decoupled: no spawn-gating, no grasp/pack interaction, no "missed"
-        bookkeeping on despawn — a distractor was never a real item, so it
-        just quietly disappears once it rides off the near end.
+        """Belt-ride for black apples still on a conveyor.
+
+        Pinched / carried distractors leave the stream (``_distractor_y`` is
+        None, or the slot is in ``_grasping_dist_slots``) and are not
+        despawned. Unpicked fruit still rides off the near end and hides.
         """
+        grasping = getattr(self, "_grasping_dist_slots", set()) or set()
         for s in range(self.n_distractor_slots):
-            if self._distractor_y[s] is None:
+            if self._distractor_y[s] is None or s in grasping:
                 continue
             side = self._distractor_side[s]
             speed = self.belt_speed[side]
@@ -863,7 +881,8 @@ class pack_fruits(Base_Task):
                 self._hide_distractor(s)
                 continue
             self._distractor_roll[s] += speed / max(self.fruit_r, 1e-4)
-            self._set_distractor_pose(s, self.belt_cx[side], self._distractor_y[s], self._fruit_ride_z)
+            x = self.belt_cx[side]
+            self._set_distractor_pose(s, x, self._distractor_y[s], self._fruit_ride_z)
 
     def _despawn_off_belt(self, idx):
         """Fruit reached the near end without a pick — hide it and free the wave."""
@@ -1064,6 +1083,140 @@ class pack_fruits(Base_Task):
         except Exception:
             return False
 
+    def _set_distractor_collision_enabled(self, slot, enabled: bool):
+        """Toggle PhysX contacts on a black apple."""
+        comps = getattr(self, "_distractor_comps", [])
+        rigid = comps[slot] if slot < len(comps) else None
+        if rigid is None:
+            return
+        groups = [1, 1, 0, 0] if enabled else [0, 0, 0, 0]
+        try:
+            for shape in rigid.get_collision_shapes():
+                shape.set_collision_groups(list(groups))
+        except Exception:
+            pass
+
+    def _calm_distractor(self, slot, damping=(0.8, 4.0)):
+        """Zero velocities and set damping so a pinch/drop is not a throw."""
+        comps = getattr(self, "_distractor_comps", [])
+        rigid = comps[slot] if slot < len(comps) else None
+        if rigid is None:
+            return
+        try:
+            rigid.set_linear_velocity(np.zeros(3))
+            rigid.set_angular_velocity(np.zeros(3))
+            rigid.set_linear_damping(float(damping[0]))
+            rigid.set_angular_damping(float(damping[1]))
+        except Exception:
+            pass
+
+    def _free_distractor_for_physical_grasp(self, slot):
+        """Leave the belt at the current pose as a dynamic body (no teleport).
+
+        Same physical pinch as colored fruit: gravity stays off until the
+        jaws finish closing. Pose is unchanged.
+        """
+        self._distractor_y[slot] = None
+        self._set_distractor_collision_enabled(slot, True)
+        rigid = self._distractor_comps[slot] if slot < len(self._distractor_comps) else None
+        if rigid is None:
+            return
+        try:
+            pose = self.distractors[slot].get_pose()
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(True)
+            self.distractors[slot].actor.set_pose(pose)
+            self._calm_distractor(slot, damping=(1.2, 6.0))
+        except Exception:
+            pass
+
+    def _enable_distractor_gravity(self, slot):
+        """Turn gravity on so the closed gripper must hold the apple by contact."""
+        rigid = self._distractor_comps[slot] if slot < len(self._distractor_comps) else None
+        if rigid is None:
+            return
+        try:
+            rigid.set_kinematic(False)
+            rigid.set_disable_gravity(False)
+            self._calm_distractor(slot, damping=(0.8, 4.0))
+        except Exception:
+            pass
+
+    def _distractor_held_by_gripper(self, slot) -> bool:
+        """True while a gripper still contacts this black apple."""
+        dists = getattr(self, "distractors", []) or []
+        if slot < 0 or slot >= len(dists):
+            return False
+        try:
+            name = dists[slot].get_name()
+            return len(self.get_gripper_actor_contact_position(name)) > 0
+        except Exception:
+            return False
+
+    def _distractor_over_belt(self, slot, margin=0.03):
+        """Return belt side if this black apple's XY sits on a conveyor, else None."""
+        dists = getattr(self, "distractors", []) or []
+        if slot < 0 or slot >= len(dists):
+            return None
+        p = np.array(dists[slot].get_pose().p, dtype=float)
+        if p[1] < self.BELT_Y_NEAR - margin or p[1] > self.BELT_Y_FAR + margin:
+            return None
+        best_side, best_dx = None, 1e9
+        for side, cx in self.belt_cx.items():
+            dx = abs(float(p[0]) - float(cx))
+            if dx <= self.BELT_HALF_WID + margin and dx < best_dx:
+                best_side, best_dx = side, dx
+        return best_side
+
+    def _reseat_distractor_on_belt(self, slot, side=None, y=None, x=None):
+        """Put a free black apple back on the kinematic belt stream."""
+        p = np.array(self.distractors[slot].get_pose().p, dtype=float)
+        if side is None:
+            side = self._distractor_over_belt(slot) or self._distractor_side[slot]
+        side = str(side or "left")
+        if side not in self.belt_cx:
+            side = "left"
+        if y is None:
+            y = float(np.clip(p[1], self.BELT_Y_NEAR + 0.02, self.BELT_Y_FAR))
+        if x is None:
+            x = float(p[0])
+        x = self._clamp_fruit_belt_x(side, x)
+        self._distractor_side[slot] = side
+        self._distractor_y[slot] = float(y)
+        self._distractor_roll[slot] = 0.0
+        self._grasping_dist_slots.discard(slot)
+        self._set_distractor_collision_enabled(slot, True)
+        rigid = self._distractor_comps[slot] if slot < len(self._distractor_comps) else None
+        if rigid is not None:
+            try:
+                rigid.set_kinematic(True)
+                rigid.set_disable_gravity(True)
+                rigid.set_linear_velocity(np.zeros(3))
+                rigid.set_angular_velocity(np.zeros(3))
+                rigid.set_linear_damping(5.0)
+                rigid.set_angular_damping(20.0)
+            except Exception:
+                pass
+        self._set_distractor_pose(slot, x, self._distractor_y[slot], self._fruit_ride_z)
+        if bool(os.environ.get("PACKING_DEBUG")):
+            print(f"[pack_fruits]  reseat distractor_{slot} on {side} belt "
+                  f"x={x:.3f} y={y:.3f}", flush=True)
+        return True
+
+    def _mark_distractor_table_rest(self, slot):
+        """Leave a dropped black apple on the table (no belt reset)."""
+        self._distractor_y[slot] = None
+        self._grasping_dist_slots.discard(slot)
+        self._set_distractor_collision_enabled(slot, True)
+        rigid = self._distractor_comps[slot] if slot < len(self._distractor_comps) else None
+        if rigid is not None:
+            try:
+                rigid.set_kinematic(False)
+                rigid.set_disable_gravity(False)
+                self._calm_distractor(slot, damping=(1.5, 8.0))
+            except Exception:
+                pass
+
     def interactive_ee_z_ceiling(self, side, pose):
         """Allow raising above the home EE while carrying a freed apple.
 
@@ -1083,6 +1236,17 @@ class pack_fruits(Base_Task):
                 try:
                     tcp = self._tcp_pos(side)
                     fp = np.array(self.items[i].get_pose().p, dtype=float)
+                    if float(np.linalg.norm(fp[:2] - tcp[:2])) < 0.14:
+                        holding = True
+                        break
+                except Exception:
+                    holding = True
+                    break
+        if not holding:
+            for s in getattr(self, "_grasping_dist_slots", set()) or ():
+                try:
+                    tcp = self._tcp_pos(side)
+                    fp = np.array(self.distractors[s].get_pose().p, dtype=float)
                     if float(np.linalg.norm(fp[:2] - tcp[:2])) < 0.14:
                         holding = True
                         break
