@@ -59,7 +59,7 @@ plays_per_scenario:
 #   log_plays: {opt1+2: true}     # only log Opt 1+2
 log_plays: true
 
-# HDF5 / LeRobot episode under data/<task>/ after a play.
+# HDF5 episode under data/<task>/ after a play.
 # true / false = every slot or none. To record a subset, use the same map
 # as plays_per_scenario (unlisted slots stay off):
 #   record_data: true
@@ -73,6 +73,11 @@ log_plays: true
 #     base:
 #       1: {opt1: true}                      # task 01 Opt 1 as well
 record_data: true
+
+# Also write LeRobot v2.1 under data_lerobot/ when Record data is on.
+# Ignored unless record_data is on for that slot. Same true / false / subset
+# form as record_data. Default off so experiment HDF5 does not fill the suite.
+export_lerobot: false
 
 # head-camera preview mp4 after the viewer closes (same true / false / subset form)
 save_video: false

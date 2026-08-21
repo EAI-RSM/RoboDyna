@@ -267,6 +267,17 @@ def interactive_save_video_requested() -> bool:
     return interactive_record_data_requested()
 
 
+def interactive_export_lerobot_requested() -> bool:
+    """True when the HDF5 pass should also write LeRobot. Default off.
+
+    Experiment yaml ``export_lerobot`` sets ``ROBODYNA_EXPORT_LEROBOT``. CLI
+    ``--record-data`` does not export unless that env var is 1.
+    """
+    if not interactive_record_data_requested():
+        return False
+    return _env_flag("ROBODYNA_EXPORT_LEROBOT") == "1"
+
+
 def interactive_capture_requested() -> bool:
     """True when Record data and/or Save video should run after the viewer closes."""
     return interactive_record_data_requested() or interactive_save_video_requested()
@@ -592,7 +603,7 @@ def maybe_attach_interactive_data_recorder(env) -> bool:
         "task_config": folder,
         "save_path": save_root,
         "save_freq": env.save_freq,
-        "export_lerobot": bool(env._interactive_record_write_hdf5),
+        "export_lerobot": interactive_export_lerobot_requested(),
         "lerobot_root": "./data_lerobot/domino_suite",
         "lerobot_chunks_size": 1000,
         "lerobot_task_state_dim": 32,
@@ -908,7 +919,7 @@ def finish_interactive_data_recording(env, live_close=None) -> str | None:
     args = dict(meta.get("args") or {})
     want_data = bool(meta.get("write_hdf5", True))
     want_video = bool(meta.get("write_video", True))
-    if want_data and args.get("export_lerobot", True):
+    if want_data and args.get("export_lerobot", False):
         try:
             from envs.utils.lerobot_export import LeRobotEpisodeExporter
 

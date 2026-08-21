@@ -782,6 +782,7 @@ def evaluation_seeds_for(
 class ExperimentConfig:
     record_data_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(False))
     save_video_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(False))
+    export_lerobot_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(False))
     log_plays_policy: SlotPolicy = field(default_factory=lambda: parse_bool_policy(True))
     plays_policy: SlotPolicy = field(default_factory=lambda: parse_int_policy(1))
     seed_policy: SlotPolicy = field(default_factory=lambda: parse_seed_policy(None))
@@ -806,6 +807,10 @@ class ExperimentConfig:
     @property
     def save_video(self) -> bool:
         return self.save_video_policy.any_true()
+
+    @property
+    def export_lerobot(self) -> bool:
+        return self.export_lerobot_policy.any_true()
 
     @property
     def seed(self) -> int | None:
@@ -1016,6 +1021,10 @@ class ExperimentConfig:
     def should_save_video(self, suite: str, task: str, scenario: str | None = None) -> bool:
         return bool(self.save_video_policy.resolve(suite, task, scenario))
 
+    def should_export_lerobot(self, suite: str, task: str, scenario: str | None = None) -> bool:
+        """True when this slot should also write LeRobot. Requires record_data."""
+        return bool(self.export_lerobot_policy.resolve(suite, task, scenario))
+
 
 def config_path() -> Path:
     raw = os.environ.get(CONFIG_ENV, "").strip()
@@ -1042,6 +1051,7 @@ def load_experiment_config(path: Path | None = None) -> ExperimentConfig:
         return cfg
     cfg.record_data_policy = parse_bool_policy(raw.get("record_data"), False)
     cfg.save_video_policy = parse_bool_policy(raw.get("save_video"), False)
+    cfg.export_lerobot_policy = parse_bool_policy(raw.get("export_lerobot"), False)
     log_raw = raw.get("log_plays", True)
     cfg.log_plays_policy = parse_bool_policy(log_raw, True)
     if "plays_per_scenario" in raw:

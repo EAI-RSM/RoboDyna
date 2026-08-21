@@ -1593,6 +1593,7 @@ class InteractiveTaskLauncher(tk.Tk):
             child_env["ROBODYNA_SAVE_VIDEO"] = "0"
             child_env.pop("ROBODYNA_RECORD_DATA", None)
             child_env.pop("ROBODYNA_RECORD_CONFIG", None)
+            child_env["ROBODYNA_EXPORT_LEROBOT"] = "0"
             self._recording_run = False
             self.child = subprocess.Popen(
                 command, cwd=ROOT, start_new_session=True, env=child_env
@@ -1634,10 +1635,13 @@ class InteractiveTaskLauncher(tk.Tk):
             self._experiment_cfg = cfg
             want_data = cfg.should_record_data(suite, task, scenario)
             want_video = cfg.should_save_video(suite, task, scenario)
+            want_lerobot = want_data and cfg.should_export_lerobot(suite, task, scenario)
         else:
             want_data = bool(self.record_data.get())
             want_video = bool(self.save_video.get())
+            want_lerobot = False
         child_env["ROBODYNA_SAVE_VIDEO"] = "1" if want_video else "0"
+        child_env["ROBODYNA_EXPORT_LEROBOT"] = "1" if want_lerobot else "0"
         if want_data or want_video:
             child_env.setdefault("ROBODYNA_DISABLE_RAY_TRACING", "1")
         if want_data:
