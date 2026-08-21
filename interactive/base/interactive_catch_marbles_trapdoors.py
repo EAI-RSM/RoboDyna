@@ -16,8 +16,6 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
@@ -30,6 +28,7 @@ from _interactive_common import (  # noqa: E402
     actor_scene_id,
     add_robot_motion_arg,
     click_hits_actor_map,
+    configure_task,
     edge_pressed,
     escape_quit_requested,
     make_viewer_view_toggle,
@@ -52,50 +51,6 @@ CONTROLS_ROBOT = """
   Door opens when the keycap is pushed down past its trigger depth.
   Release fully and press again to reopen a door.
 """
-
-
-def _embodiment_config(robot_file):
-    with open(Path(robot_file) / "config.yml", "r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
-
-
-def _configure_task(config_name: str, seed: int, use_robot: bool = False):
-    config_path = REPO_ROOT / "task_config" / f"{config_name}.yml"
-    if not config_path.exists():
-        raise SystemExit(f"Config not found: {config_path}")
-    with open(config_path, "r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle)
-
-    config.update(
-        task_name="catch_marbles_trapdoors",
-        render_freq=1,
-        now_ep_num=0,
-        seed=seed,
-        need_plan=use_robot,
-        save_data=False,
-    )
-    # Interactive sandbox: swing doors open quickly (~0.1 s) so they don't lag
-    # behind the arm press. Demo collection still uses demo_dynamic.yml as-is.
-    task_args = config.setdefault("task_args", {}).setdefault("catch_marbles_trapdoors", {})
-    task_args["door_open_speed_deg"] = max(float(task_args.get("door_open_speed_deg", 220.0)), 1200.0)
-
-    with open(Path(CONFIGS_PATH) / "_embodiment_config.yml", "r", encoding="utf-8") as handle:
-        embodiments = yaml.safe_load(handle)
-    embodiment_names = config.get("embodiment", ["aloha-agilex"])
-    if len(embodiment_names) == 1:
-        left_name = right_name = embodiment_names[0]
-        config["dual_arm_embodied"] = True
-    elif len(embodiment_names) == 3:
-        left_name, right_name, config["embodiment_dis"] = embodiment_names
-        config["dual_arm_embodied"] = False
-    else:
-        raise SystemExit("Expected one embodiment or [left_embodiment, right_embodiment, separation].")
-
-    config["left_robot_file"] = embodiments[left_name]["file_path"]
-    config["right_robot_file"] = embodiments[right_name]["file_path"]
-    config["left_embodiment_config"] = _embodiment_config(config["left_robot_file"])
-    config["right_embodiment_config"] = _embodiment_config(config["right_robot_file"])
-    return config
 
 
 def _print_color_map(env):
@@ -162,9 +117,7 @@ def main():
     add_robot_motion_arg(parser)
     args = parser.parse_args()
 
-    from envs import CONFIGS_PATH
     from envs.catch_marbles_trapdoors import catch_marbles_trapdoors
-    globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls(
         "catch_marbles_trapdoors",
@@ -176,7 +129,9 @@ def main():
     use_robot = args.control == "robot"
     env = catch_marbles_trapdoors()
     env._interactive_robot_mode = use_robot
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    env.setup_demo(**configure_task(
+        "catch_marbles_trapdoors", args.config, args.seed, use_robot=use_robot,
+    ))
     if use_robot:
         env.together_close_gripper(save_freq=None)
     print_episode_condition(env)

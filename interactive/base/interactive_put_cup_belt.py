@@ -20,7 +20,6 @@ from pathlib import Path
 import numpy as np
 import sapien
 import sapien.physx
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 os.chdir(REPO_ROOT)
@@ -31,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT / "interactive"))
 from _interactive_common import (  # noqa: E402
     UniversalRobotControls,
     add_record_data_arg,
+    configure_task,
     escape_quit_requested,
     make_viewer_view_toggle,
     print_instructions,
@@ -43,14 +43,6 @@ from _interactive_common import (  # noqa: E402
 )
 
 
-# Standalone-demo-only world-Y placement adjustment.  The task environment and
-# its shared configuration files remain unchanged.  Negative Y moves the setup
-# toward the robot/front of the scene.
-INTERACTIVE_SETUP_Y_OFFSET = -0.06
-# Gap between the belt's south edge and the cup's north edge.
-INTERACTIVE_CUP_SOUTH_CLEARANCE = 0.05
-
-
 CONTROLS_KEYBOARD = """
   Mouse click       click the belt to teleport the cup onto that belt XY
 """
@@ -61,51 +53,6 @@ CONTROLS_ROBOT = """
   Arrows / E / Q    teleop the selected arm(s)
   When the cup leaves the fingers, landing is scored after a short settle.
 """
-
-
-def _embodiment_config(robot_file):
-    with open(Path(robot_file) / "config.yml", "r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
-
-
-def _configure_task(config_name: str, seed: int, use_robot: bool = False):
-    config_path = REPO_ROOT / "task_config" / f"{config_name}.yml"
-    if not config_path.exists():
-        raise SystemExit(f"Config not found: {config_path}")
-    with open(config_path, "r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle)
-
-    config.update(
-        task_name="put_cup_belt",
-        render_freq=1,
-        now_ep_num=0,
-        seed=seed,
-        need_plan=use_robot,
-        save_data=False,
-    )
-    table_xy_bias = list(config.get("table_xy_bias", [0.0, 0.0]))
-    if len(table_xy_bias) < 2:
-        table_xy_bias = [0.0, 0.0]
-    table_xy_bias[1] = float(table_xy_bias[1]) + INTERACTIVE_SETUP_Y_OFFSET
-    config["table_xy_bias"] = table_xy_bias
-
-    with open(Path(CONFIGS_PATH) / "_embodiment_config.yml", "r", encoding="utf-8") as handle:
-        embodiments = yaml.safe_load(handle)
-    embodiment_names = config.get("embodiment", ["aloha-agilex"])
-    if len(embodiment_names) == 1:
-        left_name = right_name = embodiment_names[0]
-        config["dual_arm_embodied"] = True
-    elif len(embodiment_names) == 3:
-        left_name, right_name, config["embodiment_dis"] = embodiment_names
-        config["dual_arm_embodied"] = False
-    else:
-        raise SystemExit("Expected one embodiment or [left_embodiment, right_embodiment, separation].")
-
-    config["left_robot_file"] = embodiments[left_name]["file_path"]
-    config["right_robot_file"] = embodiments[right_name]["file_path"]
-    config["left_embodiment_config"] = _embodiment_config(config["left_robot_file"])
-    config["right_embodiment_config"] = _embodiment_config(config["right_robot_file"])
-    return config
 
 
 def _get_rigid(actor):
@@ -136,29 +83,6 @@ def _set_cup_pose(env, x, y, z=None, kinematic=True, quat=None):
             rigid.set_kinematic(False)
     except Exception:
         pass
-
-
-def _place_cup_south_of_belt(env):
-    """Place the cup 5 cm clear of the belt's south edge (dynamic for Space grasp)."""
-    pose = env.cup.get_pose()
-    belt_half_y = float(getattr(env, "belt_plate_half_size", [0.0, 0.0])[1])
-    cup_half_y = 0.5 * float(env._actor_world_size(env.cup)[1])
-    target_y = (
-        float(env.belt_y)
-        - belt_half_y
-        - cup_half_y
-        - INTERACTIVE_CUP_SOUTH_CLEARANCE
-    )
-    _set_cup_pose(
-        env,
-        float(pose.p[0]),
-        target_y,
-        0.74 + float(env.table_z_bias),
-        kinematic=False,
-        quat=env.CUP_UPRIGHT_QPOS,
-    )
-    env.cup_y = target_y
-    print(f"Starting cup 5 cm south of belt at y={target_y:.3f}.")
 
 
 def _mark_deposit(env):
@@ -260,18 +184,15 @@ def main():
     add_record_data_arg(parser)
     args = parser.parse_args()
 
-    from envs import CONFIGS_PATH
     from envs.put_cup_belt import put_cup_belt
-    globals()["CONFIGS_PATH"] = CONFIGS_PATH
 
     print_mode_controls("put_cup_belt", args.control, keyboard=CONTROLS_KEYBOARD, robot=CONTROLS_ROBOT)
 
     use_robot = args.control == "robot"
     env = put_cup_belt()
     env._interactive_robot_mode = use_robot
-    env.setup_demo(**_configure_task(args.config, args.seed, use_robot=use_robot))
+    env.setup_demo(**configure_task("put_cup_belt", args.config, args.seed, use_robot=use_robot))
     print_episode_condition(env)
-    _place_cup_south_of_belt(env)
     print(
         f"Side={'left' if env.mirrored else 'right'}; "
         f"curtains={env.blue_curtains_enabled}; "

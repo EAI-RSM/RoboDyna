@@ -25,13 +25,7 @@ def _post_setup(env):
     env.use_viewer_hollow_jar()
     # Unlock jar so the closed gripper can shove it under the nozzle.
     env.enable_interactive_jar_push()
-    # Expert pour_rate is tuned for fast sim idle-steps; interactive runs one
-    # step per viewer frame, so bump rate so the jar visibly fills (~8–12s).
-    env.pour_rate = max(float(getattr(env, "pour_rate", 0.0)), 0.00085)
-    print_instructions(
-        f"[measure_ingredient] interactive pour_rate={env.pour_rate:.6g} "
-        f"(push jar under nozzle; Z-press green key)"
-    )
+    print_instructions("Push jar under nozzle; Z-press green key.")
 
 
 if __name__ == "__main__":

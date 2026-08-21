@@ -21,12 +21,8 @@ def _post_setup(env):
     # Viewer treats a solid transmission cylinder as a filled volume — swap to
     # a hollow glass shell so the rising beer level is visible from outside.
     env.use_viewer_hollow_mug()
-    base = float(getattr(env, "FLOW_RATE_SCALE", 1.55))
-    env.flow_rate_scale = max(float(getattr(env, "flow_rate_scale", base)), base * 1.10)
     print_instructions(
-        f"[pour_beer] interactive flow_rate_scale={env.flow_rate_scale:.3g} "
-        f"pour_rate={float(getattr(env, 'pour_rate', 0)):.5f} "
-        f"(hold button to pour; click finish bell to score; EE Z capped on key)"
+        "Hold button to pour; click finish bell to score; EE Z capped on key."
     )
 
 
