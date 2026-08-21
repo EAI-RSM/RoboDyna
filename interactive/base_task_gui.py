@@ -1875,6 +1875,8 @@ class InteractiveTaskLauncher(tk.Tk):
                 text=self._tutorial_parts()[index][0],
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
+                disabledbackground=LOCKED_GRAY,
+                disabledforeground="#b4bac2",
             )
         self._apply_completed_locks()
         self._refresh_tutorial_mode()

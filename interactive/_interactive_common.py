@@ -706,11 +706,27 @@ def _render_logged_snapshots_on_live_env(env, snapshots: list) -> int:
     for i, snap in enumerate(snapshots):
         _interactive_record_restore_state(env, snap)
         env._take_picture()
+        viewer = getattr(env, "viewer", None)
+        if viewer is not None and not bool(getattr(viewer, "closed", True)):
+            try:
+                env.scene.update_render()
+                viewer.render()
+            except Exception:
+                pass
         if i == 0:
             nuniq = _head_rgb_unique_colors(env)
+            preview = (_interactive_preview_cameras() or ["head_camera"])[0]
+            if preview != "head_camera":
+                try:
+                    rgb = env.cameras.get_rgb().get(preview, {}).get("rgb")
+                    img = np.asarray(rgb) if rgb is not None else None
+                    if img is not None and img.ndim == 3:
+                        nuniq = int(np.unique(img.reshape(-1, img.shape[-1]), axis=0).shape[0])
+                except Exception:
+                    pass
             if nuniq is not None and nuniq < 32:
                 print(
-                    f"[record-data] warning: head_camera looks empty "
+                    f"[record-data] warning: {preview} looks empty "
                     f"({nuniq} unique colors) on the first saved frame",
                     flush=True,
                 )
@@ -1921,19 +1937,29 @@ def report_task_result(env, detail: str | None = None, *, ok: bool | None = None
 
 def resolve_head_camera(env=None, viewer=None):
     """Find the sapien ``head_camera`` render camera on ``env`` or ``viewer``."""
-    if env is not None:
-        cams = getattr(env, "cameras", None)
-        if cams is not None:
-            names = list(getattr(cams, "static_camera_name", []) or [])
-            clist = list(getattr(cams, "static_camera_list", []) or [])
-            if "head_camera" in names:
-                return clist[names.index("head_camera")]
+    cam = resolve_named_static_camera(env, "head_camera")
+    if cam is not None:
+        return cam
     if viewer is None and env is not None:
         viewer = getattr(env, "viewer", None)
     if viewer is not None:
         for cam in getattr(viewer, "cameras", []) or []:
             if getattr(cam, "name", None) == "head_camera":
                 return cam
+    return None
+
+
+def resolve_named_static_camera(env, name: str):
+    """Return the sapien static camera named ``name``, if it exists."""
+    if env is None or not name:
+        return None
+    cams = getattr(env, "cameras", None)
+    if cams is None:
+        return None
+    names = list(getattr(cams, "static_camera_name", []) or [])
+    clist = list(getattr(cams, "static_camera_list", []) or [])
+    if name in names:
+        return clist[names.index(name)]
     return None
 
 

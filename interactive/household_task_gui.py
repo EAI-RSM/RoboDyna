@@ -1707,13 +1707,22 @@ class HouseholdTaskLauncher(tk.Tk):
             self.seed_entry.configure(state="normal")
             self._set_option_checks("normal")
         for button in self.task_buttons:
-            button.configure(state="normal", text="Play", bg=PLAY_BLUE, activebackground=PLAY_BLUE_ACTIVE)
+            button.configure(
+                state="normal",
+                text="Play",
+                bg=PLAY_BLUE,
+                activebackground=PLAY_BLUE_ACTIVE,
+                disabledbackground=LOCKED_GRAY,
+                disabledforeground="#b4bac2",
+            )
         for index, button in enumerate(self.tutorial_buttons):
             button.configure(
                 state="normal",
                 text=self._tutorial_parts()[index][0],
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
+                disabledbackground=LOCKED_GRAY,
+                disabledforeground="#b4bac2",
             )
         self._apply_completed_locks()
         self._refresh_tutorial_mode()
@@ -1799,8 +1808,10 @@ class HouseholdTaskLauncher(tk.Tk):
                 button.configure(
                     state="disabled",
                     text="Play" if skipped else slot_success_label("household", task),
-                    bg="#59616b",
-                    activebackground="#59616b",
+                    bg=LOCKED_GRAY,
+                    activebackground=LOCKED_GRAY,
+                    disabledbackground=LOCKED_GRAY,
+                    disabledforeground="#b4bac2",
                 )
                 continue
             if keep_active:
@@ -1810,6 +1821,8 @@ class HouseholdTaskLauncher(tk.Tk):
                 text=self._slot_button_text("household", task, "Play"),
                 bg=PLAY_BLUE,
                 activebackground=PLAY_BLUE_ACTIVE,
+                disabledbackground=LOCKED_GRAY,
+                disabledforeground="#b4bac2",
             )
 
     def _record_experiment_play(self, run_meta, payload, *, exit_code=None, stopped=False):
